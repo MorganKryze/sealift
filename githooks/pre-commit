@@ -1,0 +1,12 @@
+#!/bin/sh
+# Installed by `just hooks`. Runs the CI checks on the working tree before each commit.
+set -e
+
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+	printf 'gofmt: format these files first:\n%s\n' "$unformatted" >&2
+	exit 1
+fi
+go vet ./...
+golangci-lint run ./...
+go test -race ./...
