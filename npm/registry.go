@@ -6,6 +6,7 @@ import (
 	"crypto/sha1" //nolint:gosec // old packages publish sha1 integrity only
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,32 +125,39 @@ func (c *Client) Packument(ctx context.Context, name string) (Packument, error) 
 // SRI integrity string (sha512 or sha1). It writes path+".part" and renames
 // it on success, so path never holds a partial or corrupt file. Network and
 // server errors get retried; ErrNotFound and ErrIntegrity do not.
-func (c *Client) DownloadFile(ctx context.Context, name, version, integrity, path string) error {
+//
+// It also returns the sha512 hex digest of the downloaded bytes, computed
+// whatever the integrity algorithm was: an export's cache key and manifest
+// always use sha512, even for the legacy packages that publish sha1 only.
+func (c *Client) DownloadFile(ctx context.Context, name, version, integrity, path string) (string, error) {
 	newHash, want, err := parseIntegrity(integrity)
 	if err != nil {
-		return err
+		return "", err
 	}
 	part := path + ".part"
+	var sha512Hex string
 	err = c.do(ctx, TarballURL(c.registry(), name, version), "application/octet-stream", func(body io.Reader) error {
 		f, err := os.Create(part)
 		if err != nil {
 			return err
 		}
 		h := newHash()
-		_, copyErr := io.Copy(io.MultiWriter(f, h), body)
+		sum512 := sha512.New()
+		_, copyErr := io.Copy(io.MultiWriter(f, h, sum512), body)
 		if err := errors.Join(copyErr, f.Close()); err != nil {
 			return err
 		}
 		if !bytes.Equal(h.Sum(nil), want) {
 			return ErrIntegrity
 		}
+		sha512Hex = hex.EncodeToString(sum512.Sum(nil))
 		return os.Rename(part, path)
 	})
 	if err != nil {
 		_ = os.Remove(part)
-		return fmt.Errorf("download %s@%s: %w", name, version, err)
+		return "", fmt.Errorf("download %s@%s: %w", name, version, err)
 	}
-	return nil
+	return sha512Hex, nil
 }
 
 func (c *Client) do(ctx context.Context, u, accept string, fn func(io.Reader) error) error {

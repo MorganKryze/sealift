@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -99,7 +100,7 @@ func TestDownloadFile(t *testing.T) {
 			defer srv.Close()
 
 			path := filepath.Join(t.TempDir(), "demo-1.0.0.tgz")
-			err := testClient(srv.URL).DownloadFile(context.Background(), "demo", "1.0.0", sriOf(tarball), path)
+			sha512Hex, err := testClient(srv.URL).DownloadFile(context.Background(), "demo", "1.0.0", sriOf(tarball), path)
 			if calls.Load() != tc.wantCalls {
 				t.Errorf("calls = %d, want %d", calls.Load(), tc.wantCalls)
 			}
@@ -114,7 +115,14 @@ func TestDownloadFile(t *testing.T) {
 				if string(got) != string(tarball) {
 					t.Errorf("file = %q", got)
 				}
+				sum := sha512.Sum512(tarball)
+				if want := hex.EncodeToString(sum[:]); sha512Hex != want {
+					t.Errorf("sha512 = %q, want %q", sha512Hex, want)
+				}
 				return
+			}
+			if sha512Hex != "" {
+				t.Errorf("sha512 = %q, want empty on error", sha512Hex)
 			}
 			if err == nil {
 				t.Fatal("want an error")

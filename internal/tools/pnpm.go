@@ -54,7 +54,7 @@ func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error
 	defer os.RemoveAll(tmp)
 
 	tarball := filepath.Join(tmp, "pnpm.tgz")
-	if err := client.DownloadFile(ctx, "pnpm", version, meta.Dist.Integrity, tarball); err != nil {
+	if _, err := client.DownloadFile(ctx, "pnpm", version, meta.Dist.Integrity, tarball); err != nil {
 		return "", fmt.Errorf("download pnpm %s: %w", version, err)
 	}
 
