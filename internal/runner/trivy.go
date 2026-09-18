@@ -44,13 +44,17 @@ func (c *TrivyCLI) ScanSBOM(ctx context.Context, sbomPath, outPath string) (stri
 }
 
 // ConvertToCycloneDX converts the JSON report at reportPath into a
-// CycloneDX document at outPath. The conversion reads an existing report
-// and writes no database, so it takes neither --cache-dir nor
-// --skip-db-update (decisions.md, "2026-09-18: phase 2 risk checks").
+// CycloneDX document at outPath. convert reads an existing report and
+// touches no database, but --cache-dir is a global trivy flag that
+// defaults to a path under HOME regardless of the subcommand; passing it
+// explicitly, as ScanSBOM already does, keeps this from depending on
+// HOME being set to something the caller can write (decisions.md, "phase
+// 2 part A review, what part B must carry").
 func (c *TrivyCLI) ConvertToCycloneDX(ctx context.Context, reportPath, outPath string) (string, error) {
 	return run(ctx, "", c.bin, []string{
 		"convert",
 		"--format", "cyclonedx",
+		"--cache-dir", c.cacheDir,
 		"--output", outPath,
 		reportPath,
 	}, c.asUser)

@@ -74,6 +74,7 @@ func TestTrivyCLI_ConvertToCycloneDX_Args(t *testing.T) {
 	want := []string{
 		"convert",
 		"--format", "cyclonedx",
+		"--cache-dir", cacheDir,
 		"--output", "/work/report.cdx.json",
 		"/work/report.trivy.json",
 	}
