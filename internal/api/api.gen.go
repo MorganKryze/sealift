@@ -21,25 +21,25 @@ import (
 
 // Defines values for EventKind.
 const (
-	Candidate EventKind = "candidate"
-	End       EventKind = "end"
-	Log       EventKind = "log"
-	Progress  EventKind = "progress"
-	Step      EventKind = "step"
+	EventKindCandidate EventKind = "candidate"
+	EventKindEnd       EventKind = "end"
+	EventKindLog       EventKind = "log"
+	EventKindProgress  EventKind = "progress"
+	EventKindStep      EventKind = "step"
 )
 
 // Valid indicates whether the value is a known member of the EventKind enum.
 func (e EventKind) Valid() bool {
 	switch e {
-	case Candidate:
+	case EventKindCandidate:
 		return true
-	case End:
+	case EventKindEnd:
 		return true
-	case Log:
+	case EventKindLog:
 		return true
-	case Progress:
+	case EventKindProgress:
 		return true
-	case Step:
+	case EventKindStep:
 		return true
 	default:
 		return false
@@ -82,8 +82,40 @@ type Analysis struct {
 	Id        string    `json:"id"`
 	ProjectId string    `json:"projectId"`
 
+	// Result What an analysis writes to candidates.json and ranking.json
+	Result *AnalysisResult `json:"result,omitempty"`
+
 	// State State of a job and of the directory it writes
 	State State `json:"state"`
+}
+
+// AnalysisResult What an analysis writes to candidates.json and ranking.json
+type AnalysisResult struct {
+	// After CVE counts by severity, critical to unknown
+	After Vector `json:"after"`
+
+	// Before CVE counts by severity, critical to unknown
+	Before       Vector             `json:"before"`
+	Dependencies []DependencyResult `json:"dependencies"`
+
+	// Target The system a resolution or an export is prepared for
+	Target   Target   `json:"target"`
+	Warnings []string `json:"warnings"`
+}
+
+// Candidate One newer version of a dependency, ranked against the current one
+type Candidate struct {
+	// Key Whether this candidate was resolved and scanned before the rest
+	Key bool `json:"key"`
+
+	// Published Empty when the registry has no publication time
+	Published *time.Time `json:"published,omitempty"`
+	Resolved  bool       `json:"resolved"`
+	Signals   []Signal   `json:"signals"`
+
+	// Vector CVE counts by severity, critical to unknown
+	Vector  Vector `json:"vector"`
+	Version string `json:"version"`
 }
 
 // CandidateData Payload of a candidate event
@@ -94,6 +126,18 @@ type CandidateData struct {
 	// Vector CVE counts by severity, critical to unknown
 	Vector  []int  `json:"vector"`
 	Version string `json:"version"`
+}
+
+// DependencyResult One direct dependency's current CVEs and its ranked candidates
+type DependencyResult struct {
+	// Best Empty when no candidate improves on the current version
+	Best       *string     `json:"best,omitempty"`
+	Candidates []Candidate `json:"candidates"`
+	Current    string      `json:"current"`
+	Name       string      `json:"name"`
+
+	// Vector CVE counts by severity, critical to unknown
+	Vector Vector `json:"vector"`
 }
 
 // EndData Payload of the end event, always the last one of a job
@@ -138,9 +182,10 @@ type Export struct {
 
 // ExportRequest A selection of versions per dependency, plus the project tree flag
 type ExportRequest struct {
-	IncludeProjectTree *bool `json:"includeProjectTree,omitempty"`
+	// IncludeProject Add the current project tree to the export
+	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Selection Dependency name to selected versions
+	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency.
 	Selection map[string][]string `json:"selection"`
 }
 
@@ -154,6 +199,9 @@ type Problem struct {
 	// Detail A human-readable explanation specific to this occurrence
 	Detail *string `json:"detail,omitempty"`
 
+	// Errors Every offending entry, for a validation failure
+	Errors *[]ProblemDetail `json:"errors,omitempty"`
+
 	// Instance A URI identifying this specific occurrence
 	Instance *string `json:"instance,omitempty"`
 
@@ -165,6 +213,17 @@ type Problem struct {
 
 	// Type A URI identifying the problem type
 	Type *string `json:"type,omitempty"`
+}
+
+// ProblemDetail One offending entry inside a validation failure's errors list
+type ProblemDetail struct {
+	// Field package.json field, such as dependencies or pnpm.overrides
+	Field string `json:"field"`
+
+	// Name Dependency name, empty for a field-level problem
+	Name   *string `json:"name,omitempty"`
+	Reason string  `json:"reason"`
+	Value  *string `json:"value,omitempty"`
 }
 
 // ProgressData Payload of a progress event
@@ -213,6 +272,13 @@ type Settings struct {
 	Target Target `json:"target"`
 }
 
+// Signal One reason a candidate is blocked or worth a second look
+type Signal struct {
+	Blocking bool   `json:"blocking"`
+	Evidence string `json:"evidence"`
+	Name     string `json:"name"`
+}
+
 // State State of a job and of the directory it writes
 type State string
 
@@ -245,6 +311,9 @@ type ToolsState struct {
 	// TrivyLatestAge Duration since the latest Trivy release, as a Go duration string
 	TrivyLatestAge string `json:"trivyLatestAge"`
 }
+
+// Vector CVE counts by severity, critical to unknown
+type Vector = []int
 
 // AnalysisId defines model for AnalysisId.
 type AnalysisId = string

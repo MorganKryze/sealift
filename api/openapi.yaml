@@ -449,9 +449,31 @@ components:
           type: string
           format: uri
           description: A URI identifying this specific occurrence
+        errors:
+          type: array
+          description: Every offending entry, for a validation failure
+          items:
+            $ref: "#/components/schemas/ProblemDetail"
       required:
         - title
         - status
+    ProblemDetail:
+      type: object
+      description: One offending entry inside a validation failure's errors list
+      properties:
+        field:
+          type: string
+          description: package.json field, such as dependencies or pnpm.overrides
+        name:
+          type: string
+          description: Dependency name, empty for a field-level problem
+        value:
+          type: string
+        reason:
+          type: string
+      required:
+        - field
+        - reason
     State:
       type: string
       description: State of a job and of the directory it writes
@@ -561,25 +583,124 @@ components:
         createdAt:
           type: string
           format: date-time
+        result:
+          $ref: "#/components/schemas/AnalysisResult"
       required:
         - id
         - projectId
         - state
         - createdAt
+    Vector:
+      type: array
+      description: CVE counts by severity, critical to unknown
+      items:
+        type: integer
+      minItems: 5
+      maxItems: 5
+    Signal:
+      type: object
+      description: One reason a candidate is blocked or worth a second look
+      properties:
+        name:
+          type: string
+        evidence:
+          type: string
+        blocking:
+          type: boolean
+      required:
+        - name
+        - evidence
+        - blocking
+    Candidate:
+      type: object
+      description: One newer version of a dependency, ranked against the current one
+      properties:
+        version:
+          type: string
+        vector:
+          $ref: "#/components/schemas/Vector"
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signal"
+        key:
+          type: boolean
+          description: Whether this candidate was resolved and scanned before the rest
+        resolved:
+          type: boolean
+        published:
+          type: string
+          format: date-time
+          description: Empty when the registry has no publication time
+      required:
+        - version
+        - vector
+        - signals
+        - key
+        - resolved
+    DependencyResult:
+      type: object
+      description: One direct dependency's current CVEs and its ranked candidates
+      properties:
+        name:
+          type: string
+        current:
+          type: string
+        best:
+          type: string
+          description: Empty when no candidate improves on the current version
+        vector:
+          $ref: "#/components/schemas/Vector"
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/Candidate"
+      required:
+        - name
+        - current
+        - vector
+        - candidates
+    AnalysisResult:
+      type: object
+      description: What an analysis writes to candidates.json and ranking.json
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        before:
+          $ref: "#/components/schemas/Vector"
+        after:
+          $ref: "#/components/schemas/Vector"
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/DependencyResult"
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - target
+        - before
+        - after
+        - dependencies
+        - warnings
     ExportRequest:
       type: object
       description: A selection of versions per dependency, plus the project tree flag
       properties:
         selection:
           type: object
-          description: Dependency name to selected versions
+          description: >
+            Dependency name to the list of its versions to include. An
+            empty or absent list selects nothing for that dependency.
           additionalProperties:
             type: array
             items:
               type: string
-        includeProjectTree:
+        includeProject:
           type: boolean
           default: false
+          description: Add the current project tree to the export
       required:
         - selection
     Export:
