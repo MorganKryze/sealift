@@ -112,9 +112,19 @@ func TestTrivyScansResolvedProject(t *testing.T) {
 		t.Fatalf("write sbom: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cli := NewTrivyCLI(trivyBin, filepath.Join(dir, "trivy-cache"), nil)
+
+	// ScanSBOM passes --skip-db-update: production refreshes the database
+	// once per job, not once per scan. This test's own cache starts empty
+	// under t.TempDir, and Trivy refuses --skip-db-update against a cache
+	// with no database at all, so the scan below needs this download
+	// first, the same order the analysis job itself follows.
+	if _, err := cli.UpdateDB(ctx); err != nil {
+		t.Skipf("trivy UpdateDB: %v (no network access to download the vulnerability database)", err)
+	}
+
 	if _, err := cli.ScanSBOM(ctx, sbomPath, reportPath); err != nil {
 		t.Fatalf("ScanSBOM: %v", err)
 	}
