@@ -242,6 +242,7 @@ paths:
         required: true
         schema:
           type: string
+          pattern: '^[A-Za-z0-9._-]+$'
         description: File name inside the export directory
     get:
       operationId: downloadExportFile
@@ -403,18 +404,21 @@ components:
       required: true
       schema:
         type: string
+        pattern: '^[A-Za-z0-9._-]+$'
     AnalysisId:
       name: analysisId
       in: path
       required: true
       schema:
         type: string
+        pattern: '^[A-Za-z0-9._-]+$'
     ExportId:
       name: exportId
       in: path
       required: true
       schema:
         type: string
+        pattern: '^[A-Za-z0-9._-]+$'
   responses:
     Problem:
       description: Error

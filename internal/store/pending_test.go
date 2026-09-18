@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,6 +58,23 @@ func TestPendingDiscardLeavesNothingBehind(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("exports dir after discard = %v, want empty", entries)
+	}
+}
+
+func TestNewDirRefusesIDsThatEscapeTheDataVolume(t *testing.T) {
+	s := openTestStore(t)
+
+	for _, id := range []string{"../private", "../../x", "a/b", "", ".."} {
+		if _, err := s.NewDir("analyses", id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("NewDir(%q): err = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+func TestNewDirRefusesUnknownKind(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.NewDir("other", "proj-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf(`NewDir("other", ...): err = %v, want ErrNotFound`, err)
 	}
 }
 

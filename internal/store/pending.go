@@ -19,6 +19,12 @@ type Pending struct {
 // current UTC time. kind is "analyses" or "exports". The caller writes into
 // Path and calls Commit or Discard when done.
 func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
+	if kind != "analyses" && kind != "exports" {
+		return nil, fmt.Errorf("%w: invalid kind %q", ErrNotFound, kind)
+	}
+	if err := validID(projectID); err != nil {
+		return nil, err
+	}
 	id := time.Now().UTC().Format("20060102T150405Z")
 	final := filepath.Join(s.root, "projects", projectID, kind, id)
 	tmp := final + ".tmp"

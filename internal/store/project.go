@@ -121,6 +121,9 @@ func (s *Store) Projects() ([]Project, error) {
 
 // Project reads one project by ID.
 func (s *Store) Project(id string) (Project, error) {
+	if err := validID(id); err != nil {
+		return Project{}, err
+	}
 	dir := filepath.Join(s.root, "projects", id)
 	var record projectRecord
 	if err := readJSONFile(filepath.Join(dir, "project.json"), &record); err != nil {
@@ -135,6 +138,9 @@ func (s *Store) Project(id string) (Project, error) {
 // SetProjectTarget changes a project's target platform, refusing an empty
 // field the same way SaveSettings does.
 func (s *Store) SetProjectTarget(id string, t Target) error {
+	if err := validID(id); err != nil {
+		return err
+	}
 	if err := validateTarget(t); err != nil {
 		return err
 	}
@@ -154,6 +160,9 @@ func (s *Store) SetProjectTarget(id string, t Target) error {
 
 // DeleteProject removes a project directory and everything under it.
 func (s *Store) DeleteProject(id string) error {
+	if err := validID(id); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.root, "projects", id)
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {

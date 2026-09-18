@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -133,6 +135,35 @@ func TestProjectNotFound(t *testing.T) {
 	}
 	if err := s.DeleteProject("missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"missing\"): err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestProjectMethodsRefuseIDsThatEscapeTheDataVolume(t *testing.T) {
+	s := openTestStore(t)
+	target := Target{OS: "linux", CPU: "x64", Node: "22.17.1", PnpmVer: "10.34.5"}
+
+	for _, id := range []string{"../private", "../../x", "a/b", "", ".."} {
+		if _, err := s.Project(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Project(%q): err = %v, want ErrNotFound", id, err)
+		}
+		if err := s.SetProjectTarget(id, target); !errors.Is(err, ErrNotFound) {
+			t.Errorf("SetProjectTarget(%q, ...): err = %v, want ErrNotFound", id, err)
+		}
+		if err := s.DeleteProject(id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("DeleteProject(%q): err = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
+	s := openTestStore(t)
+	settingsPath := filepath.Join(s.Root(), "private", "settings.json")
+
+	if err := s.DeleteProject("../private"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteProject(\"../private\"): err = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("private/settings.json missing after refused delete: %v", err)
 	}
 }
 

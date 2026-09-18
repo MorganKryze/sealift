@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -192,6 +193,22 @@ func readJSONFile(path string, v any) error {
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("store: unmarshal %s: %w", path, err)
+	}
+	return nil
+}
+
+// validID refuses an identifier that could escape the directory it names.
+// Handlers pass path parameters straight through, so this is the last check
+// before a path join.
+func validID(s string) error {
+	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\") || strings.Contains(s, "..") {
+		return fmt.Errorf("%w: invalid identifier %q", ErrNotFound, s)
+	}
+	for _, r := range s {
+		allowed := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '.' || r == '_'
+		if !allowed {
+			return fmt.Errorf("%w: invalid identifier %q", ErrNotFound, s)
+		}
 	}
 	return nil
 }
