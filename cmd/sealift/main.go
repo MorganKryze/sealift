@@ -9,13 +9,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 func main() {
@@ -49,21 +52,40 @@ func run(addr, root string, log *slog.Logger) error {
 	// A Trivy release asset runs tens of megabytes; give the download
 	// enough time without leaving the client unbounded.
 	toolsHTTP := &http.Client{Timeout: 5 * time.Minute}
-	installed, err := tools.NewManager(st, toolsHTTP, log).InstalledTrivy()
+	toolsManager := tools.NewManager(st, toolsHTTP, log)
+	installed, err := toolsManager.InstalledTrivy()
 	if err != nil {
 		return err
 	}
 	log.Info("tools", "trivy_installed", installed)
+
+	// The trivy binary is reached through the "current" symlink, so
+	// ActivateTrivy repoints it without this ever being reconstructed.
+	// pnpm has no such symlink: this pins the default target's version at
+	// startup, so a settings change to a different pnpm version needs a
+	// restart to take effect, a known limit of the fixed constructor
+	// jobs.NewService takes.
+	target := st.Settings().Target
+	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), nil)
+	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), nil)
+	// Empty keeps npm.DefaultRegistry, the only path production takes. The
+	// end-to-end test (test/e2e) sets this to a local Verdaccio that mirrors
+	// the public registry through an uplink, so it can publish a package
+	// sealift's own analysis and export need to resolve that the public
+	// registry never carries.
+	registry := &npm.Client{Registry: os.Getenv("SEALIFT_NPM_REGISTRY")}
 
 	queue := jobs.NewQueue(log)
 	defer queue.Close()
 	if onQueueReady != nil {
 		onQueueReady(queue)
 	}
+	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
+	handlers := api.NewHandlers(st, queue, service, toolsManager, trivyRunner)
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.Routes(queue),
+		Handler:           api.Routes(handlers),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the event stream stays open for a whole job.
 	}
