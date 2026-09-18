@@ -272,14 +272,19 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 
 	deps := r.stepListCandidates(manifest)
 
-	outcomes := r.stepResolveCandidates(deps, manifest, beforeIndex)
+	outcomes, err := r.stepResolveCandidates(deps, manifest, beforeIndex)
+	if err != nil {
+		return err
+	}
 
 	combinedIndex, err := r.stepScanCandidates(outcomes)
 	if err != nil {
 		return err
 	}
 
-	r.stepRank(deps, outcomes, combinedIndex)
+	if err := r.stepRank(deps, outcomes, combinedIndex); err != nil {
+		return err
+	}
 
 	r.stepCheckCombined(manifest)
 

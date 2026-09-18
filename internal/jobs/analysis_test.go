@@ -443,6 +443,55 @@ func TestAnalysis_UsesProjectTargetNotSettingsTarget(t *testing.T) {
 	}
 }
 
+// TestAnalysis_CandidateWriteFailureFailsTheJob proves a filesystem
+// failure writing one candidate's lockfile (step 6, resolve-candidates)
+// fails the whole analysis instead of finishing done with a partial
+// candidates directory: a later export reading a missing lockfile would
+// otherwise fail deep inside with a bare "no such file or directory",
+// long after the job itself claimed success.
+func TestAnalysis_CandidateWriteFailureFailsTheJob(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the directory permissions this test relies on")
+	}
+
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+
+	// Pre-create "candidates" read-only, so step 6's os.MkdirAll for the
+	// first candidate it tries to write fails, the same way a permission
+	// or disk problem would in production.
+	candidatesDir := filepath.Join(pending.Path(), "candidates")
+	if err := os.MkdirAll(candidatesDir, 0o500); err != nil {
+		t.Fatalf("mkdir candidates: %v", err)
+	}
+
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     &fakePnpm{},
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+
+	if err := a.Run(context.Background(), func(Event) {}); err == nil {
+		t.Fatal("Run returned nil, want an error from the candidate write failure")
+	}
+
+	finalDir := strings.TrimSuffix(a.Dir, ".tmp")
+	var status statusFile
+	if rerr := st.ReadJSON(filepath.Join(finalDir, "status.json"), &status); rerr != nil {
+		t.Fatalf("read status.json: %v", rerr)
+	}
+	if status.State != store.Failed {
+		t.Fatalf("status.json state = %q, want %q", status.State, store.Failed)
+	}
+}
+
 // TestAnalysis_RegistryUnreachable covers a dependency whose registry
 // metadata never answers (spec section 4, step 5 failure): the job marks it
 // and continues, rather than failing outright.

@@ -13,9 +13,12 @@ import (
 )
 
 // stepRank is step 8: it builds each dependency's ranked result from its
-// resolved candidates and writes candidates.json.
-func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedIndex rank.Index) {
-	_ = r.runStep("rank", func() error {
+// resolved candidates and writes candidates.json. A failure writing that
+// file fails the job: a done analysis with no candidates.json would leave
+// the interface with nothing to show for it, and no way to tell that
+// apart from an analysis that genuinely found nothing to rank.
+func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedIndex rank.Index) error {
+	return r.runStep("rank", func() error {
 		byDep := groupOutcomesByDep(outcomes)
 		policy := rank.Policy{
 			Now:           time.Now(),
@@ -135,6 +138,10 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 // candidate at once. A conflict is shown with pnpm's output and recorded as
 // a warning; candidates stay selectable, so the job does not fail.
 func (r *run) stepCheckCombined(manifest npm.Manifest) {
+	// Deliberately discarded: this step's own comment already covers the
+	// pnpm conflict path, and it is the last of the nine steps, so even a
+	// filesystem failure inside it has no later step whose own success it
+	// could put in doubt the way steps 6 and 8 would.
 	_ = r.runStep("check-combined", func() error {
 		overrides := make(map[string]string)
 		for _, dr := range r.result.Dependencies {

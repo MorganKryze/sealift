@@ -29,6 +29,10 @@ type depInfo struct {
 // see npm.Client.Attempts) gets marked and the job continues.
 func (r *run) stepListCandidates(manifest npm.Manifest) []depInfo {
 	var infos []depInfo
+	// listOneCandidate never returns an error of its own: an unreachable
+	// registry or an unparseable current version becomes a per-dependency
+	// warning instead, so this step's own fn always succeeds and there is
+	// nothing here for the discarded return value to lose.
 	_ = r.runStep("list-candidates", func() error {
 		total := len(manifest.Dependencies)
 		for i, d := range manifest.Dependencies {
@@ -81,10 +85,13 @@ type candidateOutcome struct {
 // stepResolveCandidates is step 6: for each dependency, it resolves the
 // current version and every newer candidate in isolation, key candidates
 // first, resolveParallelism resolutions at a time. A candidate that fails
-// to resolve is marked and the job continues.
-func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, beforeIndex rank.Index) []candidateOutcome {
+// to resolve is marked and the job continues; a failure writing a resolved
+// candidate's own lockfile to disk fails the job instead, since a later
+// export reading a missing lockfile would otherwise fail deep inside with
+// no useful explanation.
+func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, beforeIndex rank.Index) ([]candidateOutcome, error) {
 	var outcomes []candidateOutcome
-	_ = r.runStep("resolve-candidates", func() error {
+	err := r.runStep("resolve-candidates", func() error {
 		tasks := buildCandidateTasks(deps, beforeIndex)
 		packuments := make(map[string]npm.Packument, len(deps))
 		for _, d := range deps {
@@ -106,7 +113,7 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 		}
 		return nil
 	})
-	return outcomes
+	return outcomes, err
 }
 
 // buildCandidateTasks orders the whole task list in two passes: every
