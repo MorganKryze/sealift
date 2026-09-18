@@ -186,7 +186,7 @@ func (a *Analysis) resolveCandidateTasks(ctx context.Context, tasks []candidateT
 				if parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw)); perr != nil {
 					outcome.err = perr
 				} else {
-					outcome.pkgs = platformOf(a.Settings.Target).Filter(parsed)
+					outcome.pkgs = platformOf(a.Project.Target).Filter(parsed)
 					outcome.lock = lockRaw
 				}
 			}

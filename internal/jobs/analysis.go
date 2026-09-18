@@ -210,7 +210,7 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		ctx:     ctx,
 		emit:    emit,
 		logFile: logFile,
-		result:  &Result{Target: a.Settings.Target},
+		result:  &Result{Target: a.Project.Target},
 	}
 
 	createdAt := time.Now().UTC()
@@ -227,10 +227,10 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 			State:        state,
 			CreatedAt:    createdAt,
 			Steps:        r.steps,
-			PnpmVersion:  a.Settings.Target.PnpmVer,
+			PnpmVersion:  a.Project.Target.PnpmVer,
 			TrivyVersion: trivyVersion,
 			TrivyDBDate:  trivyDBDate,
-			Target:       a.Settings.Target,
+			Target:       a.Project.Target,
 		})
 		if commitErr != nil {
 			err = errors.Join(err, commitErr)

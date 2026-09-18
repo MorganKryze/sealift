@@ -37,12 +37,18 @@ type fakePnpm struct {
 	// that happens.
 	dirs     []string
 	dirModes []os.FileMode
+	// targets records, in call order, the target each Resolve call was
+	// asked to pin the isolated resolution's workspace file to, so a test
+	// can prove which of Project.Target and Settings.Target actually
+	// reached pnpm.
+	targets []store.Target
 }
 
 func (f *fakePnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
 	f.mu.Lock()
 	f.calls++
 	f.dirs = append(f.dirs, in.Dir)
+	f.targets = append(f.targets, in.Target)
 	if info, statErr := os.Stat(in.Dir); statErr == nil {
 		f.dirModes = append(f.dirModes, info.Mode().Perm())
 	}
@@ -374,6 +380,66 @@ loop:
 	}
 	if !hasUnresolvable {
 		t.Fatalf("bar's candidate signals = %+v, want does-not-resolve", bar.Candidates[0].Signals)
+	}
+}
+
+// TestAnalysis_UsesProjectTargetNotSettingsTarget proves an analysis
+// resolves and scans for the project's own target even once it no longer
+// matches the settings target, the same target /api/projects/{p}/target
+// persists to Project.Target and export already filters and reports by.
+func TestAnalysis_UsesProjectTargetNotSettingsTarget(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+
+	projectTarget := proj.Target
+	projectTarget.CPU = "arm64"
+	projectTarget.Libc = "musl"
+	projectTarget.Node = "20.11.0"
+	if err := st.SetProjectTarget(proj.ID, projectTarget); err != nil {
+		t.Fatalf("SetProjectTarget: %v", err)
+	}
+	proj, err := st.Project(proj.ID)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if proj.Target == st.Settings().Target {
+		t.Fatal("project target equals settings target, want them to differ for this test to mean anything")
+	}
+
+	pnpm := &fakePnpm{}
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     pnpm,
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(pnpm.targets) == 0 {
+		t.Fatal("pnpm never resolved anything")
+	}
+	for i, target := range pnpm.targets {
+		if target != proj.Target {
+			t.Errorf("pnpm resolution %d ran with target %+v, want the project's own %+v", i, target, proj.Target)
+		}
+	}
+
+	finalDir := strings.TrimSuffix(a.Dir, ".tmp")
+	var status statusFile
+	if err := st.ReadJSON(filepath.Join(finalDir, "status.json"), &status); err != nil {
+		t.Fatalf("read status.json: %v", err)
+	}
+	if status.Target != proj.Target {
+		t.Errorf("status.json target = %+v, want the project's own %+v", status.Target, proj.Target)
 	}
 }
 

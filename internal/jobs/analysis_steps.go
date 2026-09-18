@@ -53,8 +53,8 @@ func formatProblem(p npm.Problem) string {
 // the job; a database update failure on a stale database only warns.
 func (r *run) stepPrepareTools() (trivyVersion string, dbDate time.Time, err error) {
 	err = r.runStep("prepare-tools", func() error {
-		if _, perr := r.a.Tools.EnsurePnpm(r.ctx, r.a.Settings.Target.PnpmVer); perr != nil {
-			return fmt.Errorf("install pnpm %s: %w", r.a.Settings.Target.PnpmVer, perr)
+		if _, perr := r.a.Tools.EnsurePnpm(r.ctx, r.a.Project.Target.PnpmVer); perr != nil {
+			return fmt.Errorf("install pnpm %s: %w", r.a.Project.Target.PnpmVer, perr)
 		}
 		if state, serr := r.a.Tools.TrivyState(r.ctx); serr == nil {
 			trivyVersion, dbDate = state.Active, state.DBDate
@@ -104,7 +104,7 @@ func (r *run) stepResolveProject(manifest npm.Manifest) ([]npm.LockPackage, erro
 		if perr != nil {
 			return fmt.Errorf("parse project lockfile: %w", perr)
 		}
-		pkgs = platformOf(r.a.Settings.Target).Filter(parsed)
+		pkgs = platformOf(r.a.Project.Target).Filter(parsed)
 		return nil
 	})
 	return pkgs, err

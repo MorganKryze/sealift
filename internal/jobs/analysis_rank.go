@@ -20,7 +20,7 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 		policy := rank.Policy{
 			Now:           time.Now(),
 			MinReleaseAge: time.Duration(r.a.Settings.MinReleaseAgeDays) * 24 * time.Hour,
-			TargetNode:    r.a.Settings.Target.Node,
+			TargetNode:    r.a.Project.Target.Node,
 		}
 		for _, d := range deps {
 			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version}
@@ -52,7 +52,7 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 	if d.packument.Versions != nil {
 		currentMeta = d.packument.Versions[d.dep.Version]
 	}
-	currentFacts := factsOf(d.dep.Version, currentMeta, d.packument, r.a.Settings.Target)
+	currentFacts := factsOf(d.dep.Version, currentMeta, d.packument, r.a.Project.Target)
 
 	var current candidateOutcome
 	var others []candidateOutcome
@@ -90,7 +90,7 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 	var rankCandidates []rank.Candidate
 	for _, o := range others {
 		meta := d.packument.Versions[o.task.version]
-		facts := factsOf(o.task.version, meta, d.packument, r.a.Settings.Target)
+		facts := factsOf(o.task.version, meta, d.packument, r.a.Project.Target)
 		facts.Resolves = o.err == nil
 		hits := rank.Signals(currentFacts, facts, policy)
 		if o.err != nil {
@@ -158,7 +158,7 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		if perr != nil {
 			return fmt.Errorf("parse combined lockfile: %w", perr)
 		}
-		pkgs := platformOf(r.a.Settings.Target).Filter(parsed)
+		pkgs := platformOf(r.a.Project.Target).Filter(parsed)
 		findings, serr := r.a.scanPackages(r.ctx, pkgs, filepath.Join(r.a.Dir, "combined.trivy.json"))
 		if serr != nil {
 			return fmt.Errorf("scan combined: %w", serr)
