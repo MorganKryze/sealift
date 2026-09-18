@@ -19,7 +19,11 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "address to listen on")
+	// The host-side restriction comes from the publish flag
+	// (-p 127.0.0.1:8080:8080), not from the bind address: binding to
+	// 127.0.0.1 here would make the server unreachable through a published
+	// container port.
+	addr := flag.String("addr", "0.0.0.0:8080", "address to listen on")
 	root := flag.String("data", "/data", "data volume")
 	flag.Parse()
 
