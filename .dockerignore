@@ -1,0 +1,11 @@
+.git
+.atelier
+.spike-fixtures
+.github
+test/e2e
+githooks
+*.md
+!README.md
+.golangci.yml
+coverage.out
+/bin/
