@@ -123,8 +123,6 @@ async function main() {
   console.log("project created:", projectId, "analysis queued:", analysisId);
 
   const analysis = await pollUntilDone(`${api}/projects/${projectId}/analyses/${analysisId}`);
-  // A dependency with no candidates comes back as candidates: null, not [].
-  for (const d of analysis.result.dependencies) d.candidates ??= [];
   console.log(
     "analysis done:",
     analysis.result.dependencies

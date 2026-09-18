@@ -26,7 +26,10 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 			TargetNode:    r.a.Project.Target.Node,
 		}
 		for _, d := range deps {
-			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version}
+			// Candidates starts as an empty slice, not nil: the contract
+			// marks it a required array, and a dependency with nothing
+			// newer to offer must still serialise it as [].
+			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version, Candidates: []Candidate{}}
 			if d.warning != "" {
 				r.result.Warnings = append(r.result.Warnings, d.dep.Name+": "+d.warning)
 				r.result.Dependencies = append(r.result.Dependencies, dr)

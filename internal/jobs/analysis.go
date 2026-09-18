@@ -224,7 +224,11 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		ctx:     ctx,
 		emit:    emit,
 		logFile: logFile,
-		result:  &Result{Target: a.Project.Target},
+		// Dependencies and Warnings start as empty slices, not nil: the
+		// contract marks both required arrays, and a client that trusts it
+		// must never see null for an analysis that simply found nothing to
+		// report.
+		result: &Result{Target: a.Project.Target, Dependencies: []DependencyResult{}, Warnings: []string{}},
 	}
 
 	trivyVersion, trivyDBDate := "", time.Time{}

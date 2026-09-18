@@ -611,6 +611,64 @@ func TestAnalysis_RegistryUnreachable(t *testing.T) {
 	}
 }
 
+const quxDoc = `{"name":"qux","versions":{
+	"1.0.0":{"version":"1.0.0"}
+},"time":{"1.0.0":"2020-01-01T00:00:00.000Z"}}`
+
+// TestAnalysis_NoWarningsOrCandidatesSerialiseAsEmptyArrays proves the fix
+// for G3: qux is already at the only version its packument lists, so it
+// raises no warning and offers no candidate. warnings, dependencies and
+// candidates are contract-required arrays; a client that trusts the
+// contract crashes on null, so ranking.json (and, through it, the API's
+// own response) must hold [] for each, never null.
+func TestAnalysis_NoWarningsOrCandidatesSerialiseAsEmptyArrays(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"qux":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	registry := registryServer(t, map[string]string{"qux": quxDoc})
+
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     &fakePnpm{},
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	finalDir := strings.TrimSuffix(a.Dir, ".tmp")
+	raw, err := os.ReadFile(filepath.Join(finalDir, "ranking.json"))
+	if err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	text := string(raw)
+	if strings.Contains(text, "null") {
+		t.Errorf("ranking.json = %s, want no null array for a required contract field", text)
+	}
+	for _, want := range []string{`"warnings": []`, `"candidates": []`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("ranking.json = %s, want it to contain %s", text, want)
+		}
+	}
+
+	var result Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal ranking.json: %v", err)
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want none", result.Warnings)
+	}
+	if len(result.Dependencies) != 1 || result.Dependencies[0].Name != "qux" || len(result.Dependencies[0].Candidates) != 0 {
+		t.Fatalf("Dependencies = %+v, want exactly qux with no candidates", result.Dependencies)
+	}
+}
+
 // TestAnalysis_CancelledRunLeavesDirectory covers a run cancelled mid-flight
 // (spec section 4, "Cancel and restart"): the directory and its log stay on
 // disk, and status.json records the cancellation.
