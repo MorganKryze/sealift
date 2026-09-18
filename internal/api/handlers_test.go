@@ -497,6 +497,7 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 	srv := httptest.NewServer(Routes(h))
 	defer srv.Close()
 
+	var project Project
 	var analysisID string
 	release := make(chan struct{})
 	blocking := &testBlockingJob{run: func(_ context.Context, _ func(jobs.Event)) error {
@@ -514,7 +515,7 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 	defer func() {
 		close(release)
 		if analysisID != "" {
-			waitForTerminalState(t, h, analysisID)
+			waitForTerminalState(t, h, project.Id, "analysis", analysisID)
 		}
 	}()
 
@@ -523,7 +524,7 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 	analysisID = (*project.Analyses)[0].Id
-	if state, ok := h.Service.LiveState(analysisID); !ok || state != store.Queued {
+	if state, ok := h.Service.LiveState(project.Id, "analysis", analysisID); !ok || state != store.Queued {
 		t.Fatalf("LiveState(%s) = (%v, %v), want it queued behind the blocking job", analysisID, state, ok)
 	}
 
@@ -794,16 +795,102 @@ func TestCancelAnalysisUnknownIDFallsBackToStore(t *testing.T) {
 	}
 }
 
+// TestCancelAnalysisRouteRejectsALiveExportsID proves the matching hole
+// G1 closes at the API layer: naming a live export's id through the
+// analyses cancel route must answer 404, not reach the export and echo
+// back a synthesized Analysis body for it.
+func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlers(t, q)
+	srv := httptest.NewServer(Routes(h))
+	defer srv.Close()
+
+	// Created directly through the store, not through POST /projects: that
+	// endpoint also queues an analysis, which could by chance reserve the
+	// same directory id as the export queued below (same project, same
+	// second) and defeat this test's own premise.
+	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	settings := h.Store.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := h.Store.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	// A blocking job holds the queue busy for the whole test, so the
+	// export queued behind it stays live (Service still tracking it)
+	// deterministically: nothing races the fakes to a terminal state.
+	release := make(chan struct{})
+	blocking := &testBlockingJob{run: func(_ context.Context, _ func(jobs.Event)) error {
+		<-release
+		return nil
+	}}
+	if _, err := q.Submit(blocking); err != nil {
+		t.Fatalf("Submit(blocking): %v", err)
+	}
+	var exportID string
+	// Released and waited out before this test returns, not left to a
+	// deferred close: Service's finalizer goroutine keeps writing to the
+	// export directory after the queued job runs, and t.TempDir's own
+	// cleanup racing that goroutine is exactly the kind of flake this
+	// avoids.
+	defer func() {
+		close(release)
+		if exportID != "" {
+			waitForTerminalState(t, h, project.ID, "export", exportID)
+		}
+	}()
+
+	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	exportID = exportInfo.ID
+
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/projects/%s/analyses/%s/cancel", srv.URL, project.ID, exportInfo.ID), nil)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST cancel: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 404 (the export's id is not an analysis, and Cancel must reject the kind mismatch), body: %s", resp2.StatusCode, body)
+	}
+
+	// The mismatch above must not have touched the export itself: it
+	// stays live and cancellable through its own route.
+	if state, ok := h.Service.LiveState(project.ID, "export", exportInfo.ID); !ok || (state != store.Queued && state != store.Running) {
+		t.Fatalf("LiveState(export route) = (%q, %v), want a live queued or running state", state, ok)
+	}
+}
+
 // waitForTerminalState polls Service.LiveState until id is no longer
-// tracked, meaning Service's finalizer goroutine has already reacted to
-// its "end" event and stopped touching its directory. A test that races
-// a queued job against its own t.TempDir cleanup needs this: the
-// finalizer keeps writing after the job itself returns.
-func waitForTerminalState(t *testing.T, h *Handlers, id string) {
+// tracked under projectID and kind, meaning Service's finalizer goroutine
+// has already reacted to its "end" event and stopped touching its
+// directory. A test that races a queued job against its own t.TempDir
+// cleanup needs this: the finalizer keeps writing after the job itself
+// returns.
+func waitForTerminalState(t *testing.T, h *Handlers, projectID, kind, id string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := h.Service.LiveState(id); !ok {
+		if _, ok := h.Service.LiveState(projectID, kind, id); !ok {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)

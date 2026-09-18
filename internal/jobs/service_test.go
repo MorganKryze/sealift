@@ -69,13 +69,13 @@ func TestQueueAnalysisReturnsQueuedAndTracksLiveState(t *testing.T) {
 		t.Errorf("ProjectID = %q, want %q", info.ProjectID, project.ID)
 	}
 
-	if state, ok := svc.LiveState(info.ID); !ok || (state != store.Queued && state != store.Running) {
+	if state, ok := svc.LiveState(project.ID, "analysis", info.ID); !ok || (state != store.Queued && state != store.Running) {
 		t.Errorf("LiveState(%s) = (%q, %v), want a live queued or running state", info.ID, state, ok)
 	}
 
-	waitForTerminal(t, svc, info.ID)
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
 
-	if _, ok := svc.LiveState(info.ID); ok {
+	if _, ok := svc.LiveState(project.ID, "analysis", info.ID); ok {
 		t.Errorf("LiveState after the job ended = tracked, want Service to have released it")
 	}
 }
@@ -160,7 +160,7 @@ func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
 	if info.State != store.Queued || info.AnalysisID != "20260917T101502Z" {
 		t.Fatalf("ExportInfo = %+v, want state queued for analysis 20260917T101502Z", info)
 	}
-	waitForTerminal(t, svc, info.ID)
+	waitForTerminal(t, svc, project.ID, "export", info.ID)
 }
 
 func TestQueueExportRefusesAnUnknownSelectionEntry(t *testing.T) {
@@ -236,7 +236,7 @@ func TestLiveForProjectReportsAndClearsTheTrackedJob(t *testing.T) {
 		t.Fatalf("LiveForProject = (%q, %q, %q, %v), want (%q, \"analysis\", queued or running, true)", id, kind, state, ok, info.ID)
 	}
 
-	waitForTerminal(t, svc, info.ID)
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
 
 	if _, _, _, ok := svc.LiveForProject(project.ID); ok {
 		t.Error("LiveForProject after the job ended = tracked, want Service to have released it")
@@ -276,7 +276,7 @@ func TestServiceReconcilesAnalysisStatusToTheQueuesOwnOutcome(t *testing.T) {
 	}
 	svc.track(queueID, "analysis", project.ID, pending)
 
-	waitForTerminal(t, svc, pending.ID())
+	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
 
 	var status struct {
 		State string `json:"state"`
@@ -335,7 +335,7 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 	}
 	svc.track(queueID, "analysis", project.ID, pending)
 
-	waitForTerminal(t, svc, pending.ID())
+	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
 
 	if _, err := os.Stat(pending.Final()); err != nil {
 		t.Fatalf("committed analysis directory missing: %v", err)
@@ -352,9 +352,85 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 
 func TestCancelUntrackedIDReturnsErrNotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	if err := svc.Cancel("no-such-id"); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.Cancel("no-such-project", "analysis", "no-such-id"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Cancel(untracked) = %v, want ErrNotFound", err)
 	}
+}
+
+// TestLiveStateKeysByProjectKindAndID proves the fix for the id collision
+// store.NewDir's own defense does not cover: it only retries within one
+// project's one kind directory, so two different projects can get the
+// exact same analysis id when both are queued in the same second. Both
+// must stay independently addressable by their own project, not have the
+// second registration silently replace the first.
+func TestLiveStateKeysByProjectKindAndID(t *testing.T) {
+	svc, st := newTestService(t)
+	projectA := mustCreateProject(t, st)
+	projectB, err := st.CreateProject("right-pad", []byte(`{"name":"right-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	pendingA, pendingB := sameSecondPendings(t, st, "analyses", projectA.ID, "analyses", projectB.ID)
+	svc.track("fake-queue-a", "analysis", projectA.ID, pendingA)
+	svc.track("fake-queue-b", "analysis", projectB.ID, pendingB)
+
+	if state, ok := svc.LiveState(projectA.ID, "analysis", pendingA.ID()); !ok || state != store.Queued {
+		t.Fatalf("LiveState(project A) = (%q, %v), want (queued, true): its id collided with project B's, it must still be addressable", state, ok)
+	}
+	if state, ok := svc.LiveState(projectB.ID, "analysis", pendingB.ID()); !ok || state != store.Queued {
+		t.Fatalf("LiveState(project B) = (%q, %v), want (queued, true): tracking it must not have dropped project A's entry", state, ok)
+	}
+}
+
+// TestCancelRejectsAKindMismatch proves the matching hole G1 closes in
+// Cancel: an id tracked under one kind must not be reachable through
+// another kind's route, even though both would share the same lookup key
+// if it ignored kind, such as an export cancelled through the analyses
+// route.
+func TestCancelRejectsAKindMismatch(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	pending, err := st.NewDir("exports", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	svc.track("fake-queue-id", "export", project.ID, pending)
+
+	if err := svc.Cancel(project.ID, "analysis", pending.ID()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Cancel(analysis route, an export's id) = %v, want ErrNotFound", err)
+	}
+	if state, ok := svc.LiveState(project.ID, "export", pending.ID()); !ok || state != store.Queued {
+		t.Fatalf("LiveState(export route) = (%q, %v), want (queued, true): the mismatched cancel above must not have removed it", state, ok)
+	}
+}
+
+// sameSecondPendings retries store.NewDir for the two kind/project pairs
+// until both land on the same id, forcing the exact collision
+// store.NewDir's own defense does not cover (two different projects, or
+// an analysis and an export, reserved in the same second). The retry
+// loop makes the test deterministic instead of waiting on a real clock
+// boundary; in practice it resolves on the first attempt.
+func sameSecondPendings(t *testing.T, st *store.Store, kindA, projectA, kindB, projectB string) (*store.Pending, *store.Pending) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		a, err := st.NewDir(kindA, projectA)
+		if err != nil {
+			t.Fatalf("NewDir(%s, %s): %v", kindA, projectA, err)
+		}
+		b, err := st.NewDir(kindB, projectB)
+		if err != nil {
+			t.Fatalf("NewDir(%s, %s): %v", kindB, projectB, err)
+		}
+		if a.ID() == b.ID() {
+			return a, b
+		}
+		_ = a.Discard()
+		_ = b.Discard()
+	}
+	t.Fatal("could not force two directories into the same second within the deadline")
+	return nil, nil
 }
 
 func TestFinalizePendingDiscardsAnEmptyDirectory(t *testing.T) {
@@ -411,13 +487,14 @@ func mustCreateProject(t *testing.T, st *store.Store) store.Project {
 	return p
 }
 
-// waitForTerminal polls LiveState until Service is no longer tracking id,
-// meaning the finalizer has already reacted to its "end" event.
-func waitForTerminal(t *testing.T, svc *Service, id string) {
+// waitForTerminal polls LiveState until Service is no longer tracking id
+// under project and kind, meaning the finalizer has already reacted to
+// its "end" event.
+func waitForTerminal(t *testing.T, svc *Service, projectID, kind, id string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := svc.LiveState(id); !ok {
+		if _, ok := svc.LiveState(projectID, kind, id); !ok {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)

@@ -44,6 +44,19 @@ type trackedJob struct {
 	pending   *store.Pending
 }
 
+// jobKey identifies a tracked job the way a route does: its project, its
+// kind and its directory id. The directory id alone is not unique across
+// projects or kinds, since store.NewDir only guards against a collision
+// within one project's one kind directory; two projects analysed in the
+// same second, or an analysis and an export in the same second, can share
+// one. Keying on the triple is what lets Cancel and LiveState tell those
+// apart and refuse a lookup made through the wrong route.
+type jobKey struct {
+	projectID string
+	kind      string
+	storeID   string
+}
+
 // Service turns an HTTP request into a queued job. Handlers hold a
 // *Service and never touch the queue or the store layout themselves.
 //
@@ -70,7 +83,7 @@ type Service struct {
 
 	mu          sync.Mutex
 	byQueueID   map[string]*trackedJob
-	byStoreID   map[string]*trackedJob
+	byJobKey    map[jobKey]*trackedJob
 	byProjectID map[string]*trackedJob // the one job Service is tracking for a project, queued or running
 }
 
@@ -88,7 +101,7 @@ func NewService(st *store.Store, q *Queue, tm *tools.Manager, pnpm runner.Pnpm, 
 		trivy:       trivy,
 		reg:         reg,
 		byQueueID:   make(map[string]*trackedJob),
-		byStoreID:   make(map[string]*trackedJob),
+		byJobKey:    make(map[jobKey]*trackedJob),
 		byProjectID: make(map[string]*trackedJob),
 	}
 	q.SetFinalizer(s.finalize)
@@ -197,13 +210,17 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	}, nil
 }
 
-// Cancel stops the analysis or export named id, translating it to the
-// queue's own job id. It reports store.ErrNotFound once the job has ended
-// and Service is no longer tracking it: the store, not Service, holds the
-// truth about it from that point on.
-func (s *Service) Cancel(id string) error {
+// Cancel stops the analysis or export named id under project projectID,
+// translating it to the queue's own job id. kind must be "analysis" or
+// "export", the route id was reached through. It reports
+// store.ErrNotFound once the job has ended and Service is no longer
+// tracking it, and equally when id is tracked but under a different
+// project or kind: the store, not Service, holds the truth once a job
+// has ended, and a route must never cancel a job that belongs to another
+// kind just because the two share a directory id.
+func (s *Service) Cancel(projectID, kind, id string) error {
 	s.mu.Lock()
-	tj, ok := s.byStoreID[id]
+	tj, ok := s.byJobKey[jobKey{projectID: projectID, kind: kind, storeID: id}]
 	s.mu.Unlock()
 	if !ok {
 		return store.ErrNotFound
@@ -211,13 +228,15 @@ func (s *Service) Cancel(id string) error {
 	return s.queue.Cancel(tj.queueID)
 }
 
-// LiveState reports the state of an analysis or export Service is still
-// tracking: running while the queue's current job is it, queued
-// otherwise. ok is false once the job has ended, at which point the store
-// holds whatever became of its directory.
-func (s *Service) LiveState(id string) (state store.State, ok bool) {
+// LiveState reports the state of the analysis or export named id under
+// project projectID and kind ("analysis" or "export"): running while the
+// queue's current job is it, queued otherwise. ok is false once the job
+// has ended, at which point the store holds whatever became of its
+// directory, and equally when id is tracked but under a different
+// project or kind.
+func (s *Service) LiveState(projectID, kind, id string) (state store.State, ok bool) {
 	s.mu.Lock()
-	tj, tracked := s.byStoreID[id]
+	tj, tracked := s.byJobKey[jobKey{projectID: projectID, kind: kind, storeID: id}]
 	s.mu.Unlock()
 	if !tracked {
 		return "", false
@@ -242,7 +261,7 @@ func (s *Service) LiveForProject(projectID string) (id, kind string, state store
 	if !tracked {
 		return "", "", "", false
 	}
-	state, ok = s.LiveState(tj.storeID)
+	state, ok = s.LiveState(tj.projectID, tj.kind, tj.storeID)
 	if !ok {
 		return "", "", "", false
 	}
@@ -256,7 +275,7 @@ func (s *Service) track(queueID, kind, projectID string, pending *store.Pending)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byQueueID[queueID] = tj
-	s.byStoreID[tj.storeID] = tj
+	s.byJobKey[jobKey{projectID: projectID, kind: kind, storeID: tj.storeID}] = tj
 	s.byProjectID[projectID] = tj
 }
 
@@ -286,7 +305,7 @@ func (s *Service) finalize(info FinalizeInfo) error {
 
 	s.mu.Lock()
 	delete(s.byQueueID, info.ID)
-	delete(s.byStoreID, tj.storeID)
+	delete(s.byJobKey, jobKey{projectID: tj.projectID, kind: tj.kind, storeID: tj.storeID})
 	// A newer job for the same project may already have replaced this
 	// entry; only clear it if it is still the one this finalize call is
 	// about.

@@ -34,7 +34,7 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 // export has no committed directory yet, so this checks Service's live
 // tracking before falling back to the store.
 func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (GetExportResponseObject, error) {
-	if state, ok := h.Service.LiveState(req.ExportId); ok {
+	if state, ok := h.Service.LiveState(req.ProjectId, "export", req.ExportId); ok {
 		createdAt, _ := time.Parse(idLayout, req.ExportId)
 		return GetExport200JSONResponse(Export{
 			Id: req.ExportId, ProjectId: req.ProjectId, State: State(state), CreatedAt: createdAt,

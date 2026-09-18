@@ -26,7 +26,7 @@ func (h *Handlers) QueueAnalysis(_ context.Context, req QueueAnalysisRequestObje
 // running analysis has no committed directory yet, so this checks
 // Service's live tracking before falling back to the store.
 func (h *Handlers) GetAnalysis(_ context.Context, req GetAnalysisRequestObject) (GetAnalysisResponseObject, error) {
-	if state, ok := h.Service.LiveState(req.AnalysisId); ok {
+	if state, ok := h.Service.LiveState(req.ProjectId, "analysis", req.AnalysisId); ok {
 		createdAt, _ := time.Parse(idLayout, req.AnalysisId)
 		return GetAnalysis200JSONResponse(Analysis{
 			Id: req.AnalysisId, ProjectId: req.ProjectId, State: State(state), CreatedAt: createdAt,
@@ -51,7 +51,7 @@ func (h *Handlers) DeleteAnalysis(_ context.Context, req DeleteAnalysisRequestOb
 // longer tracking the id, either the job already ended or it never
 // existed; the store, not Service, has the last word at that point.
 func (h *Handlers) CancelAnalysis(_ context.Context, req CancelAnalysisRequestObject) (CancelAnalysisResponseObject, error) {
-	err := h.Service.Cancel(req.AnalysisId)
+	err := h.Service.Cancel(req.ProjectId, "analysis", req.AnalysisId)
 	if err == nil {
 		createdAt, _ := time.Parse(idLayout, req.AnalysisId)
 		return CancelAnalysis200JSONResponse(Analysis{
