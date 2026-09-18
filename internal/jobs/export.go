@@ -117,6 +117,26 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err := e.writeReports(ctx, emit, shipped, arch); err != nil {
 		return err
 	}
+	if err := e.pruneWorkingFiles(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// pruneWorkingFiles removes everything writeArchive and writeReports only
+// needed as an intermediate: downloads/ is empty by now (downloadOne moves
+// every tarball into the shared cache as it goes), stripped/ holds a
+// second copy of every rewritten tarball that writeArchive already read
+// into the committed archive, and export.cdx-input.json is Trivy's scan
+// input, not one of the export's own files. Left behind, the two
+// directories double the export's size on disk, and the stray JSON leaks
+// into ExportInfo.Files through the API.
+func (e *Export) pruneWorkingFiles() error {
+	for _, name := range []string{"downloads", "stripped", "export.cdx-input.json"} {
+		if err := os.RemoveAll(filepath.Join(e.Dir, name)); err != nil {
+			return fmt.Errorf("jobs: remove %s: %w", name, err)
+		}
+	}
 	return nil
 }
 

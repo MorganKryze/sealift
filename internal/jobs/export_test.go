@@ -387,6 +387,27 @@ func TestExportRun(t *testing.T) {
 			t.Errorf("summary.md missing %q:\n%s", want, summary)
 		}
 	}
+
+	// The committed export holds exactly the six files a client ever
+	// downloads, nothing left over from downloading, stripping or
+	// scanning: @scope/gadget's publishConfig guarantees stripped/ would
+	// otherwise exist here.
+	entriesOnDisk, err := os.ReadDir(exportDir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", exportDir, err)
+	}
+	var names []string
+	for _, entry := range entriesOnDisk {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	want := []string{
+		"findings.csv", "manifest.json", "packages_npm.tar.gz",
+		"report.cdx.json", "report.trivy.json", "summary.md",
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("export directory holds %v, want exactly %v", names, want)
+	}
 }
 
 func TestExportRunIntegrityMismatch(t *testing.T) {
