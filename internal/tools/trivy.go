@@ -48,7 +48,10 @@ type ghAsset struct {
 }
 
 // TrivyState reports the active and installed Trivy versions, the latest
-// release on GitHub and its age, and the vulnerability database's date.
+// release on GitHub and its age, and the vulnerability database's date. A
+// GitHub outage leaves Latest and LatestAge zero rather than failing the
+// whole call: the installed and active versions, and the database date,
+// come from the data volume alone and stay meaningful without GitHub.
 func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 	installed, err := m.InstalledTrivy()
 	if err != nil {
@@ -58,17 +61,19 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 	if err != nil {
 		return TrivyState{}, err
 	}
-	rel, err := m.latestTrivyRelease(ctx)
-	if err != nil {
-		return TrivyState{}, fmt.Errorf("trivy latest release: %w", err)
-	}
-	return TrivyState{
+	state := TrivyState{
 		Active:    active,
 		Installed: installed,
-		Latest:    strings.TrimPrefix(rel.TagName, "v"),
-		LatestAge: time.Since(rel.PublishedAt),
 		DBDate:    m.trivyDBDate(),
-	}, nil
+	}
+	rel, err := m.latestTrivyRelease(ctx)
+	if err != nil {
+		m.log.Warn("trivy latest release unavailable, reporting installed versions only", "error", err)
+		return state, nil
+	}
+	state.Latest = strings.TrimPrefix(rel.TagName, "v")
+	state.LatestAge = time.Since(rel.PublishedAt)
+	return state, nil
 }
 
 // UpdateTrivy installs the latest Trivy release and activates it. It
@@ -76,6 +81,9 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 // is true. The checksum catches corruption, not a compromised release; the
 // minimum age is the protection against that.
 func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	rel, err := m.latestTrivyRelease(ctx)
 	if err != nil {
 		return "", fmt.Errorf("trivy latest release: %w", err)
@@ -95,7 +103,7 @@ func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
 		if v == version {
 			// Already on disk: activating is idempotent, downloading again
 			// is not what a retry after ActivateTrivy failed needs.
-			if err := m.ActivateTrivy(version); err != nil {
+			if err := m.activateTrivyLocked(version); err != nil {
 				return "", err
 			}
 			return version, nil
@@ -150,7 +158,7 @@ func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
 		return "", fmt.Errorf("extract trivy %s: %w", version, err)
 	}
 
-	if err := m.ActivateTrivy(version); err != nil {
+	if err := m.activateTrivyLocked(version); err != nil {
 		return "", err
 	}
 	return version, nil
@@ -161,6 +169,14 @@ func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
 // is a single rename of a relative symlink, so it never leaves the
 // directory in a half-updated state.
 func (m *Manager) ActivateTrivy(version string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activateTrivyLocked(version)
+}
+
+// activateTrivyLocked is ActivateTrivy's body, called both directly and
+// from inside UpdateTrivy, which already holds mu.
+func (m *Manager) activateTrivyLocked(version string) error {
 	dir := filepath.Join(m.vol.Root(), "tools", "trivy", version)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("trivy %s is not installed: %w", version, err)

@@ -276,6 +276,36 @@ func TestUpdateTrivyChecksumsBodyOverLimitFailsInstall(t *testing.T) {
 	}
 }
 
+// TestTrivyStateSurvivesGitHubUnreachable proves a GitHub outage does not
+// fail TrivyState outright: the installed and active versions, and the
+// database date, all come from the data volume alone and stay reportable.
+func TestTrivyStateSurvivesGitHubUnreachable(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 7}}, &http.Client{Timeout: time.Second}, nil)
+	m.GitHubAPI = "http://127.0.0.1:1" // nothing listens here
+
+	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", trivyTestVersion), 0o770); err != nil {
+		t.Fatalf("mkdir installed version: %v", err)
+	}
+	if err := m.ActivateTrivy(trivyTestVersion); err != nil {
+		t.Fatalf("ActivateTrivy: %v", err)
+	}
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState with GitHub unreachable: %v, want it to succeed with partial data", err)
+	}
+	if state.Active != trivyTestVersion {
+		t.Errorf("Active = %q, want %q", state.Active, trivyTestVersion)
+	}
+	if len(state.Installed) != 1 || state.Installed[0] != trivyTestVersion {
+		t.Errorf("Installed = %v, want [%q]", state.Installed, trivyTestVersion)
+	}
+	if state.Latest != "" || state.LatestAge != 0 {
+		t.Errorf("Latest/LatestAge = %q/%v, want both zero since GitHub could not be reached", state.Latest, state.LatestAge)
+	}
+}
+
 func TestUpdateTrivyInstallingSameVersionTwiceDownloadsOnce(t *testing.T) {
 	srv, assetRequests := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, _ := newTestManager(t, srv)

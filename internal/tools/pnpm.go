@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -17,7 +18,17 @@ var errPnpmBinMissing = errors.New("pnpm package has no package/bin/pnpm.cjs")
 // EnsurePnpm installs the given pnpm version from the npm registry if it is
 // not already present, and returns the path to its package/bin/pnpm.cjs.
 // The minimum release age does not apply: the caller pins the version.
+//
+// It takes the same lock UpdateTrivy and ActivateTrivy do: two concurrent
+// installs of the same version would otherwise share the one fixed
+// "<version>.tmp" staging directory installDir uses. Today the queue only
+// ever runs one job at a time, which is the only caller, so this is not
+// yet reachable; tools.Manager still needs to enforce its own safety
+// rather than depend on that.
 func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	dir := filepath.Join(m.vol.Root(), "tools", "pnpm", version)
 	bin := filepath.Join(dir, "package", "bin", "pnpm.cjs")
 	if _, err := os.Stat(bin); err == nil {
@@ -62,4 +73,23 @@ func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error
 		return "", fmt.Errorf("pnpm %s: %w", version, errPnpmBinMissing)
 	}
 	return bin, nil
+}
+
+// InstalledPnpm lists every pnpm version present under tools/pnpm/, sorted.
+func (m *Manager) InstalledPnpm() ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(m.vol.Root(), "tools", "pnpm"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	versions := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			versions = append(versions, e.Name())
+		}
+	}
+	sort.Strings(versions)
+	return versions, nil
 }

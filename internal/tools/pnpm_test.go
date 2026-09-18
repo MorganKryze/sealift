@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -153,5 +154,61 @@ func TestEnsurePnpmUnknownVersion(t *testing.T) {
 
 	if _, err := m.EnsurePnpm(context.Background(), "0.0.1"); err == nil {
 		t.Fatal("EnsurePnpm with an unpublished version: want error, got nil")
+	}
+}
+
+// TestEnsurePnpmConcurrentCallsDoNotRace exercises Manager's mutex: two
+// calls installing the same version from separate goroutines share the
+// one fixed "<version>.tmp" staging directory installDir uses. go test
+// -race is what actually catches a missing lock here; this only gives it
+// something concurrent to catch.
+func TestEnsurePnpmConcurrentCallsDoNotRace(t *testing.T) {
+	tarball := buildTarGz(t, map[string]string{
+		"package/package.json": `{"name":"pnpm","version":"10.34.5"}`,
+		"package/bin/pnpm.cjs": "#!/usr/bin/env node\nconsole.log('pnpm')\n",
+	})
+	srv, _ := pnpmRegistry(t, map[string][]byte{"10.34.5": tarball})
+
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, srv.Client(), nil)
+	m.NPMRegistry = srv.URL
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := m.EnsurePnpm(context.Background(), "10.34.5"); err != nil {
+				t.Errorf("EnsurePnpm: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestInstalledPnpmListsExtractedVersions(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, http.DefaultClient, nil)
+
+	got, err := m.InstalledPnpm()
+	if err != nil {
+		t.Fatalf("InstalledPnpm on an empty store: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("InstalledPnpm = %v, want none", got)
+	}
+
+	for _, v := range []string{"10.34.5", "9.15.0"} {
+		if err := os.MkdirAll(filepath.Join(root, "tools", "pnpm", v), 0o770); err != nil {
+			t.Fatalf("mkdir %s: %v", v, err)
+		}
+	}
+	got, err = m.InstalledPnpm()
+	if err != nil {
+		t.Fatalf("InstalledPnpm: %v", err)
+	}
+	want := []string{"10.34.5", "9.15.0"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("InstalledPnpm = %v, want %v (sorted)", got, want)
 	}
 }

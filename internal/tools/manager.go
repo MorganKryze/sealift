@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -38,6 +39,12 @@ type Manager struct {
 	http *http.Client
 	log  *slog.Logger
 
+	// mu serializes every install and activation: two concurrent updates of
+	// the same Trivy version would otherwise share the same ".tmp" and
+	// ".old-<suffix>" staging directories, and the settings-triggered
+	// update route runs outside the job queue, so nothing else excludes it.
+	mu sync.Mutex
+
 	// NPMRegistry overrides the npm registry base URL. Empty uses the
 	// public registry; tests point it at an httptest server.
 	NPMRegistry string
@@ -54,6 +61,9 @@ type Manager struct {
 func NewManager(vol Volume, httpClient *http.Client, log *slog.Logger) *Manager {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
+	}
+	if log == nil {
+		log = slog.Default()
 	}
 	return &Manager{vol: vol, http: httpClient, log: log}
 }

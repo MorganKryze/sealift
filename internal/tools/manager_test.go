@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/MorganKryze/sealift/internal/store"
@@ -82,4 +83,31 @@ func TestExtractTarGzRejectsUnsafePaths(t *testing.T) {
 			t.Fatalf("extractTarGz(%q): want error, got nil", name)
 		}
 	}
+}
+
+// TestActivateTrivyConcurrentCallsDoNotRace exercises Manager's mutex: two
+// installed versions activated from separate goroutines must not race on
+// the shared "current" symlink. go test -race is what actually catches a
+// missing lock here; this only gives it something concurrent to catch.
+func TestActivateTrivyConcurrentCallsDoNotRace(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, nil, nil)
+	for _, v := range []string{"1.0.0", "2.0.0"} {
+		if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", v), 0o770); err != nil {
+			t.Fatalf("mkdir %s: %v", v, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		version := []string{"1.0.0", "2.0.0"}[i%2]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := m.ActivateTrivy(version); err != nil {
+				t.Errorf("ActivateTrivy(%s): %v", version, err)
+			}
+		}()
+	}
+	wg.Wait()
 }
