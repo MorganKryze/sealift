@@ -18,7 +18,7 @@ import (
 
 // Analysis resolves a project's dependencies, scans them for known
 // vulnerabilities, and ranks newer versions of each direct dependency
-// against it (spec section 4). It implements Job.
+// against it. It implements Job.
 type Analysis struct {
 	Store    *store.Store
 	Tools    *tools.Manager
@@ -82,9 +82,9 @@ func (a *Analysis) Kind() string { return "analysis" }
 // "cancelled" apart from "failed"), so State here is this job's own
 // best-effort account for a reader of the committed directory alone.
 //
-// Named statusFile, not analysisStatus: the export job (internal/jobs,
-// area 2) already declares its own analysisStatus, a narrower read-only
-// view of this same file, in export.go.
+// Named statusFile, not analysisStatus: the export job, also in
+// internal/jobs, already declares its own analysisStatus, a narrower
+// read-only view of this same file, in export.go.
 type statusFile struct {
 	State        store.State  `json:"state"`
 	CreatedAt    time.Time    `json:"createdAt"`
@@ -194,8 +194,8 @@ func (a *Analysis) commit(status statusFile) error {
 	return nil
 }
 
-// Run executes the nine steps of spec section 4 in order, stopping at the
-// first step whose failure the table marks as fatal. It always commits the
+// Run executes the analysis' nine steps in order, stopping at the first
+// step whose failure the table marks as fatal. It always commits the
 // pending directory, even on failure or cancellation, so a failed, cancelled
 // or interrupted analysis keeps its directory and log.
 func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {

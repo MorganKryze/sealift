@@ -9,8 +9,8 @@ import (
 )
 
 // idLayout is the time.Parse layout analysis and export IDs use: a UTC
-// timestamp with second precision (spec section 3), the same one
-// internal/store and internal/jobs parse and format it with.
+// timestamp with second precision, the same one internal/store and
+// internal/jobs parse and format it with.
 const idLayout = "20060102T150405Z"
 
 // QueueAnalysis queues an analysis for the project.

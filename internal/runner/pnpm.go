@@ -33,7 +33,7 @@ type ResolveResult struct {
 }
 
 // PnpmCLI resolves dependencies by running the pnpm CLI through Node.js,
-// the packaging pnpm ships (spec section 6).
+// the packaging pnpm ships.
 type PnpmCLI struct {
 	pnpmCJS  string
 	cacheDir string
@@ -65,7 +65,7 @@ type supportedArchitectures struct {
 // Resolve writes the manifest and a pnpm-workspace.yaml pinned to
 // in.Target, runs "pnpm install --lockfile-only" and reads the resulting
 // lockfile back. The store and cache sit under cacheDir, so resolutions
-// share downloaded metadata across calls (spec section 4, "Resolution").
+// share downloaded metadata across calls.
 func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
 	if err := os.WriteFile(filepath.Join(in.Dir, "package.json"), in.Manifest, 0o664); err != nil {
 		return ResolveResult{}, fmt.Errorf("write package.json: %w", err)

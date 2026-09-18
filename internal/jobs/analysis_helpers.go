@@ -16,8 +16,7 @@ import (
 
 // probeManifest is the package.json content of an isolated resolution: one
 // dependency at the version being probed, plus the project's own pinned
-// version of each of its peer dependencies that the project declares (spec
-// section 4, "Candidate resolution").
+// version of each of its peer dependencies that the project declares.
 type probeManifest struct {
 	Name         string            `json:"name"`
 	Private      bool              `json:"private"`

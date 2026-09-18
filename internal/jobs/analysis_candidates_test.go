@@ -25,7 +25,7 @@ func TestProjectVersionsOf(t *testing.T) {
 // dependency's non-key candidates. A single dependency-major pass would
 // let dependency "a"'s non-key candidate queue ahead of dependency "b"'s
 // tasks entirely, delaying b's key candidate under a shared, limited
-// semaphore (spec section 4, "Candidate resolution": key candidates first).
+// semaphore, though key candidates must go first.
 func TestBuildCandidateTasksKeyFirstAcrossDependencies(t *testing.T) {
 	depA := npm.Dependency{Name: "a", Version: "1.0.0"}
 	depB := npm.Dependency{Name: "b", Version: "1.0.0"}

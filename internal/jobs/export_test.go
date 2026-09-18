@@ -114,8 +114,8 @@ const exportScanJSON = `{
 // serving real tarballs for widgets@1.1.0 (no publishConfig), @scope/gadget
 // (with publishConfig) at 2.0.0, 2.1.0 and 2.2.0, and helper@3.0.0 (no
 // publishConfig, project only). @scope/gadget has two candidates so a test
-// can select both at once, as spec section 5 and decisions.md
-// "2026-09-17: rank candidates, let the user download any version" allow.
+// can select both at once: a dependency may select any subset of its
+// current version and its candidates, not just one.
 type testHarness struct {
 	t        *testing.T
 	store    *store.Store
@@ -224,8 +224,8 @@ func (h *testHarness) newExport(t *testing.T, analysisDir, exportDir string, inc
 		Project:  store.Project{ID: "demo", Name: "demo", Target: store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}},
 		Settings: store.Settings{SignatureKey: "top-secret", DownloadParallelism: 4},
 		Analysis: AnalysisRef{ID: "20260910T080000Z", Dir: analysisDir, Result: h.result()},
-		// @scope/gadget selects two versions at once: this is exactly the
-		// "let the user download any version" case decisions.md settles.
+		// @scope/gadget selects two versions at once, so a version that
+		// breaks the build is not the only one already sitting in Nexus.
 		Request: ExportRequest{Selection: map[string][]string{"widgets": {"1.1.0"}, "@scope/gadget": {"2.1.0", "2.2.0"}}, IncludeProject: includeProject},
 		Dir:     exportDir,
 		ID:      "20260917T101502Z",

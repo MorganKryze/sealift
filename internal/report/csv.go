@@ -11,8 +11,7 @@ import (
 	"github.com/MorganKryze/sealift/rank"
 )
 
-// FindingsHeader is the exact column order findings.csv commits to (spec
-// section 5).
+// FindingsHeader is the exact column order findings.csv commits to.
 var FindingsHeader = []string{
 	"dependency", "current_version", "selected_version",
 	"package", "package_version", "vulnerability_id",
@@ -48,8 +47,7 @@ type DependencyResolution struct {
 // FindingsRows expands ix into one row per dependency, status and affected
 // package. rank.Index.Set collapses several packages carrying the same
 // vulnerability ID into the worst one; this instead keeps every affected
-// package, because findings.csv reports one row per affected package
-// (phase 1 carry-over).
+// package, because findings.csv reports one row per affected package.
 func FindingsRows(ix rank.Index, deps []DependencyResolution) []FindingsRow {
 	var rows []FindingsRow
 	for _, d := range deps {

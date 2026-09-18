@@ -112,8 +112,8 @@ type manifestValidationEntry struct {
 
 // decodeAnalysisResult unmarshals raw (an analysis' ranking.json, or nil
 // before one exists) into the contract's AnalysisResult shape. Field names
-// match internal/jobs.Result's JSON tags exactly (CONTRACTS.md's shared
-// types), so this never needs that package's own Go type.
+// match internal/jobs.Result's JSON tags exactly, so this never needs that
+// package's own Go type.
 func decodeAnalysisResult(raw json.RawMessage) (AnalysisResult, bool) {
 	if len(raw) == 0 {
 		return AnalysisResult{}, false

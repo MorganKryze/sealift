@@ -1,7 +1,7 @@
-// Drives the end-to-end test through sealift's own HTTP API (spec section
-// 9): create a project, follow its analysis, queue an export, download the
-// archive, publish it to an air-gapped Verdaccio, and install against it.
-// This proves sealift's real analysis and export code, not a hand-built
+// Drives the end-to-end test through sealift's own HTTP API: create a
+// project, follow its analysis, queue an export, download the archive,
+// publish it to an air-gapped Verdaccio, and install against it. This
+// proves sealift's real analysis and export code, not a hand-built
 // stand-in archive.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -71,8 +71,8 @@ function publish(registryUrl, dir) {
   execFileSync("sh", ["publish.sh", registryUrl, dir], { stdio: "inherit" });
 }
 
-// tarballName mirrors spec section 2's npm pack naming: name-version.tgz,
-// and scope-name-version.tgz for @scope/name.
+// tarballName mirrors npm pack's own naming: name-version.tgz, and
+// scope-name-version.tgz for @scope/name.
 function tarballName(name, version) {
   const flat = name.startsWith("@") ? name.slice(1).replace("/", "-") : name;
   return `${flat}-${version}.tgz`;
@@ -106,8 +106,8 @@ async function main() {
   publish(REGISTRY_URL, path.resolve("fixture-out"));
 
   // Nothing installs Trivy on a fresh volume before the first analysis
-  // needs it; the interface's force-update button (spec section 6) is the
-  // real path to reach for one, so this drives that same route.
+  // needs it; the interface's force-update button is the real path to
+  // reach for one, so this drives that same route.
   const tools = await json(`${api}/tools/trivy/update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -115,8 +115,8 @@ async function main() {
   });
   console.log("trivy installed:", tools.trivyActive);
 
-  // An export refuses to start while signatureKey stays empty (spec
-  // section 3), and PUT requires the full settings object.
+  // An export refuses to start while signatureKey stays empty, and PUT
+  // requires the full settings object.
   const settings = await json(`${api}/settings`);
   settings.signatureKey = "e2e-test-signature";
   await json(`${api}/settings`, {
@@ -144,8 +144,7 @@ async function main() {
   // selection is a list of versions per dependency (api/openapi.yaml,
   // internal/jobs.ExportRequest): a dependency can ship more than one
   // version in the same archive, so a version that breaks the build on
-  // the air-gapped side is not the only one already sitting in Nexus
-  // (decisions.md, "rank candidates, let the user download any version").
+  // the air-gapped side is not the only one already sitting in Nexus.
   // includeProject ships the project's own resolved tree regardless of
   // what else gets selected, so the final pnpm install below always has
   // what project/package.json actually pins, whichever dependency the

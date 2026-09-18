@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration tests against the real pnpm and Trivy binaries (spec section
-// 9). They skip with a clear message instead of failing when a tool is
-// absent from PATH, so a machine without Trivy still runs the rest of the
-// suite. Download retries, integrity mismatches and an unreachable
+// Integration tests against the real pnpm and Trivy binaries. They skip
+// with a clear message instead of failing when a tool is absent from
+// PATH, so a machine without Trivy still runs the rest of the suite.
+// Download retries, integrity mismatches and an unreachable
 // registry are already covered against httptest, with no build tag, in
 // npm/registry_test.go: that coverage needs no real tool and no network,
 // so it stays a unit test instead of being duplicated here.
@@ -27,8 +27,8 @@ import (
 )
 
 // threeDepManifest is a package.json with three exact-version direct
-// dependencies, the shape spec section 9 asks the integration level to
-// resolve with the real pnpm binary.
+// dependencies, enough to resolve with the real pnpm binary and prove a
+// realistic lockfile comes back.
 const threeDepManifest = `{
   "name": "sealift-integration-fixture",
   "version": "1.0.0",

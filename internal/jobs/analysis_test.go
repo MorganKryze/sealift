@@ -242,7 +242,7 @@ const barDoc = `{"name":"bar","versions":{
 // TestAnalysis_HappyPathAndCandidateFailure runs a two-dependency project
 // through the whole job via the real Queue: foo has a newer version that
 // resolves and fixes its only vulnerability (the best candidate), bar has a
-// newer version that fails to resolve (spec section 4, step 6 failure).
+// newer version that fails to resolve.
 // It also checks the event sequence: every step exactly once, "end" last.
 func TestAnalysis_HappyPathAndCandidateFailure(t *testing.T) {
 	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0","bar":"2.0.0"}}`)
@@ -571,8 +571,8 @@ func TestAnalysis_CombinedCheckConflictLeavesAfterNil(t *testing.T) {
 }
 
 // TestAnalysis_RegistryUnreachable covers a dependency whose registry
-// metadata never answers (spec section 4, step 5 failure): the job marks it
-// and continues, rather than failing outright.
+// metadata never answers: the job marks it and continues, rather than
+// failing outright.
 func TestAnalysis_RegistryUnreachable(t *testing.T) {
 	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"baz":"1.0.0"}}`)
 	mgr := newTestToolsManager(t, st)
@@ -669,9 +669,9 @@ func TestAnalysis_NoWarningsOrCandidatesSerialiseAsEmptyArrays(t *testing.T) {
 	}
 }
 
-// TestAnalysis_CancelledRunLeavesDirectory covers a run cancelled mid-flight
-// (spec section 4, "Cancel and restart"): the directory and its log stay on
-// disk, and status.json records the cancellation.
+// TestAnalysis_CancelledRunLeavesDirectory covers a run cancelled
+// mid-flight: the directory and its log stay on disk, and status.json
+// records the cancellation.
 func TestAnalysis_CancelledRunLeavesDirectory(t *testing.T) {
 	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
 	mgr := newTestToolsManager(t, st)

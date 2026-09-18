@@ -31,8 +31,7 @@ func NewTrivyCLI(bin, cacheDir string, asUser *Credential) *TrivyCLI {
 
 // ScanSBOM scans the CycloneDX document at sbomPath and writes a JSON
 // report to outPath. It skips a database download: the caller refreshes
-// the database once per job, not once per scan (spec section 4, steps 4
-// and 7).
+// the database once per job, not once per scan.
 func (c *TrivyCLI) ScanSBOM(ctx context.Context, sbomPath, outPath string) (string, error) {
 	return run(ctx, "", c.bin, []string{
 		"sbom", sbomPath,
@@ -48,8 +47,7 @@ func (c *TrivyCLI) ScanSBOM(ctx context.Context, sbomPath, outPath string) (stri
 // touches no database, but --cache-dir is a global trivy flag that
 // defaults to a path under HOME regardless of the subcommand; passing it
 // explicitly, as ScanSBOM already does, keeps this from depending on
-// HOME being set to something the caller can write (decisions.md, "phase
-// 2 part A review, what part B must carry").
+// HOME being set to something the caller can write.
 func (c *TrivyCLI) ConvertToCycloneDX(ctx context.Context, reportPath, outPath string) (string, error) {
 	return run(ctx, "", c.bin, []string{
 		"convert",
@@ -61,7 +59,7 @@ func (c *TrivyCLI) ConvertToCycloneDX(ctx context.Context, reportPath, outPath s
 }
 
 // UpdateDB downloads the vulnerability database only, without scanning
-// anything (spec section 4, step 2).
+// anything.
 func (c *TrivyCLI) UpdateDB(ctx context.Context) (string, error) {
 	return run(ctx, "", c.bin, []string{
 		"image",

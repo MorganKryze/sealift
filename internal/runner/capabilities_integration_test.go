@@ -36,8 +36,7 @@ func toolsCredential(t *testing.T) *Credential {
 }
 
 // minimalTrivyReport is just enough of a Trivy JSON report (SchemaVersion
-// 2, decisions.md "phase 1 review, what phase 2 must carry") for "trivy
-// convert --format cyclonedx" to accept as input.
+// 2) for "trivy convert --format cyclonedx" to accept as input.
 const minimalTrivyReport = `{
   "SchemaVersion": 2,
   "ArtifactName": "sealift-capcheck",
@@ -64,9 +63,8 @@ const minimalTrivyReport = `{
 
 // TestConvertToCycloneDXAsTools proves that ConvertToCycloneDX, with the
 // explicit --cache-dir the fix to internal/runner/trivy.go added, still
-// succeeds when the child runs as tools instead of the caller's own user
-// (decisions.md, "phase 2 part A review, what part B must carry"), the
-// one path nothing exercised before this test. This only means anything
+// succeeds when the child runs as tools instead of the caller's own user,
+// the one path nothing exercised before this test. This only means anything
 // run as app inside the sealift image, the same requirement as
 // TestCancelKillsCrossUserGroup, plus a real trivy binary.
 func TestConvertToCycloneDXAsTools(t *testing.T) {
@@ -106,10 +104,9 @@ func TestConvertToCycloneDXAsTools(t *testing.T) {
 	}
 }
 
-// TestCancelKillsCrossUserGroup proves the cap_kill finding of
-// decisions.md ("phase 2 part A review, what part B must carry"): a
-// cancellation started by the server, running as app, must reach a child
-// process group running as tools. This only means anything when this test
+// TestCancelKillsCrossUserGroup proves that a cancellation started by the
+// server, running as app, reaches a child process group running as
+// tools. This only means anything when this test
 // binary itself runs as app with the image's file capabilities, which
 // happens only inside a container built from the sealift Dockerfile;
 // outside it, the test binary runs under the caller's own uid and cannot

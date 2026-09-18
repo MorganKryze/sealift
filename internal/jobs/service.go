@@ -17,8 +17,8 @@ import (
 )
 
 // idLayout is the time.Parse layout analysis and export IDs use: a UTC
-// timestamp with second precision (spec section 3), the same one
-// internal/store parses committed directory names with.
+// timestamp with second precision, the same one internal/store parses
+// committed directory names with.
 const idLayout = "20060102T150405Z"
 
 // ErrAnalysisNotDone reports a QueueExport call naming an analysis that
@@ -28,8 +28,8 @@ var ErrAnalysisNotDone = errors.New("jobs: analysis is not done")
 
 // ErrInvalidSelection reports a QueueExport call whose selection names one
 // or more versions the analysis did not resolve. Bad holds every
-// offending "name@version" entry, spec section 4 step 1's precedent for a
-// validation failure: list every offense, not just the first.
+// offending "name@version" entry: a validation failure lists every
+// offense, not just the first.
 type ErrInvalidSelection struct {
 	Bad []string
 }
@@ -157,9 +157,8 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 // must name a done analysis with a readable ranking.json: the export never
 // resolves anything itself, so it has nothing to fall back to otherwise.
 // The selection is validated against that analysis' own result before
-// anything is reserved: spec section 4 step 1's validation-blocks-the-
-// start precedent applies here too, so a bad selection never reaches the
-// queue only to fail deep inside the job once the HTTP response is gone.
+// anything is reserved, so a bad selection never reaches the queue only
+// to fail deep inside the job once the HTTP response is gone.
 // Unlike Analysis, Export leaves a successful run's directory for
 // Service's finalizer to commit.
 func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (store.ExportInfo, error) {

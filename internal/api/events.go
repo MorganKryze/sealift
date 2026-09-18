@@ -23,9 +23,9 @@ type EventsHandler struct {
 
 // WatchJob implements the WatchJob operation of StrictServerInterface. It
 // returns the strict response object as an open pipe: VisitWatchJobResponse
-// reads from it and flushes after every read, so the risk check's finding
-// holds here too, and the first event reaches the client without waiting
-// for the job to end.
+// reads from it and flushes after every read, so an unflushed write never
+// sits buffered behind later ones, and the first event reaches the client
+// without waiting for the job to end.
 func (h *EventsHandler) WatchJob(ctx context.Context, _ WatchJobRequestObject) (WatchJobResponseObject, error) {
 	events, unsubscribe := h.Jobs.Subscribe()
 	pr, pw := io.Pipe()

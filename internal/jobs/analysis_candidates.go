@@ -123,8 +123,7 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 // so this is what actually decides which candidates start first under a
 // limited concurrency. A single dependency-major pass would let one
 // dependency's non-key candidates queue ahead of another dependency's key
-// one, which spec section 4 ("Candidate resolution") does not allow: key
-// candidates go first.
+// one, and key candidates must go first.
 func buildCandidateTasks(deps []depInfo, beforeIndex rank.Index) []candidateTask {
 	var primary, rest []candidateTask
 	for _, d := range deps {

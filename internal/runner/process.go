@@ -85,9 +85,10 @@ func run(ctx context.Context, dir, name string, args []string, asUser *Credentia
 		pid := cmd.Process.Pid
 		// In the container the server runs as app and children run as
 		// tools; kill(2) on another user's process group needs CAP_KILL,
-		// which the image does not grant yet, so the signal can return
-		// EPERM and the group survives. Bound the wait instead of blocking
-		// forever on a child that outlived its cancellation.
+		// which the image grants the server binary. A signal can still
+		// fail to reach a group that already exited on its own, so bound
+		// the wait instead of blocking forever on a child that outlived
+		// its cancellation.
 		killErr := killGroup(-pid, syscall.SIGKILL)
 		select {
 		case <-done: // reap the process; its exit error carries no useful information

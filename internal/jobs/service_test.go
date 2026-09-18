@@ -18,7 +18,7 @@ import (
 // noopPnpm and noopTrivy are runner.Pnpm and runner.Trivy that never touch
 // a real binary. Service.QueueAnalysis and QueueExport only build a job
 // and hand it to the queue; what a real Analysis or Export does with
-// these once running is area 1 and area 2's own tests.
+// these once running belongs to their own tests, not this one.
 type noopPnpm struct{}
 
 func (noopPnpm) Resolve(context.Context, runner.ResolveInput) (runner.ResolveResult, error) {

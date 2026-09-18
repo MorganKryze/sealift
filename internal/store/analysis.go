@@ -13,7 +13,7 @@ import (
 )
 
 // analysisIDLayout is the time.Parse layout analysis and export IDs use:
-// a UTC timestamp with second precision (spec section 3).
+// a UTC timestamp with second precision.
 const analysisIDLayout = "20060102T150405Z"
 
 // AnalysisInfo summarizes one committed analysis for the API: its identity,

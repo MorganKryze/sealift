@@ -32,7 +32,7 @@ import (
 var ToolVersion = "dev"
 
 // ErrSignatureKeyMissing reports an export queued while settings.json still
-// holds an empty signatureKey (spec section 3).
+// holds an empty signatureKey.
 var ErrSignatureKeyMissing = errors.New("jobs: signatureKey is empty, set it in settings before exporting")
 
 // ErrUnknownSelection reports a selection entry naming a version the
@@ -52,9 +52,9 @@ type AnalysisRef struct {
 	Result Result
 }
 
-// Export runs the steps of spec section 5: it builds the package list from
-// an analysis' selection, downloads and re-packs each tarball, writes the
-// reproducible archive, and writes the reports beside it.
+// Export builds the package list from an analysis' selection, downloads
+// and re-packs each tarball, writes the reproducible archive, and writes
+// the reports beside it.
 type Export struct {
 	Store    *store.Store
 	Registry *npm.Client
@@ -70,9 +70,8 @@ type Export struct {
 // ExportRequest is the input to an export: the versions selected per
 // dependency and whether to include the current project tree. A dependency
 // can select any subset of its current version and its candidates, not
-// just one (decisions.md, "2026-09-17: rank candidates, let the user
-// download any version": other versions ship too, so one already sits in
-// Nexus if the recommended one breaks the build on the air-gapped side).
+// just one: other versions ship too, so one already sits in Nexus if the
+// recommended one breaks the build on the air-gapped side.
 // An empty or absent list for a dependency is the same as not selecting it.
 type ExportRequest struct {
 	Selection      map[string][]string `json:"selection"`      // dependency name to selected versions
@@ -82,12 +81,12 @@ type ExportRequest struct {
 // Kind identifies this job to the queue and in its events.
 func (e *Export) Kind() string { return "export" }
 
-// Run executes the steps of spec section 5, emitting a "step" event around
-// each one and "progress" events during the download step. Any failure,
-// including cancellation, removes e.Dir before Run returns: spec section 5
-// says only complete exports exist. A successful Run leaves e.Dir ready for
-// the caller to commit (rename it into place), since Export does not know
-// the final path store.Pending renames to.
+// Run executes the export's steps, emitting a "step" event around each one
+// and "progress" events during the download step. Any failure, including
+// cancellation, removes e.Dir before Run returns: only a complete export
+// stays on disk. A successful Run leaves e.Dir ready for the caller to
+// commit (rename it into place), since Export does not know the final
+// path store.Pending renames to.
 func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	defer func() {
 		if err != nil {
@@ -178,8 +177,8 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 
 // validSelections returns the "name@version" pairs an export may select
 // from: each dependency's current version, plus every candidate the
-// analysis ranked. The current version is resolved and scanned like a
-// candidate (spec section 4), so its lockfile lives at the same path.
+// analysis ranked. The current version is resolved and scanned the same
+// way a candidate is, so its lockfile lives at the same path.
 func validSelections(r Result) map[string]bool {
 	valid := map[string]bool{}
 	for _, d := range r.Dependencies {
@@ -439,9 +438,9 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 	}, nil
 }
 
-// writeArchive is step 4: packages_npm.tar.gz as spec section 2 describes
-// it, with out/signature.key holding the configured key and no trailing
-// newline. The same selection always gives the same archive bytes.
+// writeArchive builds packages_npm.tar.gz, with out/signature.key holding
+// the configured key and no trailing newline. The same selection always
+// gives the same archive bytes.
 // archive.WriteTarGz calls each Entry's Open exactly once, in order, so
 // checking ctx there is how this checks it between entries: WriteTarGz
 // itself takes no context.
@@ -580,8 +579,8 @@ func (e *Export) writeTrivyReports(ctx context.Context, shipped []shippedPackage
 // writeFindingsCSV reads the analysis' own candidate scan, so the current
 // and selected resolutions being compared are exactly what the analysis
 // already resolved and scanned, and expands it with report.FindingsRows
-// instead of the collapsed set rank.Index.Set gives (phase 1 carry-over):
-// findings.csv needs one row per affected package. A dependency with
+// instead of the collapsed set rank.Index.Set gives: findings.csv needs
+// one row per affected package. A dependency with
 // several selected versions gets one report.DependencyResolution per
 // version, each compared against the same current resolution, so
 // findings.csv gets one row per selected version and vulnerability, as

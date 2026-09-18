@@ -14,8 +14,8 @@ import (
 // ExportInfo summarizes one export for the API: its identity, the analysis
 // it came from, its state, and the files ready to download once it is
 // done. Every ExportInfo this package reads back from disk reports state
-// Done: spec section 5 keeps only complete exports, removing the pending
-// directory of any that failed. internal/jobs reports a queued or running
+// Done: only a complete export keeps its directory, a failed one removes
+// its pending directory instead. internal/jobs reports a queued or running
 // export by other means, since neither has a committed directory yet.
 type ExportInfo struct {
 	ID         string
