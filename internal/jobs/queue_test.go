@@ -476,6 +476,141 @@ func TestQueue_SlowSubscriberNeverBlocksWorker(t *testing.T) {
 	waitIdle(t, q)
 }
 
+// TestQueue_FinalizerRunsBeforeEndAndSurvivesAnOverflowedSubscriber
+// proves SetFinalizer's hook runs synchronously, exactly once, with the
+// job's own id, kind and terminal state, and that flooding a
+// subscriber's buffer well past capacity, which makes deliverLocked drop
+// events (its own "end" event included), never stops the hook from
+// running: unlike a Subscribe channel, it is not something the queue can
+// drop.
+func TestQueue_FinalizerRunsBeforeEndAndSurvivesAnOverflowedSubscriber(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	var mu sync.Mutex
+	var calls []FinalizeInfo
+	q.SetFinalizer(func(info FinalizeInfo) error {
+		mu.Lock()
+		calls = append(calls, info)
+		mu.Unlock()
+		return nil
+	})
+
+	// Never read: past its buffer, deliverLocked drops every event for
+	// this subscriber, "end" included.
+	_, unsubscribe := q.Subscribe()
+	defer unsubscribe()
+
+	const eventCount = 500
+	finished := make(chan struct{})
+	job := &fakeJob{kind: "fake", run: func(_ context.Context, emit func(Event)) error {
+		for i := 0; i < eventCount; i++ {
+			emit(Event{Kind: "log", Data: json.RawMessage(`{"line":"x"}`)})
+		}
+		close(finished)
+		return nil
+	}}
+	id, err := q.Submit(job)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	// Wait for the job to have actually run, not just for Current to look
+	// idle: called too early, that check cannot tell "never started" apart
+	// from "already finalized".
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("job never ran")
+	}
+	waitIdle(t, q)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("finalize calls = %+v, want exactly 1", calls)
+	}
+	if calls[0].ID != id || calls[0].Kind != "fake" || calls[0].State != store.Done {
+		t.Errorf("finalize call = %+v, want {%q, fake, done}", calls[0], id)
+	}
+}
+
+// TestQueue_FinalizerRunsForACancelledQueuedJob proves the finalize hook
+// also runs for a job the queue drops before it ever starts, through the
+// same Cancel path that publishes its "end" event.
+func TestQueue_FinalizerRunsForACancelledQueuedJob(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	var mu sync.Mutex
+	var calls []FinalizeInfo
+	q.SetFinalizer(func(info FinalizeInfo) error {
+		mu.Lock()
+		calls = append(calls, info)
+		mu.Unlock()
+		return nil
+	})
+
+	release := make(chan struct{})
+	job1 := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error {
+		<-release
+		return nil
+	}}
+	job2 := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error { return nil }}
+
+	id1, err := q.Submit(job1)
+	if err != nil {
+		t.Fatalf("Submit(job1): %v", err)
+	}
+	waitRunning(t, q, id1)
+
+	id2, err := q.Submit(job2)
+	if err != nil {
+		t.Fatalf("Submit(job2): %v", err)
+	}
+	if err := q.Cancel(id2); err != nil {
+		t.Fatalf("Cancel(queued job2): %v", err)
+	}
+	close(release)
+	waitIdle(t, q)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, c := range calls {
+		if c.ID == id2 {
+			if c.State != store.Cancelled {
+				t.Errorf("finalize call for %s = %+v, want state cancelled", id2, c)
+			}
+			return
+		}
+	}
+	t.Fatalf("finalize calls = %+v, want one naming %s", calls, id2)
+}
+
+// TestQueue_FinalizerErrorIsLoggedNotFatal proves a hook's own error never
+// takes the worker down: the queue cannot undo a job that already ran,
+// so SetFinalizer's contract is to log the error and carry on.
+func TestQueue_FinalizerErrorIsLoggedNotFatal(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+	q.SetFinalizer(func(FinalizeInfo) error { return errors.New("boom") })
+
+	job1 := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error { return nil }}
+	if _, err := q.Submit(job1); err != nil {
+		t.Fatalf("Submit(job1): %v", err)
+	}
+	waitIdle(t, q)
+
+	job2 := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(_ context.Context, _ func(Event)) error { return nil }}
+	if _, err := q.Submit(job2); err != nil {
+		t.Fatalf("Submit(job2): %v", err)
+	}
+	select {
+	case <-job2.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not survive a finalize error: job2 never started")
+	}
+}
+
 func TestQueue_CloseDrains(t *testing.T) {
 	q := NewQueue(testLogger())
 

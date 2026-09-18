@@ -48,6 +48,19 @@ type entry struct {
 	job Job
 }
 
+// FinalizeInfo is the bounded, typed shape the queue's finalize hook
+// receives: just enough to let a caller commit or reconcile a job's own
+// state, never the job's own Event stream, whose raw, arbitrarily sized
+// Data a hook could otherwise be tempted to hold onto.
+type FinalizeInfo struct {
+	ID    string
+	Kind  string
+	State store.State
+}
+
+// FinalizeFunc is the queue's finalize hook. See SetFinalizer.
+type FinalizeFunc func(FinalizeInfo) error
+
 type subscriber struct {
 	ch chan Event
 	// notified tracks whether this subscriber already got a "log" event
@@ -71,6 +84,7 @@ type Queue struct {
 	cancelCurrent   context.CancelFunc
 	cancelRequested bool
 	history         []Event
+	finalize        FinalizeFunc
 
 	subs    map[int]*subscriber
 	nextSub int
@@ -93,6 +107,37 @@ func NewQueue(log *slog.Logger) *Queue {
 	q.cond = sync.NewCond(&q.mu)
 	go q.run()
 	return q
+}
+
+// SetFinalizer registers fn as the queue's one finalize hook, replacing
+// any previous one; nil clears it. The queue calls it synchronously, on
+// the worker goroutine, exactly once per job: right after that job's
+// terminal state is known, and before the queue clears the current job
+// and publishes its "end" event. Unlike a Subscribe channel, which
+// deliverLocked drops for a subscriber that falls behind, this call is
+// never dropped, which is the point: a caller that must commit or
+// discard a directory, or reconcile a status file, on every job needs a
+// path the queue cannot skip. The queue does not retry a returned error
+// and cannot undo a job that already ran, so it only logs it and moves
+// on; a hook must therefore treat its own failure as final too.
+func (q *Queue) SetFinalizer(fn FinalizeFunc) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.finalize = fn
+}
+
+// runFinalizer calls the registered finalize hook, if any, logging but
+// swallowing its error: see SetFinalizer.
+func (q *Queue) runFinalizer(id, kind string, state store.State) {
+	q.mu.Lock()
+	fn := q.finalize
+	q.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	if err := fn(FinalizeInfo{ID: id, Kind: kind, State: state}); err != nil {
+		q.log.Error("finalize hook failed", "id", id, "kind", kind, "state", state, "error", err)
+	}
 }
 
 // Submit queues j to run once every earlier job has finished, fifo, and
@@ -140,8 +185,9 @@ func (q *Queue) Cancel(id string) error {
 	for i, e := range q.pending {
 		if e.id == id {
 			q.pending = append(q.pending[:i:i], q.pending[i+1:]...)
+			kind := e.job.Kind()
 			q.mu.Unlock()
-			q.publishCancelled(id)
+			q.publishCancelled(id, kind)
 			return nil
 		}
 	}
@@ -149,9 +195,11 @@ func (q *Queue) Cancel(id string) error {
 	return fmt.Errorf("%w: %s", ErrNotFound, id)
 }
 
-// publishCancelled emits the "end" event for a job the queue never ran,
-// through the same publish path a finished job's own end event takes.
-func (q *Queue) publishCancelled(id string) {
+// publishCancelled runs the finalize hook and emits the "end" event for a
+// job the queue never ran, through the same publish path a finished
+// job's own end event takes.
+func (q *Queue) publishCancelled(id, kind string) {
+	q.runFinalizer(id, kind, store.Cancelled)
 	data, _ := json.Marshal(struct {
 		State store.State `json:"state"`
 	}{State: store.Cancelled})
@@ -258,6 +306,16 @@ func (q *Queue) run() {
 		case err != nil:
 			state = store.Failed
 		}
+		q.mu.Unlock()
+
+		// Called before the event below, and unlocked: a hook that
+		// commits a directory or reconciles a status file must run
+		// whether or not any subscriber is still keeping up, since
+		// deliverLocked would otherwise drop the "end" event a
+		// Subscribe-based caller would have relied on instead.
+		q.runFinalizer(next.id, next.job.Kind(), state)
+
+		q.mu.Lock()
 		endData, _ := json.Marshal(struct {
 			State store.State `json:"state"`
 		}{State: state})

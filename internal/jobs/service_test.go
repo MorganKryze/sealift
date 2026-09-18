@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -292,6 +293,63 @@ func TestServiceReconcilesAnalysisStatusToTheQueuesOwnOutcome(t *testing.T) {
 	}
 }
 
+// TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow
+// proves Service's finalize hook, not a Subscribe channel, is what
+// commits a job's directory and reconciles its status.json. With a
+// subscriber that never reads, and enough events emitted to overflow its
+// buffer well past its own "end" event, a Subscribe-based finalizer
+// would have dropped every one of them for this job, including the
+// event that told it the job was even over.
+func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testing.T) {
+	svc, st := newTestService(t)
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	pending, err := st.NewDir("analyses", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+
+	_, unsubscribe := svc.queue.Subscribe()
+	defer unsubscribe()
+
+	const eventCount = 500
+	job := &fakeJob{kind: "analysis", run: func(_ context.Context, emit func(Event)) error {
+		for i := 0; i < eventCount; i++ {
+			emit(Event{Kind: "log", Data: json.RawMessage(`{"line":"x"}`)})
+		}
+		// The job's own best-effort account, wrong here on purpose (as in
+		// TestServiceReconcilesAnalysisStatusToTheQueuesOwnOutcome above),
+		// to prove the queue's own outcome is what status.json ends up
+		// holding.
+		body := []byte(`{"state":"cancelled","step":"resolve"}`)
+		if err := os.WriteFile(filepath.Join(pending.Path(), "status.json"), body, 0o664); err != nil {
+			return err
+		}
+		return os.Rename(pending.Path(), pending.Final())
+	}}
+	queueID, err := svc.queue.Submit(job)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	svc.track(queueID, "analysis", project.ID, pending)
+
+	waitForTerminal(t, svc, pending.ID())
+
+	if _, err := os.Stat(pending.Final()); err != nil {
+		t.Fatalf("committed analysis directory missing: %v", err)
+	}
+
+	var status struct{ State string }
+	if err := st.ReadJSON(filepath.Join(pending.Final(), "status.json"), &status); err != nil {
+		t.Fatalf("ReadJSON status.json: %v", err)
+	}
+	if status.State != string(store.Done) {
+		t.Errorf("status.json state = %q, want %q (the queue's own outcome, Run returned nil)", status.State, store.Done)
+	}
+}
+
 func TestCancelUntrackedIDReturnsErrNotFound(t *testing.T) {
 	svc, _ := newTestService(t)
 	if err := svc.Cancel("no-such-id"); !errors.Is(err, store.ErrNotFound) {
@@ -309,7 +367,9 @@ func TestFinalizePendingDiscardsAnEmptyDirectory(t *testing.T) {
 		t.Fatalf("NewDir: %v", err)
 	}
 
-	finalizePending(pending)
+	if err := finalizePending(pending); err != nil {
+		t.Fatalf("finalizePending: %v", err)
+	}
 
 	if _, err := os.Stat(pending.Path()); !os.IsNotExist(err) {
 		t.Fatalf("pending path after finalize: err = %v, want it discarded", err)
@@ -329,7 +389,9 @@ func TestFinalizePendingCommitsANonEmptyDirectory(t *testing.T) {
 		t.Fatalf("write archive: %v", err)
 	}
 
-	finalizePending(pending)
+	if err := finalizePending(pending); err != nil {
+		t.Fatalf("finalizePending: %v", err)
+	}
 
 	if _, err := os.Stat(pending.Path()); !os.IsNotExist(err) {
 		t.Fatalf("pending .tmp path still exists after finalize, want it committed")

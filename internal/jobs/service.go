@@ -74,7 +74,11 @@ type Service struct {
 	byProjectID map[string]*trackedJob // the one job Service is tracking for a project, queued or running
 }
 
-// NewService builds a Service and starts its finalizer goroutine.
+// NewService builds a Service and registers it as the queue's finalize
+// hook (see Queue.SetFinalizer): every job's directory and, for an
+// analysis, its status.json get finalized synchronously as part of the
+// queue's own worker step, not through a Subscribe channel a slow reader
+// could make the queue drop.
 func NewService(st *store.Store, q *Queue, tm *tools.Manager, pnpm runner.Pnpm, trivy runner.Trivy, reg *npm.Client) *Service {
 	s := &Service{
 		store:       st,
@@ -87,7 +91,7 @@ func NewService(st *store.Store, q *Queue, tm *tools.Manager, pnpm runner.Pnpm, 
 		byStoreID:   make(map[string]*trackedJob),
 		byProjectID: make(map[string]*trackedJob),
 	}
-	go s.finalizeLoop()
+	q.SetFinalizer(s.finalize)
 	return s
 }
 
@@ -256,59 +260,41 @@ func (s *Service) track(queueID, kind, projectID string, pending *store.Pending)
 	s.byProjectID[projectID] = tj
 }
 
-// finalizeLoop runs for the Service's lifetime, one long subscription
-// that sees every job's events, not only the one currently running: the
-// queue delivers to every subscriber regardless of which job is current.
-// It reacts to each "end" event for a job Service is tracking and stops
-// once the queue closes the channel.
+// finalize is the queue's finalize hook (see Queue.SetFinalizer). It runs
+// synchronously on the queue's own worker goroutine, once per job, so a
+// directory commit or a status.json reconciliation can never be dropped
+// the way an event on a Subscribe channel can once a slow reader falls
+// behind.
 //
 // The tracked job is only removed from every index once its directory
 // has been finalized and, for an analysis, its status.json reconciled:
 // a caller polling LiveState until it reports untracked, such as a test
 // that then removes the whole data volume, needs that to mean the
 // filesystem has genuinely gone quiet, not just that the maps have.
-func (s *Service) finalizeLoop() {
-	events, _ := s.queue.Subscribe()
-	for e := range events {
-		if e.Kind != "end" {
-			continue
-		}
-		s.mu.Lock()
-		tj, ok := s.byQueueID[e.Job]
-		s.mu.Unlock()
-		if !ok {
-			continue
-		}
-
-		finalizePending(tj.pending)
-		if tj.kind == "analysis" {
-			if state, ok := endState(e.Data); ok {
-				reconcileAnalysisStatus(s.store, tj.pending, state)
-			}
-		}
-
-		s.mu.Lock()
-		delete(s.byQueueID, e.Job)
-		delete(s.byStoreID, tj.storeID)
-		// A newer job for the same project may already have replaced
-		// this entry; only clear it if it is still the one this "end"
-		// event is about.
-		if s.byProjectID[tj.projectID] == tj {
-			delete(s.byProjectID, tj.projectID)
-		}
-		s.mu.Unlock()
+func (s *Service) finalize(info FinalizeInfo) error {
+	s.mu.Lock()
+	tj, ok := s.byQueueID[info.ID]
+	s.mu.Unlock()
+	if !ok {
+		return nil
 	}
-}
 
-// endState extracts the state field an "end" event's payload carries.
-func endState(data json.RawMessage) (store.State, bool) {
-	var payload struct {
-		State store.State `json:"state"`
+	err := finalizePending(tj.pending)
+	if tj.kind == "analysis" {
+		reconcileAnalysisStatus(s.store, tj.pending, info.State)
 	}
-	if err := json.Unmarshal(data, &payload); err != nil || payload.State == "" {
-		return "", false
+
+	s.mu.Lock()
+	delete(s.byQueueID, info.ID)
+	delete(s.byStoreID, tj.storeID)
+	// A newer job for the same project may already have replaced this
+	// entry; only clear it if it is still the one this finalize call is
+	// about.
+	if s.byProjectID[tj.projectID] == tj {
+		delete(s.byProjectID, tj.projectID)
 	}
-	return payload.State, true
+	s.mu.Unlock()
+	return err
 }
 
 // reconcileAnalysisStatus overwrites a committed analysis' status.json
@@ -330,21 +316,22 @@ func reconcileAnalysisStatus(st *store.Store, pending *store.Pending, state stor
 	_ = st.WriteJSON(path, fields)
 }
 
-// finalizePending decides what a job leaves behind once it has ended.
-// Analysis always commits itself, whatever the outcome, so this only ever
-// finds one of its directories when the job never started (the queue
-// dropped it while still queued): empty, and discarded here. Export
-// leaves a successful run's directory non-empty for exactly this to
-// commit, and removes it itself on failure, so this never sees a failed
-// export's directory at all.
-func finalizePending(pending *store.Pending) {
+// finalizePending decides what a job leaves behind once it has ended,
+// returning any error committing or discarding it hit so the caller can
+// log it: a failed commit here loses a finished export outright, so it
+// must not disappear silently. Analysis always commits itself, whatever
+// the outcome, so this only ever finds one of its directories when the
+// job never started (the queue dropped it while still queued): empty,
+// and discarded here. Export leaves a successful run's directory
+// non-empty for exactly this to commit, and removes it itself on
+// failure, so this never sees a failed export's directory at all.
+func finalizePending(pending *store.Pending) error {
 	entries, err := os.ReadDir(pending.Path())
 	if err != nil {
-		return // already committed or discarded by the job itself
+		return nil // already committed or discarded by the job itself
 	}
 	if len(entries) == 0 {
-		_ = pending.Discard()
-		return
+		return pending.Discard()
 	}
-	_ = pending.Commit()
+	return pending.Commit()
 }
