@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,9 +27,11 @@ const trivyTestVersion = "0.55.0"
 // release-latest endpoint, the Linux-64bit tarball, and its checksums
 // file. When badChecksum is true, the checksums file lists a checksum
 // that does not match the tarball, so callers can exercise the mismatch
-// path.
-func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) *httptest.Server {
+// path. The returned counter counts requests for the tarball asset, so a
+// caller can assert a second install skipped the download.
+func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
+	var assetRequests atomic.Int32
 	const version = trivyTestVersion
 	tarball := buildTarGz(t, map[string]string{
 		"trivy":       "#!/bin/sh\necho fake trivy\n",
@@ -62,6 +65,7 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) *httpte
 		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+		assetRequests.Add(1)
 		_, _ = w.Write(tarball)
 	})
 	mux.HandleFunc("/"+checksumsName, func(w http.ResponseWriter, _ *http.Request) {
@@ -70,7 +74,7 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) *httpte
 
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, &assetRequests
 }
 
 func newTestManager(t *testing.T, srv *httptest.Server) (*Manager, string) {
@@ -83,7 +87,7 @@ func newTestManager(t *testing.T, srv *httptest.Server) (*Manager, string) {
 }
 
 func TestUpdateTrivyRefusesRecentReleaseWithoutForce(t *testing.T) {
-	srv := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
+	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
 	_, err := m.UpdateTrivy(context.Background(), false)
@@ -96,7 +100,7 @@ func TestUpdateTrivyRefusesRecentReleaseWithoutForce(t *testing.T) {
 }
 
 func TestUpdateTrivyInstallsRecentReleaseWithForce(t *testing.T) {
-	srv := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
+	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
 	version, err := m.UpdateTrivy(context.Background(), true)
@@ -120,7 +124,7 @@ func TestUpdateTrivyInstallsRecentReleaseWithForce(t *testing.T) {
 }
 
 func TestUpdateTrivyChecksumMismatchInstallsNothing(t *testing.T) {
-	srv := trivyRelease(t, time.Now().Add(-30*24*time.Hour), true)
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), true)
 	m, root := newTestManager(t, srv)
 
 	_, err := m.UpdateTrivy(context.Background(), false)
@@ -136,7 +140,7 @@ func TestUpdateTrivyChecksumMismatchInstallsNothing(t *testing.T) {
 }
 
 func TestActivateTrivyRollsBack(t *testing.T) {
-	srv := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
 	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
@@ -174,14 +178,15 @@ func TestActivateTrivyRollsBack(t *testing.T) {
 }
 
 func TestActivateTrivyRefusesUninstalledVersion(t *testing.T) {
-	m, _ := newTestManager(t, trivyRelease(t, time.Now(), false))
+	srv, _ := trivyRelease(t, time.Now(), false)
+	m, _ := newTestManager(t, srv)
 	if err := m.ActivateTrivy("9.9.9"); err == nil {
 		t.Fatal("ActivateTrivy on a version never installed: want error, got nil")
 	}
 }
 
 func TestTrivyStateReportsDBDate(t *testing.T) {
-	srv := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
 	dbDir := filepath.Join(root, "trivy-cache", "db")
@@ -207,7 +212,7 @@ func TestTrivyStateReportsDBDate(t *testing.T) {
 }
 
 func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
-	srv := trivyRelease(t, time.Now(), false)
+	srv, _ := trivyRelease(t, time.Now(), false)
 	m, _ := newTestManager(t, srv)
 
 	state, err := m.TrivyState(context.Background())
@@ -222,5 +227,32 @@ func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
 	}
 	if state.Active != "" {
 		t.Fatalf("Active = %q, want empty", state.Active)
+	}
+}
+
+func TestUpdateTrivyInstallingSameVersionTwiceDownloadsOnce(t *testing.T) {
+	srv, assetRequests := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
+		t.Fatalf("first UpdateTrivy: %v", err)
+	}
+	if got := assetRequests.Load(); got != 1 {
+		t.Fatalf("asset requests after first install = %d, want 1", got)
+	}
+
+	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
+		t.Fatalf("second UpdateTrivy: %v", err)
+	}
+	if got := assetRequests.Load(); got != 1 {
+		t.Fatalf("asset requests after second install = %d, want still 1: a version already installed must not download again", got)
+	}
+
+	active, err := m.activeTrivy()
+	if err != nil {
+		t.Fatalf("activeTrivy: %v", err)
+	}
+	if active != trivyTestVersion {
+		t.Fatalf("active version = %q, want %q", active, trivyTestVersion)
 	}
 }

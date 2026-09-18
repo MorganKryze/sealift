@@ -5,6 +5,8 @@ package tools
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -127,6 +129,10 @@ func writeTarFile(target string, r io.Reader, mode os.FileMode) error {
 
 // installDir renames a freshly extracted "<dir>.tmp" into dir, removing any
 // stale partial extraction first so a crash never leaves dir half-written.
+// When dir already holds an install, it is moved aside rather than removed
+// up front: a rename onto a non-empty directory fails with ENOTEMPTY, and a
+// plain RemoveAll would destroy a working install before the new one is in
+// place.
 func installDir(dir string, extract func(tmp string) error) error {
 	tmp := dir + ".tmp"
 	if err := os.RemoveAll(tmp); err != nil {
@@ -140,9 +146,43 @@ func installDir(dir string, extract func(tmp string) error) error {
 		_ = os.RemoveAll(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, dir); err != nil {
+
+	var old string
+	if _, err := os.Lstat(dir); err == nil {
+		suffix, err := randomSuffix()
+		if err != nil {
+			_ = os.RemoveAll(tmp)
+			return err
+		}
+		old = dir + ".old-" + suffix
+		if err := os.Rename(dir, old); err != nil {
+			_ = os.RemoveAll(tmp)
+			return err
+		}
+	} else if !os.IsNotExist(err) {
 		_ = os.RemoveAll(tmp)
 		return err
 	}
+
+	if err := os.Rename(tmp, dir); err != nil {
+		_ = os.RemoveAll(tmp)
+		if old != "" {
+			_ = os.Rename(old, dir) // best effort: restore the working install
+		}
+		return err
+	}
+	if old != "" {
+		_ = os.RemoveAll(old)
+	}
 	return nil
+}
+
+// randomSuffix returns 8 lowercase hex characters, used to name the
+// directory installDir moves an existing install aside to.
+func randomSuffix() (string, error) {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }

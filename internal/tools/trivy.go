@@ -87,6 +87,21 @@ func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
 		return "", fmt.Errorf("%w: %s was published %s ago, minimum age is %s", ErrReleaseTooRecent, version, age.Round(time.Hour), minAge)
 	}
 
+	installed, err := m.InstalledTrivy()
+	if err != nil {
+		return "", err
+	}
+	for _, v := range installed {
+		if v == version {
+			// Already on disk: activating is idempotent, downloading again
+			// is not what a retry after ActivateTrivy failed needs.
+			if err := m.ActivateTrivy(version); err != nil {
+				return "", err
+			}
+			return version, nil
+		}
+	}
+
 	assetName, err := trivyAssetName(version, m.hostArch())
 	if err != nil {
 		return "", err

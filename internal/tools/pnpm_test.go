@@ -112,6 +112,40 @@ func TestEnsurePnpmMissingBinGivesClearError(t *testing.T) {
 	}
 }
 
+// TestEnsurePnpmRetrySucceedsAfterBadExtraction proves installDir can
+// replace an install a previous, failed EnsurePnpm call left on disk: the
+// first tarball lacks package/bin/pnpm.cjs, so tools/pnpm/10.34.5 exists
+// but is unusable; the retry must still succeed once the registry serves a
+// complete tarball for the same version.
+func TestEnsurePnpmRetrySucceedsAfterBadExtraction(t *testing.T) {
+	badTarball := buildTarGz(t, map[string]string{
+		"package/package.json": `{"name":"pnpm"}`,
+	})
+	goodTarball := buildTarGz(t, map[string]string{
+		"package/package.json": `{"name":"pnpm"}`,
+		"package/bin/pnpm.cjs": "#!/usr/bin/env node\n",
+	})
+	badSrv, _ := pnpmRegistry(t, map[string][]byte{"10.34.5": badTarball})
+	goodSrv, _ := pnpmRegistry(t, map[string][]byte{"10.34.5": goodTarball})
+
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, http.DefaultClient, nil)
+
+	m.NPMRegistry = badSrv.URL
+	if _, err := m.EnsurePnpm(context.Background(), "10.34.5"); !errors.Is(err, errPnpmBinMissing) {
+		t.Fatalf("first EnsurePnpm error = %v, want errPnpmBinMissing", err)
+	}
+
+	m.NPMRegistry = goodSrv.URL
+	bin, err := m.EnsurePnpm(context.Background(), "10.34.5")
+	if err != nil {
+		t.Fatalf("retry EnsurePnpm: %v", err)
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("stat installed bin after retry: %v", err)
+	}
+}
+
 func TestEnsurePnpmUnknownVersion(t *testing.T) {
 	srv, _ := pnpmRegistry(t, map[string][]byte{})
 	m := NewManager(fakeVolume{root: t.TempDir(), settings: store.Settings{}}, srv.Client(), nil)
