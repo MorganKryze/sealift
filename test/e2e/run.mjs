@@ -45,12 +45,23 @@ async function waitForHealthz() {
   throw new Error("sealift never became healthy");
 }
 
-async function pollUntilDone(url) {
+// pollUntilDoneTimeoutMs bounds pollUntilDone: five minutes is ample for
+// the fixture project, and without a bound a job stuck for any reason
+// burns the whole workflow's time budget with nothing to say why.
+const pollUntilDoneTimeoutMs = 5 * 60 * 1000;
+
+async function pollUntilDone(step, url) {
+  const deadline = Date.now() + pollUntilDoneTimeoutMs;
+  let lastState = "unknown";
   for (;;) {
     const body = await json(url);
+    lastState = body.state;
     if (body.state === "done") return body;
     if (["failed", "cancelled", "interrupted"].includes(body.state)) {
       throw new Error(`${url} ended in state ${body.state}: ${JSON.stringify(body)}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`${step} did not finish within ${pollUntilDoneTimeoutMs}ms polling ${url}; last state seen: ${lastState}`);
     }
     await sleep(2000);
   }
@@ -122,7 +133,7 @@ async function main() {
   const analysisId = project.analyses[0].id;
   console.log("project created:", projectId, "analysis queued:", analysisId);
 
-  const analysis = await pollUntilDone(`${api}/projects/${projectId}/analyses/${analysisId}`);
+  const analysis = await pollUntilDone("analysis", `${api}/projects/${projectId}/analyses/${analysisId}`);
   console.log(
     "analysis done:",
     analysis.result.dependencies
@@ -147,11 +158,16 @@ async function main() {
       selection[d.name] = multiVersion.versions;
     }
   }
-  if (multiVersion) {
-    console.log(`selecting two versions of ${multiVersion.name}: ${multiVersion.versions.join(", ")}`);
-  } else {
-    console.log("no dependency offered two or more candidates; exporting only what includeProject carries");
+  if (!multiVersion) {
+    // project/package.json pins express at 5.0.1 precisely to guarantee
+    // this: an empty result here means the candidate step itself broke,
+    // not that the fixture ran dry.
+    const seen = analysis.result.dependencies
+      .map((d) => `${d.name}@${d.current} [${d.candidates.map((c) => c.version).join(", ") || "no candidates"}]`)
+      .join(", ");
+    throw new Error(`no dependency offered two or more candidates; dependencies seen: ${seen}`);
   }
+  console.log(`selecting two versions of ${multiVersion.name}: ${multiVersion.versions.join(", ")}`);
 
   const exportJob = await json(`${api}/projects/${projectId}/analyses/${analysisId}/exports`, {
     method: "POST",
@@ -159,7 +175,7 @@ async function main() {
     body: JSON.stringify({ selection, includeProject: true }),
   });
   console.log("export queued:", exportJob.id);
-  await pollUntilDone(`${api}/projects/${projectId}/exports/${exportJob.id}`);
+  await pollUntilDone("export", `${api}/projects/${projectId}/exports/${exportJob.id}`);
   console.log("export done");
 
   const archiveRes = await fetch(
