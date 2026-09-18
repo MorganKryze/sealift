@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -84,6 +86,49 @@ sleep 5
 	time.Sleep(2 * time.Second) // past the grandchild's 1s delay
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("marker file exists (or stat failed differently): %v", err)
+	}
+}
+
+// TestRun_CancelBoundsWaitWhenGroupKillFails proves that a child which
+// survives its group kill (as happens in the container without CAP_KILL,
+// where kill(2) returns EPERM) no longer blocks run forever: it stubs
+// killGroup to fail and shrinks killGrace, then asserts run returns within
+// the grace period with an error naming the kill failure.
+func TestRun_CancelBoundsWaitWhenGroupKillFails(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, "sleeper.sh", `sleep 5
+`)
+
+	origGrace := killGrace
+	killGrace = 50 * time.Millisecond
+	defer func() { killGrace = origGrace }()
+
+	origKill := killGroup
+	killGroup = func(_ int, _ syscall.Signal) error { return syscall.EPERM }
+	defer func() { killGroup = origKill }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var runErr error
+	start := time.Now()
+	go func() {
+		_, runErr = run(ctx, dir, script, nil, nil)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond) // let the script start
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not return within the grace period")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("run took %v, want it bounded by killGrace (50ms)", elapsed)
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "kill") {
+		t.Fatalf("run error = %v, want it to mention the kill failure", runErr)
 	}
 }
 
