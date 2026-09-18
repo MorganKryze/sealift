@@ -1,0 +1,20 @@
+storage: /verdaccio/storage
+self_path: /verdaccio/storage
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: 1000
+
+# No uplink: an air-gapped Nexus import never reaches the public registry,
+# and the end-to-end test proves an archive stands on its own.
+uplinks: {}
+
+packages:
+  "**":
+    access: $all
+    publish: $all
+    unpublish: $all
+
+logs:
+  - { type: stdout, format: pretty, level: warn }

@@ -1,0 +1,10 @@
+{
+  "name": "sealift-e2e-project",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "express": "5.0.1",
+    "sealift-e2e-publishconfig-pkg": "1.0.0"
+  }
+}

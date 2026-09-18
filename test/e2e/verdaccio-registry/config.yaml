@@ -1,0 +1,27 @@
+storage: /verdaccio/storage
+self_path: /verdaccio/storage
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: 1000
+
+# Sealift resolves and downloads through this instance instead of the real
+# npm registry (SEALIFT_NPM_REGISTRY and NPM_CONFIG_REGISTRY in
+# docker-compose.yml), so the fixture package below can be published here
+# and be resolvable to sealift's analysis and export, which the real
+# registry never carries. The uplink keeps esbuild and express resolving
+# normally, proxied from the real registry.
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+
+packages:
+  "**":
+    access: $all
+    publish: $all
+    unpublish: $all
+    proxy: npmjs
+
+logs:
+  - { type: stdout, format: pretty, level: warn }

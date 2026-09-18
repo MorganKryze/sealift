@@ -1,0 +1,9 @@
+{
+  "name": "sealift-e2e-publishconfig-pkg",
+  "version": "1.0.0",
+  "description": "Fixture package with a publishConfig field, for the end-to-end test.",
+  "main": "index.js",
+  "publishConfig": {
+    "access": "public"
+  }
+}

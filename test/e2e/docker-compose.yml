@@ -1,0 +1,63 @@
+services:
+  # Stands in for the public npm registry: sealift resolves and downloads
+  # through it (SEALIFT_NPM_REGISTRY, NPM_CONFIG_REGISTRY below), so the
+  # local fixture package can be published here and be resolvable to
+  # sealift's own analysis and export.
+  registry:
+    image: verdaccio/verdaccio:5
+    volumes:
+      - ./verdaccio-registry/config.yaml:/verdaccio/conf/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4873/-/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # The air-gapped side: no uplink, so only what gets published here after
+  # the export exists. Final proof that the archive stands on its own.
+  airgap:
+    image: verdaccio/verdaccio:5
+    volumes:
+      - ./verdaccio-airgap/config.yaml:/verdaccio/conf/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4873/-/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  sealift:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    depends_on:
+      registry:
+        condition: service_healthy
+    environment:
+      SEALIFT_NPM_REGISTRY: http://registry:4873
+      NPM_CONFIG_REGISTRY: http://registry:4873
+    volumes:
+      - sealift-e2e-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  test:
+    image: node:22-bookworm-slim
+    depends_on:
+      sealift:
+        condition: service_healthy
+      airgap:
+        condition: service_healthy
+    working_dir: /e2e
+    volumes:
+      - .:/e2e
+    environment:
+      SEALIFT_URL: http://sealift:8080
+      REGISTRY_URL: http://registry:4873
+      AIRGAP_URL: http://airgap:4873
+    entrypoint: ["sh", "run.sh"]
+
+volumes:
+  sealift-e2e-data:
