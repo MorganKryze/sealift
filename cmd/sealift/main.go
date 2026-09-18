@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -66,8 +67,10 @@ func run(addr, root string, log *slog.Logger) error {
 	// restart to take effect, a known limit of the fixed constructor
 	// jobs.NewService takes.
 	target := st.Settings().Target
-	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), nil)
-	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), nil)
+	asUser := toolsCredential()
+	log.Info("child processes", "runs_as_tools_account", asUser != nil)
+	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
+	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), asUser)
 	// Empty keeps npm.DefaultRegistry, the only path production takes. The
 	// end-to-end test (test/e2e) sets this to a local Verdaccio that mirrors
 	// the public registry through an uplink, so it can publish a package
@@ -123,3 +126,25 @@ func run(addr, root string, log *slog.Logger) error {
 // created. Only a test in this package sets it, to submit a job before the
 // server starts accepting connections.
 var onQueueReady func(*jobs.Queue)
+
+// toolsCredential builds the credential pnpm and Trivy run under, from the
+// uid and gid docker-entrypoint.sh exports as SEALIFT_TOOLS_UID and
+// SEALIFT_TOOLS_GID. It returns nil, leaving children under the caller's
+// own identity, when either variable is unset or does not parse as a
+// uint32, which covers every test and a bare host outside the image.
+func toolsCredential() *runner.Credential {
+	uidEnv := os.Getenv("SEALIFT_TOOLS_UID")
+	gidEnv := os.Getenv("SEALIFT_TOOLS_GID")
+	if uidEnv == "" || gidEnv == "" {
+		return nil
+	}
+	uid, err := strconv.ParseUint(uidEnv, 10, 32)
+	if err != nil {
+		return nil
+	}
+	gid, err := strconv.ParseUint(gidEnv, 10, 32)
+	if err != nil {
+		return nil
+	}
+	return &runner.Credential{UID: uint32(uid), GID: uint32(gid)}
+}

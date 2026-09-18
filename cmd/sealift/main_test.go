@@ -16,6 +16,45 @@ import (
 	"github.com/MorganKryze/sealift/internal/jobs"
 )
 
+// TestToolsCredential proves toolsCredential builds a credential only when
+// both SEALIFT_TOOLS_UID and SEALIFT_TOOLS_GID parse, so a bare host or a
+// test that never sets them still runs pnpm and Trivy under the caller's
+// own identity instead of failing to start.
+func TestToolsCredential(t *testing.T) {
+	t.Run("both set", func(t *testing.T) {
+		t.Setenv("SEALIFT_TOOLS_UID", "10001")
+		t.Setenv("SEALIFT_TOOLS_GID", "2000")
+		cred := toolsCredential()
+		if cred == nil {
+			t.Fatal("toolsCredential() = nil, want a credential")
+		}
+		if cred.UID != 10001 || cred.GID != 2000 {
+			t.Errorf("toolsCredential() = %+v, want UID 10001 GID 2000", cred)
+		}
+	})
+	t.Run("uid missing", func(t *testing.T) {
+		t.Setenv("SEALIFT_TOOLS_UID", "")
+		t.Setenv("SEALIFT_TOOLS_GID", "2000")
+		if cred := toolsCredential(); cred != nil {
+			t.Errorf("toolsCredential() = %+v, want nil", cred)
+		}
+	})
+	t.Run("gid missing", func(t *testing.T) {
+		t.Setenv("SEALIFT_TOOLS_UID", "10001")
+		t.Setenv("SEALIFT_TOOLS_GID", "")
+		if cred := toolsCredential(); cred != nil {
+			t.Errorf("toolsCredential() = %+v, want nil", cred)
+		}
+	})
+	t.Run("unparseable", func(t *testing.T) {
+		t.Setenv("SEALIFT_TOOLS_UID", "not-a-number")
+		t.Setenv("SEALIFT_TOOLS_GID", "2000")
+		if cred := toolsCredential(); cred != nil {
+			t.Errorf("toolsCredential() = %+v, want nil", cred)
+		}
+	})
+}
+
 // TestRunServesHealthAndStopsOnSignal starts the real wiring on a free port,
 // so a broken store, queue or route shows up here rather than in the image.
 func TestRunServesHealthAndStopsOnSignal(t *testing.T) {

@@ -37,6 +37,10 @@ RUN groupadd --gid 2000 data \
     && useradd --uid 10000 --gid data --home-dir /data/home --no-create-home app \
     && useradd --uid 10001 --gid data --home-dir /data/home --no-create-home tools \
     && mkdir -p /data && chown app:data /data && chmod 0770 /data
+# Read by cmd/sealift's toolsCredential so pnpm and Trivy run as tools
+# instead of app, the account that owns /data/private/settings.json.
+ENV SEALIFT_TOOLS_UID=10001
+ENV SEALIFT_TOOLS_GID=2000
 
 COPY --from=caps /sealift /usr/local/bin/sealift
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
