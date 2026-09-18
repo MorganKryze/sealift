@@ -23,3 +23,7 @@ test:
 
 bench:
     go test -run '^$' -bench . -benchmem ./...
+
+# Regenerate the generated server code from api/openapi.yaml.
+generate:
+    go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config api/oapi-codegen.yaml api/openapi.yaml
