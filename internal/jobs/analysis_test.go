@@ -510,6 +510,19 @@ func TestAnalysis_CancelledRunLeavesDirectory(t *testing.T) {
 	// Give stepResolveProject time to reach the blocking fake pnpm call
 	// before cancelling, so the cancellation lands mid-step, not before it.
 	time.Sleep(50 * time.Millisecond)
+
+	// While still blocked, status.json must already exist with state
+	// running, written at the start of Run: without that early write,
+	// store.MarkRunningInterrupted's restart sweep never finds anything
+	// to flip, since commit only ever writes a terminal state.
+	var running statusFile
+	if err := st.ReadJSON(filepath.Join(a.Dir, "status.json"), &running); err != nil {
+		t.Fatalf("read status.json while still running: %v", err)
+	}
+	if running.State != store.Running {
+		t.Fatalf("status.json state while still running = %q, want %q", running.State, store.Running)
+	}
+
 	cancel()
 
 	select {

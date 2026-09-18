@@ -50,6 +50,13 @@ func run(addr, root string, log *slog.Logger) error {
 	if swept > 0 {
 		log.Warn("marked analyses interrupted after a restart", "count", swept)
 	}
+	removed, err := st.RemoveOrphanDirs()
+	if err != nil {
+		return err
+	}
+	if removed > 0 {
+		log.Warn("removed unfinished job directories left by a crash", "count", removed)
+	}
 	// A Trivy release asset runs tens of megabytes; give the download
 	// enough time without leaving the client unbounded.
 	toolsHTTP := &http.Client{Timeout: 5 * time.Minute}

@@ -52,6 +52,34 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 	return changed, nil
 }
 
+// RemoveOrphanDirs removes every analyses/<id>.tmp or exports/<id>.tmp
+// directory left under any project. A .tmp directory can only exist while
+// its job is running: Analysis commits its own on every path, including
+// failure and cancellation, before Run returns, and Export leaves one only
+// for the queue's finalize hook to commit while the server is still up. A
+// .tmp directory found at startup therefore belongs to a job the previous
+// process never got to finish. It returns how many it removed.
+func (s *Store) RemoveOrphanDirs() (int, error) {
+	pattern := filepath.Join(s.root, "projects", "*", "*", "*.tmp")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("store: list orphan directories: %w", err)
+	}
+
+	removed := 0
+	for _, dir := range matches {
+		if err := os.RemoveAll(dir); err != nil {
+			// One directory this process cannot remove (permissions, a
+			// stray open file) must not stop the server from starting, or
+			// from clearing every other orphan that is removable.
+			slog.Warn("store: could not remove an orphan directory", "path", dir, "error", err)
+			continue
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // markIfRunning flips one status.json's "state" field to interrupted,
 // leaving every other field untouched, and reports whether it did.
 func markIfRunning(path string) (bool, error) {

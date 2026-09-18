@@ -205,6 +205,20 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	}
 	defer logFile.Close()
 
+	createdAt := time.Now().UTC()
+	// Written before the first step, so a crash leaves this file behind
+	// with state running for the startup sweep (store.MarkRunningInterrupted)
+	// to find: commit only ever writes the terminal outcome, which without
+	// this early write means nothing on disk ever holds the running state
+	// the sweep looks for.
+	if werr := a.Store.WriteJSON(filepath.Join(a.Dir, "status.json"), statusFile{
+		State:     store.Running,
+		CreatedAt: createdAt,
+		Target:    a.Project.Target,
+	}); werr != nil {
+		return fmt.Errorf("jobs: write initial status.json: %w", werr)
+	}
+
 	r := &run{
 		a:       a,
 		ctx:     ctx,
@@ -213,7 +227,6 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		result:  &Result{Target: a.Project.Target},
 	}
 
-	createdAt := time.Now().UTC()
 	trivyVersion, trivyDBDate := "", time.Time{}
 	defer func() {
 		state := store.Done
