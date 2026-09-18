@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestPendingCommitPublishesUnderFinalName(t *testing.T) {
@@ -76,6 +77,56 @@ func TestNewDirRefusesUnknownKind(t *testing.T) {
 	if _, err := s.NewDir("other", "proj-1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf(`NewDir("other", ...): err = %v, want ErrNotFound`, err)
 	}
+}
+
+func TestNewDirRetriesOnIDCollisionWithinOneSecond(t *testing.T) {
+	s := openTestStore(t)
+
+	fixed := mustParseTime(t, "2026-09-17T10:15:02Z")
+	restore := stubNow(func() time.Time { return fixed })
+	defer restore()
+
+	first, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("first NewDir: %v", err)
+	}
+	if err := first.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if first.ID() != "20260917T101502Z" {
+		t.Fatalf("first ID = %q, want %q", first.ID(), "20260917T101502Z")
+	}
+
+	// Same fixed second again: without a retry, this would collide with
+	// the committed directory above the moment it tried to Commit too.
+	second, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("second NewDir: %v", err)
+	}
+	if second.ID() == first.ID() {
+		t.Fatalf("second ID = %q, want a distinct id from the same second", second.ID())
+	}
+	if err := second.Commit(); err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+}
+
+func mustParseTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return tm
+}
+
+// stubNow replaces the package's nowFunc for the duration of a test and
+// returns a function that restores it, so a collision inside one second
+// can be forced deterministically instead of relying on test timing.
+func stubNow(fn func() time.Time) func() {
+	orig := nowFunc
+	nowFunc = fn
+	return func() { nowFunc = orig }
 }
 
 func TestWriteJSONReadJSONRoundTripAtNestedPath(t *testing.T) {

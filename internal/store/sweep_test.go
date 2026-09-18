@@ -55,6 +55,50 @@ func TestMarkRunningInterruptedChangesOnlyRunningFiles(t *testing.T) {
 	assertState(failed, "failed")
 }
 
+func TestMarkRunningInterruptedSkipsADamagedStatusJSON(t *testing.T) {
+	s := openTestStore(t)
+
+	good := filepath.Join(s.Root(), "projects", "proj-1", "analyses", "20260917T101502Z", "status.json")
+	if err := os.MkdirAll(filepath.Dir(good), dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(good, []byte(`{"state":"running"}`), fileMode); err != nil {
+		t.Fatalf("write %s: %v", good, err)
+	}
+
+	damaged := filepath.Join(s.Root(), "projects", "proj-2", "analyses", "20260917T101503Z", "status.json")
+	if err := os.MkdirAll(filepath.Dir(damaged), dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(damaged, []byte(`not json`), fileMode); err != nil {
+		t.Fatalf("write %s: %v", damaged, err)
+	}
+
+	n, err := s.MarkRunningInterrupted()
+	if err != nil {
+		t.Fatalf("MarkRunningInterrupted: %v, want it to skip the damaged file instead of failing", err)
+	}
+	if n != 1 {
+		t.Fatalf("changed = %d, want 1 (only the readable file)", n)
+	}
+
+	var got struct{ State string }
+	if err := s.ReadJSON(good, &got); err != nil {
+		t.Fatalf("ReadJSON: %v", err)
+	}
+	if got.State != string(Interrupted) {
+		t.Errorf("good file state = %q, want %q", got.State, Interrupted)
+	}
+
+	raw, err := os.ReadFile(damaged)
+	if err != nil {
+		t.Fatalf("read damaged file: %v", err)
+	}
+	if string(raw) != "not json" {
+		t.Errorf("damaged file content changed, want it untouched: %s", raw)
+	}
+}
+
 func TestMarkRunningInterruptedOnEmptyStoreReturnsZero(t *testing.T) {
 	s := openTestStore(t)
 	n, err := s.MarkRunningInterrupted()

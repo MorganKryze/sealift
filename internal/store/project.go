@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -68,9 +69,11 @@ func (s *Store) CreateProject(name string, manifest []byte) (Project, error) {
 	target := s.Settings().Target
 	record := projectRecord{ID: id, Name: name, Target: target, CreatedAt: time.Now().UTC()}
 	if err := writeJSONFile(filepath.Join(dir, "project.json"), record, fileMode); err != nil {
+		_ = os.RemoveAll(dir) // the reserved directory holds no usable project; leaving it behind would block a later CreateProject or a real project's rename
 		return Project{}, err
 	}
 	if err := atomicWriteFile(filepath.Join(dir, "package.json"), manifest, fileMode); err != nil {
+		_ = os.RemoveAll(dir)
 		return Project{}, err
 	}
 	return Project{ID: id, Name: name, Target: target, Dir: dir}, nil
@@ -111,7 +114,11 @@ func (s *Store) Projects() ([]Project, error) {
 		}
 		p, err := s.Project(e.Name())
 		if err != nil {
-			return nil, err
+			// A directory without a readable project.json belongs to no
+			// project a caller can act on; skip it instead of failing the
+			// whole listing over one damaged entry.
+			slog.Warn("store: skipping a damaged project directory", "id", e.Name(), "error", err)
+			continue
 		}
 		projects = append(projects, p)
 	}

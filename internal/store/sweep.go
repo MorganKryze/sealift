@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -38,7 +39,11 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 	for _, path := range matches {
 		did, err := markIfRunning(path)
 		if err != nil {
-			return changed, err
+			// One damaged status.json must not stop the server from
+			// starting, or from sweeping every other analysis and export
+			// that is readable.
+			slog.Warn("store: skipping a damaged status.json", "path", path, "error", err)
+			continue
 		}
 		if did {
 			changed++

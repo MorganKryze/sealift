@@ -167,6 +167,25 @@ func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	}
 }
 
+func TestProjectsSkipsADirectoryWithoutProjectJSON(t *testing.T) {
+	s := openTestStore(t)
+	good, err := s.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.Root(), "projects", "no-manifest"), dirMode); err != nil {
+		t.Fatalf("mkdir damaged project dir: %v", err)
+	}
+
+	list, err := s.Projects()
+	if err != nil {
+		t.Fatalf("Projects: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != good.ID {
+		t.Fatalf("Projects() = %+v, want only %q", list, good.ID)
+	}
+}
+
 // openTestStore opens a store rooted at a fresh temporary directory.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
