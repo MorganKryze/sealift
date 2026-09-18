@@ -57,6 +57,9 @@ func run(addr, root string, log *slog.Logger) error {
 
 	queue := jobs.NewQueue(log)
 	defer queue.Close()
+	if onQueueReady != nil {
+		onQueueReady(queue)
+	}
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -66,17 +69,35 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdown); err != nil {
-			log.Error("shutdown", "error", err)
-		}
-	}()
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.ListenAndServe() }()
+
 	log.Info("listening", "addr", addr, "data", root)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
 	}
+
+	// The event stream only ends when its job does, so canceling the
+	// running job before asking the server to shut down is what lets
+	// Shutdown see that connection go idle quickly, instead of blocking
+	// until its own timeout expires.
+	queue.Close()
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdown); err != nil {
+		log.Error("shutdown", "error", err)
+	}
+	<-serveErr
 	return nil
 }
+
+// onQueueReady, when non-nil, is called with the queue right after it is
+// created. Only a test in this package sets it, to submit a job before the
+// server starts accepting connections.
+var onQueueReady func(*jobs.Queue)
