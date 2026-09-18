@@ -37,11 +37,11 @@ func testLogger() *slog.Logger {
 // waitIdle polls Current until no job is running, or fails the test after
 // timeout. Jobs in these tests finish in microseconds; the timeout only
 // catches a genuine deadlock.
-func waitIdle(t *testing.T, q *Queue, timeout time.Duration) {
+func waitIdle(t *testing.T, q *Queue) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if _, _, _, ok := q.Current(); !ok {
+		if _, _, ok := q.Current(); !ok {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -49,11 +49,11 @@ func waitIdle(t *testing.T, q *Queue, timeout time.Duration) {
 	t.Fatal("queue did not go idle in time")
 }
 
-func waitRunning(t *testing.T, q *Queue, id string, timeout time.Duration) {
+func waitRunning(t *testing.T, q *Queue, id string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if cur, _, _, ok := q.Current(); ok && cur == id {
+		if cur, _, ok := q.Current(); ok && cur == id {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -136,7 +136,7 @@ func TestQueue_OneAtATime(t *testing.T) {
 		t.Fatalf("Submit(job2): %v", err)
 	}
 
-	waitRunning(t, q, id1, time.Second)
+	waitRunning(t, q, id1)
 
 	select {
 	case <-job2.started:
@@ -145,7 +145,7 @@ func TestQueue_OneAtATime(t *testing.T) {
 	}
 
 	close(release1)
-	waitIdle(t, q, time.Second)
+	waitIdle(t, q)
 
 	select {
 	case <-job2.started:
@@ -173,7 +173,7 @@ func TestQueue_CancelRunningAndQueued(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit(job1): %v", err)
 	}
-	waitRunning(t, q, id1, time.Second)
+	waitRunning(t, q, id1)
 
 	id2, err := q.Submit(job2)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestQueue_CancelRunningAndQueued(t *testing.T) {
 		t.Fatalf("Cancel(running job1): %v", err)
 	}
 
-	waitIdle(t, q, time.Second)
+	waitIdle(t, q)
 
 	select {
 	case <-job2.started:
@@ -219,6 +219,173 @@ checked:
 	}
 	if data.State != store.Cancelled {
 		t.Fatalf("end state = %q, want %q", data.State, store.Cancelled)
+	}
+}
+
+func TestQueue_CancelQueuedJobEmitsEndEvent(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	events, unsubscribe := q.Subscribe()
+	defer unsubscribe()
+
+	release := make(chan struct{})
+	job1 := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error {
+		<-release
+		return nil
+	}}
+	job2 := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error { return nil }}
+
+	id1, err := q.Submit(job1)
+	if err != nil {
+		t.Fatalf("Submit(job1): %v", err)
+	}
+	waitRunning(t, q, id1)
+
+	id2, err := q.Submit(job2)
+	if err != nil {
+		t.Fatalf("Submit(job2): %v", err)
+	}
+	if err := q.Cancel(id2); err != nil {
+		t.Fatalf("Cancel(queued job2): %v", err)
+	}
+	close(release)
+	waitIdle(t, q)
+
+	var sawQueuedCancel bool
+	deadline := time.After(time.Second)
+	for !sawQueuedCancel {
+		select {
+		case e := <-events:
+			if e.Job == id2 {
+				if e.Kind != "end" {
+					t.Fatalf("job2 event kind = %q, want %q", e.Kind, "end")
+				}
+				var data struct{ State store.State }
+				if err := json.Unmarshal(e.Data, &data); err != nil {
+					t.Fatalf("unmarshal end data: %v", err)
+				}
+				if data.State != store.Cancelled {
+					t.Fatalf("job2 end state = %q, want %q", data.State, store.Cancelled)
+				}
+				sawQueuedCancel = true
+			}
+		case <-deadline:
+			t.Fatal("never saw an end event for the queued, cancelled job2")
+		}
+	}
+}
+
+func TestQueue_CancelAfterJobReturnsNilDoesNotReportCancelled(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	finished := make(chan struct{})
+	job := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error {
+		defer close(finished)
+		return nil // finishes on its own, unrelated to any cancel
+	}}
+	id, err := q.Submit(job)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	// Waiting on finished, not just on waitIdle, proves the job actually
+	// ran: idle alone cannot tell "already finished" apart from "never
+	// picked up yet", which is also reported as idle.
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("job never ran")
+	}
+	waitIdle(t, q)
+
+	// The job is long gone by now; Cancel must report that, not mark a
+	// finished job cancelled just because a caller asked after the fact.
+	if err := q.Cancel(id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Cancel(finished job) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestQueue_SubscribeAfterJobEndsGetsNoStaleReplay(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	finished := make(chan struct{})
+	job := &fakeJob{kind: "fake", run: func(_ context.Context, emit func(Event)) error {
+		defer close(finished)
+		emit(Event{Kind: "step", Data: json.RawMessage(`{"name":"resolve"}`)})
+		return nil
+	}}
+	id, err := q.Submit(job)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("job never ran")
+	}
+	waitIdle(t, q)
+
+	// A subscriber connecting once the queue is idle again must not replay
+	// the finished job's own "end" event: that would close its stream at
+	// once, as if the job it is about to watch had already finished.
+	events, unsubscribe := q.Subscribe()
+	defer unsubscribe()
+
+	select {
+	case e := <-events:
+		t.Fatalf("subscriber after the queue went idle got a stale replayed event: %+v (job %s already ended)", e, id)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestQueue_PanickingJobFailsInsteadOfCrashing(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	events, unsubscribe := q.Subscribe()
+	defer unsubscribe()
+
+	job := &fakeJob{kind: "fake", run: func(_ context.Context, _ func(Event)) error {
+		panic("boom")
+	}}
+	if _, err := q.Submit(job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitIdle(t, q)
+
+	var last Event
+	found := false
+	deadline := time.After(time.Second)
+	for !found {
+		select {
+		case e := <-events:
+			last = e
+			found = e.Kind == "end"
+		case <-deadline:
+			t.Fatal("never saw an end event for the panicking job")
+		}
+	}
+	var data struct{ State store.State }
+	if err := json.Unmarshal(last.Data, &data); err != nil {
+		t.Fatalf("unmarshal end data: %v", err)
+	}
+	if data.State != store.Failed {
+		t.Fatalf("end state = %q, want %q", data.State, store.Failed)
+	}
+
+	// The worker survived: a second job still runs.
+	second := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(_ context.Context, _ func(Event)) error {
+		return nil
+	}}
+	if _, err := q.Submit(second); err != nil {
+		t.Fatalf("Submit(second): %v", err)
+	}
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not survive the panic: the second job never started")
 	}
 }
 
@@ -306,7 +473,7 @@ func TestQueue_SlowSubscriberNeverBlocksWorker(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("job with an unread subscriber took %v, worker looks blocked", elapsed)
 	}
-	waitIdle(t, q, time.Second)
+	waitIdle(t, q)
 }
 
 func TestQueue_CloseDrains(t *testing.T) {
@@ -326,7 +493,7 @@ func TestQueue_CloseDrains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit(job1): %v", err)
 	}
-	waitRunning(t, q, id1, time.Second)
+	waitRunning(t, q, id1)
 
 	if _, err := q.Submit(job2); err != nil {
 		t.Fatalf("Submit(job2): %v", err)

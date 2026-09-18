@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/MorganKryze/sealift/internal/store"
@@ -69,7 +70,6 @@ type Queue struct {
 	current         *entry
 	cancelCurrent   context.CancelFunc
 	cancelRequested bool
-	state           store.State
 	history         []Event
 
 	subs    map[int]*subscriber
@@ -110,19 +110,24 @@ func (q *Queue) Submit(j Job) (id string, err error) {
 	return id, nil
 }
 
-// Current reports the running job, if any. ok is false while the queue is
-// idle, even with jobs still waiting.
-func (q *Queue) Current() (id, kind string, state store.State, ok bool) {
+// Current reports the id and kind of the running job, if any. ok is false
+// while the queue is idle, even with jobs still waiting. Whenever ok is
+// true the job is, by construction, in state running; Current carries no
+// separate state value because there is nothing else for it to say.
+func (q *Queue) Current() (id, kind string, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.current == nil {
-		return "", "", "", false
+		return "", "", false
 	}
-	return q.current.id, q.current.job.Kind(), q.state, true
+	return q.current.id, q.current.job.Kind(), true
 }
 
 // Cancel stops the running job by id, or drops a queued one before it
-// starts. It returns ErrNotFound when id names neither.
+// starts. It returns ErrNotFound when id names neither. Cancelling a
+// queued job publishes its "end" event with state cancelled, the same
+// signal a subscriber gets for a running job the queue stops: nothing
+// else ever tells a caller that job is done.
 func (q *Queue) Cancel(id string) error {
 	q.mu.Lock()
 	if q.current != nil && q.current.id == id {
@@ -136,11 +141,21 @@ func (q *Queue) Cancel(id string) error {
 		if e.id == id {
 			q.pending = append(q.pending[:i:i], q.pending[i+1:]...)
 			q.mu.Unlock()
+			q.publishCancelled(id)
 			return nil
 		}
 	}
 	q.mu.Unlock()
 	return fmt.Errorf("%w: %s", ErrNotFound, id)
+}
+
+// publishCancelled emits the "end" event for a job the queue never ran,
+// through the same publish path a finished job's own end event takes.
+func (q *Queue) publishCancelled(id string) {
+	data, _ := json.Marshal(struct {
+		State store.State `json:"state"`
+	}{State: store.Cancelled})
+	q.publish(Event{Kind: "end", Job: id, Data: data})
 }
 
 // Subscribe returns a channel of the current job's events, starting with a
@@ -151,7 +166,12 @@ func (q *Queue) Cancel(id string) error {
 // buffer, the queue drops events for it and sends one "log" event saying
 // so instead of piling more up.
 func (q *Queue) Subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, replayLimit)
+	// subscriberHeadroom leaves room for at least one live event, and the
+	// one "dropped events" notice deliverLocked sends about it, right after
+	// a full replay: a channel sized to exactly replayLimit would already
+	// be full at that point, and the notice would find no room either.
+	const subscriberHeadroom = 2
+	ch := make(chan Event, replayLimit+subscriberHeadroom)
 
 	q.mu.Lock()
 	id := q.nextSub
@@ -213,7 +233,6 @@ func (q *Queue) run() {
 		q.current = &next
 		q.cancelCurrent = cancel
 		q.cancelRequested = false
-		q.state = store.Running
 		q.history = nil
 		q.mu.Unlock()
 
@@ -222,27 +241,60 @@ func (q *Queue) run() {
 			e.Job = next.id
 			q.publish(e)
 		}
-		err := next.job.Run(ctx, emit)
+		err := runJob(ctx, q.log, next.job, emit)
 		cancel()
 
 		q.mu.Lock()
 		state := store.Done
 		switch {
-		case q.cancelRequested:
+		// cancelRequested alone would race a job that returns on its own
+		// at the same moment Cancel is called: Cancel can still see this
+		// job as current, and set the flag, in the window between Run
+		// returning and this lock being taken. Requiring the job's own
+		// error to be context.Canceled ties the state to what Run actually
+		// did, not to that timing.
+		case q.cancelRequested && errors.Is(err, context.Canceled):
 			state = store.Cancelled
 		case err != nil:
 			state = store.Failed
 		}
-		q.current = nil
-		q.cancelCurrent = nil
-		q.mu.Unlock()
-
-		q.log.Info("job finished", "id", next.id, "kind", next.job.Kind(), "state", state)
 		endData, _ := json.Marshal(struct {
 			State store.State `json:"state"`
 		}{State: state})
-		q.publish(Event{Kind: "end", Job: next.id, Data: endData})
+		endEvent := Event{Kind: "end", Job: next.id, Data: endData}
+		q.history = append(q.history, endEvent)
+		if len(q.history) > replayLimit {
+			q.history = q.history[len(q.history)-replayLimit:]
+		}
+		for _, s := range q.subs {
+			q.deliverLocked(s, endEvent)
+		}
+		q.current = nil
+		q.cancelCurrent = nil
+		// The queue is idle from here until the next job starts. Clearing
+		// history in the same critical section that marks it idle, rather
+		// than as a separate step after unlocking, keeps a subscriber that
+		// connects right after from ever observing the two out of step: it
+		// cannot land in a window where the queue already looks idle but
+		// history still holds the event that just ended.
+		q.history = nil
+		q.mu.Unlock()
+
+		q.log.Info("job finished", "id", next.id, "kind", next.job.Kind(), "state", state)
 	}
+}
+
+// runJob runs job.Run and recovers a panic into a plain error, so one
+// job's bug fails that job instead of taking the worker goroutine, and
+// with it the whole server, down.
+func runJob(ctx context.Context, log *slog.Logger, job Job, emit func(Event)) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("job panicked", "kind", job.Kind(), "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("jobs: %s panicked: %v", job.Kind(), r)
+		}
+	}()
+	return job.Run(ctx, emit)
 }
 
 // publish records e in the replay history and delivers it to every current
