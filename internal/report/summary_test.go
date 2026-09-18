@@ -2,6 +2,7 @@ package report
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -103,6 +104,30 @@ func TestWriteSummaryNilAfterSaysCheckDidNotRun(t *testing.T) {
 	}
 	if bytes.Contains(buf.Bytes(), []byte("| After | 0 | 0 | 0 | 0 | 0 |")) {
 		t.Error("summary.md printed a zero vector for After, want the did-not-run note instead")
+	}
+}
+
+// failingWriter succeeds until it has written at least limit bytes, then
+// fails every call after that: enough to prove a failure partway through
+// summary.md, not just one on the very first write, still fails the
+// whole call.
+type failingWriter struct {
+	written int
+	limit   int
+}
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	if f.written >= f.limit {
+		return 0, errors.New("disk full")
+	}
+	f.written += len(p)
+	return len(p), nil
+}
+
+func TestWriteSummaryReturnsTheFirstWriteError(t *testing.T) {
+	fw := &failingWriter{limit: 10}
+	if err := WriteSummary(fw, Summary{}); err == nil {
+		t.Fatal("WriteSummary with a writer that fails after a few bytes: want an error, got nil")
 	}
 }
 

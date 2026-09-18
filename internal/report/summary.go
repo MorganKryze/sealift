@@ -46,64 +46,87 @@ type Summary struct {
 	PackageCount      int
 }
 
+// errWriter wraps an io.Writer, remembering the first error any Write
+// call returns and discarding every write after that. WriteSummary calls
+// fmt.Fprintf and fmt.Fprintln unconditionally through it, one per line,
+// and checks err only once at the end: a full disk or a closed pipe
+// partway through must fail the whole write, not leave a summary.md that
+// looks complete but stops mid-sentence.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(p)
+	if err != nil {
+		e.err = err
+	}
+	return n, err
+}
+
 // WriteSummary writes summary.md.
 func WriteSummary(w io.Writer, s Summary) error {
-	fmt.Fprintln(w, "# Export summary")
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "- Analysis date: %s\n", s.AnalysisDate.Format(time.RFC3339))
-	fmt.Fprintf(w, "- Trivy DB date: %s\n", s.TrivyDBDate.Format(time.DateOnly))
-	fmt.Fprintf(w, "- Trivy version: %s\n", s.TrivyVersion)
-	fmt.Fprintf(w, "- Tool version: %s\n", s.ToolVersion)
-	fmt.Fprintf(w, "- Target: %s/%s %s, Node %s, pnpm %s\n", s.Target.OS, s.Target.CPU, s.Target.Libc, s.Target.Node, s.Target.PnpmVer)
-	fmt.Fprintln(w)
+	ew := &errWriter{w: w}
+	fmt.Fprintln(ew, "# Export summary")
+	fmt.Fprintln(ew)
+	fmt.Fprintf(ew, "- Analysis date: %s\n", s.AnalysisDate.Format(time.RFC3339))
+	fmt.Fprintf(ew, "- Trivy DB date: %s\n", s.TrivyDBDate.Format(time.DateOnly))
+	fmt.Fprintf(ew, "- Trivy version: %s\n", s.TrivyVersion)
+	fmt.Fprintf(ew, "- Tool version: %s\n", s.ToolVersion)
+	fmt.Fprintf(ew, "- Target: %s/%s %s, Node %s, pnpm %s\n", s.Target.OS, s.Target.CPU, s.Target.Libc, s.Target.Node, s.Target.PnpmVer)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "## CVE counts")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "| | Critical | High | Medium | Low | Unknown |")
-	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- |")
-	fmt.Fprintf(w, "| Before | %d | %d | %d | %d | %d |\n", s.Before[0], s.Before[1], s.Before[2], s.Before[3], s.Before[4])
+	fmt.Fprintln(ew, "## CVE counts")
+	fmt.Fprintln(ew)
+	fmt.Fprintln(ew, "| | Critical | High | Medium | Low | Unknown |")
+	fmt.Fprintln(ew, "| --- | --- | --- | --- | --- | --- |")
+	fmt.Fprintf(ew, "| Before | %d | %d | %d | %d | %d |\n", s.Before[0], s.Before[1], s.Before[2], s.Before[3], s.Before[4])
 	if s.After != nil {
-		fmt.Fprintf(w, "| After | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
+		fmt.Fprintf(ew, "| After | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
 	} else {
-		fmt.Fprintln(w, "| After | the combined check did not run | | | | |")
+		fmt.Fprintln(ew, "| After | the combined check did not run | | | | |")
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "## Updated dependencies")
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew, "## Updated dependencies")
+	fmt.Fprintln(ew)
 	if len(s.Dependencies) == 0 {
-		fmt.Fprintln(w, "None.")
+		fmt.Fprintln(ew, "None.")
 	} else {
-		fmt.Fprintln(w, "| Dependency | Current | Selected | CVE change |")
-		fmt.Fprintln(w, "| --- | --- | --- | --- |")
+		fmt.Fprintln(ew, "| Dependency | Current | Selected | CVE change |")
+		fmt.Fprintln(ew, "| --- | --- | --- | --- |")
 		for _, d := range s.Dependencies {
-			fmt.Fprintf(w, "| %s | %s | %s | %s |\n", d.Name, d.CurrentVersion, d.SelectedVersion, vectorDelta(d.Before, d.After))
+			fmt.Fprintf(ew, "| %s | %s | %s | %s |\n", d.Name, d.CurrentVersion, d.SelectedVersion, vectorDelta(d.Before, d.After))
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "## Remaining critical and high CVEs")
-	fmt.Fprintln(w)
-	writeFindingList(w, s.RemainingCritical, s.RemainingHigh)
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew, "## Remaining critical and high CVEs")
+	fmt.Fprintln(ew)
+	writeFindingList(ew, s.RemainingCritical, s.RemainingHigh)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "## Non-blocking signals on selected versions")
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew, "## Non-blocking signals on selected versions")
+	fmt.Fprintln(ew)
 	if len(s.Signals) == 0 {
-		fmt.Fprintln(w, "None.")
+		fmt.Fprintln(ew, "None.")
 	} else {
 		for _, sig := range s.Signals {
-			fmt.Fprintf(w, "- %s %s: %s (%s)\n", sig.Dependency, sig.Version, sig.Signal, sig.Evidence)
+			fmt.Fprintf(ew, "- %s %s: %s (%s)\n", sig.Dependency, sig.Version, sig.Signal, sig.Evidence)
 		}
 	}
-	fmt.Fprintln(w)
+	fmt.Fprintln(ew)
 
-	fmt.Fprintln(w, "## Archive")
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "- Size: %d bytes\n", s.ArchiveSize)
-	fmt.Fprintf(w, "- SHA-256: %s\n", s.ArchiveSHA256)
-	fmt.Fprintf(w, "- Packages: %d\n", s.PackageCount)
-	return nil
+	fmt.Fprintln(ew, "## Archive")
+	fmt.Fprintln(ew)
+	fmt.Fprintf(ew, "- Size: %d bytes\n", s.ArchiveSize)
+	fmt.Fprintf(ew, "- SHA-256: %s\n", s.ArchiveSHA256)
+	fmt.Fprintf(ew, "- Packages: %d\n", s.PackageCount)
+	return ew.err
 }
 
 // writeFindingList lists critical findings, then high ones, as "None." when
