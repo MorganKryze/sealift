@@ -77,10 +77,10 @@ func buildFullManifest(manifest npm.Manifest, overrides map[string]string) []byt
 	return mustJSON(doc)
 }
 
-// resolve runs one pnpm resolution in a fresh temporary directory and
-// returns the raw lockfile bytes and pnpm's combined output.
+// resolve runs one pnpm resolution in a fresh directory under the volume's
+// cache and returns the raw lockfile bytes and pnpm's combined output.
 func (a *Analysis) resolve(ctx context.Context, manifest []byte) ([]byte, string, error) {
-	dir, err := os.MkdirTemp("", "sealift-resolve-")
+	dir, err := a.Store.NewResolveDir()
 	if err != nil {
 		return nil, "", err
 	}

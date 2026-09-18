@@ -29,11 +29,23 @@ type fakePnpm struct {
 	fail  map[string]bool
 	block bool
 	calls int
+
+	// dirs and dirModes record, in call order, the resolution directory
+	// each Resolve call ran in and the mode it had at that moment: the
+	// directory is removed once (*Analysis).resolve returns, so a test
+	// asserting on its mode must capture it here, synchronously, before
+	// that happens.
+	dirs     []string
+	dirModes []os.FileMode
 }
 
 func (f *fakePnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
 	f.mu.Lock()
 	f.calls++
+	f.dirs = append(f.dirs, in.Dir)
+	if info, statErr := os.Stat(in.Dir); statErr == nil {
+		f.dirModes = append(f.dirModes, info.Mode().Perm())
+	}
 	f.mu.Unlock()
 
 	if f.block {

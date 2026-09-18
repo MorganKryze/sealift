@@ -1,14 +1,56 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/rank"
 )
+
+// TestResolveUsesAGroupWritableDirectoryUnderTheVolume proves resolve gave
+// up os.MkdirTemp("") for a directory the tools account, running under a
+// different uid once F1 lands, can still traverse: group-writable, and
+// under the volume's own cache rather than the system temp directory. It
+// also checks resolve removes that directory once it returns, on the
+// success path exercised here.
+func TestResolveUsesAGroupWritableDirectoryUnderTheVolume(t *testing.T) {
+	root := t.TempDir()
+	st, err := store.Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	pnpm := &fakePnpm{}
+	a := &Analysis{Store: st, Pnpm: pnpm, Settings: st.Settings()}
+
+	if _, _, err := a.resolve(context.Background(), []byte(`{"dependencies":{}}`)); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if len(pnpm.dirs) != 1 {
+		t.Fatalf("pnpm.dirs = %v, want exactly one resolution", pnpm.dirs)
+	}
+	dir := pnpm.dirs[0]
+	wantParent := filepath.Join(root, "cache", "resolve")
+	if !strings.HasPrefix(dir, wantParent+string(filepath.Separator)) {
+		t.Errorf("resolve dir = %q, want it under %q", dir, wantParent)
+	}
+	if len(pnpm.dirModes) != 1 {
+		t.Fatalf("pnpm.dirModes = %v, want exactly one recorded mode", pnpm.dirModes)
+	}
+	if got := pnpm.dirModes[0]; got&0o020 == 0 {
+		t.Errorf("resolve dir mode = %o, want group-writable", got)
+	}
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("resolve dir %q still exists after resolve returned (err = %v), want it removed", dir, err)
+	}
+}
 
 // TestBuildFullManifest checks that each dependency lands in the
 // package.json field its kind names, and that an override replaces its

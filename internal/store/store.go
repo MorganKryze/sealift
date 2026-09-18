@@ -67,6 +67,7 @@ func Open(root string) (*Store, error) {
 		{filepath.Join(root, "tools"), dirMode},
 		{filepath.Join(root, "trivy-cache"), dirMode},
 		{filepath.Join(root, "cache"), dirMode},
+		{filepath.Join(root, "cache", "resolve"), dirMode},
 		{filepath.Join(root, "projects"), dirMode},
 	}
 	for _, d := range dirs {
@@ -155,6 +156,31 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("store: rename to %s: %w", path, err)
 	}
 	return nil
+}
+
+// NewResolveDir reserves a fresh, group-writable directory under
+// cache/resolve for one isolated pnpm resolution. Unlike os.MkdirTemp,
+// which always creates mode 0700 under the system temp directory, this
+// stays under the volume Open laid out and in a mode the tools account can
+// traverse once it runs pnpm as a different uid. The caller removes the
+// directory once the resolution ends.
+func (s *Store) NewResolveDir() (string, error) {
+	parent := filepath.Join(s.root, "cache", "resolve")
+	for attempt := 0; attempt < 10; attempt++ {
+		suffix, err := randomHex(6)
+		if err != nil {
+			return "", fmt.Errorf("store: generate resolve dir name: %w", err)
+		}
+		dir := filepath.Join(parent, suffix)
+		if err := os.Mkdir(dir, dirMode); err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("store: create %s: %w", dir, err)
+		}
+		return dir, nil
+	}
+	return "", fmt.Errorf("store: could not allocate a resolve dir under %s", parent)
 }
 
 // tempFile reserves a unique path in dir for name and returns it, without
