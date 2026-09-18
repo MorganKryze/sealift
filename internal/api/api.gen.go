@@ -91,8 +91,8 @@ type Analysis struct {
 
 // AnalysisResult What an analysis writes to candidates.json and ranking.json
 type AnalysisResult struct {
-	// After CVE counts by severity, critical to unknown
-	After Vector `json:"after"`
+	// After Null when the combined check (step 9) never measured it
+	After *Vector `json:"after"`
 
 	// Before CVE counts by severity, critical to unknown
 	Before       Vector             `json:"before"`

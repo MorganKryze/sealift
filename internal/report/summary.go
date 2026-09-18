@@ -36,7 +36,7 @@ type Summary struct {
 	ToolVersion       string
 	Target            store.Target
 	Before            rank.Vector
-	After             rank.Vector
+	After             *rank.Vector // nil when the analysis' combined check never ran
 	Dependencies      []DependencyChange
 	RemainingCritical []rank.Finding
 	RemainingHigh     []rank.Finding
@@ -62,7 +62,11 @@ func WriteSummary(w io.Writer, s Summary) error {
 	fmt.Fprintln(w, "| | Critical | High | Medium | Low | Unknown |")
 	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- |")
 	fmt.Fprintf(w, "| Before | %d | %d | %d | %d | %d |\n", s.Before[0], s.Before[1], s.Before[2], s.Before[3], s.Before[4])
-	fmt.Fprintf(w, "| After | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
+	if s.After != nil {
+		fmt.Fprintf(w, "| After | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
+	} else {
+		fmt.Fprintln(w, "| After | the combined check did not run | | | | |")
+	}
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "## Updated dependencies")

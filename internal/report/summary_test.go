@@ -17,7 +17,7 @@ func TestWriteSummary(t *testing.T) {
 		ToolVersion:  "0.1.0",
 		Target:       store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
 		Before:       rank.Vector{2, 3, 1, 0, 0},
-		After:        rank.Vector{0, 1, 1, 0, 0},
+		After:        &rank.Vector{0, 1, 1, 0, 0},
 		Dependencies: []DependencyChange{
 			{Name: "lodash", CurrentVersion: "4.17.20", SelectedVersion: "4.17.21", Before: rank.Vector{2, 1, 0, 0, 0}, After: rank.Vector{0, 0, 0, 0, 0}},
 		},
@@ -86,6 +86,23 @@ func TestWriteSummaryEmptySections(t *testing.T) {
 		if !bytes.Contains(buf.Bytes(), []byte(want)) {
 			t.Errorf("summary.md missing %q in:\n%s", want, buf.String())
 		}
+	}
+}
+
+// TestWriteSummaryNilAfterSaysCheckDidNotRun proves a nil After, the case
+// once step 9 failed to measure it, reads as an explicit statement instead
+// of a row of zeros that would look like a clean bill of health.
+func TestWriteSummaryNilAfterSaysCheckDidNotRun(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteSummary(&buf, Summary{Before: rank.Vector{1, 0, 0, 0, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	want := "| After | the combined check did not run | | | | |\n"
+	if !bytes.Contains(buf.Bytes(), []byte(want)) {
+		t.Errorf("summary.md missing %q in:\n%s", want, buf.String())
+	}
+	if bytes.Contains(buf.Bytes(), []byte("| After | 0 | 0 | 0 | 0 | 0 |")) {
+		t.Error("summary.md printed a zero vector for After, want the did-not-run note instead")
 	}
 }
 

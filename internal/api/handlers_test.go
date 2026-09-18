@@ -181,6 +181,56 @@ func TestGetAnalysisAndExportUnknownIDReturn404(t *testing.T) {
 	}
 }
 
+// TestGetAnalysisAfterNullSurvivesThroughTheAPI proves a nil After in
+// ranking.json, the case once step 9 (check-combined) never measured it,
+// reaches a caller of GetAnalysis as null rather than a decode failure
+// dropping the whole result or a zero vector claiming a measurement that
+// never happened.
+func TestGetAnalysisAfterNullSurvivesThroughTheAPI(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":null,` +
+		`"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET analysis: %v", err)
+	}
+	defer resp2.Body.Close()
+	data, _ := io.ReadAll(resp2.Body)
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", resp2.StatusCode, data)
+	}
+	if !bytes.Contains(data, []byte(`"after":null`)) {
+		t.Errorf("response body has no explicit null after field, want one, body: %s", data)
+	}
+
+	var got Analysis
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode: %v, body: %s", err, data)
+	}
+	if got.Result == nil {
+		t.Fatalf("Result decoded as nil, want ranking.json's fields carried through, body: %s", data)
+	}
+	if got.Result.After != nil {
+		t.Errorf("Result.After = %v, want nil", got.Result.After)
+	}
+}
+
 func TestQueueExportInvalidSelectionReturns400WithEveryEntry(t *testing.T) {
 	srv, h := newTestServer(t)
 	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)

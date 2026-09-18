@@ -170,7 +170,8 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		if serr != nil {
 			return fmt.Errorf("scan combined: %w", serr)
 		}
-		r.result.After = Vector(rank.VectorOf(rank.NewIndex(findings).Set(keysOf(pkgs))))
+		after := Vector(rank.VectorOf(rank.NewIndex(findings).Set(keysOf(pkgs))))
+		r.result.After = &after
 		return nil
 	})
 }

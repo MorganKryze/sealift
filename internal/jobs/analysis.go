@@ -36,7 +36,7 @@ type Analysis struct {
 type Result struct {
 	Target       store.Target       `json:"target"`
 	Before       Vector             `json:"before"`
-	After        Vector             `json:"after"`
+	After        *Vector            `json:"after"` // nil when step 9 (check-combined) never measured it
 	Dependencies []DependencyResult `json:"dependencies"`
 	Warnings     []string           `json:"warnings"`
 }

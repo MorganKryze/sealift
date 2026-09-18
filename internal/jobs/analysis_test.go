@@ -350,8 +350,8 @@ loop:
 	if result.Before != (Vector{0, 1, 0, 0, 0}) {
 		t.Errorf("Before = %v, want one high", result.Before)
 	}
-	if result.After != (Vector{0, 0, 0, 0, 0}) {
-		t.Errorf("After = %v, want none", result.After)
+	if result.After == nil || *result.After != (Vector{0, 0, 0, 0, 0}) {
+		t.Errorf("After = %v, want a measured zero vector (step 9 resolved and scanned foo's fix cleanly)", result.After)
 	}
 
 	var foo, bar *DependencyResult
@@ -489,6 +489,84 @@ func TestAnalysis_CandidateWriteFailureFailsTheJob(t *testing.T) {
 	}
 	if status.State != store.Failed {
 		t.Fatalf("status.json state = %q, want %q", status.State, store.Failed)
+	}
+}
+
+// projectManifestPnpm resolves like fakePnpm except a manifest named
+// "project" (buildFullManifest's own package name, the shape both step 3
+// and step 9 resolve) carrying dep at failVersion is treated as a
+// conflict. Naming it "project" rather than checking the dependency alone
+// is what isolates step 9's own resolution from step 6's identically
+// versioned but differently shaped ("probe") isolated resolution of the
+// same candidate, which must keep succeeding for step 9 to run at all.
+type projectManifestPnpm struct {
+	fakePnpm
+	dep, failVersion string
+}
+
+func (f *projectManifestPnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	var doc struct {
+		Name         string            `json:"name"`
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(in.Manifest, &doc); err == nil && doc.Name == "project" && doc.Dependencies[f.dep] == f.failVersion {
+		return runner.ResolveResult{Output: "ERR_PNPM_PEER_DEP  conflict"}, errors.New("pnpm install: peer conflict")
+	}
+	return f.fakePnpm.Resolve(ctx, in)
+}
+
+// TestAnalysis_CombinedCheckConflictLeavesAfterNil proves a step 9
+// (check-combined) conflict leaves Result.After nil, both in ranking.json
+// on disk and in its JSON encoding, rather than the zero vector a caller
+// could mistake for a measured, clean result.
+func TestAnalysis_CombinedCheckConflictLeavesAfterNil(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+
+	pnpm := &projectManifestPnpm{dep: "foo", failVersion: "1.1.0"}
+	trivy := &fakeTrivy{db: map[string][]fakeFinding{
+		"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}},
+	}}
+
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     pnpm,
+		Trivy:    trivy,
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v, want the job to finish despite the combined conflict", err)
+	}
+
+	finalDir := strings.TrimSuffix(a.Dir, ".tmp")
+	raw, err := os.ReadFile(filepath.Join(finalDir, "ranking.json"))
+	if err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("unmarshal ranking.json fields: %v", err)
+	}
+	if after, ok := fields["after"]; !ok || string(after) != "null" {
+		t.Errorf("ranking.json after = %s (present=%v), want an explicit null", after, ok)
+	}
+
+	var result Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("unmarshal Result: %v", err)
+	}
+	if result.After != nil {
+		t.Errorf("Result.After = %v, want nil", result.After)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("Warnings is empty, want a warning about the combined conflict")
 	}
 }
 

@@ -713,10 +713,20 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 		return err
 	}
 
+	// e.Analysis.Result.After is nil when the analysis' own step 9
+	// (check-combined) never measured it: report.Summary keeps that
+	// distinction rather than printing a vector of zeros that would read
+	// as a clean bill of health.
+	var after *rank.Vector
+	if e.Analysis.Result.After != nil {
+		v := rank.Vector(*e.Analysis.Result.After)
+		after = &v
+	}
+
 	s := report.Summary{
 		AnalysisDate: status.CreatedAt, TrivyDBDate: status.TrivyDBDate, TrivyVersion: status.TrivyVersion,
 		ToolVersion: ToolVersion, Target: e.Project.Target,
-		Before: rank.Vector(e.Analysis.Result.Before), After: rank.Vector(e.Analysis.Result.After),
+		Before: rank.Vector(e.Analysis.Result.Before), After: after,
 		Dependencies: deps, RemainingCritical: critical, RemainingHigh: high,
 		Signals: signals, ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(shipped),
 	}

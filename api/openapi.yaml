@@ -669,7 +669,11 @@ components:
         before:
           $ref: "#/components/schemas/Vector"
         after:
-          $ref: "#/components/schemas/Vector"
+          allOf:
+            - $ref: "#/components/schemas/Vector"
+          nullable: true
+          x-omitempty: false
+          description: Null when the combined check (step 9) never measured it
         dependencies:
           type: array
           items:
@@ -681,7 +685,6 @@ components:
       required:
         - target
         - before
-        - after
         - dependencies
         - warnings
     ExportRequest:

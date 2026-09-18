@@ -192,7 +192,7 @@ func (h *testHarness) buildAnalysis(analysisDir string) {
 func (h *testHarness) result() Result {
 	return Result{
 		Before: Vector{1, 1, 0, 0, 0},
-		After:  Vector{1, 0, 1, 0, 0},
+		After:  &Vector{1, 0, 1, 0, 0},
 		Dependencies: []DependencyResult{
 			{
 				Name: "widgets", Current: "1.0.0", Best: "1.1.0", Vector: Vector{0, 1, 0, 0, 0},
