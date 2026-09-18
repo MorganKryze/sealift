@@ -15,6 +15,11 @@ func TestPendingCommitPublishesUnderFinalName(t *testing.T) {
 		t.Fatalf("NewDir: %v", err)
 	}
 
+	wantFinal := filepath.Join(s.Root(), "projects", "proj-1", "analyses", p.ID())
+	if p.Final() != wantFinal {
+		t.Fatalf("Final() = %q, want %q", p.Final(), wantFinal)
+	}
+
 	marker := filepath.Join(p.Path(), "status.json")
 	if err := os.WriteFile(marker, []byte(`{"state":"running"}`), fileMode); err != nil {
 		t.Fatalf("write marker: %v", err)
@@ -24,7 +29,7 @@ func TestPendingCommitPublishesUnderFinalName(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	finalMarker := filepath.Join(s.Root(), "projects", "proj-1", "analyses", p.ID(), "status.json")
+	finalMarker := filepath.Join(p.Final(), "status.json")
 	if _, err := os.Stat(finalMarker); err != nil {
 		t.Fatalf("stat committed marker: %v", err)
 	}
