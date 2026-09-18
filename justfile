@@ -27,3 +27,20 @@ bench:
 # Regenerate the generated server code from api/openapi.yaml.
 generate:
     go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config api/oapi-codegen.yaml api/openapi.yaml
+
+# Run tests behind the integration tag: skip cleanly where pnpm or Trivy is absent.
+integration:
+    go test -tags integration -race ./...
+
+# Build the image for the host's own architecture and load it into the local daemon.
+image:
+    docker buildx build --load -t sealift:dev .
+
+# Build for both published platforms without loading, to check the Dockerfile cross-builds.
+image-check:
+    docker buildx build --platform linux/amd64,linux/arm64 .
+
+# Run the end-to-end test: publish the archive to Verdaccio, then pnpm install against it.
+e2e:
+    docker compose -f test/e2e/docker-compose.yml up --abort-on-container-exit --exit-code-from test
+    docker compose -f test/e2e/docker-compose.yml down --volumes
