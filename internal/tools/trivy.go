@@ -247,6 +247,17 @@ func (m *Manager) hostArch() string {
 	return runtime.GOARCH
 }
 
+// checksumsSizeLimit bounds a GitHub release's checksums file and the
+// release JSON itself, both plain text listing a handful of assets, so a
+// misbehaving or compromised server cannot make fetchBytes buffer an
+// unbounded body in memory.
+const checksumsSizeLimit = 1 << 20
+
+// assetSizeLimit bounds a Trivy release tarball, which runs tens of
+// megabytes, generously, so download cannot be made to write an unbounded
+// body to disk.
+const assetSizeLimit = 512 << 20
+
 func (m *Manager) fetchBytes(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -260,7 +271,7 @@ func (m *Manager) fetchBytes(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, checksumsSizeLimit))
 }
 
 func (m *Manager) download(ctx context.Context, url, path string) error {
@@ -280,7 +291,7 @@ func (m *Manager) download(ctx context.Context, url, path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, assetSizeLimit)); err != nil {
 		_ = f.Close()
 		return err
 	}

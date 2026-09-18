@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -227,6 +228,51 @@ func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
 	}
 	if state.Active != "" {
 		t.Fatalf("Active = %q, want empty", state.Active)
+	}
+}
+
+// TestUpdateTrivyChecksumsBodyOverLimitFailsInstall proves fetchBytes caps
+// the checksums body instead of buffering it whole: a body padded well past
+// checksumsSizeLimit loses the real checksum line to truncation, so the
+// install fails instead of succeeding on an unbounded read.
+func TestUpdateTrivyChecksumsBodyOverLimitFailsInstall(t *testing.T) {
+	const version = trivyTestVersion
+	tarball := buildTarGz(t, map[string]string{"trivy": "#!/bin/sh\necho fake trivy\n"})
+	assetName := fmt.Sprintf("trivy_%s_Linux-64bit.tar.gz", version)
+	checksumsName := fmt.Sprintf("trivy_%s_checksums.txt", version)
+
+	oversized := bytes.Repeat([]byte("0"), checksumsSizeLimit+1024)
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		rel := ghRelease{
+			TagName:     "v" + version,
+			PublishedAt: time.Now().Add(-30 * 24 * time.Hour),
+			Assets: []ghAsset{
+				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName},
+				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
+			},
+		}
+		data, _ := json.Marshal(rel)
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(tarball)
+	})
+	mux.HandleFunc("/"+checksumsName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(oversized)
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	m, root := newTestManager(t, srv)
+
+	if _, err := m.UpdateTrivy(context.Background(), false); err == nil {
+		t.Fatal("UpdateTrivy with an oversized checksums body: want error, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", version)); !os.IsNotExist(err) {
+		t.Fatalf("a rejected checksums body must not be installed, stat error = %v", err)
 	}
 }
 

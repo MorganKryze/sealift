@@ -46,7 +46,10 @@ func run(addr, root string, log *slog.Logger) error {
 	if swept > 0 {
 		log.Warn("marked analyses interrupted after a restart", "count", swept)
 	}
-	installed, err := tools.NewManager(st, http.DefaultClient, log).InstalledTrivy()
+	// A Trivy release asset runs tens of megabytes; give the download
+	// enough time without leaving the client unbounded.
+	toolsHTTP := &http.Client{Timeout: 5 * time.Minute}
+	installed, err := tools.NewManager(st, toolsHTTP, log).InstalledTrivy()
 	if err != nil {
 		return err
 	}
