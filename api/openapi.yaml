@@ -1,0 +1,729 @@
+openapi: 3.1.0
+info:
+  title: sealift
+  version: "1"
+  description: >
+    Scans a pnpm project for CVEs, ranks newer dependency versions, and
+    builds an archive for an air-gapped Nexus import.
+servers:
+  - url: /api
+tags:
+  - name: projects
+    description: Project creation, target and history
+  - name: analyses
+    description: Dependency scan and ranking jobs
+  - name: exports
+    description: Archive jobs and their files
+  - name: jobs
+    description: The running job's event stream
+  - name: settings
+    description: User-configurable defaults
+  - name: tools
+    description: pnpm and Trivy installs and updates
+paths:
+  /projects:
+    get:
+      operationId: listProjects
+      tags:
+        - projects
+      summary: List projects with their last analysis and export
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectSummary"
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      operationId: createProject
+      tags:
+        - projects
+      summary: Create a project from an uploaded package.json and start an analysis
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - manifest
+              properties:
+                name:
+                  type: string
+                  description: Project name; defaults to the manifest name field
+                manifest:
+                  type: string
+                  format: binary
+                  description: package.json content
+      responses:
+        "201":
+          description: Project created, analysis queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProject
+      tags:
+        - projects
+      summary: Get a project, its target and its history
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      operationId: deleteProject
+      tags:
+        - projects
+      summary: Delete the project directory
+      responses:
+        "204":
+          description: Deleted
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/target:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    put:
+      operationId: setProjectTarget
+      tags:
+        - projects
+      summary: Change the project's target platform and toolchain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Target"
+      responses:
+        "200":
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/analyses:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      operationId: queueAnalysis
+      tags:
+        - analyses
+      summary: Queue an analysis for the project
+      responses:
+        "202":
+          description: Analysis queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Analysis"
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/analyses/{analysisId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/AnalysisId"
+    get:
+      operationId: getAnalysis
+      tags:
+        - analyses
+      summary: Get an analysis' status and results
+      responses:
+        "200":
+          description: Analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Analysis"
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      operationId: deleteAnalysis
+      tags:
+        - analyses
+      summary: Delete an analysis
+      responses:
+        "204":
+          description: Deleted
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/analyses/{analysisId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/AnalysisId"
+    post:
+      operationId: cancelAnalysis
+      tags:
+        - analyses
+      summary: Cancel a running or queued analysis
+      responses:
+        "200":
+          description: Analysis after the cancel request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Analysis"
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/analyses/{analysisId}/exports:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/AnalysisId"
+    post:
+      operationId: queueExport
+      tags:
+        - exports
+      summary: Queue an export with a version selection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportRequest"
+      responses:
+        "202":
+          description: Export queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Export"
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/exports/{exportId}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/ExportId"
+    get:
+      operationId: getExport
+      tags:
+        - exports
+      summary: Get an export's status and files
+      responses:
+        "200":
+          description: Export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Export"
+        default:
+          $ref: "#/components/responses/Problem"
+    delete:
+      operationId: deleteExport
+      tags:
+        - exports
+      summary: Delete an export
+      responses:
+        "204":
+          description: Deleted
+        default:
+          $ref: "#/components/responses/Problem"
+  /projects/{projectId}/exports/{exportId}/files/{name}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/ExportId"
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: File name inside the export directory
+    get:
+      operationId: downloadExportFile
+      tags:
+        - exports
+      summary: Download one file of a finished export
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: "#/components/responses/Problem"
+  /jobs/current/events:
+    get:
+      operationId: watchJob
+      tags:
+        - jobs
+      summary: Server-sent events of the running job
+      description: >
+        Streams the five event kinds of the job queue: step, progress,
+        candidate, log, end. Replays the running job's events so far, then
+        streams live ones. The stream ends after the end event.
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/Event"
+        default:
+          $ref: "#/components/responses/Problem"
+  /settings:
+    get:
+      operationId: getSettings
+      tags:
+        - settings
+      summary: Get settings, with signatureKey masked
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+        default:
+          $ref: "#/components/responses/Problem"
+    put:
+      operationId: updateSettings
+      tags:
+        - settings
+      summary: Update settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Settings"
+      responses:
+        "200":
+          description: Updated settings, with signatureKey masked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+        default:
+          $ref: "#/components/responses/Problem"
+  /tools:
+    get:
+      operationId: getTools
+      tags:
+        - tools
+      summary: Installed and available tool versions, DB date
+      responses:
+        "200":
+          description: Tools state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
+  /tools/trivy/update:
+    post:
+      operationId: updateTrivy
+      tags:
+        - tools
+      summary: Install a new Trivy release
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - force
+              properties:
+                force:
+                  type: boolean
+                  description: Install the latest release regardless of its age
+      responses:
+        "200":
+          description: Tools state after the update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
+  /tools/trivy/activate:
+    post:
+      operationId: activateTrivy
+      tags:
+        - tools
+      summary: Activate an installed Trivy version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - version
+              properties:
+                version:
+                  type: string
+      responses:
+        "200":
+          description: Tools state after the activation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
+  /tools/trivy/db/update:
+    post:
+      operationId: updateTrivyDB
+      tags:
+        - tools
+      summary: Force a Trivy DB download
+      responses:
+        "200":
+          description: Tools state after the DB update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
+components:
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+    AnalysisId:
+      name: analysisId
+      in: path
+      required: true
+      schema:
+        type: string
+    ExportId:
+      name: exportId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details for HTTP APIs
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI identifying the problem type
+          default: about:blank
+        title:
+          type: string
+          description: A short, human-readable summary of the problem type
+        status:
+          type: integer
+          description: The HTTP status code repeated for clients that read the body only
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence
+        instance:
+          type: string
+          format: uri
+          description: A URI identifying this specific occurrence
+      required:
+        - title
+        - status
+    State:
+      type: string
+      description: State of a job and of the directory it writes
+      enum:
+        - queued
+        - running
+        - done
+        - failed
+        - cancelled
+        - interrupted
+    Target:
+      type: object
+      description: The system a resolution or an export is prepared for
+      properties:
+        os:
+          type: string
+          example: linux
+        cpu:
+          type: string
+          example: x64
+        libc:
+          type: string
+          example: glibc
+        node:
+          type: string
+          example: 22.17.1
+        pnpmVer:
+          type: string
+          example: 10.34.5
+      required:
+        - os
+        - cpu
+        - libc
+        - node
+        - pnpmVer
+    Settings:
+      type: object
+      description: Every value the interface can change.
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        signatureKey:
+          type: string
+          description: Masked on read, never logged
+        minReleaseAgeDays:
+          type: integer
+        resolveParallelism:
+          type: integer
+        downloadParallelism:
+          type: integer
+      required:
+        - target
+        - signatureKey
+        - minReleaseAgeDays
+        - resolveParallelism
+        - downloadParallelism
+    ProjectSummary:
+      type: object
+      description: One row of the projects list.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        target:
+          $ref: "#/components/schemas/Target"
+        lastAnalysis:
+          $ref: "#/components/schemas/Analysis"
+        lastExport:
+          $ref: "#/components/schemas/Export"
+      required:
+        - id
+        - name
+        - target
+    Project:
+      type: object
+      description: A project, its target and its analysis and export history.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        target:
+          $ref: "#/components/schemas/Target"
+        analyses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Analysis"
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Export"
+      required:
+        - id
+        - name
+        - target
+    Analysis:
+      type: object
+      description: One analysis job and its state.
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        state:
+          $ref: "#/components/schemas/State"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - projectId
+        - state
+        - createdAt
+    ExportRequest:
+      type: object
+      description: A selection of versions per dependency, plus the project tree flag
+      properties:
+        selection:
+          type: object
+          description: Dependency name to selected versions
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        includeProjectTree:
+          type: boolean
+          default: false
+      required:
+        - selection
+    Export:
+      type: object
+      description: One export job, its state and its files.
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        analysisId:
+          type: string
+        state:
+          $ref: "#/components/schemas/State"
+        createdAt:
+          type: string
+          format: date-time
+        files:
+          type: array
+          items:
+            type: string
+          description: File names available under files/{name} once the export is done
+      required:
+        - id
+        - projectId
+        - analysisId
+        - state
+        - createdAt
+    ToolsState:
+      type: object
+      description: Installed and available pnpm and Trivy versions, and the DB date.
+      properties:
+        pnpmInstalled:
+          type: array
+          items:
+            type: string
+        trivyActive:
+          type: string
+        trivyInstalled:
+          type: array
+          items:
+            type: string
+        trivyLatest:
+          type: string
+        trivyLatestAge:
+          type: string
+          description: Duration since the latest Trivy release, as a Go duration string
+        trivyDbDate:
+          type: string
+          format: date-time
+      required:
+        - pnpmInstalled
+        - trivyActive
+        - trivyInstalled
+        - trivyLatest
+        - trivyLatestAge
+        - trivyDbDate
+    EventKind:
+      type: string
+      description: Discriminator for the data payload of an Event.
+      enum:
+        - step
+        - progress
+        - candidate
+        - log
+        - end
+    Event:
+      type: object
+      description: One server-sent event of the running job
+      properties:
+        kind:
+          $ref: "#/components/schemas/EventKind"
+        job:
+          type: string
+          description: Job ID the event belongs to
+        data:
+          description: Payload matching the kind; see StepData, ProgressData, CandidateData, LogData, EndData
+          oneOf:
+            - $ref: "#/components/schemas/StepData"
+            - $ref: "#/components/schemas/ProgressData"
+            - $ref: "#/components/schemas/CandidateData"
+            - $ref: "#/components/schemas/LogData"
+            - $ref: "#/components/schemas/EndData"
+      required:
+        - kind
+        - job
+        - data
+    StepData:
+      type: object
+      description: Payload of a step event
+      properties:
+        name:
+          type: string
+        state:
+          $ref: "#/components/schemas/State"
+        durationMs:
+          type: integer
+      required:
+        - name
+        - state
+    ProgressData:
+      type: object
+      description: Payload of a progress event
+      properties:
+        done:
+          type: integer
+        total:
+          type: integer
+        estimatedRemainingMs:
+          type: integer
+      required:
+        - done
+        - total
+    CandidateData:
+      type: object
+      description: Payload of a candidate event
+      properties:
+        dependency:
+          type: string
+        version:
+          type: string
+        vector:
+          type: array
+          items:
+            type: integer
+          description: CVE counts by severity, critical to unknown
+        signals:
+          type: array
+          items:
+            type: string
+      required:
+        - dependency
+        - version
+        - vector
+        - signals
+    LogData:
+      type: object
+      description: Payload of a log event
+      properties:
+        line:
+          type: string
+      required:
+        - line
+    EndData:
+      type: object
+      description: Payload of the end event, always the last one of a job
+      properties:
+        state:
+          $ref: "#/components/schemas/State"
+      required:
+        - state
