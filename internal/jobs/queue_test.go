@@ -145,13 +145,16 @@ func TestQueue_OneAtATime(t *testing.T) {
 	}
 
 	close(release1)
-	waitIdle(t, q)
 
+	// Waiting for the queue to look idle is not enough: it reports no
+	// current job in the window between one job ending and the worker
+	// picking up the next one, so job2 may not have started yet.
 	select {
 	case <-job2.started:
-	default:
+	case <-time.After(2 * time.Second):
 		t.Fatal("job2 never started after job1 finished")
 	}
+	waitIdle(t, q)
 }
 
 func TestQueue_CancelRunningAndQueued(t *testing.T) {
