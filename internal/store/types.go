@@ -5,20 +5,20 @@ package store
 // Target is the system an export gets prepared for, plus the toolchain
 // versions the resolution pins.
 type Target struct {
-	OS      string // "linux"
-	CPU     string // "x64"
-	Libc    string // "glibc" or "musl"
-	Node    string // "22.17.1"
-	PnpmVer string // "10.34.5"
+	OS      string `json:"os"`      // "linux"
+	CPU     string `json:"cpu"`     // "x64"
+	Libc    string `json:"libc"`    // "glibc" or "musl"
+	Node    string `json:"node"`    // "22.17.1"
+	PnpmVer string `json:"pnpmVer"` // "10.34.5"
 }
 
 // Settings holds every value the interface can change.
 type Settings struct {
-	Target              Target
-	SignatureKey        string
-	MinReleaseAgeDays   int
-	ResolveParallelism  int
-	DownloadParallelism int
+	Target              Target `json:"target"`
+	SignatureKey        string `json:"signatureKey"`
+	MinReleaseAgeDays   int    `json:"minReleaseAgeDays"`
+	ResolveParallelism  int    `json:"resolveParallelism"`
+	DownloadParallelism int    `json:"downloadParallelism"`
 }
 
 // State is the state of an analysis, an export or a queued job.

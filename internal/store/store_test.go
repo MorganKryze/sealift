@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,6 +109,91 @@ func TestSaveSettingsRefusesEmptyTargetField(t *testing.T) {
 	if got := s.Settings(); got != defaultSettings {
 		t.Errorf("Settings() after a refused save = %+v, want %+v", got, defaultSettings)
 	}
+}
+
+// TestSettingsJSONMatchesTheContract proves settings.json holds the field
+// names api/openapi.yaml declares (target, os, cpu, libc, node, pnpmVer,
+// signatureKey, minReleaseAgeDays, resolveParallelism, downloadParallelism)
+// instead of the exported Go field names.
+func TestSettingsJSONMatchesTheContract(t *testing.T) {
+	settings := defaultSettings
+	settings.SignatureKey = "top-secret-key"
+
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal into map: %v", err)
+	}
+	wantKeys := []string{"target", "signatureKey", "minReleaseAgeDays", "resolveParallelism", "downloadParallelism"}
+	if len(got) != len(wantKeys) {
+		t.Fatalf("Settings JSON keys = %v, want exactly %v", got, wantKeys)
+	}
+	for _, k := range wantKeys {
+		if _, ok := got[k]; !ok {
+			t.Errorf("Settings JSON missing key %q, got %v", k, got)
+		}
+	}
+
+	target, ok := got["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("target = %v, want an object", got["target"])
+	}
+	wantTargetKeys := []string{"os", "cpu", "libc", "node", "pnpmVer"}
+	if len(target) != len(wantTargetKeys) {
+		t.Fatalf("Target JSON keys = %v, want exactly %v", target, wantTargetKeys)
+	}
+	for _, k := range wantTargetKeys {
+		if _, ok := target[k]; !ok {
+			t.Errorf("Target JSON missing key %q, got %v", k, target)
+		}
+	}
+}
+
+// TestSettingsJSONFileRoundTrip proves a settings.json written to disk with
+// the contract's field names reads back into the same Settings value.
+func TestSettingsJSONFileRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	want := defaultSettings
+	want.SignatureKey = "top-secret-key"
+	if err := s.SaveSettings(want); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "private", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if !jsonHasKey(t, raw, "signatureKey") || !jsonHasKey(t, raw, "minReleaseAgeDays") {
+		t.Fatalf("settings.json = %s, want contract field names", raw)
+	}
+
+	var got Settings
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got != want {
+		t.Fatalf("round-tripped Settings = %+v, want %+v", got, want)
+	}
+}
+
+// jsonHasKey reports whether raw, a JSON object, has a top-level key named k.
+func jsonHasKey(t *testing.T, raw []byte, k string) bool {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Unmarshal into map: %v", err)
+	}
+	_, ok := m[k]
+	return ok
 }
 
 func TestStoreFileIsGroupWritable(t *testing.T) {
