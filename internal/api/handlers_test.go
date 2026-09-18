@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -343,6 +344,116 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 	}
 	if got := *(*problem.Errors)[0].Name; got != "left-pad@9.9.9" {
 		t.Fatalf("problem.Errors[0].Name = %q, want %q", got, "left-pad@9.9.9")
+	}
+}
+
+// TestQueueExportMissingSignatureKeyAnswers400 proves the fix for G2:
+// jobs.ErrSignatureKeyMissing is the caller's own mistake, forgetting to
+// configure the setting exports sign with, not a server failure.
+func TestQueueExportMissingSignatureKeyAnswers400(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	// The store's own settings still hold the empty default signatureKey.
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
+	resp2, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
+	}
+}
+
+// TestQueueExportAnalysisNotDoneAnswers409 proves the fix for G2:
+// jobs.ErrAnalysisNotDone names an analysis in the wrong state for what
+// the caller asked, a conflict with the request, not a server failure.
+func TestQueueExportAnalysisNotDoneAnswers409(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"failed"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+
+	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
+	resp2, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusConflict {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 409, body: %s", resp2.StatusCode, data)
+	}
+}
+
+// TestUpdateTrivyRefusesARecentReleaseAnswers409 proves the fix for G2:
+// tools.ErrReleaseTooRecent is a deliberate protection the request ran
+// into, not a server failure, and its detail keeps naming the minimum
+// age a client needs to explain the refusal.
+func TestUpdateTrivyRefusesARecentReleaseAnswers409(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body := fmt.Sprintf(`{"tag_name":"v1.2.3","published_at":%q,"assets":[]}`, time.Now().UTC().Format(time.RFC3339))
+		_, _ = w.Write([]byte(body))
+	})
+	ghSrv := httptest.NewServer(mux)
+	defer ghSrv.Close()
+
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlers(t, q)
+	h.Tools.GitHubAPI = ghSrv.URL
+	srv := httptest.NewServer(Routes(h))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/tools/trivy/update", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("POST update trivy: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409, body: %s", resp.StatusCode, data)
+	}
+	var problem Problem
+	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Detail == nil || !strings.Contains(*problem.Detail, "minimum age") {
+		t.Fatalf("problem.Detail = %v, want it to name the minimum age", problem.Detail)
 	}
 }
 

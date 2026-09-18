@@ -48,12 +48,21 @@ func problem(status int, title string, err error) problemBody {
 }
 
 // statusFor picks the HTTP status a plain error (not a validation failure,
-// which callers build their own Problem for) maps to.
+// which callers build their own Problem for) maps to: a sentinel the
+// caller could have avoided by asking first (a missing signature key, an
+// analysis not done yet, a release too young) gets its own status rather
+// than the 500 an unexpected failure gets.
 func statusFor(err error) int {
-	if errors.Is(err, store.ErrNotFound) || errors.Is(err, jobs.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, jobs.ErrSignatureKeyMissing):
+		return http.StatusBadRequest
+	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
 	}
-	return http.StatusInternalServerError
 }
 
 // autoProblem builds a problemBody for err, picking its status with

@@ -101,8 +101,8 @@ func TestQueueExportRefusesAnAnalysisNotDone(t *testing.T) {
 		t.Fatalf("write status.json: %v", err)
 	}
 
-	if _, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}}); err == nil {
-		t.Fatal("QueueExport on a failed analysis: want an error, got nil")
+	if _, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}}); !errors.Is(err, ErrAnalysisNotDone) {
+		t.Fatalf("QueueExport on a failed analysis = %v, want ErrAnalysisNotDone", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,11 @@ import (
 // timestamp with second precision (spec section 3), the same one
 // internal/store parses committed directory names with.
 const idLayout = "20060102T150405Z"
+
+// ErrAnalysisNotDone reports a QueueExport call naming an analysis that
+// has not reached state done: queued, running, failed or cancelled all
+// leave nothing ranked yet to select from.
+var ErrAnalysisNotDone = errors.New("jobs: analysis is not done")
 
 // ErrInvalidSelection reports a QueueExport call whose selection names one
 // or more versions the analysis did not resolve. Bad holds every
@@ -166,7 +172,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		return store.ExportInfo{}, err
 	}
 	if analysisInfo.State != store.Done {
-		return store.ExportInfo{}, fmt.Errorf("jobs: analysis %s is %s, not done", analysisID, analysisInfo.State)
+		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s is %s", ErrAnalysisNotDone, analysisID, analysisInfo.State)
 	}
 	var result Result
 	if err := json.Unmarshal(analysisInfo.Result, &result); err != nil {
