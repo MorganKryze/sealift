@@ -670,6 +670,7 @@ components:
     StepData:
       type: object
       description: Payload of a step event
+      additionalProperties: false
       properties:
         name:
           type: string
@@ -683,6 +684,7 @@ components:
     ProgressData:
       type: object
       description: Payload of a progress event
+      additionalProperties: false
       properties:
         done:
           type: integer
@@ -696,6 +698,7 @@ components:
     CandidateData:
       type: object
       description: Payload of a candidate event
+      additionalProperties: false
       properties:
         dependency:
           type: string
@@ -718,6 +721,7 @@ components:
     LogData:
       type: object
       description: Payload of a log event
+      additionalProperties: false
       properties:
         line:
           type: string
@@ -726,6 +730,7 @@ components:
     EndData:
       type: object
       description: Payload of the end event, always the last one of a job
+      additionalProperties: false
       properties:
         state:
           $ref: "#/components/schemas/State"
