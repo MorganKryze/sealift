@@ -143,6 +143,15 @@ func (q *Queue) runFinalizer(id, kind string, state store.State) {
 // Submit queues j to run once every earlier job has finished, fifo, and
 // returns the id later calls use to name it.
 func (q *Queue) Submit(j Job) (id string, err error) {
+	return q.SubmitWith(j, nil)
+}
+
+// SubmitWith queues a job and calls register with its id before the worker
+// can pick the job up. A caller that indexes a job by its queue id must use
+// this: registering after Submit returns races a job that has already
+// finished, and the finalize hook would then find nothing to finalize,
+// leaving the job's directory unpublished and the job indexed forever.
+func (q *Queue) SubmitWith(j Job, register func(id string)) (id string, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
@@ -150,6 +159,9 @@ func (q *Queue) Submit(j Job) (id string, err error) {
 	}
 	q.nextID++
 	id = fmt.Sprintf("%s-%d", j.Kind(), q.nextID)
+	if register != nil {
+		register(id)
+	}
 	q.pending = append(q.pending, entry{id: id, job: j})
 	q.cond.Signal()
 	return id, nil

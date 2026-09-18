@@ -141,12 +141,16 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
-	queueID, err := s.queue.Submit(job)
-	if err != nil {
+	// Registered before the worker can start the job: tracking it after
+	// Submit returns races a job that has already finished, and the
+	// finalize hook would find nothing to finalize.
+	if _, err := s.queue.SubmitWith(job, func(queueID string) {
+		s.track(queueID, "analysis", projectID, pending)
+	}); err != nil {
+		s.untrackPending(projectID, "analysis", pending.ID())
 		_ = pending.Discard()
 		return store.AnalysisInfo{}, err
 	}
-	s.track(queueID, "analysis", projectID, pending)
 
 	createdAt, _ := time.Parse(idLayout, pending.ID())
 	return store.AnalysisInfo{ID: pending.ID(), ProjectID: projectID, State: store.Queued, CreatedAt: createdAt}, nil
@@ -202,12 +206,16 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
-	queueID, err := s.queue.Submit(job)
-	if err != nil {
+	// Registered before the worker can start the job: tracking it after
+	// Submit returns races a job that has already finished, and the
+	// finalize hook would find nothing to finalize.
+	if _, err := s.queue.SubmitWith(job, func(queueID string) {
+		s.track(queueID, "export", projectID, pending)
+	}); err != nil {
+		s.untrackPending(projectID, "export", pending.ID())
 		_ = pending.Discard()
 		return store.ExportInfo{}, err
 	}
-	s.track(queueID, "export", projectID, pending)
 
 	createdAt, _ := time.Parse(idLayout, pending.ID())
 	return store.ExportInfo{
@@ -295,6 +303,23 @@ func (s *Service) track(queueID, kind, projectID string, pending *store.Pending)
 // a caller polling LiveState until it reports untracked, such as a test
 // that then removes the whole data volume, needs that to mean the
 // filesystem has genuinely gone quiet, not just that the maps have.
+// untrackPending removes a job that never reached the queue, so a failed
+// submission leaves no entry behind.
+func (s *Service) untrackPending(projectID, kind, storeID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := jobKey{projectID: projectID, kind: kind, storeID: storeID}
+	tj, ok := s.byJobKey[key]
+	if !ok {
+		return
+	}
+	delete(s.byJobKey, key)
+	delete(s.byQueueID, tj.queueID)
+	if s.byProjectID[projectID] == tj {
+		delete(s.byProjectID, projectID)
+	}
+}
+
 func (s *Service) finalize(info FinalizeInfo) error {
 	s.mu.Lock()
 	tj, ok := s.byQueueID[info.ID]

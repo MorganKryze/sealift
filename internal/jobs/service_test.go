@@ -270,11 +270,13 @@ func TestServiceReconcilesAnalysisStatusToTheQueuesOwnOutcome(t *testing.T) {
 		}
 		return os.Rename(pending.Path(), pending.Final())
 	}}
-	queueID, err := svc.queue.Submit(job)
-	if err != nil {
+	// Registered inside Submit, as the service does: tracking afterwards
+	// races a job that finishes first.
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, pending)
+	}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	svc.track(queueID, "analysis", project.ID, pending)
 
 	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
 
@@ -329,11 +331,13 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 		}
 		return os.Rename(pending.Path(), pending.Final())
 	}}
-	queueID, err := svc.queue.Submit(job)
-	if err != nil {
+	// Registered inside Submit, as the service does: tracking afterwards
+	// races a job that finishes first.
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, pending)
+	}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	svc.track(queueID, "analysis", project.ID, pending)
 
 	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
 
