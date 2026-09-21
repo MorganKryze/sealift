@@ -1,6 +1,7 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { Mark } from "@/components/brand/Mark"
+import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { formatDuration } from "@/lib/utils"
 
@@ -14,25 +15,48 @@ interface ExportRunningProps {
 // so neither shows here.
 export function ExportRunning({ exportId, onEnd }: ExportRunningProps) {
   const [logOpen, setLogOpen] = useState(false)
-  const events = useJobEvents(exportId, true, onEnd)
+  // The parent only learns the export failed after a refetch, at which
+  // point the terminal Export carries no per-step detail (unlike Analysis,
+  // it has no warnings field either): the failed step is only ever visible
+  // here, while the stream that reported it is still open. So a failed run
+  // holds this view, with the step named, until the user moves on.
+  const events = useJobEvents(exportId, true, () => {})
+
+  useEffect(() => {
+    if (events.ended && events.endState === "done") {
+      onEnd()
+    }
+  }, [events.ended, events.endState, onEnd])
 
   const progressPercent =
     events.progress && events.progress.total > 0
       ? Math.round((events.progress.done / events.progress.total) * 100)
       : null
+  const stoppedAt = events.ended ? events.steps.find((step) => step.state === "failed") : undefined
 
   return (
     <div className="flex flex-col gap-6 p-8">
       <div className="flex items-center gap-4">
-        <Mark size={40} className="animate-mark-lift" />
+        <Mark size={40} className={events.ended ? undefined : "animate-mark-lift"} />
         <div>
-          <h2 className="text-lg font-semibold text-ink">Export running</h2>
+          <h2 className="text-lg font-semibold text-ink">
+            {events.ended && events.endState !== "done" ? `Export ${events.endState}` : "Export running"}
+          </h2>
           <p className="text-sm text-muted">
-            {events.progress?.estimatedRemainingMs !== undefined
-              ? `About ${formatDuration(events.progress.estimatedRemainingMs)} remaining`
-              : "Working…"}
+            {events.ended && events.endState !== "done"
+              ? stoppedAt
+                ? `Stopped at ${stoppedAt.name}.`
+                : "Stopped."
+              : events.progress?.estimatedRemainingMs !== undefined
+                ? `About ${formatDuration(events.progress.estimatedRemainingMs)} remaining`
+                : "Working…"}
           </p>
         </div>
+        {events.ended && events.endState !== "done" ? (
+          <Button className="ml-auto" onClick={onEnd}>
+            Back to export
+          </Button>
+        ) : null}
       </div>
 
       {progressPercent !== null ? (

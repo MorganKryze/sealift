@@ -35,6 +35,8 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
   const tools = toolsQuery.data
   const updateError = updateMutation.error instanceof ProblemError ? updateMutation.error : null
+  const activateError = activateMutation.error instanceof ProblemError ? activateMutation.error : null
+  const dbError = dbMutation.error instanceof ProblemError ? dbMutation.error : null
 
   function installAnyway() {
     const confirmed = window.confirm(
@@ -75,6 +77,8 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
           ))}
         </ul>
 
+        {activateError ? <ProblemNotice status={activateError.status} problem={activateError.problem} /> : null}
+
         {updateError ? (
           <ProblemNotice status={updateError.status} problem={updateError.problem}>
             <Button variant="outline" size="sm" className="mt-2" onClick={installAnyway}>
@@ -98,9 +102,7 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
         <Button variant="outline" className="self-start" disabled={dbMutation.isPending} onClick={() => dbMutation.mutate()}>
           Update database
         </Button>
-        {dbMutation.error instanceof ProblemError ? (
-          <ProblemNotice status={dbMutation.error.status} problem={dbMutation.error.problem} />
-        ) : null}
+        {dbError ? <ProblemNotice status={dbError.status} problem={dbError.problem} /> : null}
       </div>
 
       <div className="flex flex-col gap-2">
