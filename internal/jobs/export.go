@@ -151,8 +151,9 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 	emitStep(emit, "package-list", store.Running, 0)
 
 	if bad := ValidateSelection(e.Analysis.Result, e.Request.Selection); len(bad) > 0 {
-		emitStep(emit, "package-list", store.Failed, time.Since(start))
-		return nil, fmt.Errorf("%w: %s", ErrUnknownSelection, strings.Join(bad, ", "))
+		err := fmt.Errorf("%w: %s", ErrUnknownSelection, strings.Join(bad, ", "))
+		emitFailedStep(emit, "package-list", time.Since(start), err)
+		return nil, err
 	}
 
 	platform := npm.Platform{OS: e.Project.Target.OS, CPU: e.Project.Target.CPU, Libc: e.Project.Target.Libc}
@@ -170,7 +171,7 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 		for _, version := range e.Request.Selection[name] {
 			lock, err := e.readLockfile(e.candidateLockfilePath(name, version))
 			if err != nil {
-				emitStep(emit, "package-list", store.Failed, time.Since(start))
+				emitFailedStep(emit, "package-list", time.Since(start), err)
 				return nil, err
 			}
 			add(lock)
@@ -179,7 +180,7 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 	if e.Request.IncludeProject {
 		lock, err := e.readLockfile(filepath.Join(e.Analysis.Dir, "project", "pnpm-lock.yaml"))
 		if err != nil {
-			emitStep(emit, "package-list", store.Failed, time.Since(start))
+			emitFailedStep(emit, "package-list", time.Since(start), err)
 			return nil, err
 		}
 		add(lock)
@@ -269,12 +270,14 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 	emitStep(emit, "download", store.Running, 0)
 
 	if err := os.MkdirAll(filepath.Join(e.Dir, "downloads"), 0o770); err != nil {
-		emitStep(emit, "download", store.Failed, time.Since(start))
-		return nil, fmt.Errorf("jobs: create downloads dir: %w", err)
+		werr := fmt.Errorf("jobs: create downloads dir: %w", err)
+		emitFailedStep(emit, "download", time.Since(start), werr)
+		return nil, werr
 	}
 	if err := os.MkdirAll(filepath.Join(e.Store.Root(), "cache", "tarballs"), 0o770); err != nil {
-		emitStep(emit, "download", store.Failed, time.Since(start))
-		return nil, fmt.Errorf("jobs: create tarball cache: %w", err)
+		werr := fmt.Errorf("jobs: create tarball cache: %w", err)
+		emitFailedStep(emit, "download", time.Since(start), werr)
+		return nil, werr
 	}
 
 	n := e.Settings.DownloadParallelism
@@ -318,7 +321,7 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 	wg.Wait()
 
 	if firstErr != nil {
-		emitStep(emit, "download", store.Failed, time.Since(start))
+		emitFailedStep(emit, "download", time.Since(start), firstErr)
 		return nil, firstErr
 	}
 	emitStep(emit, "download", store.Done, time.Since(start))
@@ -403,7 +406,7 @@ func (e *Export) stripAll(ctx context.Context, emit func(Event), downloaded []do
 	for i, d := range downloaded {
 		s, err := e.stripOne(ctx, strippedDir, d)
 		if err != nil {
-			emitStep(emit, "strip", store.Failed, time.Since(start))
+			emitFailedStep(emit, "strip", time.Since(start), err)
 			return nil, err
 		}
 		shipped[i] = s
@@ -508,8 +511,9 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	path := filepath.Join(e.Dir, "packages_npm.tar.gz")
 	f, err := os.Create(path)
 	if err != nil {
-		emitStep(emit, "archive", store.Failed, time.Since(start))
-		return report.ArchiveManifest{}, fmt.Errorf("jobs: create archive: %w", err)
+		werr := fmt.Errorf("jobs: create archive: %w", err)
+		emitFailedStep(emit, "archive", time.Since(start), werr)
+		return report.ArchiveManifest{}, werr
 	}
 	sum := sha256.New()
 	writeErr := archive.WriteTarGz(io.MultiWriter(f, sum), "out", entries)
@@ -517,13 +521,15 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 		writeErr = closeErr
 	}
 	if writeErr != nil {
-		emitStep(emit, "archive", store.Failed, time.Since(start))
-		return report.ArchiveManifest{}, fmt.Errorf("jobs: write archive: %w", writeErr)
+		werr := fmt.Errorf("jobs: write archive: %w", writeErr)
+		emitFailedStep(emit, "archive", time.Since(start), werr)
+		return report.ArchiveManifest{}, werr
 	}
 	st, err := os.Stat(path)
 	if err != nil {
-		emitStep(emit, "archive", store.Failed, time.Since(start))
-		return report.ArchiveManifest{}, fmt.Errorf("jobs: stat archive: %w", err)
+		werr := fmt.Errorf("jobs: stat archive: %w", err)
+		emitFailedStep(emit, "archive", time.Since(start), werr)
+		return report.ArchiveManifest{}, werr
 	}
 	emitStep(emit, "archive", store.Done, time.Since(start))
 	return report.ArchiveManifest{SHA256: hex.EncodeToString(sum.Sum(nil)), Size: st.Size()}, nil
@@ -536,19 +542,19 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 	emitStep(emit, "reports", store.Running, 0)
 
 	if err := e.writeManifest(shipped, arch); err != nil {
-		emitStep(emit, "reports", store.Failed, time.Since(start))
+		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
 	if err := e.writeTrivyReports(ctx, shipped); err != nil {
-		emitStep(emit, "reports", store.Failed, time.Since(start))
+		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
 	if err := e.writeFindingsCSV(); err != nil {
-		emitStep(emit, "reports", store.Failed, time.Since(start))
+		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
 	if err := e.writeSummary(shipped, arch); err != nil {
-		emitStep(emit, "reports", store.Failed, time.Since(start))
+		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
 	emitStep(emit, "reports", store.Done, time.Since(start))
@@ -818,9 +824,18 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // emitStep emits a "step" event with the payload shape analysis.go's
 // stepData already defines, so both job kinds' step events share one
-// TypeScript type on the frontend.
+// TypeScript type on the frontend. err is nil for every state but Failed;
+// emitFailedStep is the Failed-only call every step above actually uses,
+// so the reason never ends up nowhere the way it would if only the
+// server log recorded it.
 func emitStep(emit func(Event), name string, state store.State, d time.Duration) {
 	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: d.Milliseconds()})})
+}
+
+// emitFailedStep is emitStep for state Failed, with the error that failed
+// it.
+func emitFailedStep(emit func(Event), name string, d time.Duration, err error) {
+	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: store.Failed, DurationMs: d.Milliseconds(), Error: err.Error()})})
 }
 
 // progressEvent builds a "progress" event with analysis.go's progressData

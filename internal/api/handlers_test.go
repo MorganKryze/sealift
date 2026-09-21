@@ -1129,6 +1129,82 @@ func TestGetAnalysisIncludesToolVersions(t *testing.T) {
 	}
 }
 
+// TestGetAnalysisReportsFailure proves the cause of a failed step reaches
+// the API instead of staying readable only in log.txt.
+func TestGetAnalysisReportsFailure(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260918T090000Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	status := `{"state":"failed","steps":[{"name":"scan-project","state":"failed","error":"trivy: exit status 1"}]}`
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(status), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+
+	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260918T090000Z", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET analysis: %v", err)
+	}
+	defer resp2.Body.Close()
+	var a Analysis
+	if err := json.NewDecoder(resp2.Body).Decode(&a); err != nil {
+		t.Fatalf("decode analysis: %v", err)
+	}
+	if a.Failure == nil || a.Failure.Step != "scan-project" || a.Failure.Message != "trivy: exit status 1" {
+		t.Errorf("Failure = %+v, want step scan-project with the recorded message", a.Failure)
+	}
+}
+
+// TestGetAnalysisLog proves an analysis' log.txt is reachable through the
+// API as plain text, and that a missing analysis answers 404 rather than
+// an empty body.
+func TestGetAnalysisLog(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260918T090000Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "log.txt"), []byte("line one\nline two\n"), 0o664); err != nil {
+		t.Fatalf("write log.txt: %v", err)
+	}
+
+	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260918T090000Z/log", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET log: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp2.StatusCode)
+	}
+	if ct := resp2.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+	}
+	body, _ := io.ReadAll(resp2.Body)
+	if string(body) != "line one\nline two\n" {
+		t.Errorf("body = %q, want the exact log content", body)
+	}
+
+	resp3, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/does-not-exist/log", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET log: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for an analysis that does not exist", resp3.StatusCode)
+	}
+}
+
 // waitForTerminalState polls Service.LiveState until id is no longer
 // tracked under projectID and kind, meaning Service's finalizer goroutine
 // has already reacted to its "end" event and stopped touching its

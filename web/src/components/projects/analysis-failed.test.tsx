@@ -33,7 +33,7 @@ beforeEach(() => {
 
 describe("AnalysisFailed", () => {
   it("names the failed step when status.json recorded one", () => {
-    renderFailed({ ...baseAnalysis, failedStep: "scan" })
+    renderFailed({ ...baseAnalysis, failure: { step: "scan", message: "boom" } })
 
     expect(screen.getByText(/Stopped at scan\./)).toBeInTheDocument()
   })

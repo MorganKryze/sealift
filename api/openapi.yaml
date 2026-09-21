@@ -163,6 +163,24 @@ paths:
           description: Deleted
         default:
           $ref: "#/components/responses/Problem"
+  /projects/{projectId}/analyses/{analysisId}/log:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/AnalysisId"
+    get:
+      operationId: getAnalysisLog
+      tags:
+        - analyses
+      summary: Get an analysis' full log
+      responses:
+        "200":
+          description: Plain text log
+          content:
+            text/plain:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Problem"
   /projects/{projectId}/analyses/{analysisId}/cancel:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -472,6 +490,11 @@ components:
           description: Every offending entry, for a validation failure
           items:
             $ref: "#/components/schemas/ProblemDetail"
+        missing:
+          type: array
+          description: Names of what a tools-missing problem needs and does not have yet
+          items:
+            type: string
       required:
         - title
         - status
@@ -613,14 +636,24 @@ components:
         pnpmVersion:
           type: string
           description: pnpm version the analysis used, absent when it did not record one
-        failedStep:
-          type: string
-          description: Name of the step status.json recorded as failed, absent for a state that names none
+        failure:
+          $ref: "#/components/schemas/Failure"
       required:
         - id
         - projectId
         - state
         - createdAt
+    Failure:
+      type: object
+      description: Which step failed and why
+      properties:
+        step:
+          type: string
+        message:
+          type: string
+      required:
+        - step
+        - message
     Vector:
       type: array
       description: CVE counts by severity, critical to unknown
@@ -757,6 +790,8 @@ components:
           items:
             type: string
           description: File names available under files/{name} once the export is done
+        failure:
+          $ref: "#/components/schemas/Failure"
       required:
         - id
         - projectId
@@ -839,6 +874,9 @@ components:
           $ref: "#/components/schemas/State"
         durationMs:
           type: integer
+        error:
+          type: string
+          description: err.Error() when state is failed, absent otherwise
       required:
         - name
         - state

@@ -165,8 +165,8 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	if info.PnpmVersion != "" {
 		a.PnpmVersion = &info.PnpmVersion
 	}
-	if info.FailedStep != "" {
-		a.FailedStep = &info.FailedStep
+	if info.Failure != nil {
+		a.Failure = &Failure{Step: info.Failure.Step, Message: info.Failure.Message}
 	}
 	return a
 }
@@ -179,6 +179,9 @@ func exportToAPI(info store.ExportInfo) Export {
 	if info.Files != nil {
 		files := info.Files
 		e.Files = &files
+	}
+	if info.Failure != nil {
+		e.Failure = &Failure{Step: info.Failure.Step, Message: info.Failure.Message}
 	}
 	return e
 }

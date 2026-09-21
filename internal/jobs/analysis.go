@@ -103,6 +103,7 @@ type stepRecord struct {
 	Name       string `json:"name"`
 	State      string `json:"state"`
 	DurationMs int64  `json:"durationMs"`
+	Error      string `json:"error,omitempty"`
 }
 
 // stepData is the payload of a "step" event.
@@ -110,6 +111,7 @@ type stepData struct {
 	Name       string      `json:"name"`
 	State      store.State `json:"state"`
 	DurationMs int64       `json:"durationMs"`
+	Error      string      `json:"error,omitempty"`
 }
 
 // progressData is the payload of a "progress" event. CacheHits is set only
@@ -170,8 +172,12 @@ func (r *run) runStep(name string, fn func() error) error {
 		state = store.Failed
 	}
 	duration := time.Since(start).Milliseconds()
-	r.steps = append(r.steps, stepRecord{Name: name, State: string(state), DurationMs: duration})
-	r.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration})})
+	message := ""
+	if state == store.Failed {
+		message = err.Error()
+	}
+	r.steps = append(r.steps, stepRecord{Name: name, State: string(state), DurationMs: duration, Error: message})
+	r.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration, Error: message})})
 	return err
 }
 

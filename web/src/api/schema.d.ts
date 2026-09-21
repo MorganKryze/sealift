@@ -101,6 +101,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{projectId}/analyses/{analysisId}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                analysisId: components["parameters"]["AnalysisId"];
+            };
+            cookie?: never;
+        };
+        /** Get an analysis' full log */
+        get: operations["getAnalysisLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{projectId}/analyses/{analysisId}/cancel": {
         parameters: {
             query?: never;
@@ -335,6 +355,8 @@ export interface components {
             instance?: string;
             /** @description Every offending entry, for a validation failure */
             errors?: components["schemas"]["ProblemDetail"][];
+            /** @description Names of what a tools-missing problem needs and does not have yet */
+            missing?: string[];
         };
         /** @description One offending entry inside a validation failure's errors list */
         ProblemDetail: {
@@ -405,8 +427,12 @@ export interface components {
             trivyDbDate?: string;
             /** @description pnpm version the analysis used, absent when it did not record one */
             pnpmVersion?: string;
-            /** @description Name of the step status.json recorded as failed, absent for a state that names none */
-            failedStep?: string;
+            failure?: components["schemas"]["Failure"];
+        };
+        /** @description Which step failed and why */
+        Failure: {
+            step: string;
+            message: string;
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];
@@ -470,6 +496,7 @@ export interface components {
             createdAt: string;
             /** @description File names available under files/{name} once the export is done */
             files?: string[];
+            failure?: components["schemas"]["Failure"];
         };
         /** @description Installed and available pnpm and Trivy versions, and the DB date. */
         ToolsState: {
@@ -502,6 +529,8 @@ export interface components {
             name: string;
             state: components["schemas"]["State"];
             durationMs?: number;
+            /** @description err.Error() when state is failed, absent otherwise */
+            error?: string;
         };
         /** @description Payload of a progress event */
         ProgressData: {
@@ -740,6 +769,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getAnalysisLog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+                analysisId: components["parameters"]["AnalysisId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plain text log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
             };
             default: components["responses"]["Problem"];
         };

@@ -24,6 +24,10 @@ type ExportInfo struct {
 	State      State
 	CreatedAt  time.Time
 	Files      []string
+	// Failure mirrors AnalysisInfo.Failure for the API's sake, but stays
+	// nil in practice: a failed export removes its own directory (see
+	// Export.Run), so nothing ever reads one back here to fill it.
+	Failure *StepFailure
 }
 
 // exportManifest is the subset of manifest.json this package reads back.

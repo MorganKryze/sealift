@@ -18,8 +18,8 @@ const REASON: Record<string, string> = {
 
 // The schema carries no per-step failure detail for a terminal analysis
 // fetched fresh (only the running job's events replay, and the stream ends
-// with that job) beyond failedStep itself; warnings is the only other
-// place a reason beyond the state can come from.
+// with that job) beyond analysis.failure itself; warnings is the only
+// other place a reason beyond the state can come from.
 export function AnalysisFailed({ projectId, analysis }: AnalysisFailedProps) {
   const queryClient = useQueryClient()
   const rerunMutation = useMutation({
@@ -36,7 +36,7 @@ export function AnalysisFailed({ projectId, analysis }: AnalysisFailedProps) {
     <div className="flex flex-col gap-4 p-8">
       <p className="text-ink">
         {REASON[analysis.state] ?? `Analysis ${analysis.state}.`}
-        {analysis.failedStep ? ` Stopped at ${analysis.failedStep}.` : ""}
+        {analysis.failure ? ` Stopped at ${analysis.failure.step}.` : ""}
       </p>
       {warnings.length > 0 ? (
         <ul className="list-disc pl-5 text-sm text-muted">

@@ -229,6 +229,41 @@ func TestAnalysisKind(t *testing.T) {
 	}
 }
 
+// TestRunStepRecordsTheFailureMessage proves a failed step's own error
+// reaches status.json instead of staying only in log.txt: runStep must
+// set stepRecord.Error to err.Error() whenever the step's state is
+// Failed.
+func TestRunStepRecordsTheFailureMessage(t *testing.T) {
+	r := &run{a: &Analysis{}, ctx: context.Background(), emit: func(Event) {}}
+
+	err := r.runStep("boom-step", func() error { return errors.New("boom") })
+	if err == nil {
+		t.Fatal("runStep returned nil, want the step function's own error")
+	}
+	if len(r.steps) != 1 {
+		t.Fatalf("steps = %+v, want exactly one", r.steps)
+	}
+	if r.steps[0].State != string(store.Failed) {
+		t.Errorf("steps[0].State = %q, want %q", r.steps[0].State, store.Failed)
+	}
+	if r.steps[0].Error != "boom" {
+		t.Errorf("steps[0].Error = %q, want %q", r.steps[0].Error, "boom")
+	}
+}
+
+// TestRunStepLeavesErrorEmptyOnSuccess proves a done step never carries a
+// stray error message.
+func TestRunStepLeavesErrorEmptyOnSuccess(t *testing.T) {
+	r := &run{a: &Analysis{}, ctx: context.Background(), emit: func(Event) {}}
+
+	if err := r.runStep("ok-step", func() error { return nil }); err != nil {
+		t.Fatalf("runStep: %v", err)
+	}
+	if r.steps[0].Error != "" {
+		t.Errorf("steps[0].Error = %q, want empty", r.steps[0].Error)
+	}
+}
+
 const fooDoc = `{"name":"foo","versions":{
 	"1.0.0":{"version":"1.0.0"},
 	"1.1.0":{"version":"1.1.0"}

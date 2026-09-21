@@ -80,9 +80,9 @@ func (e State) Valid() bool {
 type Analysis struct {
 	CreatedAt time.Time `json:"createdAt"`
 
-	// FailedStep Name of the step status.json recorded as failed, absent for a state that names none
-	FailedStep *string `json:"failedStep,omitempty"`
-	Id         string  `json:"id"`
+	// Failure Which step failed and why
+	Failure *Failure `json:"failure,omitempty"`
+	Id      string   `json:"id"`
 
 	// PnpmVersion pnpm version the analysis used, absent when it did not record one
 	PnpmVersion *string `json:"pnpmVersion,omitempty"`
@@ -186,6 +186,9 @@ type Export struct {
 	AnalysisId string    `json:"analysisId"`
 	CreatedAt  time.Time `json:"createdAt"`
 
+	// Failure Which step failed and why
+	Failure *Failure `json:"failure,omitempty"`
+
 	// Files File names available under files/{name} once the export is done
 	Files     *[]string `json:"files,omitempty"`
 	Id        string    `json:"id"`
@@ -204,6 +207,12 @@ type ExportRequest struct {
 	Selection map[string][]string `json:"selection"`
 }
 
+// Failure Which step failed and why
+type Failure struct {
+	Message string `json:"message"`
+	Step    string `json:"step"`
+}
+
 // LogData Payload of a log event
 type LogData struct {
 	Line string `json:"line"`
@@ -219,6 +228,9 @@ type Problem struct {
 
 	// Instance A URI identifying this specific occurrence
 	Instance *string `json:"instance,omitempty"`
+
+	// Missing Names of what a tools-missing problem needs and does not have yet
+	Missing *[]string `json:"missing,omitempty"`
 
 	// Status The HTTP status code repeated for clients that read the body only
 	Status int `json:"status"`
@@ -301,8 +313,11 @@ type State string
 
 // StepData Payload of a step event
 type StepData struct {
-	DurationMs *int   `json:"durationMs,omitempty"`
-	Name       string `json:"name"`
+	DurationMs *int `json:"durationMs,omitempty"`
+
+	// Error err.Error() when state is failed, absent otherwise
+	Error *string `json:"error,omitempty"`
+	Name  string  `json:"name"`
 
 	// State State of a job and of the directory it writes
 	State State `json:"state"`
@@ -551,6 +566,9 @@ type ServerInterface interface {
 	// QueueExport Queue an export with a version selection
 	// (POST /projects/{projectId}/analyses/{analysisId}/exports)
 	QueueExport(w http.ResponseWriter, r *http.Request, projectId ProjectId, analysisId AnalysisId)
+	// GetAnalysisLog Get an analysis' full log
+	// (GET /projects/{projectId}/analyses/{analysisId}/log)
+	GetAnalysisLog(w http.ResponseWriter, r *http.Request, projectId ProjectId, analysisId AnalysisId)
 	// DeleteExport Delete an export
 	// (DELETE /projects/{projectId}/exports/{exportId})
 	DeleteExport(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId)
@@ -846,6 +864,41 @@ func (siw *ServerInterfaceWrapper) QueueExport(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.QueueExport(w, r, projectId, analysisId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAnalysisLog operation middleware
+func (siw *ServerInterfaceWrapper) GetAnalysisLog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", r.PathValue("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "analysisId" -------------
+	var analysisId AnalysisId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "analysisId", r.PathValue("analysisId"), &analysisId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "analysisId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAnalysisLog(w, r, projectId, analysisId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1242,6 +1295,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses", wrapper.QueueAnalysis)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}", wrapper.DeleteAnalysis)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}", wrapper.GetAnalysis)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/log", wrapper.GetAnalysisLog)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/cancel", wrapper.CancelAnalysis)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/exports", wrapper.QueueExport)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}", wrapper.DeleteExport)
@@ -1660,6 +1714,43 @@ type QueueExportdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response QueueExportdefaultApplicationProblemPlusJSONResponse) VisitQueueExportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAnalysisLogRequestObject struct {
+	ProjectId  ProjectId  `json:"projectId"`
+	AnalysisId AnalysisId `json:"analysisId"`
+}
+
+type GetAnalysisLogResponseObject interface {
+	VisitGetAnalysisLogResponse(w http.ResponseWriter) error
+}
+
+type GetAnalysisLog200TextResponse string
+
+func (response GetAnalysisLog200TextResponse) VisitGetAnalysisLogResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(fmt.Sprint(response)))
+	return err
+}
+
+type GetAnalysisLogdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetAnalysisLogdefaultApplicationProblemPlusJSONResponse) VisitGetAnalysisLogResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2135,6 +2226,9 @@ type StrictServerInterface interface {
 	// QueueExport Queue an export with a version selection
 	// (POST /projects/{projectId}/analyses/{analysisId}/exports)
 	QueueExport(ctx context.Context, request QueueExportRequestObject) (QueueExportResponseObject, error)
+	// GetAnalysisLog Get an analysis' full log
+	// (GET /projects/{projectId}/analyses/{analysisId}/log)
+	GetAnalysisLog(ctx context.Context, request GetAnalysisLogRequestObject) (GetAnalysisLogResponseObject, error)
 	// DeleteExport Delete an export
 	// (DELETE /projects/{projectId}/exports/{exportId})
 	DeleteExport(ctx context.Context, request DeleteExportRequestObject) (DeleteExportResponseObject, error)
@@ -2474,6 +2568,33 @@ func (sh *strictHandler) QueueExport(w http.ResponseWriter, r *http.Request, pro
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(QueueExportResponseObject); ok {
 		if err := validResponse.VisitQueueExportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAnalysisLog operation middleware
+func (sh *strictHandler) GetAnalysisLog(w http.ResponseWriter, r *http.Request, projectId ProjectId, analysisId AnalysisId) {
+	var request GetAnalysisLogRequestObject
+
+	request.ProjectId = projectId
+	request.AnalysisId = analysisId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAnalysisLog(ctx, request.(GetAnalysisLogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAnalysisLog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAnalysisLogResponseObject); ok {
+		if err := validResponse.VisitGetAnalysisLogResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

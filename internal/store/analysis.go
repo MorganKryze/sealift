@@ -28,7 +28,15 @@ type AnalysisInfo struct {
 	TrivyVersion string
 	TrivyDBDate  time.Time
 	PnpmVersion  string
-	FailedStep   string // name of the step status.json recorded as failed, empty otherwise
+	Failure      *StepFailure // the first step status.json recorded as failed, nil otherwise
+}
+
+// StepFailure names the step an analysis or export failed on and why,
+// read back from the failed step's own status.json entry: the log.txt a
+// reader would otherwise have to open to find that reason.
+type StepFailure struct {
+	Step    string
+	Message string
 }
 
 // analysisStatus is the subset of status.json this package reads back.
@@ -44,10 +52,12 @@ type analysisStatus struct {
 }
 
 // analysisStepRow is the subset of internal/jobs' stepRecord this package
-// reads back: enough to name the step status.json recorded as failed.
+// reads back: enough to name the step status.json recorded as failed, and
+// why.
 type analysisStepRow struct {
 	Name  string `json:"name"`
 	State string `json:"state"`
+	Error string `json:"error"`
 }
 
 // Analyses lists every committed analysis of a project, newest first. A
@@ -74,6 +84,27 @@ func (s *Store) AnalysisInfo(projectID, id string) (AnalysisInfo, error) {
 		return AnalysisInfo{}, fmt.Errorf("store: stat %s: %w", dir, err)
 	}
 	return readAnalysisInfo(projectID, id, dir)
+}
+
+// AnalysisLog opens a committed analysis' log.txt for reading, the running
+// account of every step a reader would otherwise have to reconstruct from
+// status.json alone.
+func (s *Store) AnalysisLog(projectID, id string) (*os.File, error) {
+	if err := validID(projectID); err != nil {
+		return nil, err
+	}
+	if err := validID(id); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.root, "projects", projectID, "analyses", id, "log.txt")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	return f, nil
 }
 
 // DeleteAnalysis removes a committed analysis directory.
@@ -136,7 +167,7 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 		info.PnpmVersion = status.PnpmVersion
 		for _, step := range status.Steps {
 			if step.State == string(Failed) {
-				info.FailedStep = step.Name
+				info.Failure = &StepFailure{Step: step.Name, Message: step.Error}
 				break
 			}
 		}

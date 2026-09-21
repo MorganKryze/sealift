@@ -99,21 +99,24 @@ func TestAnalysisInfoReadsRankingJSON(t *testing.T) {
 	}
 }
 
-func TestAnalysisInfoReportsTheFailedStep(t *testing.T) {
+func TestAnalysisInfoReportsTheFailure(t *testing.T) {
 	s := openTestStore(t)
-	status := `{"state":"failed","steps":[{"name":"resolve","state":"done"},{"name":"scan","state":"failed"}]}`
+	const message = "trivy database update failed: start /data/tools/trivy/current/trivy: no such file or directory"
+	status := `{"state":"failed","steps":[{"name":"resolve","state":"done"},` +
+		`{"name":"scan-project","state":"failed","durationMs":0,"error":"` + message + `"}]}`
 	writeAnalysisDir(t, s, "20260917T101502Z", status)
 
 	got, err := s.AnalysisInfo("proj-1", "20260917T101502Z")
 	if err != nil {
 		t.Fatalf("AnalysisInfo: %v", err)
 	}
-	if got.FailedStep != "scan" {
-		t.Errorf("FailedStep = %q, want %q", got.FailedStep, "scan")
+	want := &StepFailure{Step: "scan-project", Message: message}
+	if got.Failure == nil || *got.Failure != *want {
+		t.Errorf("Failure = %+v, want %+v", got.Failure, want)
 	}
 }
 
-func TestAnalysisInfoDoneReportsNoFailedStep(t *testing.T) {
+func TestAnalysisInfoDoneReportsNoFailure(t *testing.T) {
 	s := openTestStore(t)
 	status := `{"state":"done","steps":[{"name":"resolve","state":"done"}]}`
 	writeAnalysisDir(t, s, "20260917T101502Z", status)
@@ -122,8 +125,8 @@ func TestAnalysisInfoDoneReportsNoFailedStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalysisInfo: %v", err)
 	}
-	if got.FailedStep != "" {
-		t.Errorf("FailedStep = %q, want none", got.FailedStep)
+	if got.Failure != nil {
+		t.Errorf("Failure = %+v, want none", got.Failure)
 	}
 }
 

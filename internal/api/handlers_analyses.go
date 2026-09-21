@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
@@ -37,6 +39,33 @@ func (h *Handlers) GetAnalysis(_ context.Context, req GetAnalysisRequestObject) 
 		return GetAnalysisdefaultApplicationProblemPlusJSONResponse(autoProblem("get analysis", err)), nil
 	}
 	return GetAnalysis200JSONResponse(analysisToAPI(info)), nil
+}
+
+// analysisLogResponse streams an analysis' log.txt as
+// "text/plain; charset=utf-8" instead of buffering it into the generated
+// string response: a long-running analysis' log can grow past what is
+// comfortable to hold twice in memory (once on disk, once in the
+// response body).
+type analysisLogResponse struct {
+	body io.ReadCloser
+}
+
+func (r analysisLogResponse) VisitGetAnalysisLogResponse(w http.ResponseWriter) error {
+	defer r.body.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, err := io.Copy(w, r.body)
+	return err
+}
+
+// GetAnalysisLog returns an analysis' full log.txt: the cause of a
+// failure the step timings alone do not carry.
+func (h *Handlers) GetAnalysisLog(_ context.Context, req GetAnalysisLogRequestObject) (GetAnalysisLogResponseObject, error) {
+	f, err := h.Store.AnalysisLog(req.ProjectId, req.AnalysisId)
+	if err != nil {
+		return GetAnalysisLogdefaultApplicationProblemPlusJSONResponse(autoProblem("get analysis log", err)), nil
+	}
+	return analysisLogResponse{body: f}, nil
 }
 
 // DeleteAnalysis removes a committed analysis.
