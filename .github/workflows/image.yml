@@ -3,6 +3,7 @@ name: image
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -58,7 +59,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: build for this runner's own architecture, and push on main only
+      - name: build for this runner's own architecture, and push on main or a release tag
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -79,8 +80,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: create one manifest from the two native builds
+        env:
+          REF: ${{ github.ref }}
         run: |
-          docker buildx imagetools create \
-            -t ghcr.io/morgankryze/sealift:${{ github.sha }} \
-            ghcr.io/morgankryze/sealift:${{ github.sha }}-amd64 \
-            ghcr.io/morgankryze/sealift:${{ github.sha }}-arm64
+          tags=(-t "ghcr.io/morgankryze/sealift:${{ github.sha }}")
+          if [[ "$REF" == refs/tags/v* ]]; then
+            version="${REF#refs/tags/v}"
+            tags+=(-t "ghcr.io/morgankryze/sealift:$version" -t "ghcr.io/morgankryze/sealift:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "ghcr.io/morgankryze/sealift:${{ github.sha }}-amd64" \
+            "ghcr.io/morgankryze/sealift:${{ github.sha }}-arm64"
