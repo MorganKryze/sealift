@@ -301,13 +301,17 @@ func (s *Service) Subscribe() (<-chan Event, func()) {
 				if !ok {
 					return
 				}
-				s.mu.Lock()
-				tj, tracked := s.byQueueID[e.Job]
-				s.mu.Unlock()
-				if tracked {
-					known[e.Job] = tj.storeID
+				// The queue stamps the id for jobs that carry one; the lookup
+				// only covers a job that does not.
+				if e.StoreID == "" {
+					s.mu.Lock()
+					tj, tracked := s.byQueueID[e.Job]
+					s.mu.Unlock()
+					if tracked {
+						known[e.Job] = tj.storeID
+					}
+					e.StoreID = known[e.Job]
 				}
-				e.StoreID = known[e.Job]
 				select {
 				case out <- e:
 				case <-stop:

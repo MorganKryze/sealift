@@ -47,6 +47,21 @@ type Job interface {
 	Run(ctx context.Context, emit func(Event)) error
 }
 
+// storeIdentified is a job that knows the store directory id the client
+// names it by. The queue stamps that id on every event it emits for the
+// job, the end event included, so no lookup can miss it after the job has
+// been finalized and dropped from the service's index.
+type storeIdentified interface {
+	StoreID() string
+}
+
+func storeIDOf(j Job) string {
+	if s, ok := j.(storeIdentified); ok {
+		return s.StoreID()
+	}
+	return ""
+}
+
 type entry struct {
 	id  string
 	job Job
@@ -201,9 +216,9 @@ func (q *Queue) Cancel(id string) error {
 	for i, e := range q.pending {
 		if e.id == id {
 			q.pending = append(q.pending[:i:i], q.pending[i+1:]...)
-			kind := e.job.Kind()
+			job := e.job
 			q.mu.Unlock()
-			q.publishCancelled(id, kind)
+			q.publishCancelled(id, job)
 			return nil
 		}
 	}
@@ -214,12 +229,12 @@ func (q *Queue) Cancel(id string) error {
 // publishCancelled runs the finalize hook and emits the "end" event for a
 // job the queue never ran, through the same publish path a finished
 // job's own end event takes.
-func (q *Queue) publishCancelled(id, kind string) {
-	q.runFinalizer(id, kind, store.Cancelled)
+func (q *Queue) publishCancelled(id string, job Job) {
+	q.runFinalizer(id, job.Kind(), store.Cancelled)
 	data, _ := json.Marshal(struct {
 		State store.State `json:"state"`
 	}{State: store.Cancelled})
-	q.publish(Event{Kind: "end", Job: id, Data: data})
+	q.publish(Event{Kind: "end", Job: id, StoreID: storeIDOf(job), Data: data})
 }
 
 // Subscribe returns a channel of the current job's events, starting with a
@@ -301,8 +316,10 @@ func (q *Queue) run() {
 		q.mu.Unlock()
 
 		q.log.Info("job started", "id", next.id, "kind", next.job.Kind())
+		storeID := storeIDOf(next.job)
 		emit := func(e Event) {
 			e.Job = next.id
+			e.StoreID = storeID
 			q.publish(e)
 		}
 		err := runJob(ctx, q.log, next.job, emit)
@@ -335,7 +352,7 @@ func (q *Queue) run() {
 		endData, _ := json.Marshal(struct {
 			State store.State `json:"state"`
 		}{State: state})
-		endEvent := Event{Kind: "end", Job: next.id, Data: endData}
+		endEvent := Event{Kind: "end", Job: next.id, StoreID: storeID, Data: endData}
 		q.history = append(q.history, endEvent)
 		if len(q.history) > replayLimit {
 			q.history = q.history[len(q.history)-replayLimit:]

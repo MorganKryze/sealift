@@ -81,6 +81,9 @@ type ExportRequest struct {
 // Kind identifies this job to the queue and in its events.
 func (e *Export) Kind() string { return "export" }
 
+// StoreID names the job by its store directory id, which the client uses.
+func (e *Export) StoreID() string { return e.ID }
+
 // Run executes the export's steps, emitting a "step" event around each one
 // and "progress" events during the download step. Any failure, including
 // cancellation, removes e.Dir before Run returns: only a complete export

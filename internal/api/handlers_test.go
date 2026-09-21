@@ -30,8 +30,11 @@ import (
 func newTestServer(t *testing.T) (*httptest.Server, *Handlers) {
 	t.Helper()
 	q := jobs.NewQueue(nil)
-	t.Cleanup(q.Close)
 	h := newTestHandlers(t, q)
+	// Registered after the store's temporary directory, so it runs first:
+	// a job still writing into that directory would otherwise make its
+	// removal fail.
+	t.Cleanup(q.Close)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 	return srv, h
