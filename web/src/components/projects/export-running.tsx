@@ -1,20 +1,20 @@
 import { useEffect, useState } from "react"
 
+import { cancelExport } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
 import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { formatDuration } from "@/lib/utils"
 
 interface ExportRunningProps {
+  projectId: string
   exportId: string
   onEnd: () => void
 }
 
-// The job queue exposes no cancel operation for an export (only for an
-// analysis), and none of the five event payloads carry a cache-hit count,
-// so neither shows here.
-export function ExportRunning({ exportId, onEnd }: ExportRunningProps) {
+export function ExportRunning({ projectId, exportId, onEnd }: ExportRunningProps) {
   const [logOpen, setLogOpen] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   // The parent only learns the export failed after a refetch, at which
   // point the terminal Export carries no per-step detail (unlike Analysis,
   // it has no warnings field either): the failed step is only ever visible
@@ -27,6 +27,18 @@ export function ExportRunning({ exportId, onEnd }: ExportRunningProps) {
       onEnd()
     }
   }, [events.ended, events.endState, onEnd])
+
+  async function handleCancel() {
+    if (!window.confirm("Cancel this export?")) {
+      return
+    }
+    setCancelling(true)
+    try {
+      await cancelExport(projectId, exportId)
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   const progressPercent =
     events.progress && events.progress.total > 0
@@ -56,7 +68,11 @@ export function ExportRunning({ exportId, onEnd }: ExportRunningProps) {
           <Button className="ml-auto" onClick={onEnd}>
             Back to export
           </Button>
-        ) : null}
+        ) : (
+          <Button variant="outline" className="ml-auto" onClick={() => void handleCancel()} disabled={cancelling}>
+            Cancel
+          </Button>
+        )}
       </div>
 
       {progressPercent !== null ? (

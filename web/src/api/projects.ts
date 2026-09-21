@@ -40,6 +40,10 @@ export function getExport(projectId: string, exportId: string): Promise<Export> 
   return apiFetch<Export>(`/projects/${projectId}/exports/${exportId}`)
 }
 
+export function cancelExport(projectId: string, exportId: string): Promise<Export> {
+  return apiFetch<Export>(`/projects/${projectId}/exports/${exportId}/cancel`, { method: "POST" })
+}
+
 /**
  * Thrown by createProject. Carries the parsed Problem Details body so the
  * caller can tell a validation failure (400, with an errors list) from any

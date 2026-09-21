@@ -98,7 +98,7 @@ function ExportSummary({ projectId, analysisId, analysisCreatedAt, relatedExport
   }
 
   if (relatedExport.state === "queued" || relatedExport.state === "running") {
-    return <ExportRunning exportId={relatedExport.id} onEnd={onChange} />
+    return <ExportRunning projectId={projectId} exportId={relatedExport.id} onEnd={onChange} />
   }
 
   return <ExportDone projectId={projectId} exportId={relatedExport.id} files={relatedExport.files ?? []} />

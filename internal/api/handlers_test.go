@@ -991,6 +991,101 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 	}
 }
 
+// TestCancelExportLiveExportSucceeds proves the export cancel route reaches
+// jobs.Service the same way the analysis one does: a live export answers
+// 200 with state cancelled.
+func TestCancelExportLiveExportSucceeds(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlers(t, q)
+	srv := httptest.NewServer(Routes(h))
+	defer srv.Close()
+
+	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	settings := h.Store.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := h.Store.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	// A blocking job holds the queue busy for the whole test, so the export
+	// queued behind it stays live (Service still tracking it) deterministically.
+	release := make(chan struct{})
+	blocking := &testBlockingJob{run: func(_ context.Context, _ func(jobs.Event)) error {
+		<-release
+		return nil
+	}}
+	if _, err := q.Submit(blocking); err != nil {
+		t.Fatalf("Submit(blocking): %v", err)
+	}
+	var exportID string
+	defer func() {
+		close(release)
+		if exportID != "" {
+			waitForTerminalState(t, h, project.ID, "export", exportID)
+		}
+	}()
+
+	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	exportID = exportInfo.ID
+
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/projects/%s/exports/%s/cancel", srv.URL, project.ID, exportID), nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST cancel: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body: %s", resp.StatusCode, body)
+	}
+	var e Export
+	if err := json.NewDecoder(resp.Body).Decode(&e); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if e.State != Cancelled {
+		t.Fatalf("State = %q, want %q", e.State, Cancelled)
+	}
+}
+
+// TestCancelExportUnknownIDReturns404 proves an id neither Service nor the
+// store knows about answers 404, not a synthesized 200.
+func TestCancelExportUnknownIDReturns404(t *testing.T) {
+	srv, _ := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/projects/%s/exports/20260101T000000Z/cancel", srv.URL, project.Id), nil)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST cancel: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 404, body: %s", resp2.StatusCode, body)
+	}
+}
+
 // waitForTerminalState polls Service.LiveState until id is no longer
 // tracked under projectID and kind, meaning Service's finalizer goroutine
 // has already reacted to its "end" event and stopped touching its

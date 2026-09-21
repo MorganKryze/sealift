@@ -540,6 +540,9 @@ type ServerInterface interface {
 	// GetExport Get an export's status and files
 	// (GET /projects/{projectId}/exports/{exportId})
 	GetExport(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId)
+	// CancelExport Cancel a running or queued export
+	// (POST /projects/{projectId}/exports/{exportId}/cancel)
+	CancelExport(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId)
 	// DownloadExportFile Download one file of a finished export
 	// (GET /projects/{projectId}/exports/{exportId}/files/{name})
 	DownloadExportFile(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId, name string)
@@ -905,6 +908,41 @@ func (siw *ServerInterfaceWrapper) GetExport(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// CancelExport operation middleware
+func (siw *ServerInterfaceWrapper) CancelExport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", r.PathValue("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "exportId" -------------
+	var exportId ExportId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "exportId", r.PathValue("exportId"), &exportId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "exportId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelExport(w, r, projectId, exportId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // DownloadExportFile operation middleware
 func (siw *ServerInterfaceWrapper) DownloadExportFile(w http.ResponseWriter, r *http.Request) {
 
@@ -1191,6 +1229,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/exports", wrapper.QueueExport)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}", wrapper.DeleteExport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}", wrapper.GetExport)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}/cancel", wrapper.CancelExport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}/files/{name}", wrapper.DownloadExportFile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/jobs/current/events", wrapper.WatchJob)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/settings", wrapper.GetSettings)
@@ -1689,6 +1728,46 @@ func (response GetExportdefaultApplicationProblemPlusJSONResponse) VisitGetExpor
 	return err
 }
 
+type CancelExportRequestObject struct {
+	ProjectId ProjectId `json:"projectId"`
+	ExportId  ExportId  `json:"exportId"`
+}
+
+type CancelExportResponseObject interface {
+	VisitCancelExportResponse(w http.ResponseWriter) error
+}
+
+type CancelExport200JSONResponse Export
+
+func (response CancelExport200JSONResponse) VisitCancelExportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelExportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CancelExportdefaultApplicationProblemPlusJSONResponse) VisitCancelExportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DownloadExportFileRequestObject struct {
 	ProjectId ProjectId `json:"projectId"`
 	ExportId  ExportId  `json:"exportId"`
@@ -2045,6 +2124,9 @@ type StrictServerInterface interface {
 	// GetExport Get an export's status and files
 	// (GET /projects/{projectId}/exports/{exportId})
 	GetExport(ctx context.Context, request GetExportRequestObject) (GetExportResponseObject, error)
+	// CancelExport Cancel a running or queued export
+	// (POST /projects/{projectId}/exports/{exportId}/cancel)
+	CancelExport(ctx context.Context, request CancelExportRequestObject) (CancelExportResponseObject, error)
 	// DownloadExportFile Download one file of a finished export
 	// (GET /projects/{projectId}/exports/{exportId}/files/{name})
 	DownloadExportFile(ctx context.Context, request DownloadExportFileRequestObject) (DownloadExportFileResponseObject, error)
@@ -2429,6 +2511,33 @@ func (sh *strictHandler) GetExport(w http.ResponseWriter, r *http.Request, proje
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetExportResponseObject); ok {
 		if err := validResponse.VisitGetExportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelExport operation middleware
+func (sh *strictHandler) CancelExport(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId) {
+	var request CancelExportRequestObject
+
+	request.ProjectId = projectId
+	request.ExportId = exportId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelExport(ctx, request.(CancelExportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelExport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelExportResponseObject); ok {
+		if err := validResponse.VisitCancelExportResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

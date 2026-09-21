@@ -233,6 +233,24 @@ paths:
           description: Deleted
         default:
           $ref: "#/components/responses/Problem"
+  /projects/{projectId}/exports/{exportId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/ExportId"
+    post:
+      operationId: cancelExport
+      tags:
+        - exports
+      summary: Cancel a running or queued export
+      responses:
+        "200":
+          description: Export after the cancel request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Export"
+        default:
+          $ref: "#/components/responses/Problem"
   /projects/{projectId}/exports/{exportId}/files/{name}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

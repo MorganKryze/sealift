@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/store"
 )
 
 // QueueExport queues an export of one analysis with a version selection.
@@ -45,6 +46,27 @@ func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (Get
 		return GetExportdefaultApplicationProblemPlusJSONResponse(autoProblem("get export", err)), nil
 	}
 	return GetExport200JSONResponse(exportToAPI(info)), nil
+}
+
+// CancelExport cancels a running or queued export. Once Service is no
+// longer tracking the id, either the job already ended or it never
+// existed; the store, not Service, has the last word at that point.
+func (h *Handlers) CancelExport(_ context.Context, req CancelExportRequestObject) (CancelExportResponseObject, error) {
+	err := h.Service.Cancel(req.ProjectId, "export", req.ExportId)
+	if err == nil {
+		createdAt, _ := time.Parse(idLayout, req.ExportId)
+		return CancelExport200JSONResponse(Export{
+			Id: req.ExportId, ProjectId: req.ProjectId, State: Cancelled, CreatedAt: createdAt,
+		}), nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return CancelExportdefaultApplicationProblemPlusJSONResponse(autoProblem("cancel export", err)), nil
+	}
+	info, infoErr := h.Store.ExportInfo(req.ProjectId, req.ExportId)
+	if infoErr != nil {
+		return CancelExportdefaultApplicationProblemPlusJSONResponse(autoProblem("cancel export", infoErr)), nil
+	}
+	return CancelExport200JSONResponse(exportToAPI(info)), nil
 }
 
 // DeleteExport removes a committed export.
