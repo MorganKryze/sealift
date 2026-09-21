@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react"
 
+import { ApiError } from "@/api/client"
 import { cancelExport } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
+import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { formatDuration } from "@/lib/utils"
@@ -15,6 +17,7 @@ interface ExportRunningProps {
 export function ExportRunning({ projectId, exportId, onEnd }: ExportRunningProps) {
   const [logOpen, setLogOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState<ApiError | null>(null)
   // The parent only learns the export failed after a refetch, at which
   // point the terminal Export carries no per-step detail (unlike Analysis,
   // it has no warnings field either): the failed step is only ever visible
@@ -33,8 +36,11 @@ export function ExportRunning({ projectId, exportId, onEnd }: ExportRunningProps
       return
     }
     setCancelling(true)
+    setCancelError(null)
     try {
       await cancelExport(projectId, exportId)
+    } catch (error) {
+      setCancelError(error instanceof ApiError ? error : null)
     } finally {
       setCancelling(false)
     }
@@ -74,6 +80,8 @@ export function ExportRunning({ projectId, exportId, onEnd }: ExportRunningProps
           </Button>
         )}
       </div>
+
+      {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} /> : null}
 
       {progressPercent !== null ? (
         <div

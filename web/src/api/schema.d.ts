@@ -405,6 +405,8 @@ export interface components {
             trivyDbDate?: string;
             /** @description pnpm version the analysis used, absent when it did not record one */
             pnpmVersion?: string;
+            /** @description Name of the step status.json recorded as failed, absent for a state that names none */
+            failedStep?: string;
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];

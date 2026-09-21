@@ -165,6 +165,9 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	if info.PnpmVersion != "" {
 		a.PnpmVersion = &info.PnpmVersion
 	}
+	if info.FailedStep != "" {
+		a.FailedStep = &info.FailedStep
+	}
 	return a
 }
 

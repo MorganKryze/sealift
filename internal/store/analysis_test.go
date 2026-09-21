@@ -99,6 +99,34 @@ func TestAnalysisInfoReadsRankingJSON(t *testing.T) {
 	}
 }
 
+func TestAnalysisInfoReportsTheFailedStep(t *testing.T) {
+	s := openTestStore(t)
+	status := `{"state":"failed","steps":[{"name":"resolve","state":"done"},{"name":"scan","state":"failed"}]}`
+	writeAnalysisDir(t, s, "20260917T101502Z", status)
+
+	got, err := s.AnalysisInfo("proj-1", "20260917T101502Z")
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if got.FailedStep != "scan" {
+		t.Errorf("FailedStep = %q, want %q", got.FailedStep, "scan")
+	}
+}
+
+func TestAnalysisInfoDoneReportsNoFailedStep(t *testing.T) {
+	s := openTestStore(t)
+	status := `{"state":"done","steps":[{"name":"resolve","state":"done"}]}`
+	writeAnalysisDir(t, s, "20260917T101502Z", status)
+
+	got, err := s.AnalysisInfo("proj-1", "20260917T101502Z")
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if got.FailedStep != "" {
+		t.Errorf("FailedStep = %q, want none", got.FailedStep)
+	}
+}
+
 func TestAnalysisInfoUnknownIDReturnsErrNotFound(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.AnalysisInfo("proj-1", "20260917T101502Z"); !errors.Is(err, ErrNotFound) {

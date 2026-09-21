@@ -1,8 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
+import { ApiError } from "@/api/client"
 import { cancelAnalysis } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
+import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { formatDuration } from "@/lib/utils"
@@ -15,6 +17,7 @@ interface AnalysisRunningProps {
 export function AnalysisRunning({ projectId, analysisId }: AnalysisRunningProps) {
   const queryClient = useQueryClient()
   const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState<ApiError | null>(null)
   const [logOpen, setLogOpen] = useState(false)
 
   const events = useJobEvents(analysisId, true, () => {
@@ -26,8 +29,11 @@ export function AnalysisRunning({ projectId, analysisId }: AnalysisRunningProps)
       return
     }
     setCancelling(true)
+    setCancelError(null)
     try {
       await cancelAnalysis(projectId, analysisId)
+    } catch (error) {
+      setCancelError(error instanceof ApiError ? error : null)
     } finally {
       setCancelling(false)
     }
@@ -54,6 +60,8 @@ export function AnalysisRunning({ projectId, analysisId }: AnalysisRunningProps)
           Cancel
         </Button>
       </div>
+
+      {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} /> : null}
 
       {progressPercent !== null ? (
         <div

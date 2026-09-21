@@ -28,6 +28,7 @@ type AnalysisInfo struct {
 	TrivyVersion string
 	TrivyDBDate  time.Time
 	PnpmVersion  string
+	FailedStep   string // name of the step status.json recorded as failed, empty otherwise
 }
 
 // analysisStatus is the subset of status.json this package reads back.
@@ -35,10 +36,18 @@ type AnalysisInfo struct {
 // means the job never recorded it (an analysis that failed or was
 // interrupted before preparing its tools).
 type analysisStatus struct {
-	State        State     `json:"state"`
-	TrivyVersion string    `json:"trivyVersion"`
-	TrivyDBDate  time.Time `json:"trivyDbDate"`
-	PnpmVersion  string    `json:"pnpmVersion"`
+	State        State             `json:"state"`
+	TrivyVersion string            `json:"trivyVersion"`
+	TrivyDBDate  time.Time         `json:"trivyDbDate"`
+	PnpmVersion  string            `json:"pnpmVersion"`
+	Steps        []analysisStepRow `json:"steps"`
+}
+
+// analysisStepRow is the subset of internal/jobs' stepRecord this package
+// reads back: enough to name the step status.json recorded as failed.
+type analysisStepRow struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
 }
 
 // Analyses lists every committed analysis of a project, newest first. A
@@ -125,6 +134,12 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 		info.TrivyVersion = status.TrivyVersion
 		info.TrivyDBDate = status.TrivyDBDate
 		info.PnpmVersion = status.PnpmVersion
+		for _, step := range status.Steps {
+			if step.State == string(Failed) {
+				info.FailedStep = step.Name
+				break
+			}
+		}
 	}
 
 	if raw, err := os.ReadFile(filepath.Join(dir, "ranking.json")); err == nil {

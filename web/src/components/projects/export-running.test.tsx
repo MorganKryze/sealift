@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ApiError } from "@/api/client"
 import { cancelExport } from "@/api/projects"
 import { ExportRunning } from "@/components/projects/export-running"
 import { initialAnalysisEventsState, type AnalysisEventsState } from "@/lib/analysisEvents"
@@ -58,5 +59,18 @@ describe("ExportRunning", () => {
     render(<ExportRunning projectId="p1" exportId="e1" onEnd={() => {}} />)
 
     expect(screen.queryByText(/from cache/)).not.toBeInTheDocument()
+  })
+
+  it("shows the problem's title and detail when cancelling fails", async () => {
+    vi.mocked(cancelExport).mockRejectedValue(
+      new ApiError(500, { type: "about:blank", title: "cancel export", status: 500, detail: "queue is closed" }),
+    )
+    mockEventsState = { ...initialAnalysisEventsState, progress: { done: 1, total: 4 } }
+    render(<ExportRunning projectId="p1" exportId="e1" onEnd={() => {}} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+
+    expect(await screen.findByText("cancel export")).toBeInTheDocument()
+    expect(screen.getByText("queue is closed")).toBeInTheDocument()
   })
 })

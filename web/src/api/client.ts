@@ -7,9 +7,9 @@ const baseUrl = "/api"
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
-    message: string,
+    public readonly problem: Problem | null,
   ) {
-    super(message)
+    super(problem?.detail ?? problem?.title ?? `request failed with status ${status}`)
     this.name = "ApiError"
   }
 }
@@ -42,7 +42,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   })
 
   if (!response.ok) {
-    throw new ApiError(response.status, await response.text())
+    const problem = (await response.json().catch(() => null)) as Problem | null
+    throw new ApiError(response.status, problem)
   }
 
   if (response.status === 204) {
@@ -53,9 +54,8 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 }
 
 /**
- * Like apiFetch, but on failure parses the Problem Details body instead of
- * throwing the response text, for callers that need to branch on status,
- * title, detail or the field-level errors list.
+ * Like apiFetch, but the caller needs to branch on the field-level errors
+ * list a validation failure carries, not just its title and detail.
  */
 export async function apiFetchProblem<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {

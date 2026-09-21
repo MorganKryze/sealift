@@ -79,7 +79,10 @@ func (e State) Valid() bool {
 // Analysis One analysis job and its state.
 type Analysis struct {
 	CreatedAt time.Time `json:"createdAt"`
-	Id        string    `json:"id"`
+
+	// FailedStep Name of the step status.json recorded as failed, absent for a state that names none
+	FailedStep *string `json:"failedStep,omitempty"`
+	Id         string  `json:"id"`
 
 	// PnpmVersion pnpm version the analysis used, absent when it did not record one
 	PnpmVersion *string `json:"pnpmVersion,omitempty"`

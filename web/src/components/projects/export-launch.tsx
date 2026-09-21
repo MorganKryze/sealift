@@ -38,6 +38,11 @@ export function ExportLaunch({ projectId, analysisId, analysisCreatedAt, previou
   })
 
   const launchError = launchMutation.error instanceof ProblemError ? launchMutation.error : null
+  // jobs.ErrSignatureKeyMissing is the only 400 this route returns with no
+  // field-level errors list: a validation failure (invalid selection)
+  // always carries one instead. Settings is only ever the fix for that one.
+  const missingSignatureKey =
+    launchError?.status === 400 && !launchError.problem?.errors?.length && launchError.problem?.detail?.includes("signatureKey")
 
   return (
     <div className="flex flex-col gap-6 p-8">
@@ -76,9 +81,11 @@ export function ExportLaunch({ projectId, analysisId, analysisCreatedAt, previou
 
       {launchError ? (
         <ProblemNotice status={launchError.status} problem={launchError.problem}>
-          <Link to="/settings" className="mt-2 inline-block text-accent underline">
-            Go to Settings
-          </Link>
+          {missingSignatureKey ? (
+            <Link to="/settings" className="mt-2 inline-block text-accent underline">
+              Go to Settings
+            </Link>
+          ) : null}
         </ProblemNotice>
       ) : null}
 

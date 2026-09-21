@@ -613,6 +613,9 @@ components:
         pnpmVersion:
           type: string
           description: pnpm version the analysis used, absent when it did not record one
+        failedStep:
+          type: string
+          description: Name of the step status.json recorded as failed, absent for a state that names none
       required:
         - id
         - projectId
