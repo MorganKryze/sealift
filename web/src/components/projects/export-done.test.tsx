@@ -9,9 +9,8 @@ vi.mock("@/api/client", async () => {
   return {
     ...actual,
     apiFetch: vi.fn().mockResolvedValue({
-      sha256: "abc123",
-      packageCount: 7,
-      files: [{ name: "archive.tgz", size: 2048 }],
+      archive: { sha256: "abc123", size: 2048 },
+      packages: Array.from({ length: 7 }, (_, i) => ({ name: `pkg-${i}`, version: "1.0.0" })),
     }),
   }
 })
@@ -33,6 +32,6 @@ describe("ExportDone", () => {
       expect(screen.getByText("abc123")).toBeInTheDocument()
     })
     expect(screen.getByText(/7 packages/)).toBeInTheDocument()
-    expect(screen.getByText("2.0 KB")).toBeInTheDocument()
+    expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument()
   })
 })
