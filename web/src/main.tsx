@@ -5,10 +5,22 @@ import "@fontsource/inter/800.css"
 import "@fontsource/jetbrains-mono/500.css"
 import "./styles/index.css"
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { createRouter, RouterProvider } from "@tanstack/react-router"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
-import { Button } from "@/components/ui/button"
+import { routeTree } from "./routeTree.gen"
+
+const router = createRouter({ routeTree })
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router
+  }
+}
+
+const queryClient = new QueryClient()
 
 const rootElement = document.getElementById("root")
 if (!rootElement) {
@@ -17,8 +29,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <div className="flex min-h-screen items-center justify-center bg-background text-ink">
-      <Button>sealift</Button>
-    </div>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   </StrictMode>,
 )
