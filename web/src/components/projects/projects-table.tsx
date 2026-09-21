@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router"
+
 import type { ProjectSummary } from "@/api/projects"
 import { cn } from "@/lib/utils"
 
@@ -43,7 +45,11 @@ export function ProjectsTable({ projects }: ProjectsTableProps) {
           const stale = isStale(project.lastAnalysis?.createdAt)
           return (
             <tr key={project.id} className="border-b border-line last:border-0">
-              <td className="py-2 pr-4 font-medium text-ink">{project.name}</td>
+              <td className="py-2 pr-4 font-medium text-ink">
+                <Link to="/projects/$projectId" params={{ projectId: project.id }} className="hover:underline">
+                  {project.name}
+                </Link>
+              </td>
               <td className="py-2 pr-4 text-muted">
                 {formatDate(project.lastAnalysis?.createdAt)}
                 {stale ? (

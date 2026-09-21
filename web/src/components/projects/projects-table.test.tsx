@@ -1,3 +1,4 @@
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
@@ -31,13 +32,29 @@ const projects: ProjectSummary[] = [
   },
 ]
 
-describe("ProjectsTable", () => {
-  it("renders every project with its severity counts", () => {
-    render(<ProjectsTable projects={projects} />)
+// ProjectsTable links each project name with <Link>, which needs a router
+// context to render: a minimal router with one route, rendering the table
+// itself, is enough without pulling in the app's own route tree.
+function renderTable() {
+  const rootRoute = createRootRoute({ component: () => <ProjectsTable projects={projects} /> })
+  const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory() })
+  return render(<RouterProvider router={router} />)
+}
 
-    expect(screen.getByText("left-pad-app")).toBeInTheDocument()
+describe("ProjectsTable", () => {
+  it("renders every project with its severity counts", async () => {
+    renderTable()
+
+    expect(await screen.findByText("left-pad-app")).toBeInTheDocument()
     expect(screen.getByText("empty-project")).toBeInTheDocument()
     expect(screen.getByText(/2 critical/)).toBeInTheDocument()
     expect(screen.getByText(/5 high/)).toBeInTheDocument()
+  })
+
+  it("links each project name to its page", async () => {
+    renderTable()
+
+    const link = await screen.findByRole("link", { name: "left-pad-app" })
+    expect(link).toHaveAttribute("href", "/projects/p1")
   })
 })
