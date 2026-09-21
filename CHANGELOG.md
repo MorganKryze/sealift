@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A finished analysis or export now updates its screen at once. It could wait up to two seconds for the next refresh, because the final event sometimes arrived without the job's id.
+
 ## [0.1.0] - 2026-09-21
 
 ### Added
