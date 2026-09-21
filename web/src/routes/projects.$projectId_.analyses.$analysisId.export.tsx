@@ -1,11 +1,70 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
+import { getProject, type Project } from "@/api/projects"
+import { ExportLaunch } from "@/components/projects/export-launch"
+import { ProjectHeader } from "@/components/projects/project-header"
+import { Button } from "@/components/ui/button"
+import { latestByDate } from "@/lib/utils"
+
 export const Route = createFileRoute("/projects/$projectId_/analyses/$analysisId/export")({
-  component: ExportPlaceholder,
+  component: ExportPage,
 })
 
-function ExportPlaceholder() {
+function ExportPage() {
+  const { projectId, analysisId } = Route.useParams()
+  const queryClient = useQueryClient()
+
+  const projectQuery = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId),
+    initialData: () => queryClient.getQueryData<Project>(["project", projectId]),
+  })
+
+  if (projectQuery.isPending) {
+    return (
+      <div role="status" className="flex flex-1 items-center justify-center p-8 text-muted">
+        Loading project…
+      </div>
+    )
+  }
+
+  if (projectQuery.isError) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+        <p role="alert" className="text-sm text-severity-critical">
+          Could not load the project
+          {projectQuery.error instanceof Error ? `: ${projectQuery.error.message}` : "."}
+        </p>
+        <Button onClick={() => void projectQuery.refetch()}>Retry</Button>
+      </div>
+    )
+  }
+
+  const project = projectQuery.data
+  const analysis = project.analyses?.find((candidate) => candidate.id === analysisId)
+  const lastAnalysis = latestByDate(project.analyses)
+  const lastExport = latestByDate(project.exports)
+  const relatedExport = latestByDate(project.exports?.filter((candidate) => candidate.analysisId === analysisId))
+
+  function onExportChanged() {
+    void queryClient.invalidateQueries({ queryKey: ["project", projectId] })
+  }
+
   return (
-    <div className="flex flex-1 items-center justify-center p-8 text-muted">Export is not available yet.</div>
+    <div className="flex flex-1 flex-col">
+      <ProjectHeader project={project} lastAnalysis={lastAnalysis} lastExport={lastExport} />
+      {!analysis || analysis.state !== "done" ? (
+        <p className="p-8 text-muted">This analysis is not ready for export.</p>
+      ) : (
+        <ExportLaunch
+          projectId={projectId}
+          analysisId={analysisId}
+          analysisCreatedAt={analysis.createdAt}
+          previousState={relatedExport?.state}
+          onQueued={onExportChanged}
+        />
+      )}
+    </div>
   )
 }

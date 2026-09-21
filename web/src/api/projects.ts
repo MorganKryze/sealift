@@ -1,4 +1,4 @@
-import { apiFetch } from "./client"
+import { apiFetch, apiFetchProblem } from "./client"
 import type { components } from "./schema"
 
 export type Project = components["schemas"]["Project"]
@@ -11,6 +11,7 @@ export type DependencyResult = components["schemas"]["DependencyResult"]
 export type Candidate = components["schemas"]["Candidate"]
 export type Signal = components["schemas"]["Signal"]
 export type Target = components["schemas"]["Target"]
+export type ExportRequest = components["schemas"]["ExportRequest"]
 
 export function listProjects(): Promise<ProjectSummary[]> {
   return apiFetch<ProjectSummary[]>("/projects")
@@ -26,6 +27,17 @@ export function queueAnalysis(projectId: string): Promise<Analysis> {
 
 export function cancelAnalysis(projectId: string, analysisId: string): Promise<Analysis> {
   return apiFetch<Analysis>(`/projects/${projectId}/analyses/${analysisId}/cancel`, { method: "POST" })
+}
+
+export function queueExport(projectId: string, analysisId: string, body: ExportRequest): Promise<Export> {
+  return apiFetchProblem<Export>(`/projects/${projectId}/analyses/${analysisId}/exports`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export function getExport(projectId: string, exportId: string): Promise<Export> {
+  return apiFetch<Export>(`/projects/${projectId}/exports/${exportId}`)
 }
 
 /**
