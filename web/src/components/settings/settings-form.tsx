@@ -110,7 +110,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           placeholder="Unchanged"
           className="rounded-md border border-line bg-background px-3 py-2 text-sm"
         />
-        <span className="text-xs text-muted">Current: {storedKey}. Leave blank to keep it.</span>
+        <span className="text-xs text-muted">{storedKey ? `Current: ${storedKey}. Leave blank to keep it.` : "Not set. Exports need it."}</span>
       </label>
 
       <h2 className="mt-2 text-lg font-semibold text-ink">Limits</h2>

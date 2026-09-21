@@ -18,13 +18,15 @@ function currentStepIndex(lastAnalysis?: Analysis, lastExport?: Export): number 
 }
 
 interface ProjectHeaderProps {
+  /** Forces the highlighted step, for a screen that is itself a step. */
+  step?: number
   project: Project
   lastAnalysis?: Analysis
   lastExport?: Export
 }
 
-export function ProjectHeader({ project, lastAnalysis, lastExport }: ProjectHeaderProps) {
-  const step = currentStepIndex(lastAnalysis, lastExport)
+export function ProjectHeader({ project, lastAnalysis, lastExport, step: forcedStep }: ProjectHeaderProps) {
+  const step = forcedStep ?? currentStepIndex(lastAnalysis, lastExport)
   const { target } = project
 
   return (

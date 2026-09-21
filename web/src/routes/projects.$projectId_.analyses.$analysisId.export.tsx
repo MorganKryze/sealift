@@ -55,7 +55,7 @@ function ExportPage() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <ProjectHeader project={project} lastAnalysis={lastAnalysis} lastExport={lastExport} />
+      <ProjectHeader project={project} lastAnalysis={lastAnalysis} lastExport={lastExport} step={3} />
       {!analysis || analysis.state !== "done" ? (
         <p className="p-8 text-muted">This analysis is not ready for export.</p>
       ) : (

@@ -4,6 +4,7 @@ import { ProblemError } from "@/api/client"
 import { activateTrivy, getTools, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
 import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
+import { formatDbDate, formatGoDuration } from "@/lib/format-tools"
 
 interface ToolsPanelProps {
   minReleaseAgeDays: number
@@ -40,7 +41,7 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
   function installAnyway() {
     const confirmed = window.confirm(
-      `The latest Trivy release came out ${tools.trivyLatestAge} ago. Releases wait at least ` +
+      `The latest Trivy release came out ${formatGoDuration(tools.trivyLatestAge)} ago. Releases wait at least ` +
         `${minReleaseAgeDays} day(s) before installing automatically, to avoid shipping a just-published, ` +
         "unvetted build. Install it now anyway?",
     )
@@ -55,10 +56,10 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
       <div className="flex flex-col gap-2">
         <p className="text-sm text-ink">
-          Active Trivy: <span className="font-medium">{tools.trivyActive}</span>
+          Active Trivy: <span className="font-medium">{tools.trivyActive || "none installed"}</span>
         </p>
         <p className="text-sm text-muted">
-          Latest release {tools.trivyLatest} · {tools.trivyLatestAge} ago
+          Latest release {tools.trivyLatest} · {formatGoDuration(tools.trivyLatestAge)} ago
         </p>
 
         <ul className="flex flex-col gap-1">
@@ -98,7 +99,7 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
       </div>
 
       <div className="flex flex-col gap-2">
-        <p className="text-sm text-ink">Vulnerability database: {new Date(tools.trivyDbDate).toLocaleString()}</p>
+        <p className="text-sm text-ink">Vulnerability database: {formatDbDate(tools.trivyDbDate)}</p>
         <Button variant="outline" className="self-start" disabled={dbMutation.isPending} onClick={() => dbMutation.mutate()}>
           Update database
         </Button>
