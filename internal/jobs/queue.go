@@ -27,11 +27,15 @@ var ErrNotFound = errors.New("jobs: job not found")
 var ErrClosed = errors.New("jobs: queue is closed")
 
 // Event is one message a job emits while it runs, or the queue emits about
-// it. Kind is one of "step", "progress", "candidate", "log" or "end".
+// it. Kind is one of "step", "progress", "candidate", "log" or "end". Job
+// is the queue id (assigned per submission, not stable across a server
+// restart); StoreID is the directory id the store and the client both
+// use, set by Service.Subscribe, since the queue itself never sees it.
 type Event struct {
-	Kind string          `json:"kind"`
-	Job  string          `json:"job"`
-	Data json.RawMessage `json:"data"`
+	Kind    string          `json:"kind"`
+	Job     string          `json:"job"`
+	StoreID string          `json:"storeId,omitempty"`
+	Data    json.RawMessage `json:"data"`
 }
 
 // Job is a unit of work the queue runs to completion before starting the

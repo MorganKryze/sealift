@@ -12,6 +12,15 @@ export function latestByDate<T extends { createdAt: string }>(items: T[] | undef
   return [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
 }
 
+// Milliseconds a project query polls at while its last analysis or export
+// is still queued or running: a fallback for whatever the job event
+// stream's reconnect misses.
+export const JOB_POLL_INTERVAL_MS = 2000
+
+export function isJobActive(job?: { state: string }): boolean {
+  return job?.state === "queued" || job?.state === "running"
+}
+
 export function formatDuration(ms: number) {
   const seconds = Math.round(ms / 1000)
   if (seconds < 60) {

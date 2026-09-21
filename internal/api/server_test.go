@@ -55,7 +55,7 @@ func newTestHandlers(t *testing.T, q *jobs.Queue) *Handlers {
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
-	return NewHandlers(st, q, svc, tm, fakeTrivy{})
+	return NewHandlers(st, svc, tm, fakeTrivy{})
 }
 
 type slowJob struct{ started chan struct{} }

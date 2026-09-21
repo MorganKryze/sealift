@@ -490,6 +490,8 @@ export interface components {
             kind: components["schemas"]["EventKind"];
             /** @description Job ID the event belongs to */
             job: string;
+            /** @description Store id (the directory id) of the job the event belongs to, set once the queue has started it. Empty for an event about a job cancelled before it started. */
+            storeId?: string;
             /** @description Payload matching the kind; see StepData, ProgressData, CandidateData, LogData, EndData */
             data: components["schemas"]["StepData"] | components["schemas"]["ProgressData"] | components["schemas"]["CandidateData"] | components["schemas"]["LogData"] | components["schemas"]["EndData"];
         };

@@ -486,7 +486,7 @@ func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, trivy, &npm.Client{})
-	return NewHandlers(st, q, svc, tm, trivy)
+	return NewHandlers(st, svc, tm, trivy)
 }
 
 // waitForExportState polls GetExport until it reports one of wantStates

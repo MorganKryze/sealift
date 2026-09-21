@@ -7,7 +7,7 @@ import { ExportLaunch } from "@/components/projects/export-launch"
 import { ExportRunning } from "@/components/projects/export-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { Button } from "@/components/ui/button"
-import { latestByDate } from "@/lib/utils"
+import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
 
 export const Route = createFileRoute("/projects/$projectId_/analyses/$analysisId/export")({
   component: ExportPage,
@@ -21,6 +21,12 @@ function ExportPage() {
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId),
     initialData: () => queryClient.getQueryData<Project>(["project", projectId]),
+    refetchInterval: (query) => {
+      const project = query.state.data
+      const analysis = project?.analyses?.find((candidate) => candidate.id === analysisId)
+      const relatedExport = latestByDate(project?.exports?.filter((candidate) => candidate.analysisId === analysisId))
+      return isJobActive(analysis) || isJobActive(relatedExport) ? JOB_POLL_INTERVAL_MS : false
+    },
   })
 
   if (projectQuery.isPending) {

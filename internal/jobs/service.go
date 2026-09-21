@@ -281,6 +281,49 @@ func (s *Service) LiveForProject(projectID string) (id, kind string, state store
 	return tj.storeID, tj.kind, state, true
 }
 
+// Subscribe wraps the queue's event stream, filling in each event's store
+// id: the queue only knows the queue id it assigned at submission, while
+// Service is what maps that to the directory id the store and the client
+// both use. A per-job cache covers the "end" event, since finalize (which
+// untracks the job) runs before the queue publishes it, so the direct
+// lookup would otherwise miss on exactly the event a caller most needs
+// the store id on.
+func (s *Service) Subscribe() (<-chan Event, func()) {
+	events, unsubscribe := s.queue.Subscribe()
+	out := make(chan Event, replayLimit+2)
+	stop := make(chan struct{})
+	go func() {
+		defer close(out)
+		known := make(map[string]string)
+		for {
+			select {
+			case e, ok := <-events:
+				if !ok {
+					return
+				}
+				s.mu.Lock()
+				tj, tracked := s.byQueueID[e.Job]
+				s.mu.Unlock()
+				if tracked {
+					known[e.Job] = tj.storeID
+				}
+				e.StoreID = known[e.Job]
+				select {
+				case out <- e:
+				case <-stop:
+					return
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return out, func() {
+		unsubscribe()
+		close(stop)
+	}
+}
+
 // track records a just-submitted job under every index the rest of
 // Service needs it by.
 func (s *Service) track(queueID, kind, projectID string, pending *store.Pending) {

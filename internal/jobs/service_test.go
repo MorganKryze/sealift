@@ -354,6 +354,58 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 	}
 }
 
+// TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent proves Subscribe
+// fills in StoreID on every event, including "end": finalize untracks the
+// job (removing it from byQueueID) before the queue publishes that event,
+// so a lookup made only at delivery time would find nothing left to map
+// the queue id back to.
+func TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent(t *testing.T) {
+	svc, st := newTestService(t)
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	pending, err := st.NewDir("analyses", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+
+	events, unsubscribe := svc.Subscribe()
+	defer unsubscribe()
+
+	job := &fakeJob{kind: "analysis", run: func(_ context.Context, emit func(Event)) error {
+		emit(Event{Kind: "step", Data: json.RawMessage(`{"name":"resolve","state":"running"}`)})
+		return os.Rename(pending.Path(), pending.Final())
+	}}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, pending)
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	var step, end Event
+	for step.Kind == "" || end.Kind == "" {
+		select {
+		case e := <-events:
+			switch e.Kind {
+			case "step":
+				step = e
+			case "end":
+				end = e
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the step and end events")
+		}
+	}
+
+	if step.StoreID != pending.ID() {
+		t.Errorf("step event StoreID = %q, want %q", step.StoreID, pending.ID())
+	}
+	if end.StoreID != pending.ID() {
+		t.Errorf("end event StoreID = %q, want %q", end.StoreID, pending.ID())
+	}
+}
+
 func TestCancelUntrackedIDReturnsErrNotFound(t *testing.T) {
 	svc, _ := newTestService(t)
 	if err := svc.Cancel("no-such-project", "analysis", "no-such-id"); !errors.Is(err, store.ErrNotFound) {

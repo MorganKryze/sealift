@@ -12,9 +12,9 @@ import (
 
 // NewHandlers builds the Handlers every operation of the contract runs
 // against.
-func NewHandlers(st *store.Store, q *jobs.Queue, svc *jobs.Service, tm *tools.Manager, trivy runner.Trivy) *Handlers {
+func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy runner.Trivy) *Handlers {
 	return &Handlers{
-		EventsHandler: &EventsHandler{Jobs: q},
+		EventsHandler: &EventsHandler{Jobs: svc},
 		Store:         st,
 		Service:       svc,
 		Tools:         tm,

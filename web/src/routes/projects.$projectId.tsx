@@ -9,7 +9,7 @@ import { AnalysisRunning } from "@/components/projects/analysis-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { ProjectHistory } from "@/components/projects/project-history"
 import { Button } from "@/components/ui/button"
-import { cn, latestByDate } from "@/lib/utils"
+import { cn, isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
 
 export const Route = createFileRoute("/projects/$projectId")({
   component: ProjectPage,
@@ -28,6 +28,11 @@ function ProjectPage() {
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId),
     initialData: () => queryClient.getQueryData<Project>(["project", projectId]),
+    refetchInterval: (query) => {
+      const project = query.state.data
+      const active = isJobActive(latestByDate(project?.analyses)) || isJobActive(latestByDate(project?.exports))
+      return active ? JOB_POLL_INTERVAL_MS : false
+    },
   })
 
   if (projectQuery.isPending) {

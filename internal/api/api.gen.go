@@ -165,6 +165,9 @@ type Event struct {
 
 	// Kind Discriminator for the data payload of an Event.
 	Kind EventKind `json:"kind"`
+
+	// StoreId Store id (the directory id) of the job the event belongs to, set once the queue has started it. Empty for an event about a job cancelled before it started.
+	StoreId *string `json:"storeId,omitempty"`
 }
 
 // Event_Data Payload matching the kind; see StepData, ProgressData, CandidateData, LogData, EndData

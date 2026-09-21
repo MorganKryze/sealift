@@ -93,7 +93,7 @@ func run(addr, root string, log *slog.Logger) error {
 		onQueueReady(queue)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
-	handlers := api.NewHandlers(st, queue, service, toolsManager, trivyRunner)
+	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 
 	static, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
