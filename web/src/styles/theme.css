@@ -1,0 +1,36 @@
+:root {
+  --accent: #0f766e;
+  --ink: #0f172a;
+  --background: #ffffff;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --card: #f8fafc;
+
+  --severity-critical: #b91c1c;
+  --severity-high: #ea580c;
+  --severity-medium: #ca8a04;
+  --severity-low: #64748b;
+  --severity-unknown: #94a3b8;
+  --severity-resolved: #15803d;
+}
+
+.dark {
+  --accent: #2dd4bf;
+  --ink: #e2e8f0;
+  --background: #0b1220;
+  --muted: #94a3b8;
+  --line: #1e293b;
+  --card: #111a2e;
+}
+
+/* Follows the system when no .dark/.light class overrides it. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --accent: #2dd4bf;
+    --ink: #e2e8f0;
+    --background: #0b1220;
+    --muted: #94a3b8;
+    --line: #1e293b;
+    --card: #111a2e;
+  }
+}
