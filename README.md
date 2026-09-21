@@ -26,9 +26,9 @@ Open `http://localhost:8080`.
 
 ## Usage
 
-Create a project and upload its `package.json` and `pnpm-lock.yaml`.
+Create a project and upload its `package.json`.
 
-![The projects screen, listing two projects with their target platform and latest analysis state](docs/screenshots/projects.png)
+![The projects screen, listing two projects with their critical and high CVE counts and latest analysis and export dates](docs/screenshots/projects.png)
 
 Queue an analysis. sealift resolves the lockfile, scans it with Trivy, and lists the newer versions of each dependency, ranked by the CVEs they fix, whether they are a patch, a minor or a major jump, and whether they still resolve against the rest of the project. Pick a candidate for each dependency, or keep the one sealift already highlighted.
 
