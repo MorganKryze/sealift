@@ -6,7 +6,7 @@ import { createProject, listProjects, ProjectUploadError } from "@/api/projects"
 import { ProjectsView } from "@/components/projects/projects-view"
 import { UploadError } from "@/components/projects/upload-error"
 
-export const Route = createFileRoute("/projects")({
+export const Route = createFileRoute("/projects/")({
   component: ProjectsScreen,
 })
 
