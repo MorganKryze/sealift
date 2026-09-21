@@ -59,6 +59,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: derive the version to stamp into the binary
+        id: version
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "value=${REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev" >> "$GITHUB_OUTPUT"
+          fi
       - name: build for this runner's own architecture, and push on main or a release tag
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -66,6 +76,8 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ghcr.io/morgankryze/sealift:${{ github.sha }}-${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
 
   merge-manifest:
     name: merge into one multi-arch manifest

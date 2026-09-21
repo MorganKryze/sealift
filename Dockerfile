@@ -15,13 +15,16 @@ RUN pnpm run build
 # toolchain produces a binary for TARGETARCH directly.
 FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
 ARG TARGETARCH
+# The release workflow sets this to the pushed tag; a local build stays
+# "dev", the zero value internal/jobs.ToolVersion already has.
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist/app ./web/dist/app
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags="-s -w" -o /out/sealift ./cmd/sealift
+    go build -trimpath -ldflags="-s -w -X github.com/MorganKryze/sealift/internal/jobs.ToolVersion=$VERSION" -o /out/sealift ./cmd/sealift
 
 # Runs on TARGETPLATFORM, under emulation for a non-native target: setcap
 # needs to run on the binary it marks, and the capabilities it sets survive

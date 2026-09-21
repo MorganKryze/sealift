@@ -28,7 +28,9 @@ import (
 )
 
 // ToolVersion is sealift's own version, reported in manifest.json and
-// summary.md. cmd/sealift overwrites it at build time with -ldflags.
+// summary.md. The Dockerfile overwrites it at build time with -ldflags,
+// from the release workflow's own VERSION build arg; a local build keeps
+// this zero value.
 var ToolVersion = "dev"
 
 // ErrSignatureKeyMissing reports an export queued while settings.json still
