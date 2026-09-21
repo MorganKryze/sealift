@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0f766e"/><g transform="translate(96 88) scale(8)"><rect x="19.1" y="1" width="1.8" height="6" rx=".9" fill="#ffffff"/>
+      <circle cx="20" cy="8.2" r="2" fill="none" stroke="#ffffff" stroke-width="1.8"/>
+      <g>
+        <path d="M7.5 17.5 L20 10.2 L32.5 17.5" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="4" y="17" width="32" height="19" rx="3" fill="#ffffff"/>
+        <g fill="#0f766e" opacity=".38">
+          <rect x="8.4" y="20.5" width="1.8" height="12" rx=".9"/>
+          <rect x="12.6" y="20.5" width="1.8" height="12" rx=".9"/>
+          <rect x="16.8" y="20.5" width="1.8" height="12" rx=".9"/>
+        </g>
+        <path d="M27.50 20.60 Q28.67 19.85 29.52 20.96 Q30.88 20.65 31.29 21.98 Q32.67 22.16 32.61 23.55 Q33.84 24.19 33.31 25.48 Q34.25 26.50 33.31 27.52 Q33.84 28.81 32.61 29.45 Q32.67 30.84 31.29 31.02 Q30.88 32.35 29.52 32.04 Q28.67 33.15 27.50 32.40 Q26.33 33.15 25.48 32.04 Q24.12 32.35 23.71 31.02 Q22.33 30.84 22.39 29.45 Q21.16 28.81 21.69 27.52 Q20.75 26.50 21.69 25.48 Q21.16 24.19 22.39 23.55 Q22.33 22.16 23.71 21.98 Q24.12 20.65 25.48 20.96 Q26.33 19.85 27.50 20.60 Z" fill="#0f172a"/>
+        <circle cx="27.5" cy="26.5" r="3.7" fill="none" stroke="#ffffff" stroke-width="1"/>
+      </g></g></svg>

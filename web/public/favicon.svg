@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><style>.b{fill:#0f766e}.l,.s{fill:#0f172a}.k{fill:none;stroke:#0f172a}@media(prefers-color-scheme:dark){.b{fill:#2dd4bf}.l,.s{fill:#e2e8f0}.k{stroke:#e2e8f0}}</style><rect x="18.4" y="0" width="3.2" height="7" rx="1.2" class="l"/>
+      <g>
+        <path d="M6.5 14 L20 6.2 L33.5 14" class="k" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="2.5" y="13.5" width="35" height="24" rx="4.5" class="b"/>
+        <path d="M26.00 18.30 Q27.82 17.51 29.12 19.01 Q31.11 19.09 31.63 21.01 Q33.39 21.94 33.02 23.90 Q34.20 25.50 33.02 27.10 Q33.39 29.06 31.63 29.99 Q31.11 31.91 29.12 31.99 Q27.82 33.49 26.00 32.70 Q24.18 33.49 22.88 31.99 Q20.89 31.91 20.37 29.99 Q18.61 29.06 18.98 27.10 Q17.80 25.50 18.98 23.90 Q18.61 21.94 20.37 21.01 Q20.89 19.09 22.88 19.01 Q24.18 17.51 26.00 18.30 Z" class="s"/>
+      </g></svg>
