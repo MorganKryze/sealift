@@ -1,6 +1,16 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_VERSION=22
 
+# Runs on BUILDPLATFORM: the frontend build is platform-independent, so
+# this stage never pays for emulation on a non-native target.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
+WORKDIR /src/web
+RUN corepack enable
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ .
+RUN pnpm run build
+
 # Cross-compiles without emulation: CGO is off, so the build platform's Go
 # toolchain produces a binary for TARGETARCH directly.
 FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
@@ -9,6 +19,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=web /src/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/sealift ./cmd/sealift
 
