@@ -28,7 +28,7 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
   if (toolsQuery.isError) {
     return (
-      <p role="alert" className="text-sm text-severity-critical">
+      <p role="alert" className="text-sm text-severity-critical-fg">
         Could not load the tools state.
       </p>
     )

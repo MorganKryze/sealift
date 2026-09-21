@@ -82,6 +82,22 @@ describe("AnalysisResults", () => {
     expect(screen.getByRole("heading", { name: "left-pad" })).toBeInTheDocument()
   })
 
+  it("points aria-activedescendant at the focused option's own id, with no focusable button inside it", () => {
+    render(<AnalysisResults analysisId="a-active" result={makeResult([0, 0, 0, 0, 0])} onContinue={() => {}} />)
+
+    const listbox = screen.getByRole("listbox")
+    const options = screen.getAllByRole("option")
+    expect(options).toHaveLength(2)
+    expect(options.map((option) => option.tagName)).toEqual(["LI", "LI"])
+    expect(listbox).toHaveAttribute("aria-activedescendant", options[0]!.id)
+    for (const option of options) {
+      expect(option.querySelector("button")).toBeNull()
+    }
+
+    fireEvent.keyDown(listbox, { key: "ArrowDown" })
+    expect(listbox).toHaveAttribute("aria-activedescendant", options[1]!.id)
+  })
+
   it("says the combined check was not measured instead of showing zeros", () => {
     render(<AnalysisResults analysisId="a-null" result={makeResult(null)} onContinue={() => {}} />)
 

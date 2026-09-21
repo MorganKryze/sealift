@@ -12,6 +12,12 @@
   --severity-low: #64748b;
   --severity-unknown: #94a3b8;
   --severity-resolved: #15803d;
+
+  /* Text-only shades: a severity dot's fill stays the base color above at
+     every size, but that same color set as text fails AA against the dark
+     background below, so dark mode points these at a lighter shade instead. */
+  --severity-critical-fg: var(--severity-critical);
+  --severity-resolved-fg: var(--severity-resolved);
 }
 
 .dark {
@@ -21,6 +27,9 @@
   --muted: #94a3b8;
   --line: #1e293b;
   --card: #111a2e;
+
+  --severity-critical-fg: #f87171;
+  --severity-resolved-fg: #4ade80;
 }
 
 /* Follows the system when no .dark/.light class overrides it. */
@@ -32,5 +41,8 @@
     --muted: #94a3b8;
     --line: #1e293b;
     --card: #111a2e;
+
+    --severity-critical-fg: #f87171;
+    --severity-resolved-fg: #4ade80;
   }
 }

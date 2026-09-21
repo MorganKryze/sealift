@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent } from "react"
 
 import type { AnalysisResult, Candidate, DependencyResult } from "@/api/projects"
 import { SeverityCounts } from "@/components/severity-counts"
@@ -28,6 +28,12 @@ function isBlocked(candidate: Candidate): boolean {
   return candidate.signals.some((signal) => signal.blocking)
 }
 
+// Scoped by analysisId, not just the index, so two mounted instances (as
+// in a test that renders more than one without unmounting) never collide.
+function optionId(analysisId: string, index: number): string {
+  return `${analysisId}-dependency-${index}`
+}
+
 export function AnalysisResults({
   analysisId,
   result,
@@ -40,6 +46,7 @@ export function AnalysisResults({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const selection = useSelection(analysisId)
   const hasSelection = Object.values(selection.selection).some((versions) => versions.length > 0)
+  const listRef = useRef<HTMLUListElement>(null)
 
   useEffect(() => {
     const defaults: Record<string, string[]> = {}
@@ -64,6 +71,17 @@ export function AnalysisResults({
       setSelectedIndex((index) => Math.max(index - 1, 0))
     }
   }
+
+  // aria-activedescendant moves focus semantically, not the DOM focus
+  // itself, so the browser never scrolls the active option into view on
+  // its own the way it would for a real focus change.
+  useEffect(() => {
+    const id = optionId(analysisId, selectedIndex)
+    const option = listRef.current?.querySelector(`#${CSS.escape(id)}`)
+    // jsdom (the test environment) has no scrollIntoView at all, unlike a
+    // real browser, where every Element carries one.
+    option?.scrollIntoView?.({ block: "nearest" })
+  }, [analysisId, selectedIndex])
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-8">
@@ -96,8 +114,10 @@ export function AnalysisResults({
 
       <div className="grid flex-1 grid-cols-2 gap-6">
         <ul
+          ref={listRef}
           role="listbox"
           aria-label="Dependencies"
+          aria-activedescendant={dependencies.length > 0 ? optionId(analysisId, selectedIndex) : undefined}
           tabIndex={0}
           onKeyDown={handleListKeyDown}
           className="flex flex-col gap-1 overflow-auto rounded-md border border-line p-2 outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -105,34 +125,35 @@ export function AnalysisResults({
           {dependencies.map((dependency, index) => {
             const best = bestCandidateOf(dependency)
             return (
-              <li key={dependency.name} role="option" aria-selected={index === selectedIndex}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedIndex(index)}
-                  className={cn(
-                    "w-full rounded-md px-3 py-2 text-left text-sm",
-                    index === selectedIndex ? "bg-card" : "hover:bg-card",
+              <li
+                key={dependency.name}
+                id={optionId(analysisId, index)}
+                role="option"
+                aria-selected={index === selectedIndex}
+                onClick={() => setSelectedIndex(index)}
+                className={cn(
+                  "w-full cursor-pointer rounded-md px-3 py-2 text-left text-sm",
+                  index === selectedIndex ? "bg-card" : "hover:bg-card",
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-ink">{dependency.name}</span>
+                  <span className="text-xs text-muted">{dependency.current}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-3 text-xs">
+                  <SeverityCounts vector={dependency.vector} />
+                  <span aria-hidden className="text-muted">
+                    →
+                  </span>
+                  {best ? (
+                    <>
+                      <span className="font-medium text-ink">{best.version}</span>
+                      <SeverityCounts vector={best.vector} />
+                    </>
+                  ) : (
+                    <span className="text-muted">no candidate</span>
                   )}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-ink">{dependency.name}</span>
-                    <span className="text-xs text-muted">{dependency.current}</span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-3 text-xs">
-                    <SeverityCounts vector={dependency.vector} />
-                    <span aria-hidden className="text-muted">
-                      →
-                    </span>
-                    {best ? (
-                      <>
-                        <span className="font-medium text-ink">{best.version}</span>
-                        <SeverityCounts vector={best.vector} />
-                      </>
-                    ) : (
-                      <span className="text-muted">no candidate</span>
-                    )}
-                  </div>
-                </button>
+                </div>
               </li>
             )
           })}
@@ -182,7 +203,7 @@ function DependencyDetail({ dependency, selection }: DependencyDetailProps) {
                 <SeverityCounts vector={candidate.vector} className="ml-auto" />
               </div>
               {primaryReason ? (
-                <p className="mt-2 text-sm text-severity-critical">{primaryReason.evidence}</p>
+                <p className="mt-2 text-sm text-severity-critical-fg">{primaryReason.evidence}</p>
               ) : null}
               {candidate.signals.length > 0 ? (
                 <ul className="mt-2 flex flex-col gap-1 text-xs text-muted">

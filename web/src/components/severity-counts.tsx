@@ -20,7 +20,7 @@ export function SeverityCounts({ vector, className }: SeverityCountsProps) {
   )
 
   if (entries.length === 0) {
-    return <span className={cn("text-sm text-severity-resolved", className)}>No known CVEs</span>
+    return <span className={cn("text-sm text-severity-resolved-fg", className)}>No known CVEs</span>
   }
 
   return (

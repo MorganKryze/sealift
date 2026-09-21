@@ -48,7 +48,7 @@ function ProjectsScreen() {
       onInvalidFile={handleInvalidFile}
     >
       {invalidFileMessage ? (
-        <p role="alert" className="text-sm text-severity-critical">
+        <p role="alert" className="text-sm text-severity-critical-fg">
           {invalidFileMessage}
         </p>
       ) : null}

@@ -41,7 +41,7 @@ export function ProjectsView({
   if (status === "error") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <p role="alert" className="text-sm text-severity-critical">
+        <p role="alert" className="text-sm text-severity-critical-fg">
           Could not load projects{error?.message ? `: ${error.message}` : "."}
         </p>
         <Button onClick={onRetry}>Retry</Button>

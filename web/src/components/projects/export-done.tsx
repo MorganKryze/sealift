@@ -36,7 +36,7 @@ export function ExportDone({ projectId, exportId, files }: ExportDoneProps) {
           {manifestQuery.isPending ? (
             <p className="text-sm text-muted">Reading the manifest…</p>
           ) : manifestQuery.isError ? (
-            <p className="text-sm text-severity-critical">Could not read manifest.json.</p>
+            <p className="text-sm text-severity-critical-fg">Could not read manifest.json.</p>
           ) : (
             <p className="text-sm text-muted">
               sha256 <span className="font-mono">{manifestQuery.data.archive.sha256}</span> ·{" "}

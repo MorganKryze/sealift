@@ -40,7 +40,7 @@ function ExportPage() {
   if (projectQuery.isError) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <p role="alert" className="text-sm text-severity-critical">
+        <p role="alert" className="text-sm text-severity-critical-fg">
           Could not load the project
           {projectQuery.error instanceof Error ? `: ${projectQuery.error.message}` : "."}
         </p>

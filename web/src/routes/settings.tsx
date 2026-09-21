@@ -21,7 +21,7 @@ function SettingsScreen() {
           Loading settings…
         </p>
       ) : settingsQuery.isError ? (
-        <p role="alert" className="text-sm text-severity-critical">
+        <p role="alert" className="text-sm text-severity-critical-fg">
           Could not load settings.
         </p>
       ) : (

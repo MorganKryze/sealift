@@ -121,7 +121,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
       </div>
 
       {clientErrors.length > 0 ? (
-        <ul role="alert" className="list-disc pl-5 text-sm text-severity-critical">
+        <ul role="alert" className="list-disc pl-5 text-sm text-severity-critical-fg">
           {clientErrors.map((error) => (
             <li key={error}>{error}</li>
           ))}
@@ -129,7 +129,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
       ) : null}
 
       {saveError ? <ProblemNotice status={saveError.status} problem={saveError.problem} /> : null}
-      {saveMutation.isSuccess ? <p className="text-sm text-severity-resolved">Settings saved.</p> : null}
+      {saveMutation.isSuccess ? <p className="text-sm text-severity-resolved-fg">Settings saved.</p> : null}
 
       <Button type="submit" disabled={saveMutation.isPending} className="self-start">
         Save settings
