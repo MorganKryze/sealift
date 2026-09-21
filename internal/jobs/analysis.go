@@ -125,11 +125,15 @@ type stepData struct {
 
 // progressData is the payload of a "progress" event. CacheHits is set only
 // by an export's download step; an analysis never sets it, so it stays
-// omitted rather than printed as a stray zero.
+// omitted rather than printed as a stray zero. EstimatedRemainingMs is set
+// only once resolving candidates has a rate to project from (see
+// progressWithRemaining); every other progress source leaves it absent
+// rather than printing a guess it never computed.
 type progressData struct {
-	Done      int  `json:"done"`
-	Total     int  `json:"total"`
-	CacheHits *int `json:"cacheHits,omitempty"`
+	Done                 int    `json:"done"`
+	Total                int    `json:"total"`
+	EstimatedRemainingMs *int64 `json:"estimatedRemainingMs,omitempty"`
+	CacheHits            *int   `json:"cacheHits,omitempty"`
 }
 
 // candidateData is the payload of a "candidate" event.
@@ -199,6 +203,35 @@ func (r *run) log(line string) {
 // progress emits a "progress" event.
 func (r *run) progress(done, total int) {
 	r.emit(Event{Kind: "progress", Data: mustJSON(progressData{Done: done, Total: total})})
+}
+
+// progressWithRemaining is progress plus an estimate of the time left,
+// computed by remaining from elapsed and parallelism. Only
+// stepResolveCandidates' caller has both a meaningful elapsed clock (the
+// other progress sources finish in a handful of steps, too few to rate)
+// and its own concurrency limit, so every other step keeps calling
+// progress with neither.
+func (r *run) progressWithRemaining(done, total int, elapsed time.Duration, parallelism int) {
+	data := progressData{Done: done, Total: total}
+	if done > 0 {
+		ms := remaining(elapsed, done, total, parallelism).Milliseconds()
+		data.EstimatedRemainingMs = &ms
+	}
+	r.emit(Event{Kind: "progress", Data: mustJSON(data)})
+}
+
+// remaining estimates the time left to finish total items, having done
+// some of them in elapsed, running parallelism at a time: the mean
+// per-item duration so far, times how many remain, divided by
+// parallelism. It returns zero when done is zero (one data point is not
+// yet a rate), when nothing remains, or when parallelism is not
+// positive.
+func remaining(elapsed time.Duration, done, total, parallelism int) time.Duration {
+	if done <= 0 || total <= done || parallelism <= 0 {
+		return 0
+	}
+	mean := elapsed / time.Duration(done)
+	return mean * time.Duration(total-done) / time.Duration(parallelism)
 }
 
 // commit writes status.json and renames the pending .tmp directory into

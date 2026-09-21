@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/rank"
@@ -97,7 +98,15 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 		for _, d := range deps {
 			packuments[d.dep.Name] = d.packument
 		}
-		outcomes = r.a.resolveCandidateTasks(r.ctx, tasks, packuments, projectVersionsOf(manifest), r.progress)
+		parallelism := r.a.Settings.ResolveParallelism
+		if parallelism <= 0 {
+			parallelism = 1
+		}
+		start := time.Now()
+		onProgress := func(done, total int) {
+			r.progressWithRemaining(done, total, time.Since(start), parallelism)
+		}
+		outcomes = r.a.resolveCandidateTasks(r.ctx, tasks, packuments, projectVersionsOf(manifest), onProgress)
 		for _, o := range outcomes {
 			if o.err != nil {
 				r.log(fmt.Sprintf("%s@%s does not resolve: %v", o.task.dep.Name, o.task.version, o.err))

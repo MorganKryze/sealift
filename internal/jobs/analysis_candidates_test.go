@@ -1,10 +1,103 @@
 package jobs
 
 import (
+	"context"
+	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 )
+
+// TestRemaining checks the pure estimate: mean duration so far times what
+// remains, divided by parallelism, zero when done is zero (one data
+// point is not yet a rate).
+func TestRemaining(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		elapsed     time.Duration
+		done, total int
+		parallelism int
+		want        time.Duration
+	}{
+		{"one worker", 10 * time.Second, 5, 15, 1, 20 * time.Second},
+		{"two workers halve it", 10 * time.Second, 5, 15, 2, 10 * time.Second},
+		{"nothing done yet is unknown", 10 * time.Second, 0, 15, 1, 0},
+		{"nothing left", 10 * time.Second, 15, 15, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := remaining(tc.elapsed, tc.done, tc.total, tc.parallelism); got != tc.want {
+				t.Errorf("remaining(%v, %d, %d, %d) = %v, want %v", tc.elapsed, tc.done, tc.total, tc.parallelism, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStepResolveCandidatesEmitsEstimatedRemainingMs proves the progress
+// events resolve-candidates emits carry estimatedRemainingMs once at
+// least one candidate has resolved, and omit it for the first event
+// (done == 0), so the field never prints a guess computed from zero
+// data.
+func TestStepResolveCandidatesEmitsEstimatedRemainingMs(t *testing.T) {
+	dep := npm.Dependency{Name: "foo", Version: "1.0.0"}
+	manifest := npm.Manifest{Dependencies: []npm.Dependency{dep}}
+	deps := []depInfo{{dep: dep, newer: []string{"1.1.0", "1.2.0"}}}
+
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+
+	var mu sync.Mutex
+	var events []progressData
+	r := &run{
+		a: &Analysis{
+			Store:    st,
+			Pnpm:     &fakePnpm{},
+			Project:  proj,
+			Settings: store.Settings{ResolveParallelism: 2},
+			Dir:      pending.Path(),
+		},
+		ctx: context.Background(),
+		emit: func(e Event) {
+			if e.Kind != "progress" {
+				return
+			}
+			var d progressData
+			if err := json.Unmarshal(e.Data, &d); err != nil {
+				t.Fatalf("unmarshal progress event: %v", err)
+			}
+			// resolveCandidateTasks calls onProgress from its own worker
+			// goroutines, concurrently: this callback, and the slice it
+			// appends to, must be safe for that.
+			mu.Lock()
+			events = append(events, d)
+			mu.Unlock()
+		},
+	}
+
+	if _, err := r.stepResolveCandidates(deps, manifest, nil); err != nil {
+		t.Fatalf("stepResolveCandidates: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) == 0 {
+		t.Fatal("no progress events emitted")
+	}
+	var last progressData
+	var sawFullyDone bool
+	for _, e := range events {
+		if e.Done == e.Total {
+			sawFullyDone = true
+			last = e
+		}
+	}
+	if !sawFullyDone {
+		t.Fatalf("events = %+v, want one with done == total", events)
+	}
+	if last.EstimatedRemainingMs == nil {
+		t.Error("the done == total event has no estimatedRemainingMs, want one now that candidates have resolved")
+	}
+}
 
 // TestProjectVersionsOf checks that every dependency, of every kind, ends
 // up mapped to its own version, since buildProbeManifest needs to look a
