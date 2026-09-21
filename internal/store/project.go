@@ -1,6 +1,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,20 +20,34 @@ var ErrNotFound = errors.New("not found")
 // Project is one project directory: an uploaded package.json, its target
 // platform, and the analyses and exports run against it.
 type Project struct {
-	ID     string
-	Name   string
-	Target Target
-	Dir    string
+	ID             string
+	Name           string
+	Target         Target
+	Dir            string
+	ManifestSha256 string // sha256 of the uploaded package.json bytes, lowercase hex
+	CreatedAt      time.Time
 }
 
 // projectRecord is the on-disk shape of project.json. Name and Target come
-// straight from Project; CreatedAt has no exported counterpart yet, since
-// nothing in this plan reads it back.
+// straight from Project.
 type projectRecord struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Target    Target    `json:"target"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Target         Target    `json:"target"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ManifestSha256 string    `json:"manifestSha256,omitempty"`
+}
+
+// manifestSHA256 hashes the bytes at path as uploaded, not the parsed
+// manifest, so the browser (crypto.subtle.digest over the exact file
+// bytes) and the server agree on the same hash.
+func manifestSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("store: read %s: %w", path, err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // nonSlugRun matches any character, run, that a project id cannot contain.
@@ -67,7 +83,10 @@ func (s *Store) CreateProject(name string, manifest []byte) (Project, error) {
 	}
 
 	target := s.Settings().Target
-	record := projectRecord{ID: id, Name: name, Target: target, CreatedAt: time.Now().UTC()}
+	sum := sha256.Sum256(manifest)
+	hash := hex.EncodeToString(sum[:])
+	createdAt := time.Now().UTC()
+	record := projectRecord{ID: id, Name: name, Target: target, CreatedAt: createdAt, ManifestSha256: hash}
 	if err := writeJSONFile(filepath.Join(dir, "project.json"), record, fileMode); err != nil {
 		_ = os.RemoveAll(dir) // the reserved directory holds no usable project; leaving it behind would block a later CreateProject or a real project's rename
 		return Project{}, err
@@ -76,7 +95,7 @@ func (s *Store) CreateProject(name string, manifest []byte) (Project, error) {
 		_ = os.RemoveAll(dir)
 		return Project{}, err
 	}
-	return Project{ID: id, Name: name, Target: target, Dir: dir}, nil
+	return Project{ID: id, Name: name, Target: target, Dir: dir, ManifestSha256: hash, CreatedAt: createdAt}, nil
 }
 
 // reserveProjectDir creates projects/<base>-<suffix> under an id no other
@@ -126,7 +145,10 @@ func (s *Store) Projects() ([]Project, error) {
 	return projects, nil
 }
 
-// Project reads one project by ID.
+// Project reads one project by ID. A project created before manifestSha256
+// existed carries none in project.json; this computes it from package.json
+// instead of returning it empty, but never rewrites the record: Project is
+// a read.
 func (s *Store) Project(id string) (Project, error) {
 	if err := validID(id); err != nil {
 		return Project{}, err
@@ -139,7 +161,31 @@ func (s *Store) Project(id string) (Project, error) {
 		}
 		return Project{}, err
 	}
-	return Project{ID: record.ID, Name: record.Name, Target: record.Target, Dir: dir}, nil
+	hash := record.ManifestSha256
+	if hash == "" {
+		if computed, herr := manifestSHA256(filepath.Join(dir, "package.json")); herr == nil {
+			hash = computed
+		}
+	}
+	return Project{ID: record.ID, Name: record.Name, Target: record.Target, Dir: dir, ManifestSha256: hash, CreatedAt: record.CreatedAt}, nil
+}
+
+// ProjectsByManifestSha256 returns every project whose manifest hash
+// equals hash, newest first: a session re-uploading a manifest it has
+// already analysed wants its most recent project, not alphabetical order.
+func (s *Store) ProjectsByManifestSha256(hash string) ([]Project, error) {
+	all, err := s.Projects()
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]Project, 0, len(all))
+	for _, p := range all {
+		if p.ManifestSha256 == hash {
+			matches = append(matches, p)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].CreatedAt.After(matches[j].CreatedAt) })
+	return matches, nil
 }
 
 // SetProjectTarget changes a project's target platform, refusing an empty

@@ -1276,6 +1276,45 @@ func TestQueueAndGetAnalysisReachesATerminalState(t *testing.T) {
 	}
 }
 
+// TestListProjectsFiltersByManifestSha256 proves the query param finds
+// the projects created from one manifest's exact bytes and no others,
+// newest first, and that Project itself carries the hash.
+func TestListProjectsFiltersByManifestSha256(t *testing.T) {
+	srv, _ := newTestServer(t)
+	manifest := `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`
+
+	first, resp := createProject(t, srv, manifest)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject first status = %d", resp.StatusCode)
+	}
+	if first.ManifestSha256 == nil || *first.ManifestSha256 == "" {
+		t.Fatalf("first.ManifestSha256 = %v, want a hash", first.ManifestSha256)
+	}
+	hash := *first.ManifestSha256
+
+	second, resp2 := createProject(t, srv, manifest)
+	if resp2.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject second status = %d", resp2.StatusCode)
+	}
+	_, resp3 := createProject(t, srv, `{"name":"other"}`)
+	if resp3.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject other status = %d", resp3.StatusCode)
+	}
+
+	listResp, err := http.Get(srv.URL + "/api/projects?manifestSha256=" + hash)
+	if err != nil {
+		t.Fatalf("GET /api/projects?manifestSha256=...: %v", err)
+	}
+	defer listResp.Body.Close()
+	var list []ProjectSummary
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode project list: %v", err)
+	}
+	if len(list) != 2 || list[0].Id != second.Id || list[1].Id != first.Id {
+		t.Fatalf("filtered list = %+v, want [%q, %q] newest first", list, second.Id, first.Id)
+	}
+}
+
 // TestCreateProjectRefusesWhenToolsNotReady proves an analysis never gets
 // queued, and no project directory gets created, while trivy and its
 // database are not both on the data volume: a fresh store, not the

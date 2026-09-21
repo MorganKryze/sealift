@@ -407,6 +407,8 @@ export interface components {
             id: string;
             name: string;
             target: components["schemas"]["Target"];
+            /** @description sha256 of the uploaded package.json bytes, lowercase hex */
+            manifestSha256?: string;
             analyses?: components["schemas"]["Analysis"][];
             exports?: components["schemas"]["Export"][];
         };
@@ -587,7 +589,10 @@ export type $defs = Record<string, never>;
 export interface operations {
     listProjects: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filter to the projects created from this exact manifest hash (sha256 of the uploaded bytes, lowercase hex), newest first */
+                manifestSha256?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

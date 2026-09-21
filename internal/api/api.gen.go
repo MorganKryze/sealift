@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -267,7 +268,10 @@ type Project struct {
 	Analyses *[]Analysis `json:"analyses,omitempty"`
 	Exports  *[]Export   `json:"exports,omitempty"`
 	Id       string      `json:"id"`
-	Name     string      `json:"name"`
+
+	// ManifestSha256 sha256 of the uploaded package.json bytes, lowercase hex
+	ManifestSha256 *string `json:"manifestSha256,omitempty"`
+	Name           string  `json:"name"`
 
 	// Target The system a resolution or an export is prepared for
 	Target Target `json:"target"`
@@ -363,6 +367,12 @@ type ExportId = string
 
 // ProjectId defines model for ProjectId.
 type ProjectId = string
+
+// ListProjectsParams defines parameters for ListProjects.
+type ListProjectsParams struct {
+	// ManifestSha256 Filter to the projects created from this exact manifest hash (sha256 of the uploaded bytes, lowercase hex), newest first
+	ManifestSha256 *string `form:"manifestSha256,omitempty" json:"manifestSha256,omitempty"`
+}
 
 // CreateProjectMultipartBody defines parameters for CreateProject.
 type CreateProjectMultipartBody struct {
@@ -549,7 +559,7 @@ type ServerInterface interface {
 	WatchJob(w http.ResponseWriter, r *http.Request)
 	// ListProjects List projects with their last analysis and export
 	// (GET /projects)
-	ListProjects(w http.ResponseWriter, r *http.Request)
+	ListProjects(w http.ResponseWriter, r *http.Request, params ListProjectsParams)
 	// CreateProject Create a project from an uploaded package.json and start an analysis
 	// (POST /projects)
 	CreateProject(w http.ResponseWriter, r *http.Request)
@@ -638,8 +648,27 @@ func (siw *ServerInterfaceWrapper) WatchJob(w http.ResponseWriter, r *http.Reque
 // ListProjects operation middleware
 func (siw *ServerInterfaceWrapper) ListProjects(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListProjectsParams
+
+	// ------------- Optional query parameter "manifestSha256" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "manifestSha256", r.URL.Query(), &params.ManifestSha256, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "manifestSha256"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "manifestSha256", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListProjects(w, r)
+		siw.Handler.ListProjects(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1391,6 +1420,7 @@ func (response WatchJobdefaultApplicationProblemPlusJSONResponse) VisitWatchJobR
 }
 
 type ListProjectsRequestObject struct {
+	Params ListProjectsParams
 }
 
 type ListProjectsResponseObject interface {
@@ -2336,8 +2366,10 @@ func (sh *strictHandler) WatchJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListProjects operation middleware
-func (sh *strictHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ListProjects(w http.ResponseWriter, r *http.Request, params ListProjectsParams) {
 	var request ListProjectsRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListProjects(ctx, request.(ListProjectsRequestObject))

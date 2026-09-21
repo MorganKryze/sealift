@@ -27,6 +27,15 @@ paths:
       tags:
         - projects
       summary: List projects with their last analysis and export
+      parameters:
+        - name: manifestSha256
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Filter to the projects created from this exact manifest hash
+            (sha256 of the uploaded bytes, lowercase hex), newest first
       responses:
         "200":
           description: Projects
@@ -599,6 +608,9 @@ components:
           type: string
         target:
           $ref: "#/components/schemas/Target"
+        manifestSha256:
+          type: string
+          description: sha256 of the uploaded package.json bytes, lowercase hex
         analyses:
           type: array
           items:

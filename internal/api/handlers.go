@@ -200,6 +200,9 @@ func exportToAPI(info store.ExportInfo) Export {
 
 func projectToAPI(p store.Project, analyses []store.AnalysisInfo, exports []store.ExportInfo) Project {
 	out := Project{Id: p.ID, Name: p.Name, Target: targetToAPI(p.Target)}
+	if p.ManifestSha256 != "" {
+		out.ManifestSha256 = &p.ManifestSha256
+	}
 	if len(analyses) > 0 {
 		list := make([]Analysis, len(analyses))
 		for i, a := range analyses {

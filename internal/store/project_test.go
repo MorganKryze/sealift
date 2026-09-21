@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSlug(t *testing.T) {
@@ -108,6 +109,42 @@ func TestProjectCRUD(t *testing.T) {
 	}
 	if _, err := s.Project(p.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Project after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestProjectsByManifestSha256FindsTheMatchingProjectsNewestFirst proves
+// two projects created from the same bytes are both found by their
+// shared hash, newest first, and a project from different bytes is not.
+func TestProjectsByManifestSha256FindsTheMatchingProjectsNewestFirst(t *testing.T) {
+	s := openTestStore(t)
+	manifest := []byte(`{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+
+	first, err := s.CreateProject("left-pad", manifest)
+	if err != nil {
+		t.Fatalf("CreateProject first: %v", err)
+	}
+	time.Sleep(time.Millisecond) // CreatedAt has second precision on disk (analysisIDLayout-style IDs elsewhere), but Project.CreatedAt itself is a plain timestamp, so this only guards against two calls landing on the exact same instant.
+	second, err := s.CreateProject("left-pad-again", manifest)
+	if err != nil {
+		t.Fatalf("CreateProject second: %v", err)
+	}
+	other, err := s.CreateProject("right-pad", []byte(`{"name":"right-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject other: %v", err)
+	}
+	if first.ManifestSha256 == "" || first.ManifestSha256 != second.ManifestSha256 {
+		t.Fatalf("ManifestSha256 first=%q second=%q, want equal and non-empty", first.ManifestSha256, second.ManifestSha256)
+	}
+	if other.ManifestSha256 == first.ManifestSha256 {
+		t.Fatalf("other project's ManifestSha256 = %q, want it to differ from the shared one", other.ManifestSha256)
+	}
+
+	got, err := s.ProjectsByManifestSha256(first.ManifestSha256)
+	if err != nil {
+		t.Fatalf("ProjectsByManifestSha256: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != second.ID || got[1].ID != first.ID {
+		t.Fatalf("ProjectsByManifestSha256 = %+v, want [%q, %q] newest first", got, second.ID, first.ID)
 	}
 }
 

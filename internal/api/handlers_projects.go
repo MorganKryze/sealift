@@ -37,13 +37,21 @@ func (h *Handlers) liveAnalysisOrExport(projectID string) (analysis *Analysis, e
 	}
 }
 
-// ListProjects lists every project with its last analysis and export. A
-// live job in progress takes precedence over the store's own last entry,
-// which cannot see it yet. A store error reading one project's history is
-// logged and skipped rather than failing the whole listing: a transient
-// I/O error on one project must not look identical to "never analyzed".
-func (h *Handlers) ListProjects(_ context.Context, _ ListProjectsRequestObject) (ListProjectsResponseObject, error) {
-	projects, err := h.Store.Projects()
+// ListProjects lists every project with its last analysis and export, or,
+// with manifestSha256 set, only the projects created from that exact
+// manifest, newest first. A live job in progress takes precedence over the
+// store's own last entry, which cannot see it yet. A store error reading
+// one project's history is logged and skipped rather than failing the
+// whole listing: a transient I/O error on one project must not look
+// identical to "never analyzed".
+func (h *Handlers) ListProjects(_ context.Context, req ListProjectsRequestObject) (ListProjectsResponseObject, error) {
+	var projects []store.Project
+	var err error
+	if req.Params.ManifestSha256 != nil && *req.Params.ManifestSha256 != "" {
+		projects, err = h.Store.ProjectsByManifestSha256(*req.Params.ManifestSha256)
+	} else {
+		projects, err = h.Store.Projects()
+	}
 	if err != nil {
 		return ListProjectsdefaultApplicationProblemPlusJSONResponse(autoProblem("list projects", err)), nil
 	}
