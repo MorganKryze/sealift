@@ -6,6 +6,11 @@ export type ProjectSummary = components["schemas"]["ProjectSummary"]
 export type Problem = components["schemas"]["Problem"]
 export type Analysis = components["schemas"]["Analysis"]
 export type Export = components["schemas"]["Export"]
+export type AnalysisResult = components["schemas"]["AnalysisResult"]
+export type DependencyResult = components["schemas"]["DependencyResult"]
+export type Candidate = components["schemas"]["Candidate"]
+export type Signal = components["schemas"]["Signal"]
+export type Target = components["schemas"]["Target"]
 
 export function listProjects(): Promise<ProjectSummary[]> {
   return apiFetch<ProjectSummary[]>("/projects")

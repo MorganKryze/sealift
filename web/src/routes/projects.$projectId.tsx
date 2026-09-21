@@ -4,6 +4,7 @@ import { useState } from "react"
 
 import { getProject, type Analysis, type Project } from "@/api/projects"
 import { AnalysisFailed } from "@/components/projects/analysis-failed"
+import { AnalysisResults } from "@/components/projects/analysis-results"
 import { AnalysisRunning } from "@/components/projects/analysis-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { ProjectHistory } from "@/components/projects/project-history"
@@ -104,9 +105,7 @@ function AnalysisSummary({ projectId, analysis }: { projectId: string; analysis?
   }
 
   if (analysis.state === "done" && analysis.result) {
-    return (
-      <p className="p-8 text-ink">Analysis done: {analysis.result.dependencies.length} dependencies scanned.</p>
-    )
+    return <AnalysisResults analysisId={analysis.id} result={analysis.result} />
   }
 
   return <p className="p-8 text-muted">Analysis {analysis.state}.</p>
