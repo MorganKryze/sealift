@@ -5,12 +5,25 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vitest/config"
 
+const apiProxy = {
+  "/api": {
+    target: "http://127.0.0.1:8080",
+    changeOrigin: true,
+  },
+}
+
 export default defineConfig({
   plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
     },
+  },
+  server: {
+    proxy: apiProxy,
+  },
+  preview: {
+    proxy: apiProxy,
   },
   test: {
     environment: "jsdom",

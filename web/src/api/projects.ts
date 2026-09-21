@@ -1,7 +1,13 @@
+import { apiFetch } from "./client"
 import type { components } from "./schema"
 
 export type Project = components["schemas"]["Project"]
+export type ProjectSummary = components["schemas"]["ProjectSummary"]
 export type Problem = components["schemas"]["Problem"]
+
+export function listProjects(): Promise<ProjectSummary[]> {
+  return apiFetch<ProjectSummary[]>("/projects")
+}
 
 /**
  * Thrown by createProject. Carries the parsed Problem Details body so the
