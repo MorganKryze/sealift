@@ -25,6 +25,12 @@ export default defineConfig({
   preview: {
     proxy: apiProxy,
   },
+  // dist/index.html is a tracked placeholder (see web/embed.go), so the
+  // build writes to a subdirectory instead of overwriting it on every
+  // local build.
+  build: {
+    outDir: "dist/app",
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

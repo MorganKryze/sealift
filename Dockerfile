@@ -19,7 +19,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=web /src/web/dist ./web/dist
+COPY --from=web /src/web/dist/app ./web/dist/app
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/sealift ./cmd/sealift
 

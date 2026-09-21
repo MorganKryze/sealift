@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -95,7 +94,7 @@ func run(addr, root string, log *slog.Logger) error {
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 
-	static, err := fs.Sub(web.Dist, "dist")
+	static, err := web.Static()
 	if err != nil {
 		return err
 	}
