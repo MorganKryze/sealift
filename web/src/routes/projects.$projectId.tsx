@@ -1,23 +1,103 @@
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
+import { useState } from "react"
 
-import type { Project } from "@/api/projects"
+import { getProject, type Analysis, type Project } from "@/api/projects"
+import { ProjectHeader } from "@/components/projects/project-header"
+import { ProjectHistory } from "@/components/projects/project-history"
+import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/projects/$projectId")({
-  component: ProjectPlaceholder,
+  component: ProjectPage,
 })
 
-// Placeholder until the analysis screen lands: reads the project the create
-// mutation cached on upload, so a fresh navigation shows its name right away.
-function ProjectPlaceholder() {
+type Tab = "results" | "history"
+
+const TABS: Tab[] = ["results", "history"]
+
+function latestByDate<T extends { createdAt: string }>(items: T[] | undefined): T | undefined {
+  if (!items || items.length === 0) {
+    return undefined
+  }
+  return [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
+}
+
+function ProjectPage() {
   const { projectId } = Route.useParams()
   const queryClient = useQueryClient()
-  const project = queryClient.getQueryData<Project>(["project", projectId])
+  const [tab, setTab] = useState<Tab>("results")
+
+  const projectQuery = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId),
+    initialData: () => queryClient.getQueryData<Project>(["project", projectId]),
+  })
+
+  if (projectQuery.isPending) {
+    return (
+      <div role="status" className="flex flex-1 items-center justify-center p-8 text-muted">
+        Loading project…
+      </div>
+    )
+  }
+
+  if (projectQuery.isError) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+        <p role="alert" className="text-sm text-severity-critical">
+          Could not load the project
+          {projectQuery.error instanceof Error ? `: ${projectQuery.error.message}` : "."}
+        </p>
+        <Button onClick={() => void projectQuery.refetch()}>Retry</Button>
+      </div>
+    )
+  }
+
+  const project = projectQuery.data
+  const lastAnalysis = latestByDate(project.analyses)
+  const lastExport = latestByDate(project.exports)
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-      <h1 className="text-xl font-semibold text-ink">{project?.name ?? "Project"}</h1>
-      <p className="text-muted">Analysis queued</p>
+    <div className="flex flex-1 flex-col">
+      <ProjectHeader project={project} lastAnalysis={lastAnalysis} lastExport={lastExport} />
+      <div role="tablist" className="flex gap-1 border-b border-line px-8 pt-4">
+        {TABS.map((value) => (
+          <button
+            key={value}
+            role="tab"
+            aria-selected={tab === value}
+            onClick={() => setTab(value)}
+            className={cn(
+              "rounded-t-md px-4 py-2 text-sm font-medium capitalize outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              tab === value ? "border-b-2 border-accent text-ink" : "text-muted hover:text-ink",
+            )}
+          >
+            {value}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-1 flex-col">
+        {tab === "results" ? (
+          <AnalysisSummary analysis={lastAnalysis} />
+        ) : (
+          <ProjectHistory analyses={project.analyses ?? []} exports={project.exports ?? []} />
+        )}
+      </div>
     </div>
   )
+}
+
+function AnalysisSummary({ analysis }: { analysis?: Analysis }) {
+  if (!analysis) {
+    return <p className="p-8 text-muted">No analysis yet.</p>
+  }
+
+  if (analysis.state === "done" && analysis.result) {
+    return (
+      <p className="p-8 text-ink">Analysis done: {analysis.result.dependencies.length} dependencies scanned.</p>
+    )
+  }
+
+  return <p className="p-8 text-muted">Analysis {analysis.state}.</p>
 }

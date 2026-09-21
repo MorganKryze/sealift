@@ -4,9 +4,15 @@ import type { components } from "./schema"
 export type Project = components["schemas"]["Project"]
 export type ProjectSummary = components["schemas"]["ProjectSummary"]
 export type Problem = components["schemas"]["Problem"]
+export type Analysis = components["schemas"]["Analysis"]
+export type Export = components["schemas"]["Export"]
 
 export function listProjects(): Promise<ProjectSummary[]> {
   return apiFetch<ProjectSummary[]>("/projects")
+}
+
+export function getProject(projectId: string): Promise<Project> {
+  return apiFetch<Project>(`/projects/${projectId}`)
 }
 
 /**
