@@ -108,6 +108,10 @@ func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObje
 		name = parsed.Name
 	}
 
+	if ready, missing := h.Tools.Ready(); !ready {
+		return CreateProjectdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
+	}
+
 	project, err := h.Store.CreateProject(name, manifest)
 	if err != nil {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(autoProblem("create project", err)), nil

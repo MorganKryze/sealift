@@ -360,7 +360,14 @@ func TestQueueExportMissingSignatureKeyAnswers400(t *testing.T) {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 
-	// The store's own settings still hold the empty default signatureKey.
+	// Creating the project needed a signature key (the readiness gate);
+	// clear it back to empty to put settings in the state this test is
+	// actually about.
+	settings := h.Store.Settings()
+	settings.SignatureKey = ""
+	if err := h.Store.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
 	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
@@ -485,6 +492,7 @@ func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
+	seedToolsReady(t, st)
 	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
@@ -684,8 +692,8 @@ func TestSettingsRoundTripMasksSignatureKey(t *testing.T) {
 		t.Fatalf("decode settings: %v", err)
 	}
 	getResp.Body.Close()
-	if settings.SignatureKey != "" {
-		t.Fatalf("SignatureKey = %q, want empty before any key is set", settings.SignatureKey)
+	if settings.SignatureKey != maskedSignatureKey {
+		t.Fatalf("SignatureKey = %q, want the mask %q: the fixture seeds one so CreateProject clears the readiness gate", settings.SignatureKey, maskedSignatureKey)
 	}
 
 	settings.SignatureKey = "top-secret"
@@ -1265,5 +1273,83 @@ func TestQueueAndGetAnalysisReachesATerminalState(t *testing.T) {
 	final := waitForState(t, srv, project.Id, analysisID, Failed, Done)
 	if final.Id != analysisID {
 		t.Fatalf("final analysis id = %q, want %q", final.Id, analysisID)
+	}
+}
+
+// TestCreateProjectRefusesWhenToolsNotReady proves an analysis never gets
+// queued, and no project directory gets created, while trivy and its
+// database are not both on the data volume: a fresh store, not the
+// shared fixture that seeds readiness for every other test.
+func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	t.Cleanup(q.Close)
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	// A signature key alone must not be enough: missing must name only
+	// what trivy itself still lacks.
+	settings := st.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := st.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
+	tm.GitHubAPI = unroutable
+	tm.NPMRegistry = unroutable
+	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
+	h := NewHandlers(st, svc, tm, fakeTrivy{})
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	t.Cleanup(srv.Close)
+
+	_, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusConflict {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 409, body: %s", resp.StatusCode, data)
+	}
+	var problem Problem
+	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Missing == nil {
+		t.Fatalf("problem.Missing is nil, want [trivy trivy-db]")
+	}
+	missing := *problem.Missing
+	if len(missing) != 2 || missing[0] != "trivy" || missing[1] != "trivy-db" {
+		t.Fatalf("problem.Missing = %v, want [trivy trivy-db]", missing)
+	}
+
+	projects, err := st.Projects()
+	if err != nil {
+		t.Fatalf("Projects: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("Projects = %v, want none: a refused request must create nothing", projects)
+	}
+}
+
+// TestUpdateSettingsInvalidTargetAnswers400 proves an invalid target
+// answers 400: the caller's own mistake, not a server failure.
+func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
+	srv, h := newTestServer(t)
+	settings := h.Store.Settings()
+	settingsAPI := settingsToAPI(settings)
+	settingsAPI.SignatureKey = maskedSignatureKey
+	settingsAPI.Target.Os = ""
+
+	body, _ := json.Marshal(settingsAPI)
+	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build PUT: %v", err)
+	}
+	putReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("PUT /api/settings: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
 	}
 }

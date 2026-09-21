@@ -13,6 +13,10 @@ import (
 	"syscall"
 )
 
+// ErrInvalidTarget reports a target whose OS, CPU, Node or PnpmVer is
+// empty: the caller's own mistake, not a server failure.
+var ErrInvalidTarget = errors.New("store: target missing a required field")
+
 // dirMode is the mode of every directory under the data volume except
 // private/, so the tools user's group can create and write files in it.
 // fileMode is the mode of every file the store writes there, for the same
@@ -127,7 +131,7 @@ func (s *Store) SaveSettings(set Settings) error {
 // export with.
 func validateTarget(t Target) error {
 	if t.OS == "" || t.CPU == "" || t.Node == "" || t.PnpmVer == "" {
-		return fmt.Errorf("store: target missing a required field: %+v", t)
+		return fmt.Errorf("%w: %+v", ErrInvalidTarget, t)
 	}
 	return nil
 }

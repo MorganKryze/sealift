@@ -17,6 +17,9 @@ const idLayout = "20060102T150405Z"
 
 // QueueAnalysis queues an analysis for the project.
 func (h *Handlers) QueueAnalysis(_ context.Context, req QueueAnalysisRequestObject) (QueueAnalysisResponseObject, error) {
+	if ready, missing := h.Tools.Ready(); !ready {
+		return QueueAnalysisdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
+	}
 	info, err := h.Service.QueueAnalysis(req.ProjectId)
 	if err != nil {
 		return QueueAnalysisdefaultApplicationProblemPlusJSONResponse(autoProblem("queue analysis", err)), nil

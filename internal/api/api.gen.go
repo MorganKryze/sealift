@@ -334,7 +334,15 @@ type Target struct {
 
 // ToolsState Installed and available pnpm and Trivy versions, and the DB date.
 type ToolsState struct {
-	PnpmInstalled  []string  `json:"pnpmInstalled"`
+	// LatestSizeBytes Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable
+	LatestSizeBytes int `json:"latestSizeBytes"`
+
+	// Missing Names of what ready needs and does not have yet
+	Missing       []string `json:"missing"`
+	PnpmInstalled []string `json:"pnpmInstalled"`
+
+	// Ready Whether trivy, its database and a signature key are all in place
+	Ready          bool      `json:"ready"`
 	TrivyActive    string    `json:"trivyActive"`
 	TrivyDbDate    time.Time `json:"trivyDbDate"`
 	TrivyInstalled []string  `json:"trivyInstalled"`

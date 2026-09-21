@@ -8,9 +8,9 @@ import (
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
-// toolsStateToAPI converts a tools.TrivyState and the installed pnpm
-// versions for a response.
-func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string) ToolsState {
+// toolsStateToAPI converts a tools.TrivyState, the installed pnpm versions
+// and the current readiness for a response.
+func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, missing []string) ToolsState {
 	if pnpmInstalled == nil {
 		pnpmInstalled = []string{}
 	}
@@ -18,18 +18,25 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string) ToolsState {
 	if trivyInstalled == nil {
 		trivyInstalled = []string{}
 	}
+	if missing == nil {
+		missing = []string{}
+	}
 	return ToolsState{
-		PnpmInstalled:  pnpmInstalled,
-		TrivyActive:    s.Active,
-		TrivyInstalled: trivyInstalled,
-		TrivyLatest:    s.Latest,
-		TrivyLatestAge: s.LatestAge.String(),
-		TrivyDbDate:    s.DBDate,
+		PnpmInstalled:   pnpmInstalled,
+		TrivyActive:     s.Active,
+		TrivyInstalled:  trivyInstalled,
+		TrivyLatest:     s.Latest,
+		TrivyLatestAge:  s.LatestAge.String(),
+		TrivyDbDate:     s.DBDate,
+		LatestSizeBytes: int(s.LatestSizeBytes),
+		Ready:           ready,
+		Missing:         missing,
 	}
 }
 
 // currentToolsState reads the installed and available pnpm and Trivy
-// versions, shared by every tools operation's response.
+// versions, and the current readiness, shared by every tools operation's
+// response.
 func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	trivyState, err := h.Tools.TrivyState(ctx)
 	if err != nil {
@@ -39,7 +46,8 @@ func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	if err != nil {
 		return ToolsState{}, err
 	}
-	return toolsStateToAPI(trivyState, pnpmInstalled), nil
+	ready, missing := h.Tools.Ready()
+	return toolsStateToAPI(trivyState, pnpmInstalled, ready, missing), nil
 }
 
 // GetTools returns installed and available tool versions and the

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -44,18 +46,51 @@ const unroutable = "http://127.0.0.1:1"
 // tools.Manager pointed at addresses nothing answers, so a test that
 // exercises GetTools or an analysis' own tool preparation step never
 // waits on or depends on the real network (conventions.md: no network in
-// a unit test). Pnpm and Trivy runs themselves go through fakes.
+// a unit test). Pnpm and Trivy runs themselves go through fakes. The
+// store starts seeded as ready (see seedToolsReady): most tests exist to
+// exercise something past that gate, not the gate itself.
 func newTestHandlers(t *testing.T, q *jobs.Queue) *Handlers {
 	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
+	seedToolsReady(t, st)
 	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
 	return NewHandlers(st, svc, tm, fakeTrivy{})
+}
+
+// seedToolsReady makes st report ready (tools.Manager.Ready) without any
+// network access: an installed, active Trivy version, a vulnerability
+// database date, and a signature key. A test of the readiness gate
+// itself starts from a store this was never called on instead.
+func seedToolsReady(t *testing.T, st *store.Store) {
+	t.Helper()
+	const version = "0.0.0-test"
+	dir := filepath.Join(st.Root(), "tools", "trivy", version)
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		t.Fatalf("seed trivy dir: %v", err)
+	}
+	link := filepath.Join(st.Root(), "tools", "trivy", "current")
+	if err := os.Symlink(version, link); err != nil {
+		t.Fatalf("seed trivy symlink: %v", err)
+	}
+	dbDir := filepath.Join(st.Root(), "trivy-cache", "db")
+	if err := os.MkdirAll(dbDir, 0o770); err != nil {
+		t.Fatalf("seed trivy db dir: %v", err)
+	}
+	meta := `{"UpdatedAt":"2026-09-01T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(meta), 0o664); err != nil {
+		t.Fatalf("seed trivy db metadata: %v", err)
+	}
+	settings := st.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := st.SaveSettings(settings); err != nil {
+		t.Fatalf("seed signature key: %v", err)
+	}
 }
 
 type slowJob struct{ started chan struct{} }

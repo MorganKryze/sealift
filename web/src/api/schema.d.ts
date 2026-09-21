@@ -508,6 +508,12 @@ export interface components {
             trivyLatestAge: string;
             /** Format: date-time */
             trivyDbDate: string;
+            /** @description Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable */
+            latestSizeBytes: number;
+            /** @description Whether trivy, its database and a signature key are all in place */
+            ready: boolean;
+            /** @description Names of what ready needs and does not have yet */
+            missing: string[];
         };
         /**
          * @description Discriminator for the data payload of an Event.

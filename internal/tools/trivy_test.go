@@ -58,7 +58,7 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httpt
 			TagName:     "v" + version,
 			PublishedAt: publishedAt,
 			Assets: []ghAsset{
-				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName},
+				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName, Size: int64(len(tarball))},
 				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
 			},
 		}
@@ -212,6 +212,62 @@ func TestTrivyStateReportsDBDate(t *testing.T) {
 	}
 }
 
+// TestTrivyStateReportsLatestSizeBytes proves TrivyState reports the size
+// of the release asset this host would actually download, not the
+// release's total footprint across every platform.
+func TestTrivyStateReportsLatestSizeBytes(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now(), false)
+	m, _ := newTestManager(t, srv)
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if state.LatestSizeBytes <= 0 {
+		t.Fatalf("LatestSizeBytes = %d, want a positive size", state.LatestSizeBytes)
+	}
+}
+
+// TestManagerReady proves Ready names every prerequisite still missing,
+// without ever reaching the network: an analysis only needs what is
+// already on the data volume.
+func TestManagerReady(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, nil, nil)
+	m.GitHubAPI = "http://127.0.0.1:1"
+
+	if ready, missing := m.Ready(); ready || len(missing) != 3 {
+		t.Fatalf("Ready on a fresh volume = (%v, %v), want (false, [trivy trivy-db signature-key])", ready, missing)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", "0.55.0"), 0o770); err != nil {
+		t.Fatalf("mkdir trivy version: %v", err)
+	}
+	if err := os.Symlink("0.55.0", filepath.Join(root, "tools", "trivy", "current")); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+	if ready, missing := m.Ready(); ready || len(missing) != 2 {
+		t.Fatalf("Ready with trivy active = (%v, %v), want (false, [trivy-db signature-key])", ready, missing)
+	}
+
+	dbDir := filepath.Join(root, "trivy-cache", "db")
+	if err := os.MkdirAll(dbDir, 0o770); err != nil {
+		t.Fatalf("mkdir trivy-cache/db: %v", err)
+	}
+	metadata := fmt.Sprintf(`{"UpdatedAt":%q}`, time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(metadata), 0o664); err != nil {
+		t.Fatalf("write metadata.json: %v", err)
+	}
+	if ready, missing := m.Ready(); ready || len(missing) != 1 || missing[0] != "signature-key" {
+		t.Fatalf("Ready with trivy and its db = (%v, %v), want (false, [signature-key])", ready, missing)
+	}
+
+	m2 := NewManager(fakeVolume{root: root, settings: store.Settings{SignatureKey: "top-secret"}}, nil, nil)
+	if ready, missing := m2.Ready(); !ready || len(missing) != 0 {
+		t.Fatalf("Ready once everything is in place = (%v, %v), want (true, [])", ready, missing)
+	}
+}
+
 func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now(), false)
 	m, _ := newTestManager(t, srv)
@@ -250,7 +306,7 @@ func TestUpdateTrivyChecksumsBodyOverLimitFailsInstall(t *testing.T) {
 			TagName:     "v" + version,
 			PublishedAt: time.Now().Add(-30 * 24 * time.Hour),
 			Assets: []ghAsset{
-				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName},
+				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName, Size: int64(len(tarball))},
 				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
 			},
 		}

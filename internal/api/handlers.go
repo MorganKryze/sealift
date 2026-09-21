@@ -56,7 +56,7 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrSignatureKeyMissing):
+	case errors.Is(err, jobs.ErrSignatureKeyMissing), errors.Is(err, store.ErrInvalidTarget):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent):
 		return http.StatusConflict
@@ -88,6 +88,18 @@ func manifestProblem(problems []manifestValidationEntry) problemBody {
 	}
 	p.Errors = &details
 	return problemBody{Body: p, StatusCode: http.StatusBadRequest}
+}
+
+// toolsMissingProblem builds the 409 response for an operation that
+// needs trivy, its database or a signature key before it can queue
+// anything: the same list tools.Manager.Ready reports on GET /tools, so
+// the web and the API agree on what "ready" means.
+func toolsMissingProblem(missing []string) problemBody {
+	p := NewProblem(http.StatusConflict, "tools not ready", "trivy, its database or the signature key are not installed yet")
+	p.Type = ptr("tools-missing")
+	m := missing
+	p.Missing = &m
+	return problemBody{Body: p, StatusCode: http.StatusConflict}
 }
 
 // invalidSelectionProblem builds the 400 response for an export request

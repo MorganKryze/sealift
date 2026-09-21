@@ -105,15 +105,34 @@ async function main() {
   // out to git and ssh over that "owner" instead of publishing the file.
   publish(REGISTRY_URL, path.resolve("fixture-out"));
 
+  const manifest = readFileSync("project/package.json");
+
+  // On a fresh volume, before trivy, its database and a signature key
+  // are all in place, creating a project must be refused rather than
+  // queuing an analysis that only fails once it reaches trivy itself.
+  const precheckForm = new FormData();
+  precheckForm.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");
+  const precheckRes = await fetch(`${api}/projects`, { method: "POST", body: precheckForm });
+  if (precheckRes.status !== 409) {
+    throw new Error(`create project before tools are ready -> ${precheckRes.status}, want 409`);
+  }
+  console.log("create project refused before tools are ready, as expected");
+
   // Nothing installs Trivy on a fresh volume before the first analysis
   // needs it; the interface's force-update button is the real path to
-  // reach for one, so this drives that same route.
+  // reach for one, so this drives that same route. The vulnerability
+  // database is a separate install: nothing populates it until an
+  // analysis runs UpdateDB itself, which the readiness gate above would
+  // otherwise never let happen.
   const tools = await json(`${api}/tools/trivy/update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ force: true }),
   });
   console.log("trivy installed:", tools.trivyActive);
+
+  const toolsAfterDB = await json(`${api}/tools/trivy/db/update`, { method: "POST" });
+  console.log("trivy database installed:", toolsAfterDB.trivyDbDate);
 
   // An export refuses to start while signatureKey stays empty, and PUT
   // requires the full settings object.
@@ -126,7 +145,6 @@ async function main() {
   });
 
   const form = new FormData();
-  const manifest = readFileSync("project/package.json");
   form.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");
   const project = await json(`${api}/projects`, { method: "POST", body: form });
   const projectId = project.id;

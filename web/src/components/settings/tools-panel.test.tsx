@@ -18,6 +18,9 @@ const baseTools: ToolsState = {
   trivyLatest: "0.56.0",
   trivyLatestAge: "12h0m0s",
   trivyDbDate: new Date().toISOString(),
+  latestSizeBytes: 83886080,
+  ready: true,
+  missing: [],
 }
 
 function renderPanel() {

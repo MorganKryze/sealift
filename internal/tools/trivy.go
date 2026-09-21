@@ -29,11 +29,12 @@ const trivyRepo = "aquasecurity/trivy"
 
 // TrivyState summarizes the installed and available Trivy versions.
 type TrivyState struct {
-	Active    string        // version behind tools/trivy/current, empty if none
-	Installed []string      // every version present under tools/trivy/, sorted
-	Latest    string        // latest version on GitHub
-	LatestAge time.Duration // time since the latest release was published
-	DBDate    time.Time     // last update of the vulnerability database, zero if unknown
+	Active          string        // version behind tools/trivy/current, empty if none
+	Installed       []string      // every version present under tools/trivy/, sorted
+	Latest          string        // latest version on GitHub
+	LatestAge       time.Duration // time since the latest release was published
+	LatestSizeBytes int64         // size of the release asset for this host, 0 if unknown
+	DBDate          time.Time     // last update of the vulnerability database, zero if unknown
 }
 
 type ghRelease struct {
@@ -45,6 +46,7 @@ type ghRelease struct {
 type ghAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	Size               int64  `json:"size"`
 }
 
 // TrivyState reports the active and installed Trivy versions, the latest
@@ -73,7 +75,31 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 	}
 	state.Latest = strings.TrimPrefix(rel.TagName, "v")
 	state.LatestAge = time.Since(rel.PublishedAt)
+	if assetName, aerr := trivyAssetName(state.Latest, m.hostArch()); aerr == nil {
+		if asset, ok := findAsset(rel.Assets, assetName); ok {
+			state.LatestSizeBytes = asset.Size
+		}
+	}
 	return state, nil
+}
+
+// Ready reports whether an analysis or export can run without sealift
+// installing anything on its own: an active Trivy, a vulnerability
+// database and a signature key, all already on the data volume. It never
+// reaches the network: what an analysis needs is what is already there,
+// not what GitHub currently offers.
+func (m *Manager) Ready() (ready bool, missing []string) {
+	active, err := m.activeTrivy()
+	if err != nil || active == "" {
+		missing = append(missing, "trivy")
+	}
+	if m.trivyDBDate().IsZero() {
+		missing = append(missing, "trivy-db")
+	}
+	if m.vol.Settings().SignatureKey == "" {
+		missing = append(missing, "signature-key")
+	}
+	return len(missing) == 0, missing
 }
 
 // UpdateTrivy installs the latest Trivy release and activates it. It
