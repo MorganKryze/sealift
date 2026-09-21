@@ -603,6 +603,16 @@ components:
           format: date-time
         result:
           $ref: "#/components/schemas/AnalysisResult"
+        trivyVersion:
+          type: string
+          description: Trivy version the analysis used, absent when it did not record one
+        trivyDbDate:
+          type: string
+          format: date-time
+          description: Vulnerability database date the analysis used, absent when it did not record one
+        pnpmVersion:
+          type: string
+          description: pnpm version the analysis used, absent when it did not record one
       required:
         - id
         - projectId

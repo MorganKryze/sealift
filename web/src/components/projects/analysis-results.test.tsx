@@ -87,4 +87,25 @@ describe("AnalysisResults", () => {
 
     expect(screen.getByText(/not measured/i)).toBeInTheDocument()
   })
+
+  it("shows the recorded tool versions under the totals", () => {
+    render(
+      <AnalysisResults
+        analysisId="a-tools"
+        result={makeResult([0, 0, 0, 0, 0])}
+        trivyVersion="0.72.0"
+        trivyDbDate="2026-09-09T00:00:00Z"
+        pnpmVersion="10.34.5"
+        onContinue={() => {}}
+      />,
+    )
+
+    expect(screen.getByText(/^Trivy 0\.72\.0 · DB (?!unknown).+ · pnpm 10\.34\.5$/)).toBeInTheDocument()
+  })
+
+  it("shows unknown for a tool version the analysis did not record", () => {
+    render(<AnalysisResults analysisId="a-no-tools" result={makeResult([0, 0, 0, 0, 0])} onContinue={() => {}} />)
+
+    expect(screen.getByText(/Trivy unknown · DB unknown · pnpm unknown/)).toBeInTheDocument()
+  })
 })

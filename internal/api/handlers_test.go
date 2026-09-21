@@ -1086,6 +1086,46 @@ func TestCancelExportUnknownIDReturns404(t *testing.T) {
 	}
 }
 
+// TestGetAnalysisIncludesToolVersions proves the Trivy version, its
+// database date and the pnpm version status.json recorded reach the API
+// response, on the same fields internal/jobs.statusFile writes them under.
+func TestGetAnalysisIncludesToolVersions(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260918T090000Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	status := `{"state":"done","trivyVersion":"0.72.0","trivyDbDate":"2026-09-09T00:00:00Z","pnpmVersion":"10.34.5"}`
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(status), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+
+	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260918T090000Z", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET analysis: %v", err)
+	}
+	defer resp2.Body.Close()
+	var a Analysis
+	if err := json.NewDecoder(resp2.Body).Decode(&a); err != nil {
+		t.Fatalf("decode analysis: %v", err)
+	}
+	if a.TrivyVersion == nil || *a.TrivyVersion != "0.72.0" {
+		t.Errorf("TrivyVersion = %v, want 0.72.0", a.TrivyVersion)
+	}
+	if a.PnpmVersion == nil || *a.PnpmVersion != "10.34.5" {
+		t.Errorf("PnpmVersion = %v, want 10.34.5", a.PnpmVersion)
+	}
+	want := time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC)
+	if a.TrivyDbDate == nil || !a.TrivyDbDate.Equal(want) {
+		t.Errorf("TrivyDbDate = %v, want %v", a.TrivyDbDate, want)
+	}
+}
+
 // waitForTerminalState polls Service.LiveState until id is no longer
 // tracked under projectID and kind, meaning Service's finalizer goroutine
 // has already reacted to its "end" event and stopped touching its

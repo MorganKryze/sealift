@@ -156,6 +156,15 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	if result, ok := decodeAnalysisResult(info.Result); ok {
 		a.Result = &result
 	}
+	if info.TrivyVersion != "" {
+		a.TrivyVersion = &info.TrivyVersion
+	}
+	if !info.TrivyDBDate.IsZero() {
+		a.TrivyDbDate = &info.TrivyDBDate
+	}
+	if info.PnpmVersion != "" {
+		a.PnpmVersion = &info.PnpmVersion
+	}
 	return a
 }
 

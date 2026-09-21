@@ -396,6 +396,15 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             result?: components["schemas"]["AnalysisResult"];
+            /** @description Trivy version the analysis used, absent when it did not record one */
+            trivyVersion?: string;
+            /**
+             * Format: date-time
+             * @description Vulnerability database date the analysis used, absent when it did not record one
+             */
+            trivyDbDate?: string;
+            /** @description pnpm version the analysis used, absent when it did not record one */
+            pnpmVersion?: string;
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];

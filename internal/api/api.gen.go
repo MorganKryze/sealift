@@ -80,13 +80,22 @@ func (e State) Valid() bool {
 type Analysis struct {
 	CreatedAt time.Time `json:"createdAt"`
 	Id        string    `json:"id"`
-	ProjectId string    `json:"projectId"`
+
+	// PnpmVersion pnpm version the analysis used, absent when it did not record one
+	PnpmVersion *string `json:"pnpmVersion,omitempty"`
+	ProjectId   string  `json:"projectId"`
 
 	// Result What an analysis writes to candidates.json and ranking.json
 	Result *AnalysisResult `json:"result,omitempty"`
 
 	// State State of a job and of the directory it writes
 	State State `json:"state"`
+
+	// TrivyDbDate Vulnerability database date the analysis used, absent when it did not record one
+	TrivyDbDate *time.Time `json:"trivyDbDate,omitempty"`
+
+	// TrivyVersion Trivy version the analysis used, absent when it did not record one
+	TrivyVersion *string `json:"trivyVersion,omitempty"`
 }
 
 // AnalysisResult What an analysis writes to candidates.json and ranking.json

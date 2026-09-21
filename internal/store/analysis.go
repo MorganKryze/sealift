@@ -20,17 +20,25 @@ const analysisIDLayout = "20060102T150405Z"
 // its state, and the result an API response embeds once ranking.json
 // exists. Result is nil before the job ranks anything.
 type AnalysisInfo struct {
-	ID        string
-	ProjectID string
-	State     State
-	CreatedAt time.Time
-	Result    json.RawMessage
+	ID           string
+	ProjectID    string
+	State        State
+	CreatedAt    time.Time
+	Result       json.RawMessage
+	TrivyVersion string
+	TrivyDBDate  time.Time
+	PnpmVersion  string
 }
 
 // analysisStatus is the subset of status.json this package reads back.
-// internal/jobs writes the full shape; only the state matters here.
+// internal/jobs writes the full shape; a field left at its zero value here
+// means the job never recorded it (an analysis that failed or was
+// interrupted before preparing its tools).
 type analysisStatus struct {
-	State State `json:"state"`
+	State        State     `json:"state"`
+	TrivyVersion string    `json:"trivyVersion"`
+	TrivyDBDate  time.Time `json:"trivyDbDate"`
+	PnpmVersion  string    `json:"pnpmVersion"`
 }
 
 // Analyses lists every committed analysis of a project, newest first. A
@@ -114,6 +122,9 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 		}
 	} else {
 		info.State = status.State
+		info.TrivyVersion = status.TrivyVersion
+		info.TrivyDBDate = status.TrivyDBDate
+		info.PnpmVersion = status.PnpmVersion
 	}
 
 	if raw, err := os.ReadFile(filepath.Join(dir, "ranking.json")); err == nil {

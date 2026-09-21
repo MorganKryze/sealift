@@ -9,7 +9,15 @@ import { cn, humanizeSignal } from "@/lib/utils"
 interface AnalysisResultsProps {
   analysisId: string
   result: AnalysisResult
+  trivyVersion?: string
+  trivyDbDate?: string
+  pnpmVersion?: string
   onContinue: () => void
+}
+
+function formatToolDate(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleDateString()
 }
 
 function bestCandidateOf(dependency: DependencyResult): Candidate | undefined {
@@ -20,7 +28,14 @@ function isBlocked(candidate: Candidate): boolean {
   return candidate.signals.some((signal) => signal.blocking)
 }
 
-export function AnalysisResults({ analysisId, result, onContinue }: AnalysisResultsProps) {
+export function AnalysisResults({
+  analysisId,
+  result,
+  trivyVersion,
+  trivyDbDate,
+  pnpmVersion,
+  onContinue,
+}: AnalysisResultsProps) {
   const { dependencies, before, after, target } = result
   const [selectedIndex, setSelectedIndex] = useState(0)
   const selection = useSelection(analysisId)
@@ -72,6 +87,10 @@ export function AnalysisResults({ analysisId, result, onContinue }: AnalysisResu
         </div>
         <p className="text-xs text-muted">
           Target: {target.os}/{target.cpu} · {target.libc} · Node {target.node} · pnpm {target.pnpmVer}
+        </p>
+        <p className="text-xs text-muted">
+          Trivy {trivyVersion ?? "unknown"} · DB {trivyDbDate ? formatToolDate(trivyDbDate) : "unknown"} · pnpm{" "}
+          {pnpmVersion ?? "unknown"}
         </p>
       </div>
 

@@ -107,7 +107,16 @@ function AnalysisSummary({ projectId, analysis }: { projectId: string; analysis?
   }
 
   if (analysis.state === "done" && analysis.result) {
-    return <AnalysisResults analysisId={analysis.id} result={analysis.result} onContinue={onContinue} />
+    return (
+      <AnalysisResults
+        analysisId={analysis.id}
+        result={analysis.result}
+        trivyVersion={analysis.trivyVersion}
+        trivyDbDate={analysis.trivyDbDate}
+        pnpmVersion={analysis.pnpmVersion}
+        onContinue={onContinue}
+      />
+    )
   }
 
   return <p className="p-8 text-muted">Analysis {analysis.state}.</p>
