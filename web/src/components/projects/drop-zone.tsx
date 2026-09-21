@@ -72,6 +72,7 @@ export function DropZone({ onFile, onInvalidFile, compact = false }: DropZonePro
         ref={inputRef}
         id={inputId}
         type="file"
+        tabIndex={-1}
         accept="application/json,.json"
         className="sr-only"
         onChange={(event) => {
