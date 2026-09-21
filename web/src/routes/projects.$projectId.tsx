@@ -3,6 +3,8 @@ import { createFileRoute } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { getProject, type Analysis, type Project } from "@/api/projects"
+import { AnalysisFailed } from "@/components/projects/analysis-failed"
+import { AnalysisRunning } from "@/components/projects/analysis-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { ProjectHistory } from "@/components/projects/project-history"
 import { Button } from "@/components/ui/button"
@@ -79,7 +81,7 @@ function ProjectPage() {
       </div>
       <div className="flex flex-1 flex-col">
         {tab === "results" ? (
-          <AnalysisSummary analysis={lastAnalysis} />
+          <AnalysisSummary projectId={projectId} analysis={lastAnalysis} />
         ) : (
           <ProjectHistory analyses={project.analyses ?? []} exports={project.exports ?? []} />
         )}
@@ -88,9 +90,17 @@ function ProjectPage() {
   )
 }
 
-function AnalysisSummary({ analysis }: { analysis?: Analysis }) {
+function AnalysisSummary({ projectId, analysis }: { projectId: string; analysis?: Analysis }) {
   if (!analysis) {
     return <p className="p-8 text-muted">No analysis yet.</p>
+  }
+
+  if (analysis.state === "queued" || analysis.state === "running") {
+    return <AnalysisRunning projectId={projectId} analysisId={analysis.id} />
+  }
+
+  if (analysis.state === "failed" || analysis.state === "cancelled" || analysis.state === "interrupted") {
+    return <AnalysisFailed projectId={projectId} analysis={analysis} />
   }
 
   if (analysis.state === "done" && analysis.result) {

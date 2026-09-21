@@ -15,6 +15,14 @@ export function getProject(projectId: string): Promise<Project> {
   return apiFetch<Project>(`/projects/${projectId}`)
 }
 
+export function queueAnalysis(projectId: string): Promise<Analysis> {
+  return apiFetch<Analysis>(`/projects/${projectId}/analyses`, { method: "POST" })
+}
+
+export function cancelAnalysis(projectId: string, analysisId: string): Promise<Analysis> {
+  return apiFetch<Analysis>(`/projects/${projectId}/analyses/${analysisId}/cancel`, { method: "POST" })
+}
+
 /**
  * Thrown by createProject. Carries the parsed Problem Details body so the
  * caller can tell a validation failure (400, with an errors list) from any

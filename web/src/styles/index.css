@@ -25,3 +25,19 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  .animate-mark-lift {
+    animation: mark-lift 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes mark-lift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
