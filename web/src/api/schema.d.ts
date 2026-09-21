@@ -438,6 +438,16 @@ export interface components {
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];
+        /** @description One vulnerability behind a Vector count */
+        Cve: {
+            /** @example CVE-2024-29041 */
+            id: string;
+            /**
+             * @description As Trivy prints it, upper case
+             * @example HIGH
+             */
+            severity: string;
+        };
         /** @description One reason a candidate is blocked or worth a second look */
         Signal: {
             name: string;
@@ -448,6 +458,8 @@ export interface components {
         Candidate: {
             version: string;
             vector: components["schemas"]["Vector"];
+            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            cves: components["schemas"]["Cve"][];
             signals: components["schemas"]["Signal"][];
             /** @description Whether this candidate was resolved and scanned before the rest */
             key: boolean;
@@ -465,6 +477,8 @@ export interface components {
             /** @description Empty when no candidate improves on the current version */
             best?: string;
             vector: components["schemas"]["Vector"];
+            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
         };
         /** @description What an analysis writes to candidates.json and ranking.json */

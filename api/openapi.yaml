@@ -673,6 +673,20 @@ components:
         type: integer
       minItems: 5
       maxItems: 5
+    Cve:
+      type: object
+      description: One vulnerability behind a Vector count
+      properties:
+        id:
+          type: string
+          example: CVE-2024-29041
+        severity:
+          type: string
+          description: As Trivy prints it, upper case
+          example: HIGH
+      required:
+        - id
+        - severity
     Signal:
       type: object
       description: One reason a candidate is blocked or worth a second look
@@ -695,6 +709,11 @@ components:
           type: string
         vector:
           $ref: "#/components/schemas/Vector"
+        cves:
+          type: array
+          description: The vulnerabilities behind vector, sorted by severity then id
+          items:
+            $ref: "#/components/schemas/Cve"
         signals:
           type: array
           items:
@@ -711,6 +730,7 @@ components:
       required:
         - version
         - vector
+        - cves
         - signals
         - key
         - resolved
@@ -727,6 +747,11 @@ components:
           description: Empty when no candidate improves on the current version
         vector:
           $ref: "#/components/schemas/Vector"
+        cves:
+          type: array
+          description: The vulnerabilities behind vector, sorted by severity then id
+          items:
+            $ref: "#/components/schemas/Cve"
         candidates:
           type: array
           items:
@@ -735,6 +760,7 @@ components:
         - name
         - current
         - vector
+        - cves
         - candidates
     AnalysisResult:
       type: object

@@ -118,6 +118,9 @@ type AnalysisResult struct {
 
 // Candidate One newer version of a dependency, ranked against the current one
 type Candidate struct {
+	// Cves The vulnerabilities behind vector, sorted by severity then id
+	Cves []Cve `json:"cves"`
+
 	// Key Whether this candidate was resolved and scanned before the rest
 	Key bool `json:"key"`
 
@@ -141,13 +144,24 @@ type CandidateData struct {
 	Version string `json:"version"`
 }
 
+// Cve One vulnerability behind a Vector count
+type Cve struct {
+	Id string `json:"id"`
+
+	// Severity As Trivy prints it, upper case
+	Severity string `json:"severity"`
+}
+
 // DependencyResult One direct dependency's current CVEs and its ranked candidates
 type DependencyResult struct {
 	// Best Empty when no candidate improves on the current version
 	Best       *string     `json:"best,omitempty"`
 	Candidates []Candidate `json:"candidates"`
 	Current    string      `json:"current"`
-	Name       string      `json:"name"`
+
+	// Cves The vulnerabilities behind vector, sorted by severity then id
+	Cves []Cve  `json:"cves"`
+	Name string `json:"name"`
 
 	// Vector CVE counts by severity, critical to unknown
 	Vector Vector `json:"vector"`

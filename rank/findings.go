@@ -37,9 +37,29 @@ func ParseSeverity(s string) Severity {
 	return Unknown
 }
 
-// String returns the lowercase severity name.
+// severityNames are Severity's lowercase names, indexed by value.
+var severityNames = [...]string{"critical", "high", "medium", "low", "unknown"}
+
+// String returns the lowercase severity name, or "invalid" for a value
+// ParseSeverity never produces: a Severity built by any other means, such
+// as decoding a corrupt record, must not panic a caller that only wanted
+// to print it.
 func (s Severity) String() string {
-	return [...]string{"critical", "high", "medium", "low", "unknown"}[s]
+	if s < Critical || s > Unknown {
+		return "invalid"
+	}
+	return severityNames[s]
+}
+
+// MarshalText encodes s the way Trivy prints it: upper case ASCII
+// ("CRITICAL", "HIGH", ...), so a Severity field marshals straight into
+// the contract's cves[].severity without a separate conversion at every
+// call site.
+func (s Severity) MarshalText() ([]byte, error) {
+	if s < Critical || s > Unknown {
+		return nil, fmt.Errorf("rank: severity %d out of range", int(s))
+	}
+	return []byte(strings.ToUpper(severityNames[s])), nil
 }
 
 // Finding is one vulnerability reported for a package version.

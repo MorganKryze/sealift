@@ -6,11 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/rank"
 )
+
+// cvesOf converts a vulnerability set (as rank.Index.Set returns it, and
+// as VectorOf counts it) into the sorted list the contract carries:
+// severity first, critical to unknown, then id, so the result never
+// depends on map iteration order.
+func cvesOf(set map[string]rank.Finding) []CVE {
+	findings := make([]rank.Finding, 0, len(set))
+	for _, f := range set {
+		findings = append(findings, f)
+	}
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Severity != findings[j].Severity {
+			return findings[i].Severity < findings[j].Severity
+		}
+		return findings[i].ID < findings[j].ID
+	})
+	cves := make([]CVE, len(findings))
+	for i, f := range findings {
+		cves[i] = CVE{ID: f.ID, Severity: severityText(f.Severity)}
+	}
+	return cves
+}
+
+// severityText renders sev the way Trivy prints it (upper case ASCII)
+// through rank.Severity.MarshalText, falling back to String's own
+// out-of-range guard rather than propagating an error a vulnerability
+// count has no use for.
+func severityText(sev rank.Severity) string {
+	text, err := sev.MarshalText()
+	if err != nil {
+		return sev.String()
+	}
+	return string(text)
+}
 
 // stepRank is step 8: it builds each dependency's ranked result from its
 // resolved candidates and writes candidates.json. A failure writing that
@@ -29,7 +64,7 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 			// Candidates starts as an empty slice, not nil: the contract
 			// marks it a required array, and a dependency with nothing
 			// newer to offer must still serialise it as [].
-			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version, Candidates: []Candidate{}}
+			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version, CVEs: []CVE{}, Candidates: []Candidate{}}
 			if d.warning != "" {
 				r.result.Warnings = append(r.result.Warnings, d.dep.Name+": "+d.warning)
 				r.result.Dependencies = append(r.result.Dependencies, dr)
@@ -78,7 +113,9 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		r.result.Warnings = append(r.result.Warnings, fmt.Sprintf(
 			"%s: the current version %s does not resolve: %v", d.dep.Name, d.dep.Version, current.err))
 	} else {
-		dr.Vector = Vector(rank.VectorOf(combinedIndex.Set(keysOf(current.pkgs))))
+		set := combinedIndex.Set(keysOf(current.pkgs))
+		dr.Vector = Vector(rank.VectorOf(set))
+		dr.CVEs = cvesOf(set)
 	}
 	currentFacts.Resolves = current.err == nil
 
@@ -104,8 +141,11 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		}
 
 		var vec Vector
+		cves := []CVE{}
 		if o.err == nil {
-			vec = Vector(rank.VectorOf(combinedIndex.Set(keysOf(o.pkgs))))
+			set := combinedIndex.Set(keysOf(o.pkgs))
+			vec = Vector(rank.VectorOf(set))
+			cves = cvesOf(set)
 		}
 		published := ""
 		if t, ok := d.packument.Published(o.task.version); ok {
@@ -114,6 +154,7 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		dr.Candidates = append(dr.Candidates, Candidate{
 			Version:   o.task.version,
 			Vector:    vec,
+			CVEs:      cves,
 			Signals:   toSignals(hits),
 			Key:       o.task.key,
 			Resolved:  o.err == nil,

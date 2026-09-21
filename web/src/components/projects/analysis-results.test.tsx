@@ -18,10 +18,12 @@ function makeResult(after: number[] | null): AnalysisResult {
         current: "1.0.0",
         best: "1.3.0",
         vector: [1, 0, 0, 0, 0],
+        cves: [{ id: "CVE-2020-0001", severity: "CRITICAL" }],
         candidates: [
           {
             version: "1.3.0",
             vector: [0, 0, 0, 0, 0],
+            cves: [],
             signals: [{ name: "patch", evidence: "patch release", blocking: false }],
             key: true,
             resolved: true,
@@ -29,6 +31,7 @@ function makeResult(after: number[] | null): AnalysisResult {
           {
             version: "2.0.0",
             vector: [0, 0, 0, 0, 0],
+            cves: [],
             signals: [{ name: "breaking", evidence: "major version bump, likely breaking", blocking: true }],
             key: false,
             resolved: true,
@@ -39,10 +42,12 @@ function makeResult(after: number[] | null): AnalysisResult {
         name: "chalk",
         current: "2.0.0",
         vector: [0, 1, 0, 0, 0],
+        cves: [],
         candidates: [
           {
             version: "3.0.0",
             vector: [0, 0, 0, 0, 0],
+            cves: [],
             signals: [{ name: "breaking", evidence: "major bump, drops CommonJS", blocking: true }],
             key: false,
             resolved: true,

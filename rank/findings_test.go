@@ -93,3 +93,24 @@ func TestParseSeverity(t *testing.T) {
 		}
 	}
 }
+
+func TestSeverityStringDoesNotPanicOutOfRange(t *testing.T) {
+	if got := Severity(99).String(); got != "invalid" {
+		t.Errorf("String() of an out-of-range severity = %q, want %q", got, "invalid")
+	}
+}
+
+func TestSeverityMarshalText(t *testing.T) {
+	for sev, want := range map[Severity]string{Critical: "CRITICAL", High: "HIGH", Medium: "MEDIUM", Low: "LOW", Unknown: "UNKNOWN"} {
+		got, err := sev.MarshalText()
+		if err != nil {
+			t.Fatalf("MarshalText(%v): %v", sev, err)
+		}
+		if string(got) != want {
+			t.Errorf("MarshalText(%v) = %q, want %q", sev, got, want)
+		}
+	}
+	if _, err := Severity(99).MarshalText(); err == nil {
+		t.Error("MarshalText of an out-of-range severity: want an error, got nil")
+	}
+}
