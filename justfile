@@ -24,9 +24,10 @@ test:
 bench:
     go test -run '^$' -bench . -benchmem ./...
 
-# Regenerate the generated server code from api/openapi.yaml.
+# Regenerate the Go server and the web client from api/openapi.yaml.
 generate:
     go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config api/oapi-codegen.yaml api/openapi.yaml
+    pnpm -C web run generate
 
 # Run tests behind the integration tag: skip cleanly where pnpm or Trivy is absent.
 integration:
@@ -44,3 +45,17 @@ image-check:
 e2e:
     docker compose -f test/e2e/docker-compose.yml up --abort-on-container-exit --exit-code-from test
     docker compose -f test/e2e/docker-compose.yml down --volumes
+
+# Run the web app's dev server.
+web-dev:
+    pnpm -C web run dev
+
+# Run what CI runs on the web app: typecheck, lint, test.
+web-check:
+    pnpm -C web run typecheck
+    pnpm -C web run lint
+    pnpm -C web run test
+
+# Build the web app for production.
+web-build:
+    pnpm -C web run build
