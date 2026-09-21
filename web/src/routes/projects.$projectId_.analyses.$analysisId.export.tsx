@@ -1,8 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
-import { getProject, type Project } from "@/api/projects"
+import { getProject, type Export, type Project } from "@/api/projects"
+import { ExportDone } from "@/components/projects/export-done"
 import { ExportLaunch } from "@/components/projects/export-launch"
+import { ExportRunning } from "@/components/projects/export-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { Button } from "@/components/ui/button"
 import { latestByDate } from "@/lib/utils"
@@ -57,14 +59,47 @@ function ExportPage() {
       {!analysis || analysis.state !== "done" ? (
         <p className="p-8 text-muted">This analysis is not ready for export.</p>
       ) : (
-        <ExportLaunch
+        <ExportSummary
           projectId={projectId}
           analysisId={analysisId}
           analysisCreatedAt={analysis.createdAt}
-          previousState={relatedExport?.state}
-          onQueued={onExportChanged}
+          relatedExport={relatedExport}
+          onChange={onExportChanged}
         />
       )}
     </div>
   )
+}
+
+interface ExportSummaryProps {
+  projectId: string
+  analysisId: string
+  analysisCreatedAt: string
+  relatedExport?: Export
+  onChange: () => void
+}
+
+function ExportSummary({ projectId, analysisId, analysisCreatedAt, relatedExport, onChange }: ExportSummaryProps) {
+  if (
+    !relatedExport ||
+    relatedExport.state === "failed" ||
+    relatedExport.state === "cancelled" ||
+    relatedExport.state === "interrupted"
+  ) {
+    return (
+      <ExportLaunch
+        projectId={projectId}
+        analysisId={analysisId}
+        analysisCreatedAt={analysisCreatedAt}
+        previousState={relatedExport?.state}
+        onQueued={onChange}
+      />
+    )
+  }
+
+  if (relatedExport.state === "queued" || relatedExport.state === "running") {
+    return <ExportRunning exportId={relatedExport.id} onEnd={onChange} />
+  }
+
+  return <ExportDone projectId={projectId} exportId={relatedExport.id} files={relatedExport.files ?? []} />
 }
