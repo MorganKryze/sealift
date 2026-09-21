@@ -32,7 +32,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Handlers) {
 	q := jobs.NewQueue(nil)
 	t.Cleanup(q.Close)
 	h := newTestHandlers(t, q)
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 	return srv, h
 }
@@ -436,7 +436,7 @@ func TestUpdateTrivyRefusesARecentReleaseAnswers409(t *testing.T) {
 	defer q.Close()
 	h := newTestHandlers(t, q)
 	h.Tools.GitHubAPI = ghSrv.URL
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/api/tools/trivy/update", "application/json", bytes.NewReader([]byte("{}")))
@@ -525,7 +525,7 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
 	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
 	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
@@ -605,7 +605,7 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 	q := jobs.NewQueue(nil)
 	defer q.Close()
 	h := newTestHandlers(t, q)
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
 	var project Project
@@ -914,7 +914,7 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
 	h := newTestHandlers(t, q)
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
 	// Created directly through the store, not through POST /projects: that
@@ -998,7 +998,7 @@ func TestCancelExportLiveExportSucceeds(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
 	h := newTestHandlers(t, q)
-	srv := httptest.NewServer(Routes(h))
+	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
 	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))

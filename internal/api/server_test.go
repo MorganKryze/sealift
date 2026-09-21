@@ -75,7 +75,7 @@ func TestRoutesHealth(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
 	rec := httptest.NewRecorder()
-	Routes(newTestHandlers(t, q)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	Routes(newTestHandlers(t, q), testStatic()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -87,7 +87,7 @@ func TestRoutesHealth(t *testing.T) {
 func TestRoutesEventStream(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
-	srv := httptest.NewServer(Routes(newTestHandlers(t, q)))
+	srv := httptest.NewServer(Routes(newTestHandlers(t, q), testStatic()))
 	defer srv.Close()
 
 	type result struct {

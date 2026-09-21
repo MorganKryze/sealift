@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/web"
 )
 
 func main() {
@@ -93,9 +95,14 @@ func run(addr, root string, log *slog.Logger) error {
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	handlers := api.NewHandlers(st, queue, service, toolsManager, trivyRunner)
 
+	static, err := fs.Sub(web.Dist, "dist")
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.Routes(handlers),
+		Handler:           api.Routes(handlers, static),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the event stream stays open for a whole job.
 	}
