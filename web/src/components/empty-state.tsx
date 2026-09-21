@@ -1,12 +1,22 @@
-import mark from "@/assets/brand/mark.svg"
+import type { ReactNode } from "react"
 
-export function EmptyState() {
+import { Mark } from "@/components/brand/Mark"
+import { DropZone } from "@/components/projects/drop-zone"
+
+interface EmptyStateProps {
+  onFile?: (file: File) => void
+  onInvalidFile?: (message: string) => void
+  children?: ReactNode
+}
+
+export function EmptyState({ onFile, onInvalidFile, children }: EmptyStateProps) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-      <img src={mark} alt="" className="size-10" />
+      <Mark size={96} />
       <h1 className="text-xl font-semibold text-ink">Nothing in the hold yet</h1>
       <p className="max-w-sm text-muted">Drop a package.json to prepare its first shipment.</p>
-      <div className="h-40 w-full max-w-md rounded-lg border-2 border-dashed border-line" />
+      {children}
+      <DropZone onFile={onFile ?? (() => {})} onInvalidFile={onInvalidFile ?? (() => {})} />
     </div>
   )
 }
