@@ -39,6 +39,20 @@ func TestRoutesSPAFallback(t *testing.T) {
 	}
 }
 
+func TestRoutesSPAMissingAssetIs404(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := Routes(newTestHandlers(t, q), testStatic())
+
+	for _, p := range []string{"/assets/missing.js", "/assets/app.css", "/robots.txt"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", p, rec.Code)
+		}
+	}
+}
+
 func TestRoutesAPINeverShadowed(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()

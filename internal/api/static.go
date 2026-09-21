@@ -10,8 +10,12 @@ import (
 )
 
 // SPA serves the frontend build from fsys, the "dist" directory stripped of
-// its own name. A path that does not name a file in fsys falls back to
-// index.html, so a client-side route survives a reload. The fallback reads
+// its own name. An extensionless path outside assets/ that does not name a
+// file in fsys falls back to index.html, so a client-side route survives a
+// reload. Anything under assets/, or any other path that looks like it
+// names a file, answers 404 instead: silently handing back the HTML shell
+// for a missing script or a stale asset reference would hide the break
+// behind a response that looks like it worked. The fallback reads
 // index.html directly instead of routing the rewritten path back through
 // http.FileServer, which special-cases that name and would 301-redirect the
 // deep link away to "/".
@@ -24,6 +28,10 @@ func SPA(fsys fs.FS) http.Handler {
 		}
 		if info, err := fs.Stat(fsys, name); err == nil && !info.IsDir() {
 			files.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(name, "assets/") || path.Ext(name) != "" {
+			http.NotFound(w, r)
 			return
 		}
 		serveIndex(w, r, fsys)
