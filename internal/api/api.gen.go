@@ -228,6 +228,8 @@ type ProblemDetail struct {
 
 // ProgressData Payload of a progress event
 type ProgressData struct {
+	// CacheHits Tarballs served from the tarball cache instead of downloaded, a running count. Only an export sends this; an analysis never does.
+	CacheHits            *int `json:"cacheHits,omitempty"`
 	Done                 int  `json:"done"`
 	EstimatedRemainingMs *int `json:"estimatedRemainingMs,omitempty"`
 	Total                int  `json:"total"`

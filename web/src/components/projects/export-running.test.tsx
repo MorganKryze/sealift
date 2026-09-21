@@ -45,4 +45,18 @@ describe("ExportRunning", () => {
 
     expect(cancelExport).not.toHaveBeenCalled()
   })
+
+  it("shows the cache hit count when present", () => {
+    mockEventsState = { ...initialAnalysisEventsState, progress: { done: 2, total: 4, cacheHits: 2 } }
+    render(<ExportRunning projectId="p1" exportId="e1" onEnd={() => {}} />)
+
+    expect(screen.getByText("2 from cache")).toBeInTheDocument()
+  })
+
+  it("shows nothing about cache hits when absent", () => {
+    mockEventsState = { ...initialAnalysisEventsState, progress: { done: 2, total: 4 } }
+    render(<ExportRunning projectId="p1" exportId="e1" onEnd={() => {}} />)
+
+    expect(screen.queryByText(/from cache/)).not.toBeInTheDocument()
+  })
 })

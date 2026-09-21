@@ -495,6 +495,8 @@ export interface components {
             done: number;
             total: number;
             estimatedRemainingMs?: number;
+            /** @description Tarballs served from the tarball cache instead of downloaded, a running count. Only an export sends this; an analysis never does. */
+            cacheHits?: number;
         };
         /** @description Payload of a candidate event */
         CandidateData: {

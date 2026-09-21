@@ -87,6 +87,10 @@ export function ExportRunning({ projectId, exportId, onEnd }: ExportRunningProps
         </div>
       ) : null}
 
+      {events.progress?.cacheHits !== undefined ? (
+        <p className="text-xs text-muted">{events.progress.cacheHits} from cache</p>
+      ) : null}
+
       <ol className="flex flex-col gap-2">
         {events.steps.map((step) => (
           <li

@@ -834,6 +834,12 @@ components:
           type: integer
         estimatedRemainingMs:
           type: integer
+        cacheHits:
+          type: integer
+          description: >
+            Tarballs served from the tarball cache instead of downloaded, a
+            running count. Only an export sends this; an analysis never
+            does.
       required:
         - done
         - total

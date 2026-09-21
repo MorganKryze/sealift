@@ -521,6 +521,65 @@ func TestExportDownloadSkipsCacheHit(t *testing.T) {
 	}
 }
 
+// TestExportDownloadReportsCacheHits proves the running cache-hit count in
+// each progress event reflects downloadOne's own cache-hit accounting: a
+// second export of the same selection, once every tarball already sits in
+// the cache, reports every package as a hit by the event whose done count
+// reaches the total. Concurrent downloaders race the mutex behind emit, so
+// that event is not necessarily the last one appended; this looks it up by
+// done == total instead of assuming append order.
+func TestExportDownloadReportsCacheHits(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	var mu sync.Mutex
+	var progress []progressData
+	emit := func(e Event) {
+		if e.Kind != "progress" {
+			return
+		}
+		var p progressData
+		if err := json.Unmarshal(e.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		progress = append(progress, p)
+	}
+
+	exportDir2 := filepath.Join(t.TempDir(), "exports", "20260917T101503Z.tmp")
+	exp2 := h.newExport(t, analysisDir, exportDir2, false)
+	if err := exp2.Run(context.Background(), emit); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if len(progress) == 0 {
+		t.Fatal("no progress events emitted for the second export")
+	}
+	var final *progressData
+	for i := range progress {
+		if progress[i].Total > 0 && progress[i].Done == progress[i].Total {
+			final = &progress[i]
+		}
+	}
+	if final == nil {
+		t.Fatal("no progress event reported every package done")
+	}
+	if final.CacheHits == nil {
+		t.Fatal("final progress event has no cacheHits, want the running count")
+	}
+	if *final.CacheHits != final.Total {
+		t.Fatalf("cacheHits = %d, want every package (%d) to be a hit on the re-export", *final.CacheHits, final.Total)
+	}
+}
+
 // --- archive reading helpers ---
 
 func readArchive(t *testing.T, data []byte) map[string]string {

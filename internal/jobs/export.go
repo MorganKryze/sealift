@@ -287,6 +287,7 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 	var mu sync.Mutex
 	var firstErr error
 	var done int32
+	var cacheHits int32
 
 	for i, p := range pkgs {
 		wg.Add(1)
@@ -294,7 +295,7 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 		go func(i int, p npm.LockPackage) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			d, err := e.downloadOne(dctx, p)
+			d, hit, err := e.downloadOne(dctx, p)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -305,7 +306,10 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 				return
 			}
 			results[i] = d
-			emit(progressEvent(int(atomic.AddInt32(&done, 1)), len(pkgs)))
+			if hit {
+				atomic.AddInt32(&cacheHits, 1)
+			}
+			emit(progressEvent(int(atomic.AddInt32(&done, 1)), len(pkgs), int(atomic.LoadInt32(&cacheHits))))
 		}(i, p)
 	}
 	wg.Wait()
@@ -318,11 +322,15 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 	return results, nil
 }
 
-func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (downloadedPackage, error) {
+// downloadOne fetches one package into the tarball cache, reporting
+// whether it was already there: hit is true only for the sha512 shortcut
+// below, never for a package that still made a network request even if
+// its bytes happened to already exist under another name.
+func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downloadedPackage, hit bool, err error) {
 	if key, ok := sha512CacheKey(p.Integrity); ok {
 		cachePath := filepath.Join(e.Store.Root(), "cache", "tarballs", key+".tgz")
 		if st, err := os.Stat(cachePath); err == nil && st.Mode().IsRegular() {
-			return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: key}, nil
+			return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: key}, true, nil
 		}
 	}
 
@@ -330,15 +338,15 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (downloaded
 	sha512Hex, err := e.Registry.DownloadFile(ctx, p.Name, p.Version, p.Integrity, tmpPath)
 	if err != nil {
 		if errors.Is(err, npm.ErrIntegrity) {
-			return downloadedPackage{}, fmt.Errorf("%w: %s@%s: %w", ErrTampered, p.Name, p.Version, err)
+			return downloadedPackage{}, false, fmt.Errorf("%w: %s@%s: %w", ErrTampered, p.Name, p.Version, err)
 		}
-		return downloadedPackage{}, fmt.Errorf("jobs: download %s@%s: %w", p.Name, p.Version, err)
+		return downloadedPackage{}, false, fmt.Errorf("jobs: download %s@%s: %w", p.Name, p.Version, err)
 	}
 	cachePath := filepath.Join(e.Store.Root(), "cache", "tarballs", sha512Hex+".tgz")
 	if err := os.Rename(tmpPath, cachePath); err != nil {
-		return downloadedPackage{}, fmt.Errorf("jobs: cache %s@%s: %w", p.Name, p.Version, err)
+		return downloadedPackage{}, false, fmt.Errorf("jobs: cache %s@%s: %w", p.Name, p.Version, err)
 	}
-	return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: sha512Hex}, nil
+	return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: sha512Hex}, false, nil
 }
 
 // sha512CacheKey returns the tarball cache's hex key when integrity is
@@ -813,7 +821,8 @@ func emitStep(emit func(Event), name string, state store.State, d time.Duration)
 }
 
 // progressEvent builds a "progress" event with analysis.go's progressData
-// shape.
-func progressEvent(done, total int) Event {
-	return Event{Kind: "progress", Data: mustJSON(progressData{Done: done, Total: total})}
+// shape, reporting the running cache-hit count alongside it: only an
+// export's download step calls this.
+func progressEvent(done, total, cacheHits int) Event {
+	return Event{Kind: "progress", Data: mustJSON(progressData{Done: done, Total: total, CacheHits: &cacheHits})}
 }

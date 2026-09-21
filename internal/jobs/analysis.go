@@ -109,10 +109,13 @@ type stepData struct {
 	DurationMs int64       `json:"durationMs"`
 }
 
-// progressData is the payload of a "progress" event.
+// progressData is the payload of a "progress" event. CacheHits is set only
+// by an export's download step; an analysis never sets it, so it stays
+// omitted rather than printed as a stray zero.
 type progressData struct {
-	Done  int `json:"done"`
-	Total int `json:"total"`
+	Done      int  `json:"done"`
+	Total     int  `json:"total"`
+	CacheHits *int `json:"cacheHits,omitempty"`
 }
 
 // candidateData is the payload of a "candidate" event.
