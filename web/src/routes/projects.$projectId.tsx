@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { getProject, type Analysis, type Project } from "@/api/projects"
@@ -9,7 +9,7 @@ import { AnalysisRunning } from "@/components/projects/analysis-running"
 import { ProjectHeader } from "@/components/projects/project-header"
 import { ProjectHistory } from "@/components/projects/project-history"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { cn, latestByDate } from "@/lib/utils"
 
 export const Route = createFileRoute("/projects/$projectId")({
   component: ProjectPage,
@@ -18,13 +18,6 @@ export const Route = createFileRoute("/projects/$projectId")({
 type Tab = "results" | "history"
 
 const TABS: Tab[] = ["results", "history"]
-
-function latestByDate<T extends { createdAt: string }>(items: T[] | undefined): T | undefined {
-  if (!items || items.length === 0) {
-    return undefined
-  }
-  return [...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]
-}
 
 function ProjectPage() {
   const { projectId } = Route.useParams()
@@ -92,8 +85,17 @@ function ProjectPage() {
 }
 
 function AnalysisSummary({ projectId, analysis }: { projectId: string; analysis?: Analysis }) {
+  const navigate = useNavigate()
+
   if (!analysis) {
     return <p className="p-8 text-muted">No analysis yet.</p>
+  }
+
+  function onContinue() {
+    void navigate({
+      to: "/projects/$projectId/analyses/$analysisId/export",
+      params: { projectId, analysisId: analysis!.id },
+    })
   }
 
   if (analysis.state === "queued" || analysis.state === "running") {
@@ -105,7 +107,7 @@ function AnalysisSummary({ projectId, analysis }: { projectId: string; analysis?
   }
 
   if (analysis.state === "done" && analysis.result) {
-    return <AnalysisResults analysisId={analysis.id} result={analysis.result} />
+    return <AnalysisResults analysisId={analysis.id} result={analysis.result} onContinue={onContinue} />
   }
 
   return <p className="p-8 text-muted">Analysis {analysis.state}.</p>

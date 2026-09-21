@@ -2,12 +2,14 @@ import { useEffect, useState, type KeyboardEvent } from "react"
 
 import type { AnalysisResult, Candidate, DependencyResult } from "@/api/projects"
 import { SeverityCounts } from "@/components/severity-counts"
+import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/use-selection"
-import { cn } from "@/lib/utils"
+import { cn, humanizeSignal } from "@/lib/utils"
 
 interface AnalysisResultsProps {
   analysisId: string
   result: AnalysisResult
+  onContinue: () => void
 }
 
 function bestCandidateOf(dependency: DependencyResult): Candidate | undefined {
@@ -18,10 +20,11 @@ function isBlocked(candidate: Candidate): boolean {
   return candidate.signals.some((signal) => signal.blocking)
 }
 
-export function AnalysisResults({ analysisId, result }: AnalysisResultsProps) {
+export function AnalysisResults({ analysisId, result, onContinue }: AnalysisResultsProps) {
   const { dependencies, before, after, target } = result
   const [selectedIndex, setSelectedIndex] = useState(0)
   const selection = useSelection(analysisId)
+  const hasSelection = Object.values(selection.selection).some((versions) => versions.length > 0)
 
   useEffect(() => {
     const defaults: Record<string, string[]> = {}
@@ -63,6 +66,9 @@ export function AnalysisResults({ analysisId, result }: AnalysisResultsProps) {
               <SeverityCounts vector={after} />
             )}
           </div>
+          <Button className="ml-auto" disabled={!hasSelection} onClick={onContinue}>
+            Continue to export
+          </Button>
         </div>
         <p className="text-xs text-muted">
           Target: {target.os}/{target.cpu} · {target.libc} · Node {target.node} · pnpm {target.pnpmVer}
@@ -99,7 +105,10 @@ export function AnalysisResults({ analysisId, result }: AnalysisResultsProps) {
                       →
                     </span>
                     {best ? (
-                      <SeverityCounts vector={best.vector} />
+                      <>
+                        <span className="font-medium text-ink">{best.version}</span>
+                        <SeverityCounts vector={best.vector} />
+                      </>
                     ) : (
                       <span className="text-muted">no candidate</span>
                     )}
@@ -134,6 +143,7 @@ function DependencyDetail({ dependency, selection }: DependencyDetailProps) {
         {dependency.candidates.map((candidate) => {
           const blockingSignals = candidate.signals.filter((signal) => signal.blocking)
           const blocked = blockingSignals.length > 0
+          const primaryReason = blockingSignals[0]
           const checked = selection.isSelected(dependency.name, candidate.version)
           const inputId = `${dependency.name}-${candidate.version}`
 
@@ -152,14 +162,15 @@ function DependencyDetail({ dependency, selection }: DependencyDetailProps) {
                 </label>
                 <SeverityCounts vector={candidate.vector} className="ml-auto" />
               </div>
-              {blocked ? (
-                <p className="mt-2 text-sm text-severity-critical">{blockingSignals[0]?.evidence}</p>
+              {primaryReason ? (
+                <p className="mt-2 text-sm text-severity-critical">{primaryReason.evidence}</p>
               ) : null}
               {candidate.signals.length > 0 ? (
                 <ul className="mt-2 flex flex-col gap-1 text-xs text-muted">
                   {candidate.signals.map((signal) => (
                     <li key={signal.name}>
-                      {signal.name}: {signal.evidence}
+                      {humanizeSignal(signal.name)}
+                      {signal === primaryReason ? null : `: ${signal.evidence}`}
                     </li>
                   ))}
                 </ul>

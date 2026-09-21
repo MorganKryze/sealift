@@ -68,5 +68,5 @@ export function useSelection(analysisId: string) {
     })
   }
 
-  return { isSelected, toggle, seedDefaults }
+  return { isSelected, toggle, seedDefaults, selection: map }
 }

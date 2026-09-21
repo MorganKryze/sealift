@@ -55,14 +55,14 @@ function makeResult(after: number[] | null): AnalysisResult {
 
 describe("AnalysisResults", () => {
   it("preselects the best candidate for the focused dependency", () => {
-    render(<AnalysisResults analysisId="a-preselect" result={makeResult([0, 0, 0, 0, 0])} />)
+    render(<AnalysisResults analysisId="a-preselect" result={makeResult([0, 0, 0, 0, 0])} onContinue={() => {}} />)
 
     expect(screen.getByLabelText("1.3.0")).toBeChecked()
     expect(screen.getByLabelText("2.0.0")).not.toBeChecked()
   })
 
   it("refuses to tick a blocked candidate and explains why", () => {
-    render(<AnalysisResults analysisId="a-blocked" result={makeResult([0, 0, 0, 0, 0])} />)
+    render(<AnalysisResults analysisId="a-blocked" result={makeResult([0, 0, 0, 0, 0])} onContinue={() => {}} />)
 
     const blocked = screen.getByLabelText("2.0.0")
     expect(blocked).toBeDisabled()
@@ -71,7 +71,7 @@ describe("AnalysisResults", () => {
   })
 
   it("moves the focused dependency with the arrow keys", () => {
-    render(<AnalysisResults analysisId="a-arrows" result={makeResult([0, 0, 0, 0, 0])} />)
+    render(<AnalysisResults analysisId="a-arrows" result={makeResult([0, 0, 0, 0, 0])} onContinue={() => {}} />)
 
     expect(screen.getByRole("heading", { name: "left-pad" })).toBeInTheDocument()
 
@@ -83,7 +83,7 @@ describe("AnalysisResults", () => {
   })
 
   it("says the combined check was not measured instead of showing zeros", () => {
-    render(<AnalysisResults analysisId="a-null" result={makeResult(null)} />)
+    render(<AnalysisResults analysisId="a-null" result={makeResult(null)} onContinue={() => {}} />)
 
     expect(screen.getByText(/not measured/i)).toBeInTheDocument()
   })

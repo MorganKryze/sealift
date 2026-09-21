@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
+import { Route as ProjectsProjectIdAnalysesAnalysisIdExportRouteImport } from './routes/projects.$projectId_.analyses.$analysisId.export'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,26 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsProjectIdAnalysesAnalysisIdExportRoute =
+  ProjectsProjectIdAnalysesAnalysisIdExportRouteImport.update({
+    id: '/projects/$projectId_/analyses/$analysisId/export',
+    path: '/projects/$projectId/analyses/$analysisId/export',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects': typeof ProjectsIndexRoute
+  '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +62,30 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects/': typeof ProjectsIndexRoute
+  '/projects/$projectId_/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/settings' | '/projects/$projectId' | '/projects/'
+  fullPaths:
+    | '/'
+    | '/settings'
+    | '/projects/$projectId'
+    | '/projects/'
+    | '/projects/$projectId/analyses/$analysisId/export'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/settings' | '/projects/$projectId' | '/projects'
-  id: '__root__' | '/' | '/settings' | '/projects/$projectId' | '/projects/'
+  to:
+    | '/'
+    | '/settings'
+    | '/projects/$projectId'
+    | '/projects'
+    | '/projects/$projectId/analyses/$analysisId/export'
+  id:
+    | '__root__'
+    | '/'
+    | '/settings'
+    | '/projects/$projectId'
+    | '/projects/'
+    | '/projects/$projectId_/analyses/$analysisId/export'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +93,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
+  ProjectsProjectIdAnalysesAnalysisIdExportRoute: typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +126,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$projectId_/analyses/$analysisId/export': {
+      id: '/projects/$projectId_/analyses/$analysisId/export'
+      path: '/projects/$projectId/analyses/$analysisId/export'
+      fullPath: '/projects/$projectId/analyses/$analysisId/export'
+      preLoaderRoute: typeof ProjectsProjectIdAnalysesAnalysisIdExportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +141,8 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
+  ProjectsProjectIdAnalysesAnalysisIdExportRoute:
+    ProjectsProjectIdAnalysesAnalysisIdExportRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
