@@ -355,7 +355,7 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 // configure the setting exports sign with, not a server failure.
 func TestQueueExportMissingSignatureKeyAnswers400(t *testing.T) {
 	srv, h := newTestServer(t)
-	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
@@ -400,7 +400,7 @@ func TestQueueExportMissingSignatureKeyAnswers400(t *testing.T) {
 // the caller asked, a conflict with the request, not a server failure.
 func TestQueueExportAnalysisNotDoneAnswers409(t *testing.T) {
 	srv, h := newTestServer(t)
-	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
@@ -1477,7 +1477,7 @@ func TestListProjectsFiltersByManifestSha256(t *testing.T) {
 	if resp2.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject second status = %d", resp2.StatusCode)
 	}
-	_, resp3 := createProject(t, srv, `{"name":"other"}`)
+	_, resp3 := createProject(t, srv, `{"name":"other","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp3.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject other status = %d", resp3.StatusCode)
 	}
@@ -1576,7 +1576,7 @@ func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
 
 func TestQueueExportWithNothingToPackAnswers400(t *testing.T) {
 	srv, h := newTestServer(t)
-	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}

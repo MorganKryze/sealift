@@ -81,3 +81,25 @@ func TestParseManifestRejectsInvalidJSON(t *testing.T) {
 		t.Fatal("ParseManifest accepted truncated JSON")
 	}
 }
+
+// An analysis of a manifest with no dependency runs every step on nothing
+// and ends with "sealift picked a version for each dependency".
+func TestValidateRefusesAManifestWithNoDependency(t *testing.T) {
+	m, err := ParseManifest(strings.NewReader(`{"name":"empty","devDependencies":{}}`))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	problems := m.Validate()
+	if len(problems) != 1 || problems[0].Field != "dependencies" || problems[0].Reason != "lists no dependency to update" {
+		t.Fatalf("Validate = %+v, want one problem on dependencies", problems)
+	}
+}
+
+// A JSON array or string is valid JSON but no package.json; the decoder's
+// own message named a Go type.
+func TestParseManifestRejectsJSONThatIsNotAnObject(t *testing.T) {
+	_, err := ParseManifest(strings.NewReader(`["lodash"]`))
+	if err == nil || strings.Contains(err.Error(), "rawManifest") {
+		t.Fatalf("ParseManifest(array) error = %v, want a message without Go types", err)
+	}
+}

@@ -4,6 +4,7 @@ package npm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -62,6 +63,10 @@ type rawManifest struct {
 func ParseManifest(r io.Reader) (Manifest, error) {
 	var raw rawManifest
 	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field == "" {
+			return Manifest{}, errors.New("parse package.json: the file holds JSON, but not an object like a package.json")
+		}
 		return Manifest{}, fmt.Errorf("parse package.json: %w", err)
 	}
 	m := Manifest{Name: raw.Name}
@@ -94,6 +99,9 @@ func (m Manifest) Validate() []Problem {
 	var problems []Problem
 	for _, field := range m.unsupported {
 		problems = append(problems, Problem{Field: field, Reason: "not supported"})
+	}
+	if len(m.Dependencies) == 0 {
+		problems = append(problems, Problem{Field: "dependencies", Reason: "lists no dependency to update"})
 	}
 	for _, d := range m.Dependencies {
 		if reason := specProblem(d.Version); reason != "" {
