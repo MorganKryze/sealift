@@ -646,7 +646,7 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 	analysisID = (*project.Analyses)[0].Id
-	if state, ok := h.Service.LiveState(project.Id, "analysis", analysisID); !ok || state != store.Queued {
+	if state, _, ok := h.Service.LiveState(project.Id, "analysis", analysisID); !ok || state != store.Queued {
 		t.Fatalf("LiveState(%s) = (%v, %v), want it queued behind the blocking job", analysisID, state, ok)
 	}
 
@@ -677,6 +677,86 @@ func TestGetProjectAndListProjectsShowALiveAnalysisBeforeItCommits(t *testing.T)
 	}
 	if len(list) != 1 || list[0].LastAnalysis == nil || list[0].LastAnalysis.Id != analysisID {
 		t.Fatalf("ListProjects = %+v, want LastAnalysis = %q", list, analysisID)
+	}
+}
+
+// TestGetProjectLiveExportCarriesItsAnalysisID proves the fix for finding
+// 1: a queued or running export has no committed directory to read
+// analysisId from, so it must come from Service's own tracking instead of
+// going out empty. An empty analysisId is what let the web UI's
+// exports.filter(e => e.analysisId === analysis.id) drop the live export
+// entirely.
+func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlers(t, q)
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+
+	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	settings := h.Store.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := h.Store.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	const analysisID = "20260917T101502Z"
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", analysisID)
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	// A blocking job holds the queue busy for the whole test, so the export
+	// queued behind it stays live (Service still tracking it) deterministically.
+	release := make(chan struct{})
+	blocking := &testBlockingJob{run: func(_ context.Context, _ func(jobs.Event)) error {
+		<-release
+		return nil
+	}}
+	if _, err := q.Submit(blocking); err != nil {
+		t.Fatalf("Submit(blocking): %v", err)
+	}
+	var exportID string
+	defer func() {
+		close(release)
+		if exportID != "" {
+			waitForTerminalState(t, h, project.ID, "export", exportID)
+		}
+	}()
+
+	exportInfo, err := h.Service.QueueExport(project.ID, analysisID, jobs.ExportRequest{Selection: map[string][]string{}})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	exportID = exportInfo.ID
+
+	getResp, err := http.Get(srv.URL + "/api/projects/" + project.ID)
+	if err != nil {
+		t.Fatalf("GET project: %v", err)
+	}
+	defer getResp.Body.Close()
+	var got Project
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if got.Exports == nil || len(*got.Exports) == 0 {
+		t.Fatalf("GetProject exports = %v, want the live export first", got.Exports)
+	}
+	live := (*got.Exports)[0]
+	if live.Id != exportID {
+		t.Fatalf("live export id = %q, want %q", live.Id, exportID)
+	}
+	if live.AnalysisId != analysisID {
+		t.Fatalf("live export analysisId = %q, want %q (an empty analysisId is what dropped the live export from the web UI's relatedExport filter)", live.AnalysisId, analysisID)
 	}
 }
 
@@ -997,7 +1077,7 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 
 	// The mismatch above must not have touched the export itself: it
 	// stays live and cancellable through its own route.
-	if state, ok := h.Service.LiveState(project.ID, "export", exportInfo.ID); !ok || (state != store.Queued && state != store.Running) {
+	if state, _, ok := h.Service.LiveState(project.ID, "export", exportInfo.ID); !ok || (state != store.Queued && state != store.Running) {
 		t.Fatalf("LiveState(export route) = (%q, %v), want a live queued or running state", state, ok)
 	}
 }
@@ -1223,7 +1303,7 @@ func waitForTerminalState(t *testing.T, h *Handlers, projectID, kind, id string)
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := h.Service.LiveState(projectID, kind, id); !ok {
+		if _, _, ok := h.Service.LiveState(projectID, kind, id); !ok {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)

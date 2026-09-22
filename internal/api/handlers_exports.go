@@ -35,10 +35,10 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 // export has no committed directory yet, so this checks Service's live
 // tracking before falling back to the store.
 func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (GetExportResponseObject, error) {
-	if state, ok := h.Service.LiveState(req.ProjectId, "export", req.ExportId); ok {
+	if state, analysisID, ok := h.Service.LiveState(req.ProjectId, "export", req.ExportId); ok {
 		createdAt, _ := time.Parse(idLayout, req.ExportId)
 		return GetExport200JSONResponse(Export{
-			Id: req.ExportId, ProjectId: req.ProjectId, State: State(state), CreatedAt: createdAt,
+			Id: req.ExportId, ProjectId: req.ProjectId, AnalysisId: analysisID, State: State(state), CreatedAt: createdAt,
 		}), nil
 	}
 	info, err := h.Store.ExportInfo(req.ProjectId, req.ExportId)
@@ -52,11 +52,11 @@ func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (Get
 // longer tracking the id, either the job already ended or it never
 // existed; the store, not Service, has the last word at that point.
 func (h *Handlers) CancelExport(_ context.Context, req CancelExportRequestObject) (CancelExportResponseObject, error) {
-	err := h.Service.Cancel(req.ProjectId, "export", req.ExportId)
+	analysisID, err := h.Service.Cancel(req.ProjectId, "export", req.ExportId)
 	if err == nil {
 		createdAt, _ := time.Parse(idLayout, req.ExportId)
 		return CancelExport200JSONResponse(Export{
-			Id: req.ExportId, ProjectId: req.ProjectId, State: Cancelled, CreatedAt: createdAt,
+			Id: req.ExportId, ProjectId: req.ProjectId, AnalysisId: analysisID, State: Cancelled, CreatedAt: createdAt,
 		}), nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {

@@ -43,11 +43,12 @@ func (e *ErrInvalidSelection) Error() string {
 // Service looks it up by, so a single finalize step removes it from all
 // of them together.
 type trackedJob struct {
-	queueID   string
-	kind      string // "analysis" or "export"
-	storeID   string
-	projectID string
-	pending   *store.Pending
+	queueID    string
+	kind       string // "analysis" or "export"
+	storeID    string
+	projectID  string
+	analysisID string // set for kind "export"; the analysis it was exported from
+	pending    *store.Pending
 }
 
 // jobKey identifies a tracked job the way a route does: its project, its
@@ -145,7 +146,7 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 	// Submit returns races a job that has already finished, and the
 	// finalize hook would find nothing to finalize.
 	if _, err := s.queue.SubmitWith(job, func(queueID string) {
-		s.track(queueID, "analysis", projectID, pending)
+		s.track(queueID, "analysis", projectID, "", pending)
 	}); err != nil {
 		s.untrackPending(projectID, "analysis", pending.ID())
 		_ = pending.Discard()
@@ -210,7 +211,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	// Submit returns races a job that has already finished, and the
 	// finalize hook would find nothing to finalize.
 	if _, err := s.queue.SubmitWith(job, func(queueID string) {
-		s.track(queueID, "export", projectID, pending)
+		s.track(queueID, "export", projectID, analysisID, pending)
 	}); err != nil {
 		s.untrackPending(projectID, "export", pending.ID())
 		_ = pending.Discard()
@@ -230,15 +231,19 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 // tracking it, and equally when id is tracked but under a different
 // project or kind: the store, not Service, holds the truth once a job
 // has ended, and a route must never cancel a job that belongs to another
-// kind just because the two share a directory id.
-func (s *Service) Cancel(projectID, kind, id string) error {
+// kind just because the two share a directory id. analysisID is set only
+// for kind "export".
+func (s *Service) Cancel(projectID, kind, id string) (analysisID string, err error) {
 	s.mu.Lock()
 	tj, ok := s.byJobKey[jobKey{projectID: projectID, kind: kind, storeID: id}]
 	s.mu.Unlock()
 	if !ok {
-		return store.ErrNotFound
+		return "", store.ErrNotFound
 	}
-	return s.queue.Cancel(tj.queueID)
+	if err := s.queue.Cancel(tj.queueID); err != nil {
+		return "", err
+	}
+	return tj.analysisID, nil
 }
 
 // LiveState reports the state of the analysis or export named id under
@@ -246,39 +251,39 @@ func (s *Service) Cancel(projectID, kind, id string) error {
 // queue's current job is it, queued otherwise. ok is false once the job
 // has ended, at which point the store holds whatever became of its
 // directory, and equally when id is tracked but under a different
-// project or kind.
-func (s *Service) LiveState(projectID, kind, id string) (state store.State, ok bool) {
+// project or kind. analysisID is set only for kind "export".
+func (s *Service) LiveState(projectID, kind, id string) (state store.State, analysisID string, ok bool) {
 	s.mu.Lock()
 	tj, tracked := s.byJobKey[jobKey{projectID: projectID, kind: kind, storeID: id}]
 	s.mu.Unlock()
 	if !tracked {
-		return "", false
+		return "", "", false
 	}
 	if curID, _, curOK := s.queue.Current(); curOK && curID == tj.queueID {
-		return store.Running, true
+		return store.Running, tj.analysisID, true
 	}
-	return store.Queued, true
+	return store.Queued, tj.analysisID, true
 }
 
 // LiveForProject reports the one analysis or export Service is still
 // tracking for projectID, if any: its id, whether it is an "analysis" or
-// an "export", and its live state. A project can in principle have more
-// than one job queued behind each other; this reports only the most
-// recently queued one, which is enough for a project page to show that
-// something is happening without a second index keyed by project and
-// time.
-func (s *Service) LiveForProject(projectID string) (id, kind string, state store.State, ok bool) {
+// an "export", its live state, and, for an export, the analysis it was
+// exported from. A project can in principle have more than one job
+// queued behind each other; this reports only the most recently queued
+// one, which is enough for a project page to show that something is
+// happening without a second index keyed by project and time.
+func (s *Service) LiveForProject(projectID string) (id, kind string, state store.State, analysisID string, ok bool) {
 	s.mu.Lock()
 	tj, tracked := s.byProjectID[projectID]
 	s.mu.Unlock()
 	if !tracked {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	state, ok = s.LiveState(tj.projectID, tj.kind, tj.storeID)
+	state, analysisID, ok = s.LiveState(tj.projectID, tj.kind, tj.storeID)
 	if !ok {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
-	return tj.storeID, tj.kind, state, true
+	return tj.storeID, tj.kind, state, analysisID, true
 }
 
 // Subscribe wraps the queue's event stream, filling in each event's store
@@ -329,9 +334,9 @@ func (s *Service) Subscribe() (<-chan Event, func()) {
 }
 
 // track records a just-submitted job under every index the rest of
-// Service needs it by.
-func (s *Service) track(queueID, kind, projectID string, pending *store.Pending) {
-	tj := &trackedJob{queueID: queueID, kind: kind, storeID: pending.ID(), projectID: projectID, pending: pending}
+// Service needs it by. analysisID is set only for kind "export".
+func (s *Service) track(queueID, kind, projectID, analysisID string, pending *store.Pending) {
+	tj := &trackedJob{queueID: queueID, kind: kind, storeID: pending.ID(), projectID: projectID, analysisID: analysisID, pending: pending}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byQueueID[queueID] = tj

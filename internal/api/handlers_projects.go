@@ -20,7 +20,7 @@ import (
 // has no committed directory yet, so neither ListProjects nor GetProject
 // can see it by reading the store alone.
 func (h *Handlers) liveAnalysisOrExport(projectID string) (analysis *Analysis, export *Export) {
-	id, kind, state, ok := h.Service.LiveForProject(projectID)
+	id, kind, state, analysisID, ok := h.Service.LiveForProject(projectID)
 	if !ok {
 		return nil, nil
 	}
@@ -30,7 +30,7 @@ func (h *Handlers) liveAnalysisOrExport(projectID string) (analysis *Analysis, e
 		a := Analysis{Id: id, ProjectId: projectID, State: State(state), CreatedAt: createdAt}
 		return &a, nil
 	case "export":
-		e := Export{Id: id, ProjectId: projectID, State: State(state), CreatedAt: createdAt}
+		e := Export{Id: id, ProjectId: projectID, AnalysisId: analysisID, State: State(state), CreatedAt: createdAt}
 		return nil, &e
 	default:
 		return nil, nil

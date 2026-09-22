@@ -69,13 +69,13 @@ func TestQueueAnalysisReturnsQueuedAndTracksLiveState(t *testing.T) {
 		t.Errorf("ProjectID = %q, want %q", info.ProjectID, project.ID)
 	}
 
-	if state, ok := svc.LiveState(project.ID, "analysis", info.ID); !ok || (state != store.Queued && state != store.Running) {
+	if state, _, ok := svc.LiveState(project.ID, "analysis", info.ID); !ok || (state != store.Queued && state != store.Running) {
 		t.Errorf("LiveState(%s) = (%q, %v), want a live queued or running state", info.ID, state, ok)
 	}
 
 	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
 
-	if _, ok := svc.LiveState(project.ID, "analysis", info.ID); ok {
+	if _, _, ok := svc.LiveState(project.ID, "analysis", info.ID); ok {
 		t.Errorf("LiveState after the job ended = tracked, want Service to have released it")
 	}
 }
@@ -223,7 +223,7 @@ func TestLiveForProjectReportsAndClearsTheTrackedJob(t *testing.T) {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
-	if _, _, _, ok := svc.LiveForProject(project.ID); ok {
+	if _, _, _, _, ok := svc.LiveForProject(project.ID); ok {
 		t.Fatal("LiveForProject before anything is queued: want ok = false")
 	}
 
@@ -231,14 +231,14 @@ func TestLiveForProjectReportsAndClearsTheTrackedJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueueAnalysis: %v", err)
 	}
-	id, kind, state, ok := svc.LiveForProject(project.ID)
+	id, kind, state, _, ok := svc.LiveForProject(project.ID)
 	if !ok || id != info.ID || kind != "analysis" || (state != store.Queued && state != store.Running) {
 		t.Fatalf("LiveForProject = (%q, %q, %q, %v), want (%q, \"analysis\", queued or running, true)", id, kind, state, ok, info.ID)
 	}
 
 	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
 
-	if _, _, _, ok := svc.LiveForProject(project.ID); ok {
+	if _, _, _, _, ok := svc.LiveForProject(project.ID); ok {
 		t.Error("LiveForProject after the job ended = tracked, want Service to have released it")
 	}
 }
@@ -273,7 +273,7 @@ func TestServiceReconcilesAnalysisStatusToTheQueuesOwnOutcome(t *testing.T) {
 	// Registered inside Submit, as the service does: tracking afterwards
 	// races a job that finishes first.
 	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
-		svc.track(queueID, "analysis", project.ID, pending)
+		svc.track(queueID, "analysis", project.ID, "", pending)
 	}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 	// Registered inside Submit, as the service does: tracking afterwards
 	// races a job that finishes first.
 	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
-		svc.track(queueID, "analysis", project.ID, pending)
+		svc.track(queueID, "analysis", project.ID, "", pending)
 	}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent(t *testing.T) {
 		return os.Rename(pending.Path(), pending.Final())
 	}}
 	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
-		svc.track(queueID, "analysis", project.ID, pending)
+		svc.track(queueID, "analysis", project.ID, "", pending)
 	}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent(t *testing.T) {
 
 func TestCancelUntrackedIDReturnsErrNotFound(t *testing.T) {
 	svc, _ := newTestService(t)
-	if err := svc.Cancel("no-such-project", "analysis", "no-such-id"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.Cancel("no-such-project", "analysis", "no-such-id"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Cancel(untracked) = %v, want ErrNotFound", err)
 	}
 }
@@ -428,13 +428,13 @@ func TestLiveStateKeysByProjectKindAndID(t *testing.T) {
 	}
 
 	pendingA, pendingB := sameSecondPendings(t, st, "analyses", projectA.ID, "analyses", projectB.ID)
-	svc.track("fake-queue-a", "analysis", projectA.ID, pendingA)
-	svc.track("fake-queue-b", "analysis", projectB.ID, pendingB)
+	svc.track("fake-queue-a", "analysis", projectA.ID, "", pendingA)
+	svc.track("fake-queue-b", "analysis", projectB.ID, "", pendingB)
 
-	if state, ok := svc.LiveState(projectA.ID, "analysis", pendingA.ID()); !ok || state != store.Queued {
+	if state, _, ok := svc.LiveState(projectA.ID, "analysis", pendingA.ID()); !ok || state != store.Queued {
 		t.Fatalf("LiveState(project A) = (%q, %v), want (queued, true): its id collided with project B's, it must still be addressable", state, ok)
 	}
-	if state, ok := svc.LiveState(projectB.ID, "analysis", pendingB.ID()); !ok || state != store.Queued {
+	if state, _, ok := svc.LiveState(projectB.ID, "analysis", pendingB.ID()); !ok || state != store.Queued {
 		t.Fatalf("LiveState(project B) = (%q, %v), want (queued, true): tracking it must not have dropped project A's entry", state, ok)
 	}
 }
@@ -451,12 +451,12 @@ func TestCancelRejectsAKindMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDir: %v", err)
 	}
-	svc.track("fake-queue-id", "export", project.ID, pending)
+	svc.track("fake-queue-id", "export", project.ID, "", pending)
 
-	if err := svc.Cancel(project.ID, "analysis", pending.ID()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.Cancel(project.ID, "analysis", pending.ID()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Cancel(analysis route, an export's id) = %v, want ErrNotFound", err)
 	}
-	if state, ok := svc.LiveState(project.ID, "export", pending.ID()); !ok || state != store.Queued {
+	if state, _, ok := svc.LiveState(project.ID, "export", pending.ID()); !ok || state != store.Queued {
 		t.Fatalf("LiveState(export route) = (%q, %v), want (queued, true): the mismatched cancel above must not have removed it", state, ok)
 	}
 }
@@ -550,7 +550,7 @@ func waitForTerminal(t *testing.T, svc *Service, projectID, kind, id string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := svc.LiveState(projectID, kind, id); !ok {
+		if _, _, ok := svc.LiveState(projectID, kind, id); !ok {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
