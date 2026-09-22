@@ -54,6 +54,16 @@ export function useSelection(analysisId: string) {
     })
   }
 
+  /** The review screen's radio choice: one version selected, or none (current is kept). */
+  function selected(dependency: string, current: string): string {
+    return map[dependency]?.[0] ?? current
+  }
+
+  /** Replaces whatever was picked for dependency with version, or clears it when version is current. */
+  function pick(dependency: string, version: string, current: string) {
+    setMap((prev) => ({ ...prev, [dependency]: version === current ? [] : [version] }))
+  }
+
   function seedDefaults(defaults: SelectionMap) {
     setMap((prev) => {
       let changed = false
@@ -68,5 +78,5 @@ export function useSelection(analysisId: string) {
     })
   }
 
-  return { isSelected, toggle, seedDefaults, selection: map }
+  return { isSelected, toggle, selected, pick, seedDefaults, selection: map }
 }

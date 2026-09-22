@@ -82,6 +82,26 @@ body {
   animation: pop 0.25s ease;
 }
 
+/* The export screen's seal, once the archive is done. Plays on mount only,
+   the same way animate-enter and animate-pop do: a re-render of the done
+   screen (a poll tick, a theme toggle) never replays it. */
+@keyframes stamp {
+  0% {
+    transform: scale(1.35) translateY(-6px);
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+.animate-stamp {
+  animation: stamp 0.5s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

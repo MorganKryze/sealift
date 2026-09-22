@@ -63,6 +63,21 @@ export function formatWhen(value: string): string {
   return date.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + `, ${time}`
 }
 
+// "released 3 days ago" / "released 4 months ago" / "released 2 years ago",
+// for a candidate's publication date in the review screen's reason line.
+export function releasedAgo(value: string, now: Date = new Date()): string {
+  const days = Math.round((now.getTime() - new Date(value).getTime()) / 86_400_000)
+  if (days < 60) {
+    return `released ${days} day${days === 1 ? "" : "s"} ago`
+  }
+  const months = Math.round(days / 30.4)
+  if (months < 24) {
+    return `released ${months} month${months === 1 ? "" : "s"} ago`
+  }
+  const years = Math.round(months / 12)
+  return `released ${years} year${years === 1 ? "" : "s"} ago`
+}
+
 // Signal.name has no fixed enum in the schema, so identifiers are turned
 // into labels generically (too-recent -> Too recent) instead of a lookup
 // table that would drift from whatever the analyzer actually emits.

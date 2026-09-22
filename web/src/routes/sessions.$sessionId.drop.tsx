@@ -43,6 +43,9 @@ function DropRoute() {
       case "review":
         void navigate({ to: "/sessions/$sessionId/review", params: { sessionId } })
         break
+      case "export":
+        void navigate({ to: "/sessions/$sessionId/export", params: { sessionId } })
+        break
     }
   }
 

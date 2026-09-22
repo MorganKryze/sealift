@@ -1,24 +1,31 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, Navigate, useNavigate } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
-import { AnalysisScreen } from "@/components/session/analysis-screen"
+import { ExportScreen } from "@/components/session/export-screen"
 import type { StepId } from "@/components/step-bar"
 import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
 
-export const Route = createFileRoute("/sessions/$sessionId/analysis")({
-  component: AnalysisRoute,
+export const Route = createFileRoute("/sessions/$sessionId/export")({
+  component: ExportRoute,
 })
 
-function AnalysisRoute() {
+function ExportRoute() {
   const { sessionId } = Route.useParams()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const query = useQuery({
     queryKey: ["project", sessionId],
     queryFn: () => getProject(sessionId),
-    refetchInterval: (q) => (isJobActive(latestByDate(q.state.data?.analyses)) ? JOB_POLL_INTERVAL_MS : false),
+    refetchInterval: (q) => {
+      const project = q.state.data
+      const analysis = latestByDate(project?.analyses)
+      const relatedExport = analysis
+        ? latestByDate(project?.exports?.filter((candidate) => candidate.analysisId === analysis.id))
+        : undefined
+      return isJobActive(relatedExport) ? JOB_POLL_INTERVAL_MS : false
+    },
   })
 
   if (query.isPending) {
@@ -37,10 +44,14 @@ function AnalysisRoute() {
     )
   }
 
-  const analysis = latestByDate(query.data.analyses)
-  if (!analysis) {
-    return <p className="p-8 text-muted">No analysis yet.</p>
+  const project = query.data
+  const analysis = latestByDate(project.analyses)
+
+  if (!analysis || analysis.state !== "done") {
+    return <Navigate to="/sessions/$sessionId/analysis" params={{ sessionId }} replace />
   }
+
+  const relatedExport = latestByDate(project.exports?.filter((candidate) => candidate.analysisId === analysis.id))
 
   function goToStep(step: StepId) {
     switch (step) {
@@ -60,10 +71,10 @@ function AnalysisRoute() {
   }
 
   return (
-    <AnalysisScreen
-      projectId={sessionId}
-      project={query.data}
+    <ExportScreen
+      project={project}
       analysis={analysis}
+      relatedExport={relatedExport}
       onChanged={() => void queryClient.invalidateQueries({ queryKey: ["project", sessionId] })}
       onNavigateStep={goToStep}
     />

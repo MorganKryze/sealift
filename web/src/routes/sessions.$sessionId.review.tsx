@@ -2,17 +2,14 @@ import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
-import { AnalysisResults } from "@/components/projects/analysis-results"
-import { stepBarStep, StepBar, type StepBarStep } from "@/components/step-bar"
+import { ReviewScreen } from "@/components/session/review-screen"
+import type { StepId } from "@/components/step-bar"
 import { latestByDate } from "@/lib/utils"
 
 export const Route = createFileRoute("/sessions/$sessionId/review")({
   component: ReviewRoute,
 })
 
-// Task 10 replaces this screen's body with the full grouped proposal from
-// the prototype's Review step; until then it reuses the existing results
-// view and hands off to the existing export route, both left working.
 function ReviewRoute() {
   const { sessionId } = Route.useParams()
   const navigate = useNavigate()
@@ -37,33 +34,27 @@ function ReviewRoute() {
 
   const project = query.data
   const analysis = latestByDate(project.analyses)
-  const steps: StepBarStep[] = [
-    stepBarStep("drop", "done"),
-    stepBarStep("analysis", "done", () => void navigate({ to: "/sessions/$sessionId/analysis", params: { sessionId } })),
-    stepBarStep("review", "current"),
-    stepBarStep("export", "upcoming"),
-  ]
 
-  return (
-    <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
-      <StepBar steps={steps} />
-      {!analysis || analysis.state !== "done" || !analysis.result ? (
-        <p className="p-8 text-muted">No finished analysis to review yet.</p>
-      ) : (
-        <AnalysisResults
-          analysisId={analysis.id}
-          result={analysis.result}
-          trivyVersion={analysis.trivyVersion}
-          trivyDbDate={analysis.trivyDbDate}
-          pnpmVersion={analysis.pnpmVersion}
-          onContinue={() =>
-            void navigate({
-              to: "/projects/$projectId/analyses/$analysisId/export",
-              params: { projectId: sessionId, analysisId: analysis.id },
-            })
-          }
-        />
-      )}
-    </div>
-  )
+  if (!analysis) {
+    return <p className="p-8 text-muted">No analysis yet.</p>
+  }
+
+  function goToStep(step: StepId) {
+    switch (step) {
+      case "drop":
+        void navigate({ to: "/sessions/$sessionId/drop", params: { sessionId } })
+        break
+      case "analysis":
+        void navigate({ to: "/sessions/$sessionId/analysis", params: { sessionId } })
+        break
+      case "review":
+        void navigate({ to: "/sessions/$sessionId/review", params: { sessionId } })
+        break
+      case "export":
+        void navigate({ to: "/sessions/$sessionId/export", params: { sessionId } })
+        break
+    }
+  }
+
+  return <ReviewScreen project={project} analysis={analysis} onNavigateStep={goToStep} />
 }
