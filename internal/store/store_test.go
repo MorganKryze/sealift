@@ -2,8 +2,10 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,5 +217,28 @@ func TestStoreFileIsGroupWritable(t *testing.T) {
 	}
 	if info.Mode().Perm()&0o020 == 0 {
 		t.Errorf("mode %o is not group-writable", info.Mode().Perm())
+	}
+}
+
+func TestSaveSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for field, change := range map[string]func(*Settings){
+		"node is empty":              func(set *Settings) { set.Target.Node = "" },
+		"node must be exact":         func(set *Settings) { set.Target.Node = "22.x" },
+		"pnpm version must be exact": func(set *Settings) { set.Target.PnpmVer = "10" },
+	} {
+		set := s.Settings()
+		change(&set)
+		err := s.SaveSettings(set)
+		if !errors.Is(err, ErrInvalidTarget) {
+			t.Errorf("%s: SaveSettings = %v, want ErrInvalidTarget", field, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), field) || strings.Contains(err.Error(), "{") {
+			t.Errorf("%s: message %q, want it to name the field in words", field, err)
+		}
 	}
 }

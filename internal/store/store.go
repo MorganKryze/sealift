@@ -11,11 +11,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/MorganKryze/sealift/npm"
 )
 
-// ErrInvalidTarget reports a target whose OS, CPU, Node or PnpmVer is
-// empty: the caller's own mistake, not a server failure.
-var ErrInvalidTarget = errors.New("store: target missing a required field")
+// ErrInvalidTarget reports a target with an empty field or a Node or pnpm
+// version that is not exact: the caller's own mistake, not a server failure.
+var ErrInvalidTarget = errors.New("invalid target")
 
 // dirMode is the mode of every directory under the data volume except
 // private/, so the tools user's group can create and write files in it.
@@ -130,8 +132,22 @@ func (s *Store) SaveSettings(set Settings) error {
 // validateTarget refuses a target the rest of the pipeline cannot resolve or
 // export with.
 func validateTarget(t Target) error {
-	if t.OS == "" || t.CPU == "" || t.Node == "" || t.PnpmVer == "" {
-		return fmt.Errorf("%w: %+v", ErrInvalidTarget, t)
+	var problems []string
+	for _, f := range []struct{ name, value string }{{"os", t.OS}, {"cpu", t.CPU}, {"node", t.Node}, {"pnpm version", t.PnpmVer}} {
+		if f.value == "" {
+			problems = append(problems, f.name+" is empty")
+		}
+	}
+	// Both versions pin the exact toolchain an export is resolved with; a
+	// range such as "22.x" would let the resolution drift between runs.
+	if t.Node != "" && !npm.IsExactVersion(t.Node) {
+		problems = append(problems, fmt.Sprintf("node must be exact, such as 22.17.1, not %q", t.Node))
+	}
+	if t.PnpmVer != "" && !npm.IsExactVersion(t.PnpmVer) {
+		problems = append(problems, fmt.Sprintf("pnpm version must be exact, such as 10.34.5, not %q", t.PnpmVer))
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", ErrInvalidTarget, strings.Join(problems, "; "))
 	}
 	return nil
 }
