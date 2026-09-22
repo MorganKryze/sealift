@@ -241,3 +241,24 @@ func stubRandomHex(fn func(n int) (string, error)) func() {
 	randomHexFunc = fn
 	return func() { randomHexFunc = orig }
 }
+
+func TestProjectsListsNewestFirst(t *testing.T) {
+	s := openTestStore(t)
+	older, err := s.CreateProject("alpha", []byte(`{"name":"alpha"}`))
+	if err != nil {
+		t.Fatalf("CreateProject older: %v", err)
+	}
+	time.Sleep(time.Millisecond) // two CreateProject calls must not share an instant
+	newer, err := s.CreateProject("zeta", []byte(`{"name":"zeta"}`))
+	if err != nil {
+		t.Fatalf("CreateProject newer: %v", err)
+	}
+
+	got, err := s.Projects()
+	if err != nil {
+		t.Fatalf("Projects: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != newer.ID || got[1].ID != older.ID {
+		t.Fatalf("Projects = %+v, want [%q, %q]: newest first, whatever the names", got, newer.ID, older.ID)
+	}
+}

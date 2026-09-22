@@ -119,7 +119,7 @@ func (s *Store) reserveProjectDir(base string) (id, dir string, err error) {
 	return "", "", fmt.Errorf("store: could not allocate an id for %q", base)
 }
 
-// Projects lists every project, sorted by name.
+// Projects lists every project, newest first.
 func (s *Store) Projects() ([]Project, error) {
 	entries, err := os.ReadDir(filepath.Join(s.root, "projects"))
 	if err != nil {
@@ -141,7 +141,12 @@ func (s *Store) Projects() ([]Project, error) {
 		}
 		projects = append(projects, p)
 	}
-	sort.Slice(projects, func(i, j int) bool { return projects[i].Name < projects[j].Name })
+	sort.Slice(projects, func(i, j int) bool {
+		if !projects[i].CreatedAt.Equal(projects[j].CreatedAt) {
+			return projects[i].CreatedAt.After(projects[j].CreatedAt)
+		}
+		return projects[i].ID < projects[j].ID
+	})
 	return projects, nil
 }
 
