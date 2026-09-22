@@ -61,6 +61,11 @@ function AnalysisRoute() {
 
   return (
     <AnalysisScreen
+      // Retry queues a new analysis with a new id under the same route: a
+      // fresh key here remounts the screen (and useJobEvents inside it)
+      // instead of reusing an instance still holding the previous run's
+      // steps and progress.
+      key={analysis.id}
       projectId={sessionId}
       project={query.data}
       analysis={analysis}

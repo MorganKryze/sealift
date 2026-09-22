@@ -108,4 +108,45 @@ describe("useJobEvents", () => {
     renderHook(() => useJobEvents("analysis-1", false, vi.fn()))
     expect(FakeEventSource.instances).toHaveLength(0)
   })
+
+  // Finding 5: retrying an analysis queues a new job id but the analysis
+  // route rendered the same <AnalysisScreen> instance, so the reducer here
+  // (created once by useReducer) kept the previous run's failed steps
+  // until new events overwrote them. The fix is a `key={analysis.id}` on
+  // <AnalysisScreen> in the route, which remounts this hook instead of
+  // reusing it. These two cases document why the fix has to be a remount,
+  // not just passing a new analysisId: this hook alone cannot tell a
+  // retry apart from a reconnect.
+  it("keeps a previous run's steps when reused for a new analysis id without remounting", () => {
+    const { result, rerender } = renderHook(({ id }: { id: string }) => useJobEvents(id, true, vi.fn()), {
+      initialProps: { id: "analysis-1" },
+    })
+    const source = FakeEventSource.instances[0]!
+    act(() => {
+      source.emitRaw(
+        'event: step\ndata: {"kind":"step","job":"analysis-3","storeId":"analysis-1","data":{"name":"scan-project","state":"failed","error":"boom"}}\n\n',
+      )
+    })
+    expect(result.current.steps).toEqual([{ name: "scan-project", state: "failed", durationMs: undefined, error: "boom" }])
+
+    rerender({ id: "analysis-2" })
+
+    expect(result.current.steps).toEqual([{ name: "scan-project", state: "failed", durationMs: undefined, error: "boom" }])
+  })
+
+  it("drops a previous run's steps when remounted fresh for a new analysis id", () => {
+    const { result, unmount } = renderHook(() => useJobEvents("analysis-1", true, vi.fn()))
+    const source = FakeEventSource.instances[0]!
+    act(() => {
+      source.emitRaw(
+        'event: step\ndata: {"kind":"step","job":"analysis-3","storeId":"analysis-1","data":{"name":"scan-project","state":"failed","error":"boom"}}\n\n',
+      )
+    })
+    expect(result.current.steps).toHaveLength(1)
+    unmount()
+
+    const { result: fresh } = renderHook(() => useJobEvents("analysis-2", true, vi.fn()))
+
+    expect(fresh.current.steps).toEqual([])
+  })
 })
