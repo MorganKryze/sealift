@@ -14,6 +14,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions.$sessionId.index'
 import { Route as SessionsSessionIdAnalysisRouteImport } from './routes/sessions.$sessionId.analysis'
+import { Route as SessionsSessionIdDropRouteImport } from './routes/sessions.$sessionId.drop'
 import { Route as SessionsSessionIdReviewRouteImport } from './routes/sessions.$sessionId.review'
 import { Route as ProjectsProjectIdAnalysesAnalysisIdExportRouteImport } from './routes/projects.$projectId_.analyses.$analysisId.export'
 
@@ -43,6 +44,11 @@ const SessionsSessionIdAnalysisRoute =
     path: '/analysis',
     getParentRoute: () => SessionsSessionIdRoute,
   } as any)
+const SessionsSessionIdDropRoute = SessionsSessionIdDropRouteImport.update({
+  id: '/drop',
+  path: '/drop',
+  getParentRoute: () => SessionsSessionIdRoute,
+} as any)
 const SessionsSessionIdReviewRoute = SessionsSessionIdReviewRouteImport.update({
   id: '/review',
   path: '/review',
@@ -60,6 +66,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
   '/sessions/$sessionId': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
   '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId_/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/sessions/$sessionId'
     | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/review'
     | '/sessions/$sessionId/'
     | '/projects/$projectId/analyses/$analysisId/export'
@@ -97,6 +107,7 @@ export interface FileRouteTypes {
     | '/'
     | '/settings'
     | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/review'
     | '/sessions/$sessionId'
     | '/projects/$projectId/analyses/$analysisId/export'
@@ -106,6 +117,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/sessions/$sessionId'
     | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/review'
     | '/sessions/$sessionId/'
     | '/projects/$projectId_/analyses/$analysisId/export'
@@ -155,6 +167,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsSessionIdAnalysisRouteImport
       parentRoute: typeof SessionsSessionIdRoute
     }
+    '/sessions/$sessionId/drop': {
+      id: '/sessions/$sessionId/drop'
+      path: '/drop'
+      fullPath: '/sessions/$sessionId/drop'
+      preLoaderRoute: typeof SessionsSessionIdDropRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
+    }
     '/sessions/$sessionId/review': {
       id: '/sessions/$sessionId/review'
       path: '/review'
@@ -174,12 +193,14 @@ declare module '@tanstack/react-router' {
 
 interface SessionsSessionIdRouteChildren {
   SessionsSessionIdAnalysisRoute: typeof SessionsSessionIdAnalysisRoute
+  SessionsSessionIdDropRoute: typeof SessionsSessionIdDropRoute
   SessionsSessionIdReviewRoute: typeof SessionsSessionIdReviewRoute
   SessionsSessionIdIndexRoute: typeof SessionsSessionIdIndexRoute
 }
 
 const SessionsSessionIdRouteChildren: SessionsSessionIdRouteChildren = {
   SessionsSessionIdAnalysisRoute: SessionsSessionIdAnalysisRoute,
+  SessionsSessionIdDropRoute: SessionsSessionIdDropRoute,
   SessionsSessionIdReviewRoute: SessionsSessionIdReviewRoute,
   SessionsSessionIdIndexRoute: SessionsSessionIdIndexRoute,
 }

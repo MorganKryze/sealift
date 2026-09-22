@@ -1,25 +1,20 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
-import { AnalysisScreen } from "@/components/session/analysis-screen"
+import { DropSummary } from "@/components/session/drop-summary"
 import type { StepId } from "@/components/step-bar"
-import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
+import { sessionSteps } from "@/lib/sessionSteps"
+import { latestByDate } from "@/lib/utils"
 
-export const Route = createFileRoute("/sessions/$sessionId/analysis")({
-  component: AnalysisRoute,
+export const Route = createFileRoute("/sessions/$sessionId/drop")({
+  component: DropRoute,
 })
 
-function AnalysisRoute() {
+function DropRoute() {
   const { sessionId } = Route.useParams()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
-
-  const query = useQuery({
-    queryKey: ["project", sessionId],
-    queryFn: () => getProject(sessionId),
-    refetchInterval: (q) => (isJobActive(latestByDate(q.state.data?.analyses)) ? JOB_POLL_INTERVAL_MS : false),
-  })
+  const query = useQuery({ queryKey: ["project", sessionId], queryFn: () => getProject(sessionId) })
 
   if (query.isPending) {
     return (
@@ -37,11 +32,6 @@ function AnalysisRoute() {
     )
   }
 
-  const analysis = latestByDate(query.data.analyses)
-  if (!analysis) {
-    return <p className="p-8 text-muted">No analysis yet.</p>
-  }
-
   function goToStep(step: StepId) {
     switch (step) {
       case "drop":
@@ -56,13 +46,8 @@ function AnalysisRoute() {
     }
   }
 
-  return (
-    <AnalysisScreen
-      projectId={sessionId}
-      project={query.data}
-      analysis={analysis}
-      onChanged={() => void queryClient.invalidateQueries({ queryKey: ["project", sessionId] })}
-      onNavigateStep={goToStep}
-    />
-  )
+  const project = query.data
+  const steps = sessionSteps({ project, current: "drop", onNavigate: goToStep })
+
+  return <DropSummary project={project} analysis={latestByDate(project.analyses)} steps={steps} />
 }

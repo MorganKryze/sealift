@@ -4,21 +4,24 @@ import { Check, Loader2, X } from "lucide-react"
 import { useState } from "react"
 
 import { ApiError } from "@/api/client"
-import { cancelAnalysis, queueAnalysis, type Analysis } from "@/api/projects"
+import { cancelAnalysis, queueAnalysis, type Analysis, type Project } from "@/api/projects"
 import { FailureBlock } from "@/components/failure-block"
 import { ProblemNotice } from "@/components/problem-notice"
-import { stepBarStep, StepBar, type StepBarStep } from "@/components/step-bar"
+import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { useJobEvents } from "@/hooks/use-job-events"
+import { sessionSteps, TERMINAL_FAILED_STATES } from "@/lib/sessionSteps"
 import { formatDuration, humanizeSignal } from "@/lib/utils"
 
 interface AnalysisScreenProps {
   projectId: string
+  project: Project
   analysis: Analysis
   /** Refetches the project so the route sees the next analysis or its result. */
   onChanged: () => void
+  onNavigateStep: (step: StepId) => void
 }
 
 // Mirrors the step names internal/jobs/analysis_steps.go, analysis_candidates.go
@@ -37,9 +40,7 @@ const ANALYSIS_STEPS: { id: string; label: string }[] = [
   { id: "check-combined", label: "Check the combined install" },
 ]
 
-const TERMINAL_FAILED_STATES = new Set(["failed", "cancelled", "interrupted"])
-
-export function AnalysisScreen({ projectId, analysis, onChanged }: AnalysisScreenProps) {
+export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavigateStep }: AnalysisScreenProps) {
   const navigate = useNavigate()
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -72,18 +73,7 @@ export function AnalysisScreen({ projectId, analysis, onChanged }: AnalysisScree
     }
   }
 
-  const steps: StepBarStep[] = [
-    stepBarStep("drop", "done"),
-    stepBarStep("analysis", failedState ? "failed" : analysis.state === "done" ? "done" : "current"),
-    stepBarStep(
-      "review",
-      "upcoming",
-      analysis.state === "done"
-        ? () => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: projectId } })
-        : undefined,
-    ),
-    stepBarStep("export", "upcoming"),
-  ]
+  const steps = sessionSteps({ project, current: "analysis", onNavigate: onNavigateStep })
 
   const title = failedState
     ? analysis.state === "failed"
