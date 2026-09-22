@@ -83,6 +83,9 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httpt
 			{TagName: "v0.54.9-rc.1", PublishedAt: old, Prerelease: true},
 			{TagName: "v0.54.8", PublishedAt: old, Draft: true},
 			{TagName: "v0.54.0", PublishedAt: old},
+			// Published before v0.54.0 but numbered higher, as a patch on
+			// an older line can be: the recommendation follows the number.
+			{TagName: "v0.54.1", PublishedAt: old.Add(-24 * time.Hour)},
 		})
 	})
 	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
@@ -417,8 +420,8 @@ func TestTrivyStateRecommendsAnOlderReleaseWhileTheLatestIsTooRecent(t *testing.
 	if err != nil {
 		t.Fatalf("TrivyState: %v", err)
 	}
-	if state.Recommended != "0.54.0" {
-		t.Fatalf("Recommended = %q, want 0.54.0: the newest release past the minimum age, skipping the prerelease and the draft", state.Recommended)
+	if state.Recommended != "0.54.1" {
+		t.Fatalf("Recommended = %q, want 0.54.1: the highest version past the minimum age, whatever the list order, skipping the prerelease and the draft", state.Recommended)
 	}
 }
 
@@ -454,5 +457,16 @@ func TestUpdateTrivyRefusesANamedRecentReleaseWithoutForce(t *testing.T) {
 
 	if _, err := m.UpdateTrivy(context.Background(), trivyTestVersion, false); !errors.Is(err, ErrReleaseTooRecent) {
 		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseTooRecent", err)
+	}
+}
+
+func TestUpdateTrivyRejectsAVersionThatIsNotPlainSemver(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	for _, version := range []string{"../../../evil/repo/releases/tags/v1.0.0", "0.55.0/../latest", "v0.55.0-rc.1", "latest"} {
+		if _, err := m.UpdateTrivy(context.Background(), version, true); !errors.Is(err, ErrInvalidTrivyVersion) {
+			t.Errorf("UpdateTrivy(%q) error = %v, want ErrInvalidTrivyVersion", version, err)
+		}
 	}
 }

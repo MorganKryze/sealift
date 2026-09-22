@@ -11,10 +11,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // ErrReleaseTooRecent reports a Trivy release younger than the configured
@@ -25,7 +28,15 @@ var ErrReleaseTooRecent = errors.New("trivy release is too recent")
 // not match the release's checksums file.
 var ErrChecksumMismatch = errors.New("trivy asset checksum mismatch")
 
+// ErrInvalidTrivyVersion reports a requested Trivy version that is not a
+// plain X.Y.Z release number.
+var ErrInvalidTrivyVersion = errors.New("trivy version must be a release number such as 0.74.0")
+
 const trivyRepo = "aquasecurity/trivy"
+
+// releaseNumber accepts a plain release number, with or without its "v".
+// The version ends up in a GitHub API path, so nothing else may pass.
+var releaseNumber = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 // TrivyState summarizes the installed and available Trivy versions.
 type TrivyState struct {
@@ -142,6 +153,9 @@ func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (
 			return "", fmt.Errorf("trivy latest release: %w", err)
 		}
 	} else {
+		if !releaseNumber.MatchString(version) {
+			return "", ErrInvalidTrivyVersion
+		}
 		rel, err = m.trivyReleaseByTag(ctx, version)
 		if err != nil {
 			return "", fmt.Errorf("trivy release %s: %w", version, err)
@@ -334,11 +348,11 @@ func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRele
 	return rel, nil
 }
 
-// recommendedTrivyRelease returns the newest release at least minAge old,
-// among GitHub's default page of most recent releases (30, comfortably
-// covering Trivy's roughly monthly cadence). ok is false when none of
-// those qualifies, which no release cadence sealift has seen so far
-// triggers.
+// recommendedTrivyRelease returns the highest-numbered release at least
+// minAge old among GitHub's default page of recent releases (30, several
+// months of Trivy's cadence). GitHub orders that page by date, and a patch
+// on an older line can come out after a newer release, so the version
+// number decides. ok is false when none qualifies.
 func (m *Manager) recommendedTrivyRelease(ctx context.Context, minAge time.Duration) (rel ghRelease, ok bool, err error) {
 	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases")
 	if err != nil {
@@ -348,12 +362,20 @@ func (m *Manager) recommendedTrivyRelease(ctx context.Context, minAge time.Durat
 	if err := json.Unmarshal(data, &releases); err != nil {
 		return ghRelease{}, false, err
 	}
+	var best *semver.Version
 	for _, r := range releases {
-		if !r.Draft && !r.Prerelease && time.Since(r.PublishedAt) >= minAge {
-			return r, true, nil
+		if r.Draft || r.Prerelease || time.Since(r.PublishedAt) < minAge || !releaseNumber.MatchString(r.TagName) {
+			continue
+		}
+		v, err := semver.NewVersion(r.TagName)
+		if err != nil {
+			continue
+		}
+		if best == nil || v.GreaterThan(best) {
+			best, rel, ok = v, r, true
 		}
 	}
-	return ghRelease{}, false, nil
+	return rel, ok, nil
 }
 
 func (m *Manager) hostArch() string {
