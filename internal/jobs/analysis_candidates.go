@@ -38,7 +38,7 @@ func (r *run) stepListCandidates(manifest npm.Manifest) []depInfo {
 		total := len(manifest.Dependencies)
 		for i, d := range manifest.Dependencies {
 			infos = append(infos, r.listOneCandidate(d))
-			r.progress(i+1, total)
+			r.progress("list-candidates", i+1, total)
 		}
 		return nil
 	})
@@ -100,7 +100,7 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 		}
 		start := time.Now()
 		onProgress := func(done, total int) {
-			r.progressWithRemaining(done, total, time.Since(start))
+			r.progressWithRemaining("resolve-candidates", done, total, time.Since(start))
 		}
 		outcomes = r.a.resolveCandidateTasks(r.ctx, tasks, packuments, projectVersionsOf(manifest), onProgress)
 		for _, o := range outcomes {
@@ -251,13 +251,13 @@ func (r *run) stepScanCandidates(outcomes []candidateOutcome) (rank.Index, error
 		if kerr != nil {
 			return fmt.Errorf("scan key candidates: %w", kerr)
 		}
-		r.progress(1, 2)
+		r.progress("scan-candidates", 1, 2)
 
 		restFindings, rerr := r.a.scanPackages(r.ctx, restPkgs, restPath)
 		if rerr != nil {
 			return fmt.Errorf("scan remaining candidates: %w", rerr)
 		}
-		r.progress(2, 2)
+		r.progress("scan-candidates", 2, 2)
 
 		if merr := mergeTrivyReports([]string{keyPath, restPath}, filepath.Join(r.a.Dir, "candidates.trivy.json")); merr != nil {
 			return merr

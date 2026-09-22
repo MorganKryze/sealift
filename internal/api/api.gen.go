@@ -274,7 +274,10 @@ type ProgressData struct {
 	CacheHits            *int `json:"cacheHits,omitempty"`
 	Done                 int  `json:"done"`
 	EstimatedRemainingMs *int `json:"estimatedRemainingMs,omitempty"`
-	Total                int  `json:"total"`
+
+	// Step Name of the step this progress belongs to, matching a StepData "name" from the same run. A client keys progress by this field, not by how many step events it has seen so far: a subscriber that only replays the tail of a long run's history can still place this progress under the right step.
+	Step  string `json:"step"`
+	Total int    `json:"total"`
 }
 
 // Project A project, its target and its analysis and export history.

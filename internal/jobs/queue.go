@@ -14,10 +14,19 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
-// replayLimit bounds how many of a job's past events a new subscriber
-// replays, and doubles as each subscriber channel's buffer size, so a full
-// replay into a fresh channel never hits the drop path below.
+// replayLimit bounds how many of a job's past "log", "progress" and
+// "candidate" events a new subscriber replays. "step" events are exempt
+// (see appendHistoryLocked): a subscriber that connects mid-run, such as
+// a reloaded tab, must replay every step already reached to show it as
+// done instead of stuck on its upcoming dot, and there are only a
+// handful of those per job regardless of how long it runs.
 const replayLimit = 128
+
+// stepHeadroom is generous headroom, on top of replayLimit, for the
+// "step" events appendHistoryLocked exempts from trimming: the longest
+// job (an analysis) reaches 9, an export 5. It sizes each subscriber
+// channel so a full replay never hits the drop path in Subscribe.
+const stepHeadroom = 32
 
 // ErrNotFound reports a Cancel call naming a job the queue does not hold,
 // neither running nor queued.
@@ -250,14 +259,15 @@ func (q *Queue) Subscribe() (<-chan Event, func()) {
 	// a full replay: a channel sized to exactly replayLimit would already
 	// be full at that point, and the notice would find no room either.
 	const subscriberHeadroom = 2
-	ch := make(chan Event, replayLimit+subscriberHeadroom)
+	ch := make(chan Event, replayLimit+stepHeadroom+subscriberHeadroom)
 
 	q.mu.Lock()
 	id := q.nextSub
 	q.nextSub++
 	for _, e := range q.history {
-		// history never holds more than replayLimit entries (see
-		// appendHistoryLocked), so this never hits the default case.
+		// history never holds more than replayLimit non-step entries, plus
+		// stepHeadroom's worth of step ones (see appendHistoryLocked), so
+		// this never hits the default case.
 		select {
 		case ch <- e:
 		default:
@@ -353,10 +363,7 @@ func (q *Queue) run() {
 			State store.State `json:"state"`
 		}{State: state})
 		endEvent := Event{Kind: "end", Job: next.id, StoreID: storeID, Data: endData}
-		q.history = append(q.history, endEvent)
-		if len(q.history) > replayLimit {
-			q.history = q.history[len(q.history)-replayLimit:]
-		}
+		q.appendHistoryLocked(endEvent)
 		for _, s := range q.subs {
 			q.deliverLocked(s, endEvent)
 		}
@@ -393,13 +400,42 @@ func runJob(ctx context.Context, log *slog.Logger, job Job, emit func(Event)) (e
 func (q *Queue) publish(e Event) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.history = append(q.history, e)
-	if len(q.history) > replayLimit {
-		q.history = q.history[len(q.history)-replayLimit:]
-	}
+	q.appendHistoryLocked(e)
 	for _, s := range q.subs {
 		q.deliverLocked(s, e)
 	}
+}
+
+// appendHistoryLocked appends e to q.history and trims it, called with
+// q.mu held. Every "step" event is kept regardless of replayLimit: there
+// are only a handful per job, and a subscriber that connects mid-run (a
+// reloaded tab, or a late one) needs every one of them replayed to show
+// the steps it missed as done instead of stuck on their upcoming dot.
+// Only "log", "progress" and "candidate" events, which a long
+// resolve-candidates run can emit far more of, are trimmed to the newest
+// replayLimit among themselves.
+func (q *Queue) appendHistoryLocked(e Event) {
+	q.history = append(q.history, e)
+
+	nonStep := 0
+	for _, h := range q.history {
+		if h.Kind != "step" {
+			nonStep++
+		}
+	}
+	drop := nonStep - replayLimit
+	if drop <= 0 {
+		return
+	}
+	trimmed := make([]Event, 0, len(q.history)-drop)
+	for _, h := range q.history {
+		if h.Kind != "step" && drop > 0 {
+			drop--
+			continue
+		}
+		trimmed = append(trimmed, h)
+	}
+	q.history = trimmed
 }
 
 // deliverLocked sends e to s, dropping it and noting the drop instead of

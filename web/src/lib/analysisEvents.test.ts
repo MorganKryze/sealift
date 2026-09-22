@@ -8,7 +8,7 @@ describe("analysisEventsReducer", () => {
   it("folds a scripted sequence, including a log burst, into the final state", () => {
     const events: JobEvent[] = [
       { kind: "step", job, data: { name: "resolve", state: "running" } },
-      { kind: "progress", job, data: { done: 1, total: 4, estimatedRemainingMs: 9000 } },
+      { kind: "progress", job, data: { step: "resolve", done: 1, total: 4, estimatedRemainingMs: 9000 } },
       {
         kind: "candidate",
         job,
@@ -24,33 +24,47 @@ describe("analysisEventsReducer", () => {
     const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
 
     expect(state.steps).toEqual([{ name: "resolve", state: "done", durationMs: 1200 }])
-    expect(state.progress).toEqual({ done: 1, total: 4, estimatedRemainingMs: 9000 })
+    expect(state.progress).toEqual({ step: "resolve", done: 1, total: 4, estimatedRemainingMs: 9000 })
     expect(state.candidates).toHaveLength(1)
     expect(state.logLines).toEqual(["resolving left-pad", "resolving chalk", "resolving lodash"])
     expect(state.ended).toBe(true)
     expect(state.endState).toBe("done")
   })
 
-  it("keeps a step's own progress readable by index once a later step reports its own", () => {
+  it("keeps a step's own progress readable by name once a later step reports its own", () => {
     const events: JobEvent[] = [
       { kind: "step", job, data: { name: "list-candidates", state: "done", durationMs: 100 } },
-      { kind: "progress", job, data: { done: 1, total: 249 } },
-      { kind: "progress", job, data: { done: 249, total: 249 } },
+      { kind: "progress", job, data: { step: "resolve-candidates", done: 1, total: 249 } },
+      { kind: "progress", job, data: { step: "resolve-candidates", done: 249, total: 249 } },
       { kind: "step", job, data: { name: "resolve-candidates", state: "done", durationMs: 29000 } },
-      { kind: "progress", job, data: { done: 1, total: 2 } },
-      { kind: "progress", job, data: { done: 2, total: 2 } },
+      { kind: "progress", job, data: { step: "scan-candidates", done: 1, total: 2 } },
+      { kind: "progress", job, data: { step: "scan-candidates", done: 2, total: 2 } },
       { kind: "step", job, data: { name: "scan-candidates", state: "done", durationMs: 400 } },
     ]
 
     const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
 
-    // Index 1: the step not yet in `steps` when the first two progress
-    // events arrived (list-candidates already done, resolve-candidates
-    // still running). Its value survives scan-candidates' own progress,
-    // recorded separately at index 2.
-    expect(state.progressByStepIndex[1]).toEqual({ done: 249, total: 249 })
-    expect(state.progressByStepIndex[2]).toEqual({ done: 2, total: 2 })
-    expect(state.progress).toEqual({ done: 2, total: 2 })
+    // resolve-candidates' own entry survives scan-candidates' own
+    // progress, recorded separately under its own step name.
+    expect(state.progressByStep["resolve-candidates"]).toEqual({ step: "resolve-candidates", done: 249, total: 249 })
+    expect(state.progressByStep["scan-candidates"]).toEqual({ step: "scan-candidates", done: 2, total: 2 })
+    expect(state.progress).toEqual({ step: "scan-candidates", done: 2, total: 2 })
+  })
+
+  // Finding 4: a subscriber that only replays the tail of a long run's
+  // history (past the queue's replayLimit on "progress" events) may never
+  // see list-candidates' own "step" event at all, only resolve-candidates'
+  // progress. Keying progress by the step field it carries, instead of by
+  // how many step events have been seen (state.steps.length), is what
+  // keeps this attributed to resolve-candidates rather than falling under
+  // whatever position list-candidates would otherwise have occupied.
+  it("attributes progress by its own step field even when earlier step events were never replayed", () => {
+    const events: JobEvent[] = [{ kind: "progress", job, data: { step: "resolve-candidates", done: 12, total: 38 } }]
+
+    const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
+
+    expect(state.steps).toEqual([])
+    expect(state.progressByStep["resolve-candidates"]).toEqual({ step: "resolve-candidates", done: 12, total: 38 })
   })
 
   it("keeps steps in first-seen order while updating each one in place", () => {

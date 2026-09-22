@@ -556,6 +556,8 @@ export interface components {
         };
         /** @description Payload of a progress event */
         ProgressData: {
+            /** @description Name of the step this progress belongs to, matching a StepData "name" from the same run. A client keys progress by this field, not by how many step events it has seen so far: a subscriber that only replays the tail of a long run's history can still place this progress under the right step. */
+            step: string;
             done: number;
             total: number;
             estimatedRemainingMs?: number;

@@ -19,17 +19,17 @@ export interface AnalysisEventsState {
   steps: StepEntry[]
   progress: ProgressData | null
   /**
-   * The same progress events, kept per step instead of collapsed to the
-   * latest one. A step's own runStep call emits progress only while that
-   * step is active and exactly one "step" event once it is done, so the
-   * step slot a progress event belongs to is state.steps.length at the
-   * moment it arrives (the step not yet in steps is the one running).
-   * Reading progress by that index, instead of the single latest value,
-   * is what keeps a later step's own progress (analysis' scan-candidates
-   * resolves in two fixed batches) from overwriting resolve-candidates'
-   * real count once that step has moved on.
+   * The same progress events, kept per step name instead of collapsed to
+   * the latest one: progress carries its own step field (see
+   * internal/jobs.progressData), so this survives a subscriber that only
+   * replays the tail of a long run's history, where earlier steps and
+   * their position in state.steps are no longer known. Keying by name,
+   * not position, is also what keeps a later step's own progress
+   * (analysis' scan-candidates resolves in two fixed batches) from
+   * overwriting resolve-candidates' real count once that step has moved
+   * on.
    */
-  progressByStepIndex: Record<number, ProgressData>
+  progressByStep: Record<string, ProgressData>
   candidates: CandidateData[]
   logLines: string[]
   ended: boolean
@@ -39,7 +39,7 @@ export interface AnalysisEventsState {
 export const initialAnalysisEventsState: AnalysisEventsState = {
   steps: [],
   progress: null,
-  progressByStepIndex: {},
+  progressByStep: {},
   candidates: [],
   logLines: [],
   ended: false,
@@ -65,7 +65,7 @@ export function analysisEventsReducer(state: AnalysisEventsState, event: JobEven
       return {
         ...state,
         progress: data,
-        progressByStepIndex: { ...state.progressByStepIndex, [state.steps.length]: data },
+        progressByStep: { ...state.progressByStep, [data.step]: data },
       }
     }
     case "candidate":

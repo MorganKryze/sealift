@@ -51,11 +51,10 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
   const showSteps = live || events.steps.length > 0
   const eventsByName = new Map(events.steps.map((step) => [step.name, step]))
   // scan-candidates (the step right after) also reports progress, in two
-  // fixed batches; reading resolve-candidates' own slot instead of the
+  // fixed batches; reading resolve-candidates' own entry instead of the
   // latest progress event keeps its real count on screen once scanning
   // starts, rather than a stale "2 of 2" once the run has moved on.
-  const resolveIndex = ANALYSIS_STEPS.findIndex((step) => step.id === "resolve-candidates")
-  const resolveProgress = events.progressByStepIndex[resolveIndex]
+  const resolveProgress = events.progressByStep["resolve-candidates"]
 
   const retryMutation = useMutation({
     mutationFn: () => queueAnalysis(projectId),

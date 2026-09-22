@@ -123,13 +123,17 @@ type stepData struct {
 	Error      string      `json:"error,omitempty"`
 }
 
-// progressData is the payload of a "progress" event. CacheHits is set only
-// by an export's download step; an analysis never sets it, so it stays
-// omitted rather than printed as a stray zero. EstimatedRemainingMs is set
-// only once resolving candidates has a rate to project from (see
+// progressData is the payload of a "progress" event. Step names the step
+// this progress belongs to, so a client keys it by name instead of by how
+// many step events it has seen so far: the latter breaks for a subscriber
+// that only replays the tail of a long run's history. CacheHits is set
+// only by an export's download step; an analysis never sets it, so it
+// stays omitted rather than printed as a stray zero. EstimatedRemainingMs
+// is set only once resolving candidates has a rate to project from (see
 // progressWithRemaining); every other progress source leaves it absent
 // rather than printing a guess it never computed.
 type progressData struct {
+	Step                 string `json:"step"`
 	Done                 int    `json:"done"`
 	Total                int    `json:"total"`
 	EstimatedRemainingMs *int64 `json:"estimatedRemainingMs,omitempty"`
@@ -200,9 +204,11 @@ func (r *run) log(line string) {
 	r.emit(Event{Kind: "log", Data: mustJSON(logData{Line: line})})
 }
 
-// progress emits a "progress" event.
-func (r *run) progress(done, total int) {
-	r.emit(Event{Kind: "progress", Data: mustJSON(progressData{Done: done, Total: total})})
+// progress emits a "progress" event for step, the step name it belongs
+// to: the same name that step's own "step" event carries, so a client can
+// key progress and steps by the same field.
+func (r *run) progress(step string, done, total int) {
+	r.emit(Event{Kind: "progress", Data: mustJSON(progressData{Step: step, Done: done, Total: total})})
 }
 
 // progressWithRemaining is progress plus an estimate of the time left,
@@ -210,8 +216,8 @@ func (r *run) progress(done, total int) {
 // has a meaningful elapsed clock (the other progress sources finish in a
 // handful of steps, too few to rate), so every other step keeps calling
 // progress instead.
-func (r *run) progressWithRemaining(done, total int, elapsed time.Duration) {
-	data := progressData{Done: done, Total: total}
+func (r *run) progressWithRemaining(step string, done, total int, elapsed time.Duration) {
+	data := progressData{Step: step, Done: done, Total: total}
 	if done > 0 {
 		ms := remaining(elapsed, done, total).Milliseconds()
 		data.EstimatedRemainingMs = &ms

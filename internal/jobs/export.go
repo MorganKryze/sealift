@@ -893,5 +893,5 @@ func emitFailedStep(emit func(Event), name string, d time.Duration, err error) {
 // shape, reporting the running cache-hit count alongside it: only an
 // export's download step calls this.
 func progressEvent(done, total, cacheHits int) Event {
-	return Event{Kind: "progress", Data: mustJSON(progressData{Done: done, Total: total, CacheHits: &cacheHits})}
+	return Event{Kind: "progress", Data: mustJSON(progressData{Step: "download", Done: done, Total: total, CacheHits: &cacheHits})}
 }

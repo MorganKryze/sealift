@@ -343,6 +343,56 @@ func TestQueue_SubscribeAfterJobEndsGetsNoStaleReplay(t *testing.T) {
 	}
 }
 
+// TestQueue_HistoryKeepsEveryStepEventPastReplayLimit proves the fix for
+// finding 4: a subscriber that connects mid-run, such as a reloaded tab,
+// must replay every "step" event already reached so far, even once the
+// job has emitted more than replayLimit "progress" events on top of it.
+// Before the fix, a plain last-replayLimit trim of the whole history
+// dropped the early step events under exactly this load, which is what a
+// resolve-candidates step (one progress event per candidate) does on a
+// manifest with a few dozen dependencies.
+func TestQueue_HistoryKeepsEveryStepEventPastReplayLimit(t *testing.T) {
+	q := NewQueue(testLogger())
+	defer q.Close()
+
+	emitted := make(chan struct{})
+	release := make(chan struct{})
+	job := &fakeJob{kind: "analysis", run: func(_ context.Context, emit func(Event)) error {
+		emit(Event{Kind: "step", Data: json.RawMessage(`{"name":"validate","state":"done"}`)})
+		for i := 0; i < replayLimit+50; i++ {
+			emit(Event{Kind: "progress", Data: json.RawMessage(`{"step":"resolve-candidates","done":1,"total":1}`)})
+		}
+		close(emitted)
+		<-release
+		return nil
+	}}
+	if _, err := q.Submit(job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	select {
+	case <-emitted:
+	case <-time.After(time.Second):
+		t.Fatal("job never emitted its events")
+	}
+	defer close(release)
+
+	events, unsubscribe := q.Subscribe()
+	defer unsubscribe()
+
+	var sawStep bool
+	deadline := time.After(time.Second)
+	for !sawStep {
+		select {
+		case e := <-events:
+			if e.Kind == "step" {
+				sawStep = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the replayed step event")
+		}
+	}
+}
+
 func TestQueue_PanickingJobFailsInsteadOfCrashing(t *testing.T) {
 	q := NewQueue(testLogger())
 	defer q.Close()
