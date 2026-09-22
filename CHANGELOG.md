@@ -6,8 +6,28 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A setup screen on first run. It lists Trivy, its vulnerability database and the signature key, with their download sizes, and installs nothing until you press Install. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age, or the latest if you choose to install it anyway.
+- A step bar for each session: drop, analyse, review, export. You can open any finished step again.
+- Duplicate detection: dropping a package.json that an earlier session already used offers to resume that session or start a new one.
+- The cause of a failed step, on screen and after a reload, with the next actions and the full log.
+- The CVE ids behind each count: on screen for the current version of a dependency, and in the API for each candidate as well.
+- The time left while candidate versions resolve.
+- The release age of each proposed version, and a note on why sealift prefers the oldest version that fixes the most CVEs.
+
+### Changed
+
+- The interface guides you through one session at a time. The review opens on sealift's proposal in three groups: to decide, proposed, and nothing to do. Each dependency shows its key candidates, with the full list one click away.
+- The export screen shows its progress while it runs, with a cancel button, and ends on the archive with its sha256, one download for the archive, and the reports grouped below it.
+- The API refuses to create a project or queue an analysis while Trivy, its database or the signature key is missing, and names what is missing.
+- Past sessions list newest first.
+
 ### Fixed
 
+- A failed or cancelled export stays listed with its cause. It used to disappear within seconds.
+- A settings update with a missing field answers 400 instead of 500.
+- The release image reports its own version in `summary.md`. It said `dev`.
 - A finished analysis or export now updates its screen at once. It could wait up to two seconds for the next refresh, because the final event sometimes arrived without the job's id.
 
 ## [0.1.0] - 2026-09-21
