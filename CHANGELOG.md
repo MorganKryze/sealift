@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-22
+
 ### Added
 
 - A setup screen on first run. It lists Trivy, its vulnerability database and the signature key, with their download sizes, and installs nothing until you press Install. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age, or the latest if you choose to install it anyway.
@@ -41,5 +43,6 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MorganKryze/sealift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MorganKryze/sealift/releases/tag/v0.1.0
