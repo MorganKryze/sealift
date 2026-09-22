@@ -273,6 +273,10 @@ interface DependencyRowProps {
 function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }: DependencyRowProps) {
   const kept = picked === dependency.current
   const kind = kept ? null : jumpKind(dependency.current, picked)
+  const pickedCandidate = dependency.candidates.find((c) => c.version === picked)
+  const reason = [reasonFor(dependency, picked), !kept && pickedCandidate?.published ? releasedAgo(pickedCandidate.published) : null]
+    .filter(Boolean)
+    .join(", ")
   const defaultCandidates = dependency.candidates.filter((c) => c.key || c.version === dependency.best)
   const extraCandidates = dependency.candidates.filter((c) => !defaultCandidates.includes(c))
   const [showAll, setShowAll] = useState(false)
@@ -290,7 +294,7 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
       >
         <span>
           <span className="font-mono text-sm font-semibold text-ink">{dependency.name}</span>
-          <p className="mt-0.5 text-xs text-muted">{reasonFor(dependency, picked)}</p>
+          <p className="mt-0.5 text-xs text-muted">{reason}</p>
         </span>
         <span className="flex flex-wrap items-center gap-2 font-mono text-sm">
           <span className="text-muted">{dependency.current}</span>
