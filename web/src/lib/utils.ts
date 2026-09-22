@@ -45,6 +45,24 @@ export function formatBytes(bytes: number) {
   return `${value.toFixed(1)} ${units[unitIndex]}`
 }
 
+export async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes)
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+}
+
+// "today, 14:07" for a date on today's calendar day, otherwise a short date.
+export function formatWhen(value: string): string {
+  const date = new Date(value)
+  const now = new Date()
+  const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+  if (date.toDateString() === now.toDateString()) {
+    return `today, ${time}`
+  }
+  return date.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + `, ${time}`
+}
+
 // Signal.name has no fixed enum in the schema, so identifiers are turned
 // into labels generically (too-recent -> Too recent) instead of a lookup
 // table that would drift from whatever the analyzer actually emits.

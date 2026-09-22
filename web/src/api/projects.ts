@@ -1,4 +1,4 @@
-import { apiFetch, apiFetchProblem } from "./client"
+import { ApiError, apiFetch, apiFetchProblem } from "./client"
 import type { components } from "./schema"
 
 export type Project = components["schemas"]["Project"]
@@ -13,12 +13,30 @@ export type Signal = components["schemas"]["Signal"]
 export type Target = components["schemas"]["Target"]
 export type ExportRequest = components["schemas"]["ExportRequest"]
 
-export function listProjects(): Promise<ProjectSummary[]> {
-  return apiFetch<ProjectSummary[]>("/projects")
+/**
+ * Lists projects, newest first. With manifestSha256, narrows to the
+ * projects created from those exact bytes: the duplicate-session check.
+ */
+export function listProjects(manifestSha256?: string): Promise<ProjectSummary[]> {
+  const query = manifestSha256 ? `?manifestSha256=${encodeURIComponent(manifestSha256)}` : ""
+  return apiFetch<ProjectSummary[]>(`/projects${query}`)
 }
 
 export function getProject(projectId: string): Promise<Project> {
   return apiFetch<Project>(`/projects/${projectId}`)
+}
+
+/**
+ * Fetches an analysis' full log as plain text. Not routed through apiFetch:
+ * that helper always parses the response as JSON.
+ */
+export async function getAnalysisLog(projectId: string, analysisId: string): Promise<string> {
+  const response = await fetch(`/api/projects/${projectId}/analyses/${analysisId}/log`)
+  if (!response.ok) {
+    const problem = (await response.json().catch(() => null)) as Problem | null
+    throw new ApiError(response.status, problem)
+  }
+  return response.text()
 }
 
 export function queueAnalysis(projectId: string): Promise<Analysis> {

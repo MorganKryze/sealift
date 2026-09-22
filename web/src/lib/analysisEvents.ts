@@ -12,6 +12,7 @@ export interface StepEntry {
   name: string
   state: StepData["state"]
   durationMs?: number
+  error?: string
 }
 
 export interface AnalysisEventsState {
@@ -41,7 +42,7 @@ export function analysisEventsReducer(state: AnalysisEventsState, event: JobEven
   switch (event.kind) {
     case "step": {
       const data = event.data as StepData
-      const entry: StepEntry = { name: data.name, state: data.state, durationMs: data.durationMs }
+      const entry: StepEntry = { name: data.name, state: data.state, durationMs: data.durationMs, error: data.error }
       const index = state.steps.findIndex((step) => step.name === data.name)
       const steps = index === -1 ? [...state.steps, entry] : state.steps.map((step, i) => (i === index ? entry : step))
       return { ...state, steps }

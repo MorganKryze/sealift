@@ -41,6 +41,28 @@ describe("analysisEventsReducer", () => {
     const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
 
     expect(state.steps.map((step) => step.name)).toEqual(["resolve", "scan"])
-    expect(state.steps[0]).toEqual({ name: "resolve", state: "done", durationMs: 500 })
+    expect(state.steps[0]).toEqual({ name: "resolve", state: "done", durationMs: 500, error: undefined })
+  })
+
+  it("carries a failed step's error message so the UI need not wait for a refetch", () => {
+    const events: JobEvent[] = [
+      { kind: "step", job, data: { name: "scan-project", state: "running" } },
+      {
+        kind: "step",
+        job,
+        data: { name: "scan-project", state: "failed", durationMs: 300, error: "database download timed out" },
+      },
+      { kind: "end", job, data: { state: "failed" } },
+    ]
+
+    const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
+
+    expect(state.steps[0]).toEqual({
+      name: "scan-project",
+      state: "failed",
+      durationMs: 300,
+      error: "database download timed out",
+    })
+    expect(state.endState).toBe("failed")
   })
 })
