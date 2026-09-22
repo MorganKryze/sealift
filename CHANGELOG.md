@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-22
+
 ### Added
 
 - `GET /api/projects/{id}/manifest` returns the package.json a session was started from, and the Drop step shows it even when the analysis failed.
@@ -72,6 +74,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/MorganKryze/sealift/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/MorganKryze/sealift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MorganKryze/sealift/releases/tag/v0.1.0
