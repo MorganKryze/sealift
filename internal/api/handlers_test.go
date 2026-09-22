@@ -834,7 +834,7 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 		}
 	}()
 
-	exportInfo, err := h.Service.QueueExport(project.ID, analysisID, jobs.ExportRequest{Selection: map[string][]string{}})
+	exportInfo, err := h.Service.QueueExport(project.ID, analysisID, jobs.ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
 		t.Fatalf("QueueExport: %v", err)
 	}
@@ -1159,7 +1159,7 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 		}
 	}()
 
-	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}})
+	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
 		t.Fatalf("QueueExport: %v", err)
 	}
@@ -1232,7 +1232,7 @@ func TestCancelExportLiveExportSucceeds(t *testing.T) {
 		}
 	}()
 
-	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}})
+	exportInfo, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
 		t.Fatalf("QueueExport: %v", err)
 	}
@@ -1571,5 +1571,38 @@ func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
+	}
+}
+
+func TestQueueExportWithNothingToPackAnswers400(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad"}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
+	resp2, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
 	}
 }

@@ -26,6 +26,10 @@ const idLayout = "20060102T150405Z"
 // leave nothing ranked yet to select from.
 var ErrAnalysisNotDone = errors.New("jobs: analysis is not done")
 
+// ErrNothingToExport reports a QueueExport call that selects no version and
+// leaves out the current tree: the archive would hold no package at all.
+var ErrNothingToExport = errors.New("jobs: the export selects no version and leaves out the current project, so it would pack nothing")
+
 // ErrInvalidSelection reports a QueueExport call whose selection names one
 // or more versions the analysis did not resolve. Bad holds every
 // offending "name@version" entry: a validation failure lists every
@@ -189,6 +193,9 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	settings := s.store.Settings()
 	if settings.SignatureKey == "" {
 		return store.ExportInfo{}, ErrSignatureKeyMissing
+	}
+	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
+		return store.ExportInfo{}, ErrNothingToExport
 	}
 
 	pending, err := s.store.NewDir("exports", projectID)
@@ -439,4 +446,13 @@ func finalizePending(pending *store.Pending) error {
 		return pending.Discard()
 	}
 	return pending.Commit()
+}
+
+func selectsAnyVersion(sel map[string][]string) bool {
+	for _, versions := range sel {
+		if len(versions) > 0 {
+			return true
+		}
+	}
+	return false
 }

@@ -153,7 +153,9 @@ func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
 		t.Fatalf("write ranking.json: %v", err)
 	}
 
-	info, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}})
+	// An empty selection is refused on its own (see the test below); the
+	// current tree still gives this export something to pack.
+	info, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
 		t.Fatalf("QueueExport: %v", err)
 	}
@@ -569,3 +571,40 @@ type storeIDJob struct {
 }
 
 func (j storeIDJob) StoreID() string { return j.id }
+
+// A selection with no version and no current tree packs an archive with
+// no package in it, which a user would carry through the kiosk believing
+// it fixed every CVE.
+func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
+	svc, st := newTestService(t)
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	settings := st.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := st.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+
+	for name, sel := range map[string]map[string][]string{
+		"nil":                nil,
+		"empty":              {},
+		"only empty entries": {"lodash": {}},
+	} {
+		if _, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: sel}); !errors.Is(err, ErrNothingToExport) {
+			t.Errorf("%s selection: QueueExport = %v, want ErrNothingToExport", name, err)
+		}
+	}
+}
