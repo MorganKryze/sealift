@@ -29,7 +29,18 @@ declare module "@tanstack/react-router" {
 // The theme control lives in the settings panel, which is not mounted until opened.
 applyTheme(readStoredTheme())
 
-const queryClient = new QueryClient()
+// A 4xx will answer the same on a retry (a deleted session stays deleted),
+// so only a network failure or a 5xx is worth trying again.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        const status = typeof error === "object" && error && "status" in error ? (error as { status: number }).status : 0
+        return status >= 400 && status < 500 ? false : failureCount < 3
+      },
+    },
+  },
+})
 
 const rootElement = document.getElementById("root")
 if (!rootElement) {
