@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
+import { SessionLoadError } from "@/components/route-error"
 import { getProject } from "@/api/projects"
 import { AnalysisScreen } from "@/components/session/analysis-screen"
 import type { StepId } from "@/components/step-bar"

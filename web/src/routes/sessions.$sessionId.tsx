@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
-import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, Outlet } from "@tanstack/react-router"
 
+import { SessionLoadError } from "@/components/route-error"
 import { getProject } from "@/api/projects"
 import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
 

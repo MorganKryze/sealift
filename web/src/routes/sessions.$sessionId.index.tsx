@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
-import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, Navigate } from "@tanstack/react-router"
 
+import { SessionLoadError } from "@/components/route-error"
 import { getProject } from "@/api/projects"
 import { latestByDate } from "@/lib/utils"
 
@@ -32,7 +32,9 @@ function SessionIndexRoute() {
 
   const lastAnalysis = latestByDate(query.data.analyses)
   if (lastAnalysis && lastAnalysis.state === "done") {
-    return <Navigate to="/sessions/$sessionId/review" params={{ sessionId }} replace />
+    // A session that already produced an export resumes on it, where its archive is.
+    const exported = query.data.exports?.some((candidate) => candidate.analysisId === lastAnalysis.id)
+    return <Navigate to={exported ? "/sessions/$sessionId/export" : "/sessions/$sessionId/review"} params={{ sessionId }} replace />
   }
   return <Navigate to="/sessions/$sessionId/analysis" params={{ sessionId }} replace />
 }
