@@ -65,13 +65,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
       {previousArchive ? (
         <section className="mt-10 border-t border-line pt-8">
           <h2 className="mb-4 text-lg font-semibold text-ink">Earlier archive from this analysis</h2>
-          <ArchiveDone
-            projectId={project.id}
-            exportId={previousArchive.id}
-            files={previousArchive.files ?? []}
-            onExportAnother={() => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: project.id } })}
-            onNewSession={() => void navigate({ to: "/" })}
-          />
+          <ArchiveDone projectId={project.id} exportId={previousArchive.id} files={previousArchive.files ?? []} />
         </section>
       ) : null}
     </div>
@@ -169,7 +163,12 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
               <p className="text-xl font-bold tracking-tight text-ink tabular-nums">{events.progress?.cacheHits ?? 0}</p>
             </Card>
           </div>
-          {progressPercent !== null ? <Progress className="mt-3" value={progressPercent} label="Export progress" /> : null}
+          {progressPercent !== null ? (
+            <div className="mt-3">
+              <Progress value={progressPercent} label="Export progress" />
+              <p className="mt-1.5 text-right text-xs text-muted tabular-nums">{progressPercent}%</p>
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -181,10 +180,19 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
                 key={step.name}
                 className={cn("flex items-center justify-between px-4.5 py-2.5 text-sm", index > 0 && "border-t border-line")}
               >
-                <span className={step.state === "failed" ? "text-severity-critical-fg" : "text-ink"}>{step.name}</span>
-                <span className="font-mono text-xs text-muted">
-                  {step.state}
-                  {step.durationMs !== undefined ? ` · ${formatDuration(step.durationMs)}` : ""}
+                <span className={step.state === "failed" && !cancelled ? "text-severity-critical-fg" : "text-ink"}>
+                  {EXPORT_STEP_LABELS[step.name] ?? step.name}
+                </span>
+                <span className="text-xs text-muted">
+                  {step.state === "running"
+                    ? "Running…"
+                    : step.state === "failed"
+                      ? cancelled
+                        ? "Stopped by you"
+                        : "Failed"
+                      : step.state === "done"
+                        ? `Done · ${formatDuration(step.durationMs ?? 0)}`
+                        : step.state}
                 </span>
               </li>
             ))}
@@ -205,7 +213,7 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
         <div className="mt-5 flex flex-col items-start gap-2">
           <div className="flex flex-wrap gap-3">
             <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
-              {retryMutation.isPending ? "Starting…" : "Retry"}
+              {retryMutation.isPending ? "Starting…" : cancelled ? "Start the export again" : "Retry"}
             </Button>
             <Button variant="ghost" asChild>
               <Link to="/sessions/$sessionId/review" params={{ sessionId: projectId }}>
@@ -218,6 +226,15 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
       ) : null}
     </>
   )
+}
+
+// internal/jobs/export.go names its steps; these are the words the user reads.
+const EXPORT_STEP_LABELS: Record<string, string> = {
+  "package-list": "List the packages to export",
+  download: "Download and verify each package",
+  strip: "Strip publishConfig",
+  archive: "Pack and sign the archive",
+  reports: "Write the reports",
 }
 
 const REPORT_DESCRIPTIONS: Record<string, string> = {
@@ -243,8 +260,9 @@ interface ArchiveDoneProps {
   projectId: string
   exportId: string
   files: string[]
-  onExportAnother: () => void
-  onNewSession: () => void
+  /** Absent for an earlier archive shown under a later export: the page already offers the next steps. */
+  onExportAnother?: () => void
+  onNewSession?: () => void
 }
 
 function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession }: ArchiveDoneProps) {
@@ -270,14 +288,18 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
     }
   }
 
+  const isMain = onExportAnother !== undefined
+
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">Archive ready</h1>
-        <p className="mt-1.5 max-w-[62ch] text-muted">
-          Carry this file through the kiosk. The reports travel with it for whoever imports it.
-        </p>
-      </div>
+      {isMain ? (
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold tracking-tight text-ink">Archive ready</h1>
+          <p className="mt-1.5 max-w-[62ch] text-muted">
+            Carry this file through the kiosk. The reports travel with it for whoever imports it.
+          </p>
+        </div>
+      ) : null}
 
       <Card className="grid grid-cols-[auto_1fr] items-center gap-5 p-6">
         <Mark size={72} className="animate-stamp" />
@@ -341,14 +363,16 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
         </section>
       ) : null}
 
-      <div className="mt-6 flex flex-wrap gap-3">
-        <Button variant="outline" onClick={onExportAnother}>
-          Export another selection
-        </Button>
-        <Button variant="ghost" onClick={onNewSession}>
-          Start a new session
-        </Button>
-      </div>
+      {isMain ? (
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button variant="outline" onClick={onExportAnother}>
+            Export another selection
+          </Button>
+          <Button variant="ghost" onClick={onNewSession}>
+            Start a new session
+          </Button>
+        </div>
+      ) : null}
     </>
   )
 }
