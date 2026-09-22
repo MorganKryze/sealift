@@ -373,10 +373,13 @@ func TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent(t *testing.T) {
 	events, unsubscribe := svc.Subscribe()
 	defer unsubscribe()
 
-	job := &fakeJob{kind: "analysis", run: func(_ context.Context, emit func(Event)) error {
+	// Analysis and Export carry their store id, and the queue stamps it on
+	// every event. A job without one would depend on the service's index,
+	// which the finalizer empties before the end event goes out.
+	job := storeIDJob{fakeJob: &fakeJob{kind: "analysis", run: func(_ context.Context, emit func(Event)) error {
 		emit(Event{Kind: "step", Data: json.RawMessage(`{"name":"resolve","state":"running"}`)})
 		return os.Rename(pending.Path(), pending.Final())
-	}}
+	}}, id: pending.ID()}
 	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
 		svc.track(queueID, "analysis", project.ID, "", pending)
 	}); err != nil {
@@ -557,3 +560,12 @@ func waitForTerminal(t *testing.T, svc *Service, projectID, kind, id string) {
 	}
 	t.Fatalf("job %s was still tracked after the deadline", id)
 }
+
+// storeIDJob is a fakeJob that knows its store directory id, as Analysis
+// and Export do.
+type storeIDJob struct {
+	*fakeJob
+	id string
+}
+
+func (j storeIDJob) StoreID() string { return j.id }
