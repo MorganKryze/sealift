@@ -71,10 +71,11 @@ interface ExportProgressProps {
 /**
  * Covers queued, running and every terminal-but-failed state in one
  * component, keyed by the export's own id so a retry (a new export, a new
- * id) mounts fresh while a running export that fails in place keeps the
- * same instance: only that keeps the live error on screen once the state
- * refetch that follows it flips relatedExport.state to failed, since a
- * failed export does not persist its cause anywhere the API can read back.
+ * id) mounts fresh. A failed or cancelled export keeps its status.json on
+ * the server (see internal/jobs.Export.Run), so exportRecord.failure
+ * survives a reload; while the live stream is still open, events.steps
+ * carries the same cause a beat earlier, before the next poll refreshes
+ * exportRecord itself.
  */
 function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: ExportProgressProps) {
   const selection = useSelection(analysisId)
@@ -84,10 +85,10 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
   const events = useJobEvents(exportRecord.id, active, () => {})
 
   useEffect(() => {
-    if (events.ended && events.endState === "done") {
+    if (events.ended) {
       onChanged()
     }
-  }, [events.ended, events.endState, onChanged])
+  }, [events.ended, onChanged])
 
   const retryMutation = useMutation({
     mutationFn: () => queueExport(projectId, analysisId, { selection: selection.selection, includeProject: false }),
@@ -112,11 +113,13 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
   }
 
   // A page opened directly on an already-terminal export never had a live
-  // stream: nothing here beyond the state itself is known, and the cause
-  // lives only in this job's own log, which this screen has no route to.
+  // stream: everything shown then comes from exportRecord itself, which a
+  // failed or cancelled export's status.json fills in (see
+  // internal/store.readExportInfo).
   const cold = !active && !events.ended
   const failed = cold ? TERMINAL_FAILED_STATES.has(exportRecord.state) : events.ended && events.endState !== "done"
   const stoppedAt = events.ended ? events.steps.find((step) => step.state === "failed") : undefined
+  const failureMessage = exportRecord.failure?.message ?? stoppedAt?.error
   const progressPercent =
     events.progress && events.progress.total > 0 ? Math.round((events.progress.done / events.progress.total) * 100) : null
 
@@ -128,9 +131,12 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
         <h1 className="text-2xl font-bold tracking-tight text-ink">{title}</h1>
         <p className="mt-1.5 max-w-[62ch] text-muted">
           {failed
-            ? stoppedAt
-              ? `Stopped at ${stoppedAt.name}.`
-              : "Stopped. The next action is below."
+            ? (failureMessage ??
+              (exportRecord.state === "cancelled"
+                ? "You cancelled this export."
+                : stoppedAt
+                  ? `Stopped at ${stoppedAt.name}.`
+                  : "Stopped. The next action is below."))
             : events.progress?.estimatedRemainingMs !== undefined
               ? `Downloading each package from the registry, checking its integrity, then packing. About ${formatDuration(events.progress.estimatedRemainingMs)} remaining.`
               : "Downloading each package from the registry, checking its integrity, then packing."}

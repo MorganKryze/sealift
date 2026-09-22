@@ -13,10 +13,10 @@ import (
 
 // ExportInfo summarizes one export for the API: its identity, the analysis
 // it came from, its state, and the files ready to download once it is
-// done. Every ExportInfo this package reads back from disk reports state
-// Done: only a complete export keeps its directory, a failed one removes
-// its pending directory instead. internal/jobs reports a queued or running
-// export by other means, since neither has a committed directory yet.
+// done. A committed export directory can hold any terminal state: a
+// successful one reports Done from manifest.json alone, while a failed or
+// cancelled one keeps its directory too, with a status.json Export.Run
+// wrote on its way out (see internal/jobs).
 type ExportInfo struct {
 	ID         string
 	ProjectID  string
@@ -24,9 +24,8 @@ type ExportInfo struct {
 	State      State
 	CreatedAt  time.Time
 	Files      []string
-	// Failure mirrors AnalysisInfo.Failure for the API's sake, but stays
-	// nil in practice: a failed export removes its own directory (see
-	// Export.Run), so nothing ever reads one back here to fill it.
+	// Failure names the first step status.json recorded as failed, and
+	// why, for a failed export. Nil for a done or cancelled one.
 	Failure *StepFailure
 }
 
@@ -37,6 +36,14 @@ type ExportInfo struct {
 type exportManifest struct {
 	AnalysisID string    `json:"analysisId"`
 	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// exportStatus is the subset of a failed or cancelled export's status.json
+// this package reads back. internal/jobs writes the full shape.
+type exportStatus struct {
+	State      State             `json:"state"`
+	AnalysisID string            `json:"analysisId"`
+	Steps      []analysisStepRow `json:"steps"`
 }
 
 // Exports lists every committed export of a project, newest first.
@@ -121,6 +128,11 @@ func (s *Store) ExportFile(projectID, exportID, name string) (*os.File, error) {
 // time, and lists every regular file in dir for Files. A missing or
 // unreadable manifest.json still yields an ExportInfo: CreatedAt falls
 // back to the ID's own timestamp, and AnalysisID stays empty.
+//
+// status.json, present only for a failed or cancelled export, overrides
+// State and AnalysisID and fills Failure, using the same first-failed-step
+// rule readAnalysisInfo uses. It is excluded from Files: it is bookkeeping
+// for this package, not one of the export's own deliverables.
 func readExportInfo(projectID, id, dir string) (ExportInfo, error) {
 	createdAt, err := time.Parse(analysisIDLayout, id)
 	if err != nil {
@@ -138,12 +150,28 @@ func readExportInfo(projectID, id, dir string) (ExportInfo, error) {
 		return info, fmt.Errorf("store: read manifest.json for %s: %w", id, err)
 	}
 
+	var status exportStatus
+	if err := readJSONFile(filepath.Join(dir, "status.json"), &status); err == nil {
+		info.State = status.State
+		if status.AnalysisID != "" {
+			info.AnalysisID = status.AnalysisID
+		}
+		for _, step := range status.Steps {
+			if step.State == string(Failed) {
+				info.Failure = &StepFailure{Step: step.Name, Message: step.Error}
+				break
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return info, fmt.Errorf("store: read status.json for %s: %w", id, err)
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return info, fmt.Errorf("store: list %s: %w", dir, err)
 	}
 	for _, e := range entries {
-		if e.Type().IsRegular() {
+		if e.Type().IsRegular() && e.Name() != "status.json" {
 			info.Files = append(info.Files, e.Name())
 		}
 	}

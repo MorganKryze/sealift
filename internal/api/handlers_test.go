@@ -595,6 +595,107 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	}
 }
 
+// TestQueueExportFailureIsVisibleAfterItEnds proves the fix for finding 2:
+// a failing export used to remove its own directory, so it vanished from
+// GET /projects/{id} within one poll and its cause was never readable
+// once the live event stream was gone. The registry here points at an
+// unroutable address, so the download step fails deterministically
+// without touching the network.
+func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	seedToolsReady(t, st)
+	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
+	tm.GitHubAPI = unroutable
+	tm.NPMRegistry = unroutable
+	reg := &npm.Client{Registry: unroutable, Attempts: 1, Backoff: func(int) time.Duration { return 0 }}
+	svc := jobs.NewService(st, q, tm, fakePnpm{}, exportTrivyFake{}, reg)
+	h := NewHandlers(st, svc, tm, exportTrivyFake{})
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	settings := h.Store.Settings()
+	settings.SignatureKey = "top-secret"
+	if err := h.Store.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
+		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+	candidateDir := filepath.Join(analysisDir, "candidates", "left-pad@1.3.1")
+	if err := os.MkdirAll(candidateDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	lockfile := "lockfileVersion: '9.0'\npackages:\n  \"left-pad@1.3.1\":\n    resolution: {integrity: sha512-abc123}\n"
+	if err := os.WriteFile(filepath.Join(candidateDir, "pnpm-lock.yaml"), []byte(lockfile), 0o664); err != nil {
+		t.Fatalf("write pnpm-lock.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
+		t.Fatalf("write candidates.trivy.json: %v", err)
+	}
+
+	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{"left-pad": {"1.3.1"}}})
+	resp2, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	}
+	var queued Export
+	if err := json.NewDecoder(resp2.Body).Decode(&queued); err != nil {
+		t.Fatalf("decode queued export: %v", err)
+	}
+
+	final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed)
+	if final.State != Failed {
+		t.Fatalf("export state = %q, want %q: the registry is unroutable", final.State, Failed)
+	}
+
+	getResp, err := http.Get(fmt.Sprintf("%s/api/projects/%s", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET project: %v", err)
+	}
+	defer getResp.Body.Close()
+	var got Project
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if got.Exports == nil || len(*got.Exports) == 0 {
+		t.Fatalf("GetProject exports = %v, want the failed export still listed", got.Exports)
+	}
+	listed := (*got.Exports)[0]
+	if listed.State != Failed {
+		t.Fatalf("listed export state = %q, want %q: it must still be listed after it ended, not vanished", listed.State, Failed)
+	}
+	if listed.AnalysisId != "20260917T101502Z" {
+		t.Errorf("listed export analysisId = %q, want %q", listed.AnalysisId, "20260917T101502Z")
+	}
+	if listed.Failure == nil || listed.Failure.Message == "" {
+		t.Fatalf("listed export failure = %v, want a non-empty cause", listed.Failure)
+	}
+}
+
 // testBlockingJob is a jobs.Job a test controls through run, used to hold
 // the queue busy so a job queued behind it stays deterministically
 // queued instead of racing the fake tools to a terminal state.

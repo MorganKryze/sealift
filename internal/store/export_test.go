@@ -71,6 +71,43 @@ func TestExportInfoListsFilesAndAnalysisID(t *testing.T) {
 	}
 }
 
+// TestExportInfoReadsFailedStatus proves the fix for finding 2: a failed
+// or cancelled export keeps its directory, and ExportInfo reads its state,
+// analysis id and cause from status.json instead of assuming Done the way
+// it does when status.json is absent. status.json itself must not leak
+// into Files: it is bookkeeping, not one of the export's deliverables.
+func TestExportInfoReadsFailedStatus(t *testing.T) {
+	s := openTestStore(t)
+	writeExportDir(t, s, "20260917T101502Z", map[string]string{
+		"status.json": `{"state":"failed","analysisId":"20260916T090000Z","steps":[` +
+			`{"name":"package-list","state":"done","durationMs":5},` +
+			`{"name":"download","state":"failed","durationMs":120,"error":"jobs: download widgets@1.1.0: possible tampering"}` +
+			`]}`,
+	})
+
+	got, err := s.ExportInfo("proj-1", "20260917T101502Z")
+	if err != nil {
+		t.Fatalf("ExportInfo: %v", err)
+	}
+	if got.State != Failed {
+		t.Errorf("State = %q, want %q", got.State, Failed)
+	}
+	if got.AnalysisID != "20260916T090000Z" {
+		t.Errorf("AnalysisID = %q, want %q", got.AnalysisID, "20260916T090000Z")
+	}
+	if got.Failure == nil {
+		t.Fatalf("Failure = nil, want a StepFailure")
+	}
+	if got.Failure.Step != "download" || got.Failure.Message != "jobs: download widgets@1.1.0: possible tampering" {
+		t.Errorf("Failure = %+v, want step download with the download step's own message", got.Failure)
+	}
+	for _, name := range got.Files {
+		if name == "status.json" {
+			t.Errorf("Files = %v, want status.json excluded", got.Files)
+		}
+	}
+}
+
 func TestExportInfoUnknownIDReturnsErrNotFound(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.ExportInfo("proj-1", "20260917T101502Z"); !errors.Is(err, ErrNotFound) {

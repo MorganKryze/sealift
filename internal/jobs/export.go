@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -86,16 +87,42 @@ func (e *Export) Kind() string { return "export" }
 // StoreID names the job by its store directory id, which the client uses.
 func (e *Export) StoreID() string { return e.ID }
 
+// exportStatusFile is the on-disk shape of a failed or cancelled export's
+// status.json: enough for store.readExportInfo to report the same state,
+// analysis id and first-failed-step cause a reader gets for an analysis.
+// A successful export writes no status.json: manifest.json already carries
+// its analysis id and creation time, and its state is Done by construction
+// (only a complete export keeps a non-empty directory).
+type exportStatusFile struct {
+	State      store.State  `json:"state"`
+	AnalysisID string       `json:"analysisId"`
+	Steps      []stepRecord `json:"steps"`
+}
+
 // Run executes the export's steps, emitting a "step" event around each one
-// and "progress" events during the download step. Any failure, including
-// cancellation, removes e.Dir before Run returns: only a complete export
-// stays on disk. A successful Run leaves e.Dir ready for the caller to
-// commit (rename it into place), since Export does not know the final
-// path store.Pending renames to.
+// and "progress" events during the download step. A successful Run leaves
+// e.Dir ready for the caller to commit (rename it into place), since Export
+// does not know the final path store.Pending renames to.
+//
+// On failure or cancellation, Run removes only its own working files
+// (downloads/, stripped/, the Trivy scan input and any partial archive)
+// and writes status.json instead of removing e.Dir outright: a failed
+// export keeping nothing on disk is what made its cause unreadable even
+// while it was still live, since the next poll found no export at all.
 func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
+	var steps []stepRecord
+	record := func(ev Event) {
+		if ev.Kind == "step" {
+			var d stepData
+			if json.Unmarshal(ev.Data, &d) == nil {
+				steps = append(steps, stepRecord{Name: d.Name, State: string(d.State), DurationMs: d.DurationMs, Error: d.Error})
+			}
+		}
+		emit(ev)
+	}
 	defer func() {
 		if err != nil {
-			_ = os.RemoveAll(e.Dir)
+			e.failed(ctx, steps)
 		}
 	}()
 
@@ -103,29 +130,51 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 		return ErrSignatureKeyMissing
 	}
 
-	pkgs, err := e.packageList(emit)
+	pkgs, err := e.packageList(record)
 	if err != nil {
 		return err
 	}
-	downloaded, err := e.downloadAll(ctx, emit, pkgs)
+	downloaded, err := e.downloadAll(ctx, record, pkgs)
 	if err != nil {
 		return err
 	}
-	shipped, err := e.stripAll(ctx, emit, downloaded)
+	shipped, err := e.stripAll(ctx, record, downloaded)
 	if err != nil {
 		return err
 	}
-	arch, err := e.writeArchive(ctx, emit, shipped)
+	arch, err := e.writeArchive(ctx, record, shipped)
 	if err != nil {
 		return err
 	}
-	if err := e.writeReports(ctx, emit, shipped, arch); err != nil {
+	if err := e.writeReports(ctx, record, shipped, arch); err != nil {
 		return err
 	}
 	if err := e.pruneWorkingFiles(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// failed cleans up a failed or cancelled run's working files and writes
+// status.json, leaving e.Dir non-empty so Service's finalizer commits it
+// instead of discarding it. It never returns an error: a failure to record
+// a failure must not itself fail louder than the failure being recorded,
+// and finalizePending already treats a directory this leaves empty (every
+// removal failed) as one to discard.
+func (e *Export) failed(ctx context.Context, steps []stepRecord) {
+	for _, name := range []string{"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz"} {
+		if rerr := os.RemoveAll(filepath.Join(e.Dir, name)); rerr != nil {
+			slog.Warn("jobs: export cleanup after failure", "path", name, "error", rerr)
+		}
+	}
+	state := store.Failed
+	if ctx.Err() != nil {
+		state = store.Cancelled
+	}
+	status := exportStatusFile{State: state, AnalysisID: e.Analysis.ID, Steps: steps}
+	if werr := e.Store.WriteJSON(filepath.Join(e.Dir, "status.json"), status); werr != nil {
+		slog.Warn("jobs: write export status.json after failure", "error", werr)
+	}
 }
 
 // pruneWorkingFiles removes everything writeArchive and writeReports only

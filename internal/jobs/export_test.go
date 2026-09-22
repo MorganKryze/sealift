@@ -426,12 +426,10 @@ func TestExportRunIntegrityMismatch(t *testing.T) {
 	if !errors.Is(err, ErrTampered) {
 		t.Fatalf("Run: err = %v, want ErrTampered", err)
 	}
-	if _, statErr := os.Stat(exportDir); !os.IsNotExist(statErr) {
-		t.Error("pending export directory survived a failed export")
-	}
+	assertExportFailedStatus(t, exportDir, "download", "possible tampering")
 }
 
-func TestExportRunUnknownSelectionRemovesPendingDir(t *testing.T) {
+func TestExportRunUnknownSelectionKeepsPendingDirWithStatus(t *testing.T) {
 	h := newTestHarness(t)
 	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
 	h.buildAnalysis(analysisDir)
@@ -452,8 +450,89 @@ func TestExportRunUnknownSelectionRemovesPendingDir(t *testing.T) {
 			t.Errorf("Run: err = %q, want it to list %q", err, want)
 		}
 	}
-	if _, statErr := os.Stat(exportDir); !os.IsNotExist(statErr) {
-		t.Error("pending export directory survived a failed export")
+	assertExportFailedStatus(t, exportDir, "package-list", "did not resolve")
+}
+
+// assertExportFailedStatus proves the fix for finding 2: a failed export
+// keeps its directory instead of removing it, with a status.json a reader
+// can find the cause in even after the live event stream is gone. wantStep
+// and wantMessageSubstr are checked against the first step status.json
+// records as failed.
+func assertExportFailedStatus(t *testing.T, exportDir, wantStep, wantMessageSubstr string) {
+	t.Helper()
+	if _, statErr := os.Stat(exportDir); statErr != nil {
+		t.Fatalf("pending export directory did not survive a failed export: %v", statErr)
+	}
+	for _, name := range []string{"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz"} {
+		if _, statErr := os.Stat(filepath.Join(exportDir, name)); !os.IsNotExist(statErr) {
+			t.Errorf("%s survived a failed export, want it removed", name)
+		}
+	}
+	var status exportStatusFile
+	data, err := os.ReadFile(filepath.Join(exportDir, "status.json"))
+	if err != nil {
+		t.Fatalf("read status.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatalf("unmarshal status.json: %v", err)
+	}
+	if status.State != store.Failed {
+		t.Errorf("status.json state = %q, want %q", status.State, store.Failed)
+	}
+	if status.AnalysisID != "20260910T080000Z" {
+		t.Errorf("status.json analysisId = %q, want %q", status.AnalysisID, "20260910T080000Z")
+	}
+	var found *stepRecord
+	for i, s := range status.Steps {
+		if s.State == string(store.Failed) {
+			found = &status.Steps[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("status.json steps = %+v, want one failed step", status.Steps)
+	}
+	if found.Name != wantStep {
+		t.Errorf("failed step = %q, want %q", found.Name, wantStep)
+	}
+	if !strings.Contains(found.Error, wantMessageSubstr) {
+		t.Errorf("failed step error = %q, want it to contain %q", found.Error, wantMessageSubstr)
+	}
+}
+
+// TestExportRunCancelledDuringDownloadWritesCancelledStatus proves a
+// cancelled export is told apart from a failed one in status.json: a
+// context already cancelled by the time the download step reads from it
+// makes Run return ctx.Err(), and the status Run leaves behind must read
+// "cancelled", not "failed".
+func TestExportRunCancelledDuringDownloadWritesCancelledStatus(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := exp.Run(ctx, noopEmit)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: err = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(exportDir); statErr != nil {
+		t.Fatalf("pending export directory did not survive a cancelled export: %v", statErr)
+	}
+	var status exportStatusFile
+	data, rerr := os.ReadFile(filepath.Join(exportDir, "status.json"))
+	if rerr != nil {
+		t.Fatalf("read status.json: %v", rerr)
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatalf("unmarshal status.json: %v", err)
+	}
+	if status.State != store.Cancelled {
+		t.Errorf("status.json state = %q, want %q", status.State, store.Cancelled)
 	}
 }
 
