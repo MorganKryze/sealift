@@ -7,6 +7,7 @@ import { getSettings, updateSettings, updateTrivy, updateTrivyDB, type ToolsStat
 import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { formatGoDuration } from "@/lib/format-tools"
 import { formatBytes } from "@/lib/utils"
 
 interface SetupScreenProps {
@@ -24,8 +25,8 @@ export function SetupScreen({ tools }: SetupScreenProps) {
   const [keyValue, setKeyValue] = useState("")
 
   const installMutation = useMutation({
-    mutationFn: async () => {
-      await updateTrivy(false)
+    mutationFn: async ({ version, force }: { version?: string; force: boolean }) => {
+      if (tools.missing.includes("trivy")) await updateTrivy(force, version)
       return updateTrivyDB()
     },
     onSuccess: (state) => queryClient.setQueryData(["tools"], state),
@@ -45,6 +46,15 @@ export function SetupScreen({ tools }: SetupScreenProps) {
   const needsInstall = missingTrivy || missingDb
 
   const installError = installMutation.error instanceof ProblemError ? installMutation.error : null
+  // A 409 from the install means the latest Trivy release is younger than the minimum release age.
+  const latestTooRecent = installError?.status === 409
+  const recommended = missingTrivy ? tools.trivyRecommended : undefined
+  const install = (version?: string, force = false) => installMutation.mutate({ version, force })
+  const installAnyway = (
+    <Button variant="outline" size="sm" disabled={installMutation.isPending} onClick={() => install(undefined, true)}>
+      Install Trivy {tools.trivyLatest} anyway
+    </Button>
+  )
   const saveKeyError = saveKeyMutation.error instanceof ProblemError ? saveKeyMutation.error : null
 
   return (
@@ -125,14 +135,30 @@ export function SetupScreen({ tools }: SetupScreenProps) {
 
       {needsInstall ? (
         <div className="flex flex-col items-start gap-3">
-          <Button size="lg" disabled={installMutation.isPending} onClick={() => installMutation.mutate()}>
-            {installMutation.isPending ? "Installing…" : `Install Trivy and its database · about ${formatBytes(tools.latestSizeBytes)}`}
+          <Button size="lg" disabled={installMutation.isPending} onClick={() => install(recommended)}>
+            {installMutation.isPending
+              ? "Installing…"
+              : recommended
+                ? `Install Trivy ${recommended} and its database`
+                : `Install Trivy and its database · about ${formatBytes(tools.latestSizeBytes)}`}
           </Button>
+          {recommended ? (
+            <div className="flex flex-col items-start gap-2 text-sm text-muted">
+              <p>
+                Trivy {tools.trivyLatest} came out {formatGoDuration(tools.trivyLatestAge)} ago. sealift waits before installing a new release, so a
+                bad or compromised publish has time to surface, and proposes {recommended}, the newest release past that wait.
+              </p>
+              {installAnyway}
+            </div>
+          ) : null}
           {installError ? (
             <ProblemNotice status={installError.status} problem={installError.problem}>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => installMutation.mutate()}>
-                Retry
-              </Button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {latestTooRecent ? installAnyway : null}
+                <Button variant="outline" size="sm" onClick={() => install(recommended)}>
+                  Retry
+                </Button>
+              </div>
             </ProblemNotice>
           ) : null}
         </div>

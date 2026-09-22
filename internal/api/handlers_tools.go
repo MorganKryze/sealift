@@ -21,7 +21,7 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, mis
 	if missing == nil {
 		missing = []string{}
 	}
-	return ToolsState{
+	state := ToolsState{
 		PnpmInstalled:   pnpmInstalled,
 		TrivyActive:     s.Active,
 		TrivyInstalled:  trivyInstalled,
@@ -32,6 +32,10 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, mis
 		Ready:           ready,
 		Missing:         missing,
 	}
+	if s.Recommended != "" {
+		state.TrivyRecommended = &s.Recommended
+	}
+	return state
 }
 
 // currentToolsState reads the installed and available pnpm and Trivy
@@ -78,8 +82,15 @@ func (h *Handlers) ActivateTrivy(ctx context.Context, req ActivateTrivyRequestOb
 // UpdateTrivy installs a new Trivy release, refusing one younger than the
 // minimum release age unless the request forces it.
 func (h *Handlers) UpdateTrivy(ctx context.Context, req UpdateTrivyRequestObject) (UpdateTrivyResponseObject, error) {
-	force := req.Body != nil && req.Body.Force
-	if _, err := h.Tools.UpdateTrivy(ctx, force); err != nil {
+	var version string
+	force := false
+	if req.Body != nil {
+		force = req.Body.Force
+		if req.Body.Version != nil {
+			version = *req.Body.Version
+		}
+	}
+	if _, err := h.Tools.UpdateTrivy(ctx, version, force); err != nil {
 		return UpdateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("update trivy", err)), nil
 	}
 	state, err := h.currentToolsState(ctx)

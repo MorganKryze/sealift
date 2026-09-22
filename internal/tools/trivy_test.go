@@ -53,8 +53,8 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httpt
 	// request, once the server is listening.
 	var srv *httptest.Server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		rel := ghRelease{
+	release := func() ghRelease {
+		return ghRelease{
 			TagName:     "v" + version,
 			PublishedAt: publishedAt,
 			Assets: []ghAsset{
@@ -62,8 +62,28 @@ func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httpt
 				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
 			},
 		}
-		data, _ := json.Marshal(rel)
+	}
+	writeJSON := func(w http.ResponseWriter, v any) {
+		data, _ := json.Marshal(v)
 		_, _ = w.Write(data)
+	}
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, release())
+	})
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases/tags/v"+version, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, release())
+	})
+	// The release list, newest first as GitHub orders it: this release,
+	// a prerelease and a draft that must never be recommended, then an
+	// older release past any minimum age.
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases", func(w http.ResponseWriter, _ *http.Request) {
+		old := time.Now().Add(-60 * 24 * time.Hour)
+		writeJSON(w, []ghRelease{
+			release(),
+			{TagName: "v0.54.9-rc.1", PublishedAt: old, Prerelease: true},
+			{TagName: "v0.54.8", PublishedAt: old, Draft: true},
+			{TagName: "v0.54.0", PublishedAt: old},
+		})
 	})
 	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
 		assetRequests.Add(1)
@@ -91,7 +111,7 @@ func TestUpdateTrivyRefusesRecentReleaseWithoutForce(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
-	_, err := m.UpdateTrivy(context.Background(), false)
+	_, err := m.UpdateTrivy(context.Background(), "", false)
 	if !errors.Is(err, ErrReleaseTooRecent) {
 		t.Fatalf("UpdateTrivy(force=false) error = %v, want ErrReleaseTooRecent", err)
 	}
@@ -104,7 +124,7 @@ func TestUpdateTrivyInstallsRecentReleaseWithForce(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
-	version, err := m.UpdateTrivy(context.Background(), true)
+	version, err := m.UpdateTrivy(context.Background(), "", true)
 	if err != nil {
 		t.Fatalf("UpdateTrivy(force=true): %v", err)
 	}
@@ -128,7 +148,7 @@ func TestUpdateTrivyChecksumMismatchInstallsNothing(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), true)
 	m, root := newTestManager(t, srv)
 
-	_, err := m.UpdateTrivy(context.Background(), false)
+	_, err := m.UpdateTrivy(context.Background(), "", false)
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("UpdateTrivy error = %v, want ErrChecksumMismatch", err)
 	}
@@ -144,7 +164,7 @@ func TestActivateTrivyRollsBack(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, root := newTestManager(t, srv)
 
-	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
 		t.Fatalf("install 0.55.0: %v", err)
 	}
 
@@ -324,7 +344,7 @@ func TestUpdateTrivyChecksumsBodyOverLimitFailsInstall(t *testing.T) {
 
 	m, root := newTestManager(t, srv)
 
-	if _, err := m.UpdateTrivy(context.Background(), false); err == nil {
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err == nil {
 		t.Fatal("UpdateTrivy with an oversized checksums body: want error, got nil")
 	}
 	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", version)); !os.IsNotExist(err) {
@@ -366,14 +386,14 @@ func TestUpdateTrivyInstallingSameVersionTwiceDownloadsOnce(t *testing.T) {
 	srv, assetRequests := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, _ := newTestManager(t, srv)
 
-	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
 		t.Fatalf("first UpdateTrivy: %v", err)
 	}
 	if got := assetRequests.Load(); got != 1 {
 		t.Fatalf("asset requests after first install = %d, want 1", got)
 	}
 
-	if _, err := m.UpdateTrivy(context.Background(), false); err != nil {
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
 		t.Fatalf("second UpdateTrivy: %v", err)
 	}
 	if got := assetRequests.Load(); got != 1 {
@@ -386,5 +406,53 @@ func TestUpdateTrivyInstallingSameVersionTwiceDownloadsOnce(t *testing.T) {
 	}
 	if active != trivyTestVersion {
 		t.Fatalf("active version = %q, want %q", active, trivyTestVersion)
+	}
+}
+
+func TestTrivyStateRecommendsAnOlderReleaseWhileTheLatestIsTooRecent(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if state.Recommended != "0.54.0" {
+		t.Fatalf("Recommended = %q, want 0.54.0: the newest release past the minimum age, skipping the prerelease and the draft", state.Recommended)
+	}
+}
+
+func TestTrivyStateRecommendsNothingWhileTheLatestIsOldEnough(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if state.Recommended != "" {
+		t.Fatalf("Recommended = %q, want empty when the latest release is old enough", state.Recommended)
+	}
+}
+
+func TestUpdateTrivyInstallsANamedRelease(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	version, err := m.UpdateTrivy(context.Background(), trivyTestVersion, false)
+	if err != nil {
+		t.Fatalf("UpdateTrivy(%s): %v", trivyTestVersion, err)
+	}
+	if version != trivyTestVersion {
+		t.Fatalf("installed %q, want %q", version, trivyTestVersion)
+	}
+}
+
+func TestUpdateTrivyRefusesANamedRecentReleaseWithoutForce(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
+	m, _ := newTestManager(t, srv)
+
+	if _, err := m.UpdateTrivy(context.Background(), trivyTestVersion, false); !errors.Is(err, ErrReleaseTooRecent) {
+		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseTooRecent", err)
 	}
 }

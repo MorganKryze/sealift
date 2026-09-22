@@ -35,10 +35,20 @@ type TrivyState struct {
 	LatestAge       time.Duration // time since the latest release was published
 	LatestSizeBytes int64         // size of the release asset for this host, 0 if unknown
 	DBDate          time.Time     // last update of the vulnerability database, zero if unknown
+	// Recommended is the newest release old enough to install without
+	// force, set only while Latest itself is younger than the minimum
+	// age: installing it needs no force and keeps the age check's
+	// purpose (not the newest possible code, code that has had time for
+	// a compromised release to be caught) intact. Empty when Latest is
+	// already old enough, or when none of the releases this checks is.
+	Recommended    string
+	RecommendedAge time.Duration
 }
 
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
+	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []ghAsset `json:"assets"`
 }
@@ -80,6 +90,16 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 			state.LatestSizeBytes = asset.Size
 		}
 	}
+
+	minAge := time.Duration(m.vol.Settings().MinReleaseAgeDays) * 24 * time.Hour
+	if state.LatestAge < minAge {
+		if recRel, ok, rerr := m.recommendedTrivyRelease(ctx, minAge); rerr != nil {
+			m.log.Warn("trivy recommended release unavailable", "error", rerr)
+		} else if ok {
+			state.Recommended = strings.TrimPrefix(recRel.TagName, "v")
+			state.RecommendedAge = time.Since(recRel.PublishedAt)
+		}
+	}
 	return state, nil
 }
 
@@ -102,19 +122,32 @@ func (m *Manager) Ready() (ready bool, missing []string) {
 	return len(missing) == 0, missing
 }
 
-// UpdateTrivy installs the latest Trivy release and activates it. It
-// refuses a release younger than Settings().MinReleaseAgeDays unless force
-// is true. The checksum catches corruption, not a compromised release; the
-// minimum age is the protection against that.
-func (m *Manager) UpdateTrivy(ctx context.Context, force bool) (string, error) {
+// UpdateTrivy installs a Trivy release and activates it: the latest one
+// when version is empty, or the named one, such as the Recommended
+// TrivyState reported, otherwise. It refuses a release younger than
+// Settings().MinReleaseAgeDays unless force is true. The checksum catches
+// corruption, not a compromised release; the minimum age is the
+// protection against that, so a caller offering a specific version keeps
+// the user in control of trading it away, the same as force does for the
+// latest.
+func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rel, err := m.latestTrivyRelease(ctx)
-	if err != nil {
-		return "", fmt.Errorf("trivy latest release: %w", err)
+	var rel ghRelease
+	var err error
+	if version == "" {
+		rel, err = m.latestTrivyRelease(ctx)
+		if err != nil {
+			return "", fmt.Errorf("trivy latest release: %w", err)
+		}
+	} else {
+		rel, err = m.trivyReleaseByTag(ctx, version)
+		if err != nil {
+			return "", fmt.Errorf("trivy release %s: %w", version, err)
+		}
 	}
-	version := strings.TrimPrefix(rel.TagName, "v")
+	version = strings.TrimPrefix(rel.TagName, "v")
 
 	minAge := time.Duration(m.vol.Settings().MinReleaseAgeDays) * 24 * time.Hour
 	if age := time.Since(rel.PublishedAt); !force && age < minAge {
@@ -280,6 +313,47 @@ func (m *Manager) latestTrivyRelease(ctx context.Context) (ghRelease, error) {
 		return ghRelease{}, err
 	}
 	return rel, nil
+}
+
+// trivyReleaseByTag fetches one named release, for UpdateTrivy's version
+// parameter: installing a specific release (the one recommendedTrivyRelease
+// found, not necessarily the latest).
+func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRelease, error) {
+	tag := version
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/tags/"+tag)
+	if err != nil {
+		return ghRelease{}, err
+	}
+	var rel ghRelease
+	if err := json.Unmarshal(data, &rel); err != nil {
+		return ghRelease{}, err
+	}
+	return rel, nil
+}
+
+// recommendedTrivyRelease returns the newest release at least minAge old,
+// among GitHub's default page of most recent releases (30, comfortably
+// covering Trivy's roughly monthly cadence). ok is false when none of
+// those qualifies, which no release cadence sealift has seen so far
+// triggers.
+func (m *Manager) recommendedTrivyRelease(ctx context.Context, minAge time.Duration) (rel ghRelease, ok bool, err error) {
+	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases")
+	if err != nil {
+		return ghRelease{}, false, err
+	}
+	var releases []ghRelease
+	if err := json.Unmarshal(data, &releases); err != nil {
+		return ghRelease{}, false, err
+	}
+	for _, r := range releases {
+		if !r.Draft && !r.Prerelease && time.Since(r.PublishedAt) >= minAge {
+			return r, true, nil
+		}
+	}
+	return ghRelease{}, false, nil
 }
 
 func (m *Manager) hostArch() string {

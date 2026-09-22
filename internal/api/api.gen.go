@@ -371,6 +371,9 @@ type ToolsState struct {
 
 	// TrivyLatestAge Duration since the latest Trivy release, as a Go duration string
 	TrivyLatestAge string `json:"trivyLatestAge"`
+
+	// TrivyRecommended Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age
+	TrivyRecommended *string `json:"trivyRecommended,omitempty"`
 }
 
 // Vector CVE counts by severity, critical to unknown
@@ -409,6 +412,9 @@ type ActivateTrivyJSONBody struct {
 type UpdateTrivyJSONBody struct {
 	// Force Install the latest release regardless of its age
 	Force bool `json:"force"`
+
+	// Version Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set.
+	Version *string `json:"version,omitempty"`
 }
 
 // CreateProjectMultipartRequestBody defines body for CreateProject for multipart/form-data ContentType.

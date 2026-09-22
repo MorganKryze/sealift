@@ -16,8 +16,9 @@ export function getTools(): Promise<ToolsState> {
   return apiFetch<ToolsState>("/tools")
 }
 
-export function updateTrivy(force: boolean): Promise<ToolsState> {
-  return apiFetchProblem<ToolsState>("/tools/trivy/update", { method: "POST", body: JSON.stringify({ force }) })
+/** Installs the latest Trivy release, or the named one; force skips the minimum release age. */
+export function updateTrivy(force: boolean, version?: string): Promise<ToolsState> {
+  return apiFetchProblem<ToolsState>("/tools/trivy/update", { method: "POST", body: JSON.stringify({ force, version }) })
 }
 
 export function activateTrivy(version: string): Promise<ToolsState> {

@@ -526,6 +526,8 @@ export interface components {
             trivyDbDate: string;
             /** @description Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable */
             latestSizeBytes: number;
+            /** @description Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age */
+            trivyRecommended?: string;
             /** @description Whether trivy, its database and a signature key are all in place */
             ready: boolean;
             /** @description Names of what ready needs and does not have yet */
@@ -1070,6 +1072,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
+                    /** @description Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set. */
+                    version?: string;
                     /** @description Install the latest release regardless of its age */
                     force: boolean;
                 };
