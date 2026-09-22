@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
+import { useState } from "react"
 
 import { getTools } from "@/api/settings"
 import { HomeScreen } from "@/components/session/home-screen"
@@ -12,6 +13,12 @@ export const Route = createFileRoute("/")({
 
 function IndexRoute() {
   const toolsQuery = useQuery({ queryKey: ["tools"], queryFn: getTools })
+  // Setup stays on screen once shown, until the user presses Continue, so
+  // the ready state is seen; it comes back whenever a tool goes missing.
+  const [inSetup, setInSetup] = useState(false)
+  if (toolsQuery.data?.ready === false && !inSetup) {
+    setInSetup(true)
+  }
 
   if (toolsQuery.isPending) {
     return (
@@ -32,8 +39,8 @@ function IndexRoute() {
     )
   }
 
-  if (!toolsQuery.data.ready) {
-    return <SetupScreen tools={toolsQuery.data} />
+  if (!toolsQuery.data.ready || inSetup) {
+    return <SetupScreen tools={toolsQuery.data} onContinue={() => setInSetup(false)} />
   }
 
   return <HomeScreen />

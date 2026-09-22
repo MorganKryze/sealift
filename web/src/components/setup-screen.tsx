@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, Database, KeyRound, ShieldCheck } from "lucide-react"
+import { Check, Database, KeyRound, LoaderCircle, ShieldCheck } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import { ProblemError } from "@/api/client"
@@ -7,11 +7,13 @@ import { getSettings, updateSettings, updateTrivy, updateTrivyDB, type ToolsStat
 import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { formatGoDuration } from "@/lib/format-tools"
+import { formatDbDate, formatGoDuration } from "@/lib/format-tools"
 import { formatBytes } from "@/lib/utils"
 
 interface SetupScreenProps {
   tools: ToolsState
+  /** Leaves setup once every tool is ready; setup never leaves on its own, so the ready state stays visible. */
+  onContinue: () => void
 }
 
 /**
@@ -19,14 +21,18 @@ interface SetupScreenProps {
  * Nothing here installs on mount: every download starts from a click, so
  * nothing lands on the machine until the user asks for it.
  */
-export function SetupScreen({ tools }: SetupScreenProps) {
+export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
   const [keyValue, setKeyValue] = useState("")
 
   const installMutation = useMutation({
+    // Each tool's state reaches the cards as soon as it lands, so the user
+    // sees Trivy ready while the database still downloads.
     mutationFn: async ({ version, force }: { version?: string; force: boolean }) => {
-      if (tools.missing.includes("trivy")) await updateTrivy(force, version)
+      if (tools.missing.includes("trivy")) {
+        queryClient.setQueryData(["tools"], await updateTrivy(force, version))
+      }
       return updateTrivyDB()
     },
     onSuccess: (state) => queryClient.setQueryData(["tools"], state),
@@ -71,15 +77,21 @@ export function SetupScreen({ tools }: SetupScreenProps) {
       <div className="grid gap-3">
         <ToolRow
           icon={<ShieldCheck className="size-5" />}
-          title="Trivy"
+          title={`Trivy ${tools.trivyActive || recommended || tools.trivyLatest}`.trim()}
           description="Vulnerability scanner, from github.com/aquasecurity/trivy, checked against its sha256."
+          size={tools.latestSizeBytes > 0 && !recommended ? formatBytes(tools.latestSizeBytes) : undefined}
           ready={!missingTrivy}
           busy={installMutation.isPending && missingTrivy}
         />
         <ToolRow
           icon={<Database className="size-5" />}
           title="Vulnerability database"
-          description="Updated every six hours upstream. sealift refreshes it before each analysis."
+          description={
+            missingDb
+              ? "Updated every six hours upstream. sealift refreshes it before each analysis."
+              : `Downloaded ${formatDbDate(tools.trivyDbDate)}. sealift refreshes it before each analysis.`
+          }
+          size="about 120 MB"
           ready={!missingDb}
           busy={installMutation.isPending && !missingTrivy && missingDb}
         />
@@ -99,7 +111,15 @@ export function SetupScreen({ tools }: SetupScreenProps) {
               <code className="font-mono text-xs">signature.key</code>. Ask its owner if you do not have it.
             </p>
             {missingKey ? (
-              <div className="mt-2.5 flex flex-wrap gap-2">
+              <form
+                className="mt-2.5 flex flex-wrap gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (settingsQuery.data && keyValue.trim() && !saveKeyMutation.isPending) {
+                    saveKeyMutation.mutate(keyValue.trim())
+                  }
+                }}
+              >
                 <input
                   type="password"
                   value={keyValue}
@@ -109,14 +129,10 @@ export function SetupScreen({ tools }: SetupScreenProps) {
                   aria-label="Signature key"
                   className="h-9 min-w-55 flex-1 rounded-md border border-line bg-background px-3 text-sm outline-none focus:border-accent"
                 />
-                <Button
-                  size="sm"
-                  disabled={!settingsQuery.data || !keyValue.trim() || saveKeyMutation.isPending}
-                  onClick={() => saveKeyMutation.mutate(keyValue.trim())}
-                >
+                <Button type="submit" size="sm" disabled={!settingsQuery.data || !keyValue.trim() || saveKeyMutation.isPending}>
                   Save key
                 </Button>
-              </div>
+              </form>
             ) : null}
           </div>
           <span className={"inline-flex items-center gap-1.5 text-sm font-medium " + (missingKey ? "text-muted" : "text-severity-resolved-fg")}>
@@ -140,7 +156,9 @@ export function SetupScreen({ tools }: SetupScreenProps) {
               ? "Installing…"
               : recommended
                 ? `Install Trivy ${recommended} and its database`
-                : `Install Trivy (${formatBytes(tools.latestSizeBytes)}) and its database (about 120 MB, 1.4 GB once unpacked)`}
+                : tools.latestSizeBytes > 0
+                  ? `Install Trivy (${formatBytes(tools.latestSizeBytes)}) and its database (about 120 MB, 1.4 GB once unpacked)`
+                  : "Install Trivy and its database (about 120 MB, 1.4 GB once unpacked)"}
           </Button>
           {recommended ? (
             <div className="flex flex-col items-start gap-2 text-sm text-muted">
@@ -162,7 +180,13 @@ export function SetupScreen({ tools }: SetupScreenProps) {
             </ProblemNotice>
           ) : null}
         </div>
-      ) : null}
+      ) : missingKey ? (
+        <p className="text-sm text-muted">Save the signature key to continue.</p>
+      ) : (
+        <Button size="lg" className="self-start" onClick={onContinue}>
+          Continue
+        </Button>
+      )}
     </div>
   )
 }
@@ -171,13 +195,15 @@ interface ToolRowProps {
   icon: ReactNode
   title: string
   description: string
+  /** Download size shown while the tool is missing; omitted when unknown. */
+  size?: string
   ready: boolean
   busy: boolean
 }
 
-function ToolRow({ icon, title, description, ready, busy }: ToolRowProps) {
+function ToolRow({ icon, title, description, size, ready, busy }: ToolRowProps) {
   return (
-    <Card className="grid grid-cols-[40px_1fr_auto] items-center gap-3.5 p-4">
+    <Card data-tool className="grid grid-cols-[40px_1fr_auto] items-center gap-3.5 p-4">
       <span
         className={
           "grid size-10 flex-none place-items-center rounded-[10px] border border-line " +
@@ -189,14 +215,23 @@ function ToolRow({ icon, title, description, ready, busy }: ToolRowProps) {
       <div>
         <h3 className="text-sm font-semibold text-ink">{title}</h3>
         <p className="text-sm text-muted">{description}</p>
+        {busy ? (
+          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line" aria-hidden="true">
+            <div className="animate-indeterminate h-full w-1/3 rounded-full bg-accent" />
+          </div>
+        ) : null}
       </div>
-      <span className={"text-sm font-medium " + (ready ? "inline-flex items-center gap-1.5 text-severity-resolved-fg" : "text-muted")}>
+      <span className={"inline-flex items-center gap-1.5 text-sm font-medium whitespace-nowrap " + (ready ? "text-severity-resolved-fg" : busy ? "text-ink" : "text-muted")}>
         {ready ? (
           <>
             <Check className="size-3.5" strokeWidth={3} /> Ready
           </>
         ) : busy ? (
-          "Installing…"
+          <>
+            <LoaderCircle className="size-3.5 animate-spin" /> Downloading…
+          </>
+        ) : size ? (
+          `Not installed · ${size}`
         ) : (
           "Not installed"
         )}
