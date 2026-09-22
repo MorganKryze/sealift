@@ -140,7 +140,7 @@ export function SetupScreen({ tools }: SetupScreenProps) {
               ? "Installing…"
               : recommended
                 ? `Install Trivy ${recommended} and its database`
-                : `Install Trivy and its database · about ${formatBytes(tools.latestSizeBytes)}`}
+                : `Install Trivy (${formatBytes(tools.latestSizeBytes)}) and its database (about 120 MB, 1.4 GB once unpacked)`}
           </Button>
           {recommended ? (
             <div className="flex flex-col items-start gap-2 text-sm text-muted">
