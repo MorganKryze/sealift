@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
+import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, Outlet } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
-import { Button } from "@/components/ui/button"
 import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
 
 export const Route = createFileRoute("/sessions/$sessionId")({
@@ -37,14 +37,7 @@ function SessionLayout() {
   }
 
   if (query.isError) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <p role="alert" className="text-sm text-severity-critical-fg">
-          Could not load this session.
-        </p>
-        <Button onClick={() => void query.refetch()}>Retry</Button>
-      </div>
-    )
+    return <SessionLoadError error={query.error} onRetry={() => void query.refetch()} />
   }
 
   return <Outlet />

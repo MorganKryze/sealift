@@ -10,9 +10,14 @@ import { createRouter, RouterProvider } from "@tanstack/react-router"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
+import { RouteError, RouteNotFound } from "./components/route-error"
 import { routeTree } from "./routeTree.gen"
 
-const router = createRouter({ routeTree })
+const router = createRouter({
+  routeTree,
+  defaultErrorComponent: RouteError,
+  defaultNotFoundComponent: RouteNotFound,
+})
 
 declare module "@tanstack/react-router" {
   interface Register {

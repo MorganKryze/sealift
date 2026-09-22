@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, Navigate } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
@@ -26,11 +27,7 @@ function SessionIndexRoute() {
   }
 
   if (query.isError) {
-    return (
-      <p role="alert" className="p-8 text-sm text-severity-critical-fg">
-        Could not load this session.
-      </p>
-    )
+    return <SessionLoadError error={query.error} onRetry={() => void query.refetch()} />
   }
 
   const lastAnalysis = latestByDate(query.data.analyses)

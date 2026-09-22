@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { SessionLoadError } from "@/components/route-error"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
@@ -25,11 +26,7 @@ function ReviewRoute() {
   }
 
   if (query.isError) {
-    return (
-      <p role="alert" className="p-8 text-sm text-severity-critical-fg">
-        Could not load this session.
-      </p>
-    )
+    return <SessionLoadError error={query.error} onRetry={() => void query.refetch()} />
   }
 
   const project = query.data
