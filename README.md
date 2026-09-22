@@ -26,11 +26,11 @@ Open `http://localhost:8080`.
 
 ## Usage
 
-On first run, sealift asks for Trivy, its vulnerability database and the signature key your Nexus import checks. It downloads nothing until you press Install. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age instead.
+On first run, sealift asks for Trivy, its vulnerability database and the signature key your Nexus import checks. It downloads nothing until you press Install, then shows each tool downloading and ready before you continue. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age instead.
 
 ![The setup screen, listing Trivy, its vulnerability database and the signature key, with an install button naming both download sizes](docs/screenshots/setup.png)
 
-Drop a project's `package.json`. Its direct dependencies must be pinned to exact versions. If you dropped the same file before, sealift offers to resume that session.
+Drop a project's `package.json`. Its direct dependencies must be pinned to exact versions; the preview lists anything sealift would refuse before you start. If you dropped the same file before, sealift offers to resume that session.
 
 sealift resolves the project, scans it with Trivy, lists the newer versions of each dependency, and resolves each candidate against the rest of the project. The screen shows each step as it finishes, with the time left. You can close the page; the session keeps running.
 
@@ -46,7 +46,7 @@ Confirm the selection. sealift resolves the project against it, downloads each p
 
 ## Configuration
 
-Every setting lives on the Settings screen and applies to the next analysis or export.
+Every setting lives in the Settings panel, opened from the header, and applies to the next analysis or export. The panel also holds the light, dark or system theme.
 
 | Setting | Changes |
 | --- | --- |
