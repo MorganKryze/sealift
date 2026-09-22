@@ -50,6 +50,12 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
   const failedState = TERMINAL_FAILED_STATES.has(analysis.state)
   const showSteps = live || events.steps.length > 0
   const eventsByName = new Map(events.steps.map((step) => [step.name, step]))
+  // scan-candidates (the step right after) also reports progress, in two
+  // fixed batches; reading resolve-candidates' own slot instead of the
+  // latest progress event keeps its real count on screen once scanning
+  // starts, rather than a stale "2 of 2" once the run has moved on.
+  const resolveIndex = ANALYSIS_STEPS.findIndex((step) => step.id === "resolve-candidates")
+  const resolveProgress = events.progressByStepIndex[resolveIndex]
 
   const retryMutation = useMutation({
     mutationFn: () => queueAnalysis(projectId),
@@ -146,20 +152,20 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
               )
             })}
           </ol>
-          <div hidden={!events.progress} className="border-t border-line px-5.5 py-3.5">
+          <div hidden={!resolveProgress} className="border-t border-line px-5.5 py-3.5">
             <div className="flex justify-between text-xs text-muted tabular-nums">
               <span>
-                {events.progress ? `${events.progress.done} of ${events.progress.total} candidates resolved` : ""}
+                {resolveProgress ? `${resolveProgress.done} of ${resolveProgress.total} candidates resolved` : ""}
               </span>
               <span>
-                {events.progress?.estimatedRemainingMs !== undefined
-                  ? `about ${formatDuration(events.progress.estimatedRemainingMs)} left`
+                {resolveProgress?.estimatedRemainingMs !== undefined
+                  ? `about ${formatDuration(resolveProgress.estimatedRemainingMs)} left`
                   : ""}
               </span>
             </div>
             <Progress
               className="mt-2.5"
-              value={events.progress && events.progress.total > 0 ? (events.progress.done / events.progress.total) * 100 : 0}
+              value={resolveProgress && resolveProgress.total > 0 ? (resolveProgress.done / resolveProgress.total) * 100 : 0}
               label="Candidates resolved"
             />
           </div>

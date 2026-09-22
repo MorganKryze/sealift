@@ -31,6 +31,28 @@ describe("analysisEventsReducer", () => {
     expect(state.endState).toBe("done")
   })
 
+  it("keeps a step's own progress readable by index once a later step reports its own", () => {
+    const events: JobEvent[] = [
+      { kind: "step", job, data: { name: "list-candidates", state: "done", durationMs: 100 } },
+      { kind: "progress", job, data: { done: 1, total: 249 } },
+      { kind: "progress", job, data: { done: 249, total: 249 } },
+      { kind: "step", job, data: { name: "resolve-candidates", state: "done", durationMs: 29000 } },
+      { kind: "progress", job, data: { done: 1, total: 2 } },
+      { kind: "progress", job, data: { done: 2, total: 2 } },
+      { kind: "step", job, data: { name: "scan-candidates", state: "done", durationMs: 400 } },
+    ]
+
+    const state = events.reduce(analysisEventsReducer, initialAnalysisEventsState)
+
+    // Index 1: the step not yet in `steps` when the first two progress
+    // events arrived (list-candidates already done, resolve-candidates
+    // still running). Its value survives scan-candidates' own progress,
+    // recorded separately at index 2.
+    expect(state.progressByStepIndex[1]).toEqual({ done: 249, total: 249 })
+    expect(state.progressByStepIndex[2]).toEqual({ done: 2, total: 2 })
+    expect(state.progress).toEqual({ done: 2, total: 2 })
+  })
+
   it("keeps steps in first-seen order while updating each one in place", () => {
     const events: JobEvent[] = [
       { kind: "step", job, data: { name: "resolve", state: "running" } },
