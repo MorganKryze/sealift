@@ -11,8 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
-import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
+import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
+import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions.$sessionId.index'
+import { Route as SessionsSessionIdAnalysisRouteImport } from './routes/sessions.$sessionId.analysis'
+import { Route as SessionsSessionIdReviewRouteImport } from './routes/sessions.$sessionId.review'
 import { Route as ProjectsProjectIdAnalysesAnalysisIdExportRouteImport } from './routes/projects.$projectId_.analyses.$analysisId.export'
 
 const IndexRoute = IndexRouteImport.update({
@@ -25,15 +27,26 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
-  id: '/projects/',
-  path: '/projects/',
+const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
+  id: '/sessions/$sessionId',
+  path: '/sessions/$sessionId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
-  id: '/projects/$projectId',
-  path: '/projects/$projectId',
-  getParentRoute: () => rootRouteImport,
+const SessionsSessionIdIndexRoute = SessionsSessionIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SessionsSessionIdRoute,
+} as any)
+const SessionsSessionIdAnalysisRoute =
+  SessionsSessionIdAnalysisRouteImport.update({
+    id: '/analysis',
+    path: '/analysis',
+    getParentRoute: () => SessionsSessionIdRoute,
+  } as any)
+const SessionsSessionIdReviewRoute = SessionsSessionIdReviewRouteImport.update({
+  id: '/review',
+  path: '/review',
+  getParentRoute: () => SessionsSessionIdRoute,
 } as any)
 const ProjectsProjectIdAnalysesAnalysisIdExportRoute =
   ProjectsProjectIdAnalysesAnalysisIdExportRouteImport.update({
@@ -45,23 +58,28 @@ const ProjectsProjectIdAnalysesAnalysisIdExportRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
-  '/projects/': typeof ProjectsIndexRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
+  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
+  '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
-  '/projects': typeof ProjectsIndexRoute
+  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/settings': typeof SettingsRoute
-  '/projects/$projectId': typeof ProjectsProjectIdRoute
-  '/projects/': typeof ProjectsIndexRoute
+  '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
+  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
+  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
+  '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
   '/projects/$projectId_/analyses/$analysisId/export': typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 export interface FileRouteTypes {
@@ -69,30 +87,34 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/settings'
-    | '/projects/$projectId'
-    | '/projects/'
+    | '/sessions/$sessionId'
+    | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/review'
+    | '/sessions/$sessionId/'
     | '/projects/$projectId/analyses/$analysisId/export'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/settings'
-    | '/projects/$projectId'
-    | '/projects'
+    | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/review'
+    | '/sessions/$sessionId'
     | '/projects/$projectId/analyses/$analysisId/export'
   id:
     | '__root__'
     | '/'
     | '/settings'
-    | '/projects/$projectId'
-    | '/projects/'
+    | '/sessions/$sessionId'
+    | '/sessions/$sessionId/analysis'
+    | '/sessions/$sessionId/review'
+    | '/sessions/$sessionId/'
     | '/projects/$projectId_/analyses/$analysisId/export'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SettingsRoute: typeof SettingsRoute
-  ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
-  ProjectsIndexRoute: typeof ProjectsIndexRoute
+  SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
   ProjectsProjectIdAnalysesAnalysisIdExportRoute: typeof ProjectsProjectIdAnalysesAnalysisIdExportRoute
 }
 
@@ -112,19 +134,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/': {
-      id: '/projects/'
-      path: '/projects'
-      fullPath: '/projects/'
-      preLoaderRoute: typeof ProjectsIndexRouteImport
+    '/sessions/$sessionId': {
+      id: '/sessions/$sessionId'
+      path: '/sessions/$sessionId'
+      fullPath: '/sessions/$sessionId'
+      preLoaderRoute: typeof SessionsSessionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/projects/$projectId': {
-      id: '/projects/$projectId'
-      path: '/projects/$projectId'
-      fullPath: '/projects/$projectId'
-      preLoaderRoute: typeof ProjectsProjectIdRouteImport
-      parentRoute: typeof rootRouteImport
+    '/sessions/$sessionId/': {
+      id: '/sessions/$sessionId/'
+      path: '/'
+      fullPath: '/sessions/$sessionId/'
+      preLoaderRoute: typeof SessionsSessionIdIndexRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
+    }
+    '/sessions/$sessionId/analysis': {
+      id: '/sessions/$sessionId/analysis'
+      path: '/analysis'
+      fullPath: '/sessions/$sessionId/analysis'
+      preLoaderRoute: typeof SessionsSessionIdAnalysisRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
+    }
+    '/sessions/$sessionId/review': {
+      id: '/sessions/$sessionId/review'
+      path: '/review'
+      fullPath: '/sessions/$sessionId/review'
+      preLoaderRoute: typeof SessionsSessionIdReviewRouteImport
+      parentRoute: typeof SessionsSessionIdRoute
     }
     '/projects/$projectId_/analyses/$analysisId/export': {
       id: '/projects/$projectId_/analyses/$analysisId/export'
@@ -136,11 +172,25 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface SessionsSessionIdRouteChildren {
+  SessionsSessionIdAnalysisRoute: typeof SessionsSessionIdAnalysisRoute
+  SessionsSessionIdReviewRoute: typeof SessionsSessionIdReviewRoute
+  SessionsSessionIdIndexRoute: typeof SessionsSessionIdIndexRoute
+}
+
+const SessionsSessionIdRouteChildren: SessionsSessionIdRouteChildren = {
+  SessionsSessionIdAnalysisRoute: SessionsSessionIdAnalysisRoute,
+  SessionsSessionIdReviewRoute: SessionsSessionIdReviewRoute,
+  SessionsSessionIdIndexRoute: SessionsSessionIdIndexRoute,
+}
+
+const SessionsSessionIdRouteWithChildren =
+  SessionsSessionIdRoute._addFileChildren(SessionsSessionIdRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SettingsRoute: SettingsRoute,
-  ProjectsProjectIdRoute: ProjectsProjectIdRoute,
-  ProjectsIndexRoute: ProjectsIndexRoute,
+  SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
   ProjectsProjectIdAnalysesAnalysisIdExportRoute:
     ProjectsProjectIdAnalysesAnalysisIdExportRoute,
 }
