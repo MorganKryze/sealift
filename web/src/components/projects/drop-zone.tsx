@@ -1,16 +1,20 @@
-import { useId, useRef, useState, type DragEvent, type KeyboardEvent } from "react"
+import { useId, useRef, useState, type DragEvent, type ReactNode } from "react"
+
+import { Mark } from "@/components/brand/Mark"
+import { Button } from "@/components/ui/button"
 
 import { cn } from "@/lib/utils"
 
 interface DropZoneProps {
   onFile: (file: File) => void
   onInvalidFile: (message: string) => void
-  compact?: boolean
+  /** Rules shown inside the zone, under the button. */
+  children?: ReactNode
 }
 
 const LABEL = "Drop package.json here, or browse"
 
-export function DropZone({ onFile, onInvalidFile, compact = false }: DropZoneProps) {
+export function DropZone({ onFile, onInvalidFile, children }: DropZoneProps) {
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -31,13 +35,6 @@ export function DropZone({ onFile, onInvalidFile, compact = false }: DropZonePro
     onFile(file)
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault()
-      inputRef.current?.click()
-    }
-  }
-
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setIsDragging(false)
@@ -46,11 +43,7 @@ export function DropZone({ onFile, onInvalidFile, compact = false }: DropZonePro
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-label={LABEL}
       onClick={() => inputRef.current?.click()}
-      onKeyDown={handleKeyDown}
       onDragOver={(event) => {
         event.preventDefault()
         setIsDragging(true)
@@ -58,16 +51,26 @@ export function DropZone({ onFile, onInvalidFile, compact = false }: DropZonePro
       onDragLeave={() => setIsDragging(false)}
       onDrop={handleDrop}
       className={cn(
-        "flex w-full max-w-md cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-line text-center text-sm text-muted outline-none transition-colors",
-        "hover:border-accent focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent",
-        compact ? "h-20" : "h-40",
-        isDragging && "border-accent bg-card",
+        "flex w-full cursor-pointer flex-col items-center gap-3.5 rounded-2xl border-[1.5px] border-dashed border-accent/45 bg-card px-6 py-11 text-center transition-colors",
+        "hover:border-accent",
+        isDragging && "border-accent bg-accent/10",
       )}
     >
+      <Mark size={56} />
+      <h2 className="text-lg font-semibold tracking-tight text-ink">Drop package.json here</h2>
+      <Button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          inputRef.current?.click()
+        }}
+      >
+        Choose a file
+      </Button>
+      {children ? <div className="max-w-[52ch] text-sm text-muted">{children}</div> : null}
       <label htmlFor={inputId} className="sr-only">
         {LABEL}
       </label>
-      <span>{LABEL}</span>
       <input
         ref={inputRef}
         id={inputId}

@@ -90,23 +90,22 @@ export function HomeScreen() {
       </div>
 
       <div className="mt-6">
-        <DropZone onFile={(file) => void handleFile(file)} onInvalidFile={setFileError} />
+        <DropZone onFile={(file) => void handleFile(file)} onInvalidFile={setFileError}>
+          Direct dependencies must be pinned to exact versions, such as 4.17.1.
+          {settingsQuery.data ? (
+            <>
+              {" "}
+              Target: {settingsQuery.data.target.os}/{settingsQuery.data.target.cpu} · {settingsQuery.data.target.libc}{" "}
+              · Node {settingsQuery.data.target.node}.
+            </>
+          ) : null}
+        </DropZone>
       </div>
       {fileError ? (
         <p role="alert" className="mt-3 text-sm text-severity-critical-fg">
           {fileError}
         </p>
       ) : null}
-      <p className="mt-3 max-w-[52ch] text-sm text-muted">
-        Direct dependencies must be pinned to exact versions, such as 4.17.1.
-        {settingsQuery.data ? (
-          <>
-            {" "}
-            Target: {settingsQuery.data.target.os}/{settingsQuery.data.target.cpu} · {settingsQuery.data.target.libc}{" "}
-            · Node {settingsQuery.data.target.node}.
-          </>
-        ) : null}
-      </p>
 
       <HistoryList
         query={historyQuery}
