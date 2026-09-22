@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
 import type { Problem } from "@/api/projects"
@@ -42,6 +43,11 @@ export function ProblemNotice({ status, problem, className, children }: ProblemN
         <>
           <p className="font-medium">{problem?.title ?? "Request failed"}</p>
           {problem?.detail ? <p className="text-muted">{problem.detail}</p> : null}
+          {problem?.type === "tools-missing" ? (
+            <Link to="/" className="mt-2 inline-block font-medium text-accent underline underline-offset-2">
+              Open setup
+            </Link>
+          ) : null}
           {children}
         </>
       )}

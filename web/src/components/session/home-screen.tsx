@@ -50,7 +50,9 @@ export function HomeScreen() {
       const hash = await sha256Hex(buffer)
       const manifest = parseManifestPreview(new TextDecoder().decode(buffer), file.name.replace(/\.json$/i, ""))
       const next: PendingFile = { file, hash, manifest }
-      const matches = await listProjects(hash)
+      // The duplicate check only saves the user a repeat analysis: when the
+      // lookup itself fails, go on to the preview rather than blame the file.
+      const matches = await listProjects(hash).catch(() => [])
       if (matches.length > 0) {
         setDuplicate({ pending: next, match: matches[0] })
       } else {
