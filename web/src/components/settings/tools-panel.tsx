@@ -67,7 +67,9 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
           Active Trivy: <span className="font-medium">{tools.trivyActive || "none installed"}</span>
         </p>
         <p className="text-sm text-muted">
-          Latest release {tools.trivyLatest} · {formatGoDuration(tools.trivyLatestAge)} ago
+          {tools.trivyLatest
+            ? `Latest release ${tools.trivyLatest} · ${formatGoDuration(tools.trivyLatestAge)} ago`
+            : "Latest release unknown: sealift could not reach GitHub."}
         </p>
 
         <ul className="flex flex-col gap-1">
@@ -90,9 +92,12 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
         {updateError ? (
           <ProblemNotice status={updateError.status} problem={updateError.problem}>
-            <Button variant="outline" size="sm" className="mt-2" onClick={installAnyway}>
-              Install anyway
-            </Button>
+            {/* A 409 means the latest release is younger than the minimum age; only then does forcing it help. */}
+            {updateError.status === 409 ? (
+              <Button variant="outline" size="sm" className="mt-2" onClick={installAnyway}>
+                Install anyway
+              </Button>
+            ) : null}
           </ProblemNotice>
         ) : null}
 

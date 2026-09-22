@@ -28,6 +28,10 @@ var ErrReleaseTooRecent = errors.New("trivy release is too recent")
 // not match the release's checksums file.
 var ErrChecksumMismatch = errors.New("trivy asset checksum mismatch")
 
+// ErrReleaseSourceUnavailable reports that GitHub, where Trivy releases
+// come from, did not answer usefully: unreachable, rate-limited or down.
+var ErrReleaseSourceUnavailable = errors.New("could not reach GitHub to look up Trivy releases")
+
 // ErrInvalidTrivyVersion reports a requested Trivy version that is not a
 // plain X.Y.Z release number.
 var ErrInvalidTrivyVersion = errors.New("trivy version must be a release number such as 0.74.0")
@@ -150,7 +154,7 @@ func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (
 	if version == "" {
 		rel, err = m.latestTrivyRelease(ctx)
 		if err != nil {
-			return "", fmt.Errorf("trivy latest release: %w", err)
+			return "", fmt.Errorf("%w: %w", ErrReleaseSourceUnavailable, err)
 		}
 	} else {
 		if !releaseNumber.MatchString(version) {
@@ -158,7 +162,7 @@ func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (
 		}
 		rel, err = m.trivyReleaseByTag(ctx, version)
 		if err != nil {
-			return "", fmt.Errorf("trivy release %s: %w", version, err)
+			return "", fmt.Errorf("%w: release %s: %w", ErrReleaseSourceUnavailable, version, err)
 		}
 	}
 	version = strings.TrimPrefix(rel.TagName, "v")

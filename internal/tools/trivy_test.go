@@ -470,3 +470,15 @@ func TestUpdateTrivyRejectsAVersionThatIsNotPlainSemver(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	m, _ := newTestManager(t, srv)
+
+	if _, err := m.UpdateTrivy(context.Background(), "", false); !errors.Is(err, ErrReleaseSourceUnavailable) {
+		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseSourceUnavailable", err)
+	}
+}

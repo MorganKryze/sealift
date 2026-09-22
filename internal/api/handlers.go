@@ -60,6 +60,8 @@ func statusFor(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent):
 		return http.StatusConflict
+	case errors.Is(err, tools.ErrReleaseSourceUnavailable):
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

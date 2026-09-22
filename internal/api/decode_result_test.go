@@ -2,8 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // An analysis written before CVE ids existed carries no "cves" field, and
@@ -31,5 +35,11 @@ func TestDecodeAnalysisResultFillsArraysMissingFromOlderAnalyses(t *testing.T) {
 		if strings.Contains(string(encoded), field) {
 			t.Errorf("encoded result carries %s, want an empty array: %s", field, encoded)
 		}
+	}
+}
+
+func TestStatusForAnUnreachableReleaseSourceIsBadGateway(t *testing.T) {
+	if got := statusFor(fmt.Errorf("wrapped: %w", tools.ErrReleaseSourceUnavailable)); got != http.StatusBadGateway {
+		t.Fatalf("statusFor = %d, want %d", got, http.StatusBadGateway)
 	}
 }
