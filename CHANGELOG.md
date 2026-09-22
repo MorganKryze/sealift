@@ -22,6 +22,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The export screen shows its progress while it runs, with a cancel button, and ends on the archive with its sha256, one download for the archive, and the reports grouped below it.
 - The API refuses to create a project or queue an analysis while Trivy, its database or the signature key is missing, and names what is missing.
 - Past sessions list newest first.
+- sealift waits 14 days before proposing or installing a new release, up from 7. An install that already saved its settings keeps its own value.
 
 ### Fixed
 

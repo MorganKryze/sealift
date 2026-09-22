@@ -74,7 +74,7 @@ func TestSettingsRoundTripKeepsSignatureKey(t *testing.T) {
 
 	want := defaultSettings
 	want.SignatureKey = "top-secret-key"
-	want.MinReleaseAgeDays = 14
+	want.MinReleaseAgeDays = 21
 	if err := s.SaveSettings(want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}

@@ -38,7 +38,7 @@ var defaultSettings = Settings{
 		Node:    "22.17.1",
 		PnpmVer: "10.34.5",
 	},
-	MinReleaseAgeDays:   7,
+	MinReleaseAgeDays:   14,
 	ResolveParallelism:  4,
 	DownloadParallelism: 16,
 }
