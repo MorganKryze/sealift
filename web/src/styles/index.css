@@ -43,3 +43,51 @@ body {
     transform: translateY(-4px);
   }
 }
+
+/* Plays once when an element mounts (a screen taking over, a row opening),
+   never on a re-render: React only runs a CSS animation on an element the
+   first time it appears with that class, not on later prop updates. */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-enter {
+  animation: enter 0.35s ease both;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+.animate-fade {
+  animation: fade 0.2s ease both;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+.animate-pop {
+  animation: pop 0.25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
