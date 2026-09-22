@@ -25,8 +25,6 @@ describe("analysisEventsReducer", () => {
 
     expect(state.steps).toEqual([{ name: "resolve", state: "done", durationMs: 1200 }])
     expect(state.progress).toEqual({ step: "resolve", done: 1, total: 4, estimatedRemainingMs: 9000 })
-    expect(state.candidates).toHaveLength(1)
-    expect(state.logLines).toEqual(["resolving left-pad", "resolving chalk", "resolving lodash"])
     expect(state.ended).toBe(true)
     expect(state.endState).toBe("done")
   })

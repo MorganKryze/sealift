@@ -42,18 +42,6 @@ export function useSelection(analysisId: string) {
     writeStorage(storageKey, map)
   }, [storageKey, map])
 
-  function isSelected(dependency: string, version: string) {
-    return (map[dependency] ?? []).includes(version)
-  }
-
-  function toggle(dependency: string, version: string) {
-    setMap((prev) => {
-      const versions = prev[dependency] ?? []
-      const next = versions.includes(version) ? versions.filter((v) => v !== version) : [...versions, version]
-      return { ...prev, [dependency]: next }
-    })
-  }
-
   /** The review screen's radio choice: one version selected, or none (current is kept). */
   function selected(dependency: string, current: string): string {
     return map[dependency]?.[0] ?? current
@@ -78,5 +66,5 @@ export function useSelection(analysisId: string) {
     })
   }
 
-  return { isSelected, toggle, selected, pick, seedDefaults, selection: map }
+  return { selected, pick, seedDefaults, selection: map }
 }

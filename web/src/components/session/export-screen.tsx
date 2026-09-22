@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 
 import { apiFetch, ApiError } from "@/api/client"
 import { cancelExport, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
@@ -82,13 +82,7 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
   const active = exportRecord.state === "queued" || exportRecord.state === "running"
-  const events = useJobEvents(exportRecord.id, active, () => {})
-
-  useEffect(() => {
-    if (events.ended) {
-      onChanged()
-    }
-  }, [events.ended, onChanged])
+  const events = useJobEvents(exportRecord.id, active, onChanged)
 
   const retryMutation = useMutation({
     mutationFn: () => queueExport(projectId, analysisId, { selection: selection.selection, includeProject: false }),

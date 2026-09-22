@@ -4,8 +4,6 @@ export type EventKind = components["schemas"]["EventKind"]
 export type JobEvent = components["schemas"]["Event"]
 export type StepData = components["schemas"]["StepData"]
 export type ProgressData = components["schemas"]["ProgressData"]
-export type CandidateData = components["schemas"]["CandidateData"]
-export type LogData = components["schemas"]["LogData"]
 export type EndData = components["schemas"]["EndData"]
 
 export interface StepEntry {
@@ -30,8 +28,6 @@ export interface AnalysisEventsState {
    * on.
    */
   progressByStep: Record<string, ProgressData>
-  candidates: CandidateData[]
-  logLines: string[]
   ended: boolean
   endState: EndData["state"] | null
 }
@@ -40,8 +36,6 @@ export const initialAnalysisEventsState: AnalysisEventsState = {
   steps: [],
   progress: null,
   progressByStep: {},
-  candidates: [],
-  logLines: [],
   ended: false,
   endState: null,
 }
@@ -68,10 +62,6 @@ export function analysisEventsReducer(state: AnalysisEventsState, event: JobEven
         progressByStep: { ...state.progressByStep, [data.step]: data },
       }
     }
-    case "candidate":
-      return { ...state, candidates: [...state.candidates, event.data as CandidateData] }
-    case "log":
-      return { ...state, logLines: [...state.logLines, (event.data as LogData).line] }
     case "end":
       return { ...state, ended: true, endState: (event.data as EndData).state }
     default:
