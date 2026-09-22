@@ -40,6 +40,23 @@ const ANALYSIS_STEPS: { id: string; label: string }[] = [
   { id: "check-combined", label: "Check the combined install" },
 ]
 
+/**
+ * The cause shown for a stopped analysis. An analysis run before sealift
+ * recorded causes has a failure with an empty message; it still names the
+ * step, so the screen says where it stopped and points at the log.
+ */
+export function failureMessage(analysis: Pick<Analysis, "state" | "failure">): string {
+  // A cancel stops the run with a "context canceled" error: the user's own action, not a failure.
+  if (analysis.state === "cancelled") return "You cancelled this analysis."
+  const cause = analysis.failure?.message?.trim()
+  if (cause) return cause
+  if (analysis.failure) {
+    const step = ANALYSIS_STEPS.find((s) => s.id === analysis.failure?.step)?.label ?? analysis.failure.step
+    return `It stopped at "${step}". The version of sealift that ran it did not record why; the log below has what it wrote.`
+  }
+  return "The analysis was interrupted, most likely by a server restart."
+}
+
 export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavigateStep }: AnalysisScreenProps) {
   const navigate = useNavigate()
   const [cancelling, setCancelling] = useState(false)
@@ -197,12 +214,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
           projectId={projectId}
           analysisId={analysis.id}
           heading="What went wrong"
-          message={
-            analysis.failure?.message ??
-            (analysis.state === "cancelled"
-              ? "You cancelled this analysis."
-              : "The analysis was interrupted, most likely by a server restart.")
-          }
+          message={failureMessage(analysis)}
           detail="Your uploaded file is kept. Retrying starts a new analysis from the beginning."
           actions={
             <>
