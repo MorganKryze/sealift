@@ -51,7 +51,14 @@ function ExportRoute() {
     return <Navigate to="/sessions/$sessionId/analysis" params={{ sessionId }} replace />
   }
 
-  const relatedExport = latestByDate(project.exports?.filter((candidate) => candidate.analysisId === analysis.id))
+  const analysisExports = project.exports?.filter((candidate) => candidate.analysisId === analysis.id)
+  const relatedExport = latestByDate(analysisExports)
+  // A later export that failed or was cancelled must not hide an archive
+  // this analysis already produced: it is still on disk and downloadable.
+  const previousArchive =
+    relatedExport && relatedExport.state !== "done"
+      ? latestByDate(analysisExports?.filter((candidate) => candidate.state === "done"))
+      : undefined
 
   function goToStep(step: StepId) {
     switch (step) {
@@ -75,6 +82,7 @@ function ExportRoute() {
       project={project}
       analysis={analysis}
       relatedExport={relatedExport}
+      previousArchive={previousArchive}
       onChanged={() => void queryClient.invalidateQueries({ queryKey: ["project", sessionId] })}
       onNavigateStep={goToStep}
     />

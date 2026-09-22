@@ -19,11 +19,13 @@ interface ExportScreenProps {
   project: Project
   analysis: Analysis
   relatedExport?: Export
+  /** The latest done export of this analysis, when a later one did not finish. */
+  previousArchive?: Export
   onChanged: () => void
   onNavigateStep: (step: StepId) => void
 }
 
-export function ExportScreen({ project, analysis, relatedExport, onChanged, onNavigateStep }: ExportScreenProps) {
+export function ExportScreen({ project, analysis, relatedExport, previousArchive, onChanged, onNavigateStep }: ExportScreenProps) {
   const navigate = useNavigate()
   const steps = sessionSteps({ project, current: "export", onNavigate: onNavigateStep })
 
@@ -57,6 +59,19 @@ export function ExportScreen({ project, analysis, relatedExport, onChanged, onNa
           onChanged={onChanged}
         />
       )}
+
+      {previousArchive ? (
+        <section className="mt-10 border-t border-line pt-8">
+          <h2 className="mb-4 text-lg font-semibold text-ink">Earlier archive from this analysis</h2>
+          <ArchiveDone
+            projectId={project.id}
+            exportId={previousArchive.id}
+            files={previousArchive.files ?? []}
+            onExportAnother={() => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: project.id } })}
+            onNewSession={() => void navigate({ to: "/" })}
+          />
+        </section>
+      ) : null}
     </div>
   )
 }
