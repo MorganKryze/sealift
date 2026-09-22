@@ -134,7 +134,28 @@ func decodeAnalysisResult(raw json.RawMessage) (AnalysisResult, bool) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return AnalysisResult{}, false
 	}
+	// An analysis written by an older release lacks fields added since, such
+	// as cves, and the contract marks these arrays required: a client must
+	// never meet null where it expects a list.
+	result.Dependencies = orEmpty(result.Dependencies)
+	result.Warnings = orEmpty(result.Warnings)
+	for i := range result.Dependencies {
+		d := &result.Dependencies[i]
+		d.Cves = orEmpty(d.Cves)
+		d.Candidates = orEmpty(d.Candidates)
+		for j := range d.Candidates {
+			d.Candidates[j].Cves = orEmpty(d.Candidates[j].Cves)
+			d.Candidates[j].Signals = orEmpty(d.Candidates[j].Signals)
+		}
+	}
 	return result, true
+}
+
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 func targetToAPI(t store.Target) Target {
