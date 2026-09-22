@@ -91,7 +91,17 @@ describe("ToolsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update database" }))
 
     await waitFor(() => expect(screen.getByRole("button", { name: /Updating the database/ })).toBeDisabled())
-    finish(baseTools)
+    finish({ ...baseTools, trivyDbDate: new Date(Date.parse(baseTools.trivyDbDate) + 3600_000).toISOString() })
     await waitFor(() => expect(screen.getByText(/^Database updated/)).toBeInTheDocument())
+  })
+
+  it("says the database was already current when its date did not move", async () => {
+    vi.mocked(updateTrivyDB).mockResolvedValue(baseTools)
+
+    renderPanel()
+    await waitFor(() => screen.getByRole("button", { name: "Update database" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update database" }))
+
+    await waitFor(() => expect(screen.getByText(/^The database is already current/)).toBeInTheDocument())
   })
 })

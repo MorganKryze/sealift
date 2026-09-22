@@ -25,7 +25,10 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
     onSuccess: ({ state }) => onChanged(state),
   })
   const activateMutation = useMutation({ mutationFn: activateTrivy, onSuccess: onChanged })
-  const dbMutation = useMutation({ mutationFn: updateTrivyDB, onSuccess: onChanged })
+  const dbMutation = useMutation({
+    mutationFn: async () => ({ before: toolsQuery.data?.trivyDbDate, state: await updateTrivyDB() }),
+    onSuccess: ({ state }) => onChanged(state),
+  })
 
   if (toolsQuery.isPending) {
     return <p className="text-muted">Loading tools…</p>
@@ -129,7 +132,9 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
         </Button>
         {dbMutation.isSuccess ? (
           <p role="status" className="text-sm text-severity-resolved-fg">
-            Database updated: {formatDbDate(dbMutation.data.trivyDbDate)}.
+            {dbMutation.data.state.trivyDbDate === dbMutation.data.before
+              ? `The database is already current, downloaded ${formatDbDate(dbMutation.data.state.trivyDbDate)}.`
+              : `Database updated: ${formatDbDate(dbMutation.data.state.trivyDbDate)}.`}
           </p>
         ) : null}
         {dbError ? <ProblemNotice status={dbError.status} problem={dbError.problem} /> : null}
