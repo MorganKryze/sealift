@@ -3,12 +3,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ProblemError } from "@/api/client"
-import { getTools, updateTrivy, type ToolsState } from "@/api/settings"
+import { getTools, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
 import { ToolsPanel } from "@/components/settings/tools-panel"
 
 vi.mock("@/api/settings", async () => {
   const actual = await vi.importActual<typeof import("@/api/settings")>("@/api/settings")
-  return { ...actual, getTools: vi.fn(), updateTrivy: vi.fn() }
+  return { ...actual, getTools: vi.fn(), updateTrivy: vi.fn(), updateTrivyDB: vi.fn() }
 })
 
 const baseTools: ToolsState = {
@@ -35,6 +35,7 @@ function renderPanel() {
 beforeEach(() => {
   vi.mocked(getTools).mockReset().mockResolvedValue(baseTools)
   vi.mocked(updateTrivy).mockReset()
+  vi.mocked(updateTrivyDB).mockReset()
 })
 
 describe("ToolsPanel", () => {
@@ -56,5 +57,41 @@ describe("ToolsPanel", () => {
     await waitFor(() => {
       expect(screen.getByText("A tool update is already running.")).toBeInTheDocument()
     })
+  })
+
+  it("shows the update running, then says Trivy was already current", async () => {
+    let finish: (state: ToolsState) => void = () => {}
+    vi.mocked(updateTrivy).mockReturnValue(new Promise((resolve) => (finish = resolve)))
+
+    renderPanel()
+    await waitFor(() => screen.getByRole("button", { name: "Update Trivy" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update Trivy" }))
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Checking for a newer Trivy/ })).toBeDisabled())
+    finish(baseTools)
+    await waitFor(() => expect(screen.getByText("Trivy 0.55.0 is already the newest release sealift installs.")).toBeInTheDocument())
+  })
+
+  it("says which Trivy it installed", async () => {
+    vi.mocked(updateTrivy).mockResolvedValue({ ...baseTools, trivyActive: "0.56.0", trivyInstalled: ["0.55.0", "0.56.0"] })
+
+    renderPanel()
+    await waitFor(() => screen.getByRole("button", { name: "Update Trivy" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update Trivy" }))
+
+    await waitFor(() => expect(screen.getByText("Trivy 0.56.0 installed and active.")).toBeInTheDocument())
+  })
+
+  it("shows the database update running, then its new date", async () => {
+    let finish: (state: ToolsState) => void = () => {}
+    vi.mocked(updateTrivyDB).mockReturnValue(new Promise((resolve) => (finish = resolve)))
+
+    renderPanel()
+    await waitFor(() => screen.getByRole("button", { name: "Update database" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update database" }))
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Updating the database/ })).toBeDisabled())
+    finish(baseTools)
+    await waitFor(() => expect(screen.getByText(/^Database updated/)).toBeInTheDocument())
   })
 })

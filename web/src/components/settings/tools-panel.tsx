@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { LoaderCircle } from "lucide-react"
 
 import { ProblemError } from "@/api/client"
 import { activateTrivy, getTools, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
@@ -18,7 +19,11 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
     queryClient.setQueryData(["tools"], state)
   }
 
-  const updateMutation = useMutation({ mutationFn: (force: boolean) => updateTrivy(force), onSuccess: onChanged })
+  // Keeps the version active before the click, so the result can say whether anything changed.
+  const updateMutation = useMutation({
+    mutationFn: async (force: boolean) => ({ before: toolsQuery.data?.trivyActive, state: await updateTrivy(force) }),
+    onSuccess: ({ state }) => onChanged(state),
+  })
   const activateMutation = useMutation({ mutationFn: activateTrivy, onSuccess: onChanged })
   const dbMutation = useMutation({ mutationFn: updateTrivyDB, onSuccess: onChanged })
 
@@ -52,7 +57,7 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
 
   return (
     <div className="flex flex-col gap-6">
-      <h2 className="text-lg font-semibold text-ink">Tools</h2>
+      <h2 className="text-base font-semibold text-ink">Scanner</h2>
 
       <div className="flex flex-col gap-2">
         <p className="text-sm text-ink">
@@ -94,15 +99,39 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
           disabled={updateMutation.isPending}
           onClick={() => updateMutation.mutate(false)}
         >
-          Update Trivy
+          {updateMutation.isPending ? (
+            <>
+              <LoaderCircle className="size-4 animate-spin" /> Checking for a newer Trivy…
+            </>
+          ) : (
+            "Update Trivy"
+          )}
         </Button>
+        {updateMutation.isSuccess ? (
+          <p role="status" className="text-sm text-severity-resolved-fg">
+            {updateMutation.data.state.trivyActive === updateMutation.data.before
+              ? `Trivy ${updateMutation.data.state.trivyActive} is already the newest release sealift installs.`
+              : `Trivy ${updateMutation.data.state.trivyActive} installed and active.`}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-2">
         <p className="text-sm text-ink">Vulnerability database: {formatDbDate(tools.trivyDbDate)}</p>
         <Button variant="outline" className="self-start" disabled={dbMutation.isPending} onClick={() => dbMutation.mutate()}>
-          Update database
+          {dbMutation.isPending ? (
+            <>
+              <LoaderCircle className="size-4 animate-spin" /> Updating the database…
+            </>
+          ) : (
+            "Update database"
+          )}
         </Button>
+        {dbMutation.isSuccess ? (
+          <p role="status" className="text-sm text-severity-resolved-fg">
+            Database updated: {formatDbDate(dbMutation.data.trivyDbDate)}.
+          </p>
+        ) : null}
         {dbError ? <ProblemNotice status={dbError.status} problem={dbError.problem} /> : null}
       </div>
 
