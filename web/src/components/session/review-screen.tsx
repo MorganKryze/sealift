@@ -100,7 +100,14 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     return (
       <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
         <StepBar steps={steps} />
-        <p className="p-8 text-muted">No finished analysis to review yet.</p>
+        <div className="flex flex-col items-start gap-3">
+          <p className="text-muted">
+            {analysis.state === "failed" || analysis.state === "cancelled" || analysis.state === "interrupted"
+              ? "This analysis did not finish, so there is no proposal to review."
+              : "The analysis is still running. The proposal appears here once it finishes."}
+          </p>
+          <Button onClick={() => onNavigateStep("analysis")}>Go to the analysis</Button>
+        </div>
       </div>
     )
   }

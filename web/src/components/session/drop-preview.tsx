@@ -16,10 +16,10 @@ interface DropPreviewProps {
 }
 
 const STEPS: StepBarStep[] = [
-  stepBarStep("drop", "current"),
-  stepBarStep("analysis", "upcoming"),
-  stepBarStep("review", "upcoming"),
-  stepBarStep("export", "upcoming"),
+  stepBarStep("drop", "available", true),
+  stepBarStep("analysis", "upcoming", false),
+  stepBarStep("review", "upcoming", false),
+  stepBarStep("export", "upcoming", false),
 ]
 
 /**

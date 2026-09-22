@@ -1,16 +1,23 @@
-import { Check, X } from "lucide-react"
+import { Check, LoaderCircle, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
 export type StepId = "drop" | "analysis" | "review" | "export"
 
-export type StepStatus = "upcoming" | "current" | "done" | "failed"
+/**
+ * What a step's work has come to. "available" is reachable but not done
+ * yet (Review before any export); which step is on screen is a separate
+ * flag, so a failed analysis still reads as failed while it is shown.
+ */
+export type StepStatus = "upcoming" | "available" | "running" | "done" | "failed"
 
 export interface StepBarStep {
   id: StepId
   label: string
   sub: string
   status: StepStatus
+  /** The step on screen. */
+  current: boolean
   /** Present only when the step can be navigated to. */
   onNavigate?: () => void
 }
@@ -27,8 +34,8 @@ const STEP_LABELS: Record<StepId, { label: string; sub: string }> = {
 }
 
 /** Fills in label/sub from the step id, so callers only pass status and onNavigate. */
-export function stepBarStep(id: StepId, status: StepStatus, onNavigate?: () => void): StepBarStep {
-  return { id, ...STEP_LABELS[id], status, onNavigate }
+export function stepBarStep(id: StepId, status: StepStatus, current: boolean, onNavigate?: () => void): StepBarStep {
+  return { id, ...STEP_LABELS[id], status, current, onNavigate }
 }
 
 /**
@@ -45,6 +52,8 @@ export function StepBar({ steps }: StepBarProps) {
             <X className="size-3.5" strokeWidth={3} />
           ) : step.status === "done" ? (
             <Check className="size-3.5" strokeWidth={3} />
+          ) : step.status === "running" ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
           ) : (
             index + 1
           )
@@ -55,7 +64,7 @@ export function StepBar({ steps }: StepBarProps) {
               className={cn(
                 "grid size-6 flex-none place-items-center rounded-full border text-xs font-semibold",
                 step.status === "done" && "border-accent bg-accent text-background",
-                step.status === "current" && "border-accent text-accent",
+                (step.status === "available" || step.status === "running") && "border-accent text-accent",
                 step.status === "failed" && "border-severity-critical bg-severity-critical text-white",
                 step.status === "upcoming" && "border-line text-muted",
               )}
@@ -71,10 +80,11 @@ export function StepBar({ steps }: StepBarProps) {
 
         const className = cn(
           "flex flex-1 basis-[120px] items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
-          step.status === "current" && "border-accent bg-card font-semibold text-ink",
-          step.status === "done" && "border-line text-ink hover:border-accent",
-          step.status === "failed" && "border-severity-critical/40 text-ink",
-          step.status === "upcoming" && "cursor-not-allowed border-line text-muted opacity-70",
+          step.status === "upcoming" ? "cursor-not-allowed border-line text-muted opacity-70" : "border-line text-ink",
+          step.status === "failed" && "border-severity-critical/40",
+          step.onNavigate && "hover:border-accent",
+          step.current && "bg-card font-semibold opacity-100",
+          step.current && (step.status === "failed" ? "border-severity-critical" : "border-accent"),
         )
 
         if (step.onNavigate) {
@@ -83,7 +93,7 @@ export function StepBar({ steps }: StepBarProps) {
               key={step.id}
               type="button"
               onClick={step.onNavigate}
-              aria-current={step.status === "current" ? "step" : undefined}
+              aria-current={step.current ? "step" : undefined}
               className={className}
             >
               {content}
@@ -92,7 +102,7 @@ export function StepBar({ steps }: StepBarProps) {
         }
 
         return (
-          <span key={step.id} aria-disabled="true" aria-current={step.status === "current" ? "step" : undefined} className={className}>
+          <span key={step.id} aria-disabled={step.current ? undefined : "true"} aria-current={step.current ? "step" : undefined} className={className}>
             {content}
           </span>
         )
