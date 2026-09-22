@@ -98,6 +98,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
   }
 
   const steps = sessionSteps({ project, current: "analysis", onNavigate: onNavigateStep })
+  const runningIndex = ANALYSIS_STEPS.findIndex((step) => !eventsByName.has(step.id))
 
   const title = failedState
     ? analysis.state === "failed"
@@ -109,11 +110,14 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
       ? "Analysis finished"
       : "Analysing"
 
-  const lead = failedState
-    ? "The cause and the next action are below."
-    : analysis.state === "done"
-      ? "sealift picked a version for each dependency."
-      : "Resolving each candidate against the whole project takes most of the time. You can leave this page; the session keeps running."
+  const cancelledState = analysis.state === "cancelled"
+  const lead = cancelledState
+    ? "You stopped it. Your file is kept; start it again whenever you want."
+    : failedState
+      ? "The cause and the next action are below."
+      : analysis.state === "done"
+        ? "sealift picked a version for each dependency."
+        : "Resolving each candidate against the whole project takes most of the time. You can leave this page; the session keeps running."
 
   const elapsedMs = events.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0)
 
@@ -131,7 +135,9 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
           <ol className="py-1.5">
             {ANALYSIS_STEPS.map((step, index) => {
               const entry = eventsByName.get(step.id)
-              const state = entry?.state ?? ""
+              // The server reports a step when it ends, so the one in progress is
+              // the first without a report while the analysis is live.
+              const state = entry?.state ?? (live && index === runningIndex ? "running" : "")
               return (
                 <li
                   key={step.id}
@@ -170,7 +176,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
               )
             })}
           </ol>
-          <div hidden={!resolveProgress} className="border-t border-line px-5.5 py-3.5">
+          <div hidden={!resolveProgress || !live} className="border-t border-line px-5.5 py-3.5">
             <div className="flex justify-between text-xs text-muted tabular-nums">
               <span>
                 {resolveProgress ? `${resolveProgress.done} of ${resolveProgress.total} candidates resolved` : ""}
@@ -215,17 +221,20 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
         <FailureBlock
           projectId={projectId}
           analysisId={analysis.id}
-          heading="What went wrong"
+          tone={cancelledState ? "neutral" : "failure"}
+          heading={cancelledState ? "Stopped at your request" : "What went wrong"}
           message={failureMessage(analysis)}
           detail="Your uploaded file is kept. Retrying starts a new analysis from the beginning."
           actions={
             <>
               <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
-                Retry
+                {cancelledState ? "Start it again" : "Retry"}
               </Button>
-              <Button variant="outline" onClick={settingsPanel.open}>
-                Open settings
-              </Button>
+              {cancelledState ? null : (
+                <Button variant="outline" onClick={settingsPanel.open}>
+                  Open settings
+                </Button>
+              )}
               <Button variant="ghost" onClick={() => void navigate({ to: "/" })}>
                 Choose another file
               </Button>
