@@ -206,32 +206,31 @@ func (r *run) progress(done, total int) {
 }
 
 // progressWithRemaining is progress plus an estimate of the time left,
-// computed by remaining from elapsed and parallelism. Only
-// stepResolveCandidates' caller has both a meaningful elapsed clock (the
-// other progress sources finish in a handful of steps, too few to rate)
-// and its own concurrency limit, so every other step keeps calling
-// progress with neither.
-func (r *run) progressWithRemaining(done, total int, elapsed time.Duration, parallelism int) {
+// computed by remaining from elapsed. Only stepResolveCandidates' caller
+// has a meaningful elapsed clock (the other progress sources finish in a
+// handful of steps, too few to rate), so every other step keeps calling
+// progress instead.
+func (r *run) progressWithRemaining(done, total int, elapsed time.Duration) {
 	data := progressData{Done: done, Total: total}
 	if done > 0 {
-		ms := remaining(elapsed, done, total, parallelism).Milliseconds()
+		ms := remaining(elapsed, done, total).Milliseconds()
 		data.EstimatedRemainingMs = &ms
 	}
 	r.emit(Event{Kind: "progress", Data: mustJSON(data)})
 }
 
 // remaining estimates the time left to finish total items, having done
-// some of them in elapsed, running parallelism at a time: the mean
-// per-item duration so far, times how many remain, divided by
-// parallelism. It returns zero when done is zero (one data point is not
-// yet a rate), when nothing remains, or when parallelism is not
-// positive.
-func remaining(elapsed time.Duration, done, total, parallelism int) time.Duration {
-	if done <= 0 || total <= done || parallelism <= 0 {
+// some of them in elapsed: elapsed is wall-clock time since the step
+// started, already measured while every worker ran at once, so
+// elapsed/done is already the mean wall-clock time per item at whatever
+// concurrency the step runs at; dividing by the worker count again would
+// double-count it. It returns zero when done is zero (one data point is
+// not yet a rate) or when nothing remains.
+func remaining(elapsed time.Duration, done, total int) time.Duration {
+	if done <= 0 || total <= done {
 		return 0
 	}
-	mean := elapsed / time.Duration(done)
-	return mean * time.Duration(total-done) / time.Duration(parallelism)
+	return elapsed * time.Duration(total-done) / time.Duration(done)
 }
 
 // commit writes status.json and renames the pending .tmp directory into

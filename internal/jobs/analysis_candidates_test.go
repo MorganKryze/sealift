@@ -11,25 +11,28 @@ import (
 	"github.com/MorganKryze/sealift/npm"
 )
 
-// TestRemaining checks the pure estimate: mean duration so far times what
-// remains, divided by parallelism, zero when done is zero (one data
-// point is not yet a rate).
+// TestRemaining checks the pure estimate: mean wall-clock duration per
+// item so far, times how many remain. elapsed is already wall-clock time
+// at whatever concurrency the step runs at, so elapsed/done is already
+// the per-item rate: dividing by a worker count again (the bug in finding
+// 3) would double-count it, which is why the "two workers" case below
+// must give the same answer as "one worker" for the same elapsed, done
+// and total.
 func TestRemaining(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		elapsed     time.Duration
 		done, total int
-		parallelism int
 		want        time.Duration
 	}{
-		{"one worker", 10 * time.Second, 5, 15, 1, 20 * time.Second},
-		{"two workers halve it", 10 * time.Second, 5, 15, 2, 10 * time.Second},
-		{"nothing done yet is unknown", 10 * time.Second, 0, 15, 1, 0},
-		{"nothing left", 10 * time.Second, 15, 15, 1, 0},
+		{"one worker", 10 * time.Second, 5, 15, 20 * time.Second},
+		{"two workers, same wall-clock elapsed, same estimate", 10 * time.Second, 5, 15, 20 * time.Second},
+		{"nothing done yet is unknown", 10 * time.Second, 0, 15, 0},
+		{"nothing left", 10 * time.Second, 15, 15, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := remaining(tc.elapsed, tc.done, tc.total, tc.parallelism); got != tc.want {
-				t.Errorf("remaining(%v, %d, %d, %d) = %v, want %v", tc.elapsed, tc.done, tc.total, tc.parallelism, got, tc.want)
+			if got := remaining(tc.elapsed, tc.done, tc.total); got != tc.want {
+				t.Errorf("remaining(%v, %d, %d) = %v, want %v", tc.elapsed, tc.done, tc.total, got, tc.want)
 			}
 		})
 	}

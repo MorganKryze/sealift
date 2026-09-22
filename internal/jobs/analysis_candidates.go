@@ -98,13 +98,9 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 		for _, d := range deps {
 			packuments[d.dep.Name] = d.packument
 		}
-		parallelism := r.a.Settings.ResolveParallelism
-		if parallelism <= 0 {
-			parallelism = 1
-		}
 		start := time.Now()
 		onProgress := func(done, total int) {
-			r.progressWithRemaining(done, total, time.Since(start), parallelism)
+			r.progressWithRemaining(done, total, time.Since(start))
 		}
 		outcomes = r.a.resolveCandidateTasks(r.ctx, tasks, packuments, projectVersionsOf(manifest), onProgress)
 		for _, o := range outcomes {
