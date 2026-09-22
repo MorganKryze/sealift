@@ -26,6 +26,12 @@ export function getProject(projectId: string): Promise<Project> {
   return apiFetch<Project>(`/projects/${projectId}`)
 }
 
+/** Fetches the package.json a project was created from, as uploaded. */
+export async function getProjectManifest(projectId: string): Promise<string> {
+  const response = await send(`/api/projects/${projectId}/manifest`, undefined, (status, problem) => new ApiError(status, problem))
+  return response.text()
+}
+
 /**
  * Fetches an analysis' full log as plain text. Not routed through apiFetch:
  * that helper always parses the response as JSON.

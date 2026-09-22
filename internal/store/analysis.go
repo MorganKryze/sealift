@@ -202,3 +202,20 @@ func (s *Store) deleteJobDir(projectID, kind, id string) error {
 	}
 	return nil
 }
+
+// ProjectManifest opens the package.json a project was created from, as
+// uploaded. ErrNotFound when the project does not exist.
+func (s *Store) ProjectManifest(projectID string) (*os.File, error) {
+	if err := validID(projectID); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.root, "projects", projectID, "package.json")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	return f, nil
+}

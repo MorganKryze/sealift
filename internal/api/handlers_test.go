@@ -1606,3 +1606,31 @@ func TestQueueExportWithNothingToPackAnswers400(t *testing.T) {
 		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
 	}
 }
+
+func TestGetProjectManifestReturnsTheUploadedBytes(t *testing.T) {
+	srv, _ := newTestServer(t)
+	manifest := `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`
+	project, resp := createProject(t, srv, manifest)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+
+	got, err := http.Get(fmt.Sprintf("%s/api/projects/%s/manifest", srv.URL, project.Id))
+	if err != nil {
+		t.Fatalf("GET manifest: %v", err)
+	}
+	defer got.Body.Close()
+	body, _ := io.ReadAll(got.Body)
+	if got.StatusCode != http.StatusOK || string(body) != manifest {
+		t.Fatalf("status %d, body %q, want 200 and the uploaded bytes", got.StatusCode, body)
+	}
+
+	missing, err := http.Get(srv.URL + "/api/projects/no-such-project/manifest")
+	if err != nil {
+		t.Fatalf("GET missing manifest: %v", err)
+	}
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing project status = %d, want 404", missing.StatusCode)
+	}
+}

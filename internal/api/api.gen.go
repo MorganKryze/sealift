@@ -622,6 +622,9 @@ type ServerInterface interface {
 	// DownloadExportFile Download one file of a finished export
 	// (GET /projects/{projectId}/exports/{exportId}/files/{name})
 	DownloadExportFile(w http.ResponseWriter, r *http.Request, projectId ProjectId, exportId ExportId, name string)
+	// GetProjectManifest Get the package.json a project was created from, byte for byte
+	// (GET /projects/{projectId}/manifest)
+	GetProjectManifest(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 	// SetProjectTarget Change the project's target platform and toolchain
 	// (PUT /projects/{projectId}/target)
 	SetProjectTarget(w http.ResponseWriter, r *http.Request, projectId ProjectId)
@@ -1117,6 +1120,32 @@ func (siw *ServerInterfaceWrapper) DownloadExportFile(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// GetProjectManifest operation middleware
+func (siw *ServerInterfaceWrapper) GetProjectManifest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", r.PathValue("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProjectManifest(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetProjectTarget operation middleware
 func (siw *ServerInterfaceWrapper) SetProjectTarget(w http.ResponseWriter, r *http.Request) {
 
@@ -1355,6 +1384,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses", wrapper.QueueAnalysis)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}", wrapper.DeleteAnalysis)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}", wrapper.GetAnalysis)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/manifest", wrapper.GetProjectManifest)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/log", wrapper.GetAnalysisLog)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/cancel", wrapper.CancelAnalysis)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects/{projectId}/analyses/{analysisId}/exports", wrapper.QueueExport)
@@ -1984,6 +2014,45 @@ func (response DownloadExportFiledefaultApplicationProblemPlusJSONResponse) Visi
 	return err
 }
 
+type GetProjectManifestRequestObject struct {
+	ProjectId ProjectId `json:"projectId"`
+}
+
+type GetProjectManifestResponseObject interface {
+	VisitGetProjectManifestResponse(w http.ResponseWriter) error
+}
+
+type GetProjectManifest200JSONResponse map[string]interface{}
+
+func (response GetProjectManifest200JSONResponse) VisitGetProjectManifestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectManifestdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetProjectManifestdefaultApplicationProblemPlusJSONResponse) VisitGetProjectManifestResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetProjectTargetRequestObject struct {
 	ProjectId ProjectId `json:"projectId"`
 	Body      *SetProjectTargetJSONRequestBody
@@ -2302,6 +2371,9 @@ type StrictServerInterface interface {
 	// DownloadExportFile Download one file of a finished export
 	// (GET /projects/{projectId}/exports/{exportId}/files/{name})
 	DownloadExportFile(ctx context.Context, request DownloadExportFileRequestObject) (DownloadExportFileResponseObject, error)
+	// GetProjectManifest Get the package.json a project was created from, byte for byte
+	// (GET /projects/{projectId}/manifest)
+	GetProjectManifest(ctx context.Context, request GetProjectManifestRequestObject) (GetProjectManifestResponseObject, error)
 	// SetProjectTarget Change the project's target platform and toolchain
 	// (PUT /projects/{projectId}/target)
 	SetProjectTarget(ctx context.Context, request SetProjectTargetRequestObject) (SetProjectTargetResponseObject, error)
@@ -2767,6 +2839,32 @@ func (sh *strictHandler) DownloadExportFile(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DownloadExportFileResponseObject); ok {
 		if err := validResponse.VisitDownloadExportFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetProjectManifest operation middleware
+func (sh *strictHandler) GetProjectManifest(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	var request GetProjectManifestRequestObject
+
+	request.ProjectId = projectId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetProjectManifest(ctx, request.(GetProjectManifestRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetProjectManifest")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetProjectManifestResponseObject); ok {
+		if err := validResponse.VisitGetProjectManifestResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

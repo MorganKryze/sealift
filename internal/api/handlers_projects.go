@@ -226,3 +226,26 @@ func (h *Handlers) SetProjectTarget(_ context.Context, req SetProjectTargetReque
 	}
 	return SetProjectTarget200JSONResponse(projectToAPI(project, nil, nil)), nil
 }
+
+type projectManifestResponse struct {
+	body io.ReadCloser
+}
+
+func (r projectManifestResponse) VisitGetProjectManifestResponse(w http.ResponseWriter) error {
+	defer r.body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, err := io.Copy(w, r.body)
+	return err
+}
+
+// GetProjectManifest returns the package.json a project was created from,
+// byte for byte, so a session can show what was uploaded even when its
+// analysis never produced a result.
+func (h *Handlers) GetProjectManifest(_ context.Context, req GetProjectManifestRequestObject) (GetProjectManifestResponseObject, error) {
+	f, err := h.Store.ProjectManifest(req.ProjectId)
+	if err != nil {
+		return GetProjectManifestdefaultApplicationProblemPlusJSONResponse(autoProblem("get project manifest", err)), nil
+	}
+	return projectManifestResponse{body: f}, nil
+}

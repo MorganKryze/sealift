@@ -1,6 +1,9 @@
-import type { Analysis, Project } from "@/api/projects"
+import { useQuery } from "@tanstack/react-query"
+
+import { getProjectManifest, type Analysis, type Project } from "@/api/projects"
 import { StepBar, type StepBarStep } from "@/components/step-bar"
 import { Card, CardContent } from "@/components/ui/card"
+import { parseManifestPreview } from "@/lib/manifestPreview"
 
 interface DropSummaryProps {
   project: Project
@@ -9,13 +12,22 @@ interface DropSummaryProps {
 }
 
 /**
- * The Drop step's read-only view once a session already exists. The API
- * does not serve the uploaded package.json back, so this reconstructs the
- * dependency list from the analysis that read it; before that analysis has
- * a result, only the project's own name and target are known.
+ * The Drop step's read-only view once a session already exists: the
+ * package.json as uploaded, read back from the server, so a session whose
+ * analysis failed still shows what it was given.
  */
 export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
-  const dependencies = analysis?.result?.dependencies ?? []
+  const manifestQuery = useQuery({ queryKey: ["manifest", project.id], queryFn: () => getProjectManifest(project.id) })
+  const uploaded = (() => {
+    try {
+      return manifestQuery.data ? parseManifestPreview(manifestQuery.data, project.name).dependencies : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  const dependencies = (uploaded ?? analysis?.result?.dependencies.map((d) => ({ name: d.name, version: d.current })) ?? []).map(
+    (d) => ({ name: d.name, version: d.version }),
+  )
   const shown = dependencies.slice(0, 18)
   const extra = dependencies.length - shown.length
 
@@ -25,9 +37,11 @@ export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-ink">{project.name}</h1>
         <p className="mt-1.5 max-w-[62ch] text-muted">
-          {dependencies.length > 0
-            ? "The dependencies this session's analysis read from package.json."
-            : "The dependency list shows here once the analysis has a result."}
+          {manifestQuery.isPending
+            ? "Reading the uploaded package.json…"
+            : dependencies.length > 0
+              ? "The package.json this session was started from."
+              : "sealift could not read back the package.json of this session."}
         </p>
       </div>
       <Card>
@@ -39,7 +53,7 @@ export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
             <dl className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-x-6 gap-y-2.5">
               <div>
                 <dt className="text-xs text-muted">Dependencies</dt>
-                <dd className="font-semibold text-ink tabular-nums">{dependencies.length > 0 ? dependencies.length : "After analysis"}</dd>
+                <dd className="font-semibold text-ink tabular-nums">{dependencies.length > 0 ? dependencies.length : "Unknown"}</dd>
               </div>
               <div>
                 <dt className="text-xs text-muted">Target</dt>
@@ -52,7 +66,7 @@ export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
               <div className="mt-3.5 flex flex-wrap gap-1.5">
                 {shown.map((dependency) => (
                   <span key={dependency.name} className="rounded-md border border-line bg-card px-2 py-0.5 font-mono text-xs">
-                    {dependency.name}@{dependency.current}
+                    {dependency.name}@{dependency.version}
                   </span>
                 ))}
                 {extra > 0 ? (

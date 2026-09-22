@@ -172,6 +172,24 @@ paths:
           description: Deleted
         default:
           $ref: "#/components/responses/Problem"
+  /projects/{projectId}/manifest:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProjectManifest
+      tags:
+        - projects
+      summary: Get the package.json a project was created from, byte for byte
+      responses:
+        "200":
+          description: The uploaded package.json
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Problem"
   /projects/{projectId}/analyses/{analysisId}/log:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
