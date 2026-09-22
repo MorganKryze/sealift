@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { apiFetch, ApiError } from "@/api/client"
-import { cancelExport, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
+import { cancelExport, queueExport, type Analysis, type DependencyResult, type Export, type Project } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
 import { ProblemNotice } from "@/components/problem-notice"
 import { StepBar, type StepId } from "@/components/step-bar"
@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { useSelection } from "@/hooks/use-selection"
+import { exportSelection } from "@/lib/exportSelection"
 import { sessionSteps, TERMINAL_FAILED_STATES } from "@/lib/sessionSteps"
 import { cn, formatBytes, formatDuration } from "@/lib/utils"
 
@@ -55,6 +56,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
           key={relatedExport.id}
           projectId={project.id}
           analysisId={analysis.id}
+          dependencies={analysis.result?.dependencies ?? []}
           exportRecord={relatedExport}
           onChanged={onChanged}
         />
@@ -79,6 +81,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
 interface ExportProgressProps {
   projectId: string
   analysisId: string
+  dependencies: DependencyResult[]
   exportRecord: Export
   onChanged: () => void
 }
@@ -92,7 +95,7 @@ interface ExportProgressProps {
  * carries the same cause a beat earlier, before the next poll refreshes
  * exportRecord itself.
  */
-function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: ExportProgressProps) {
+function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onChanged }: ExportProgressProps) {
   const selection = useSelection(analysisId)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -100,7 +103,8 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
   const events = useJobEvents(exportRecord.id, active, onChanged)
 
   const retryMutation = useMutation({
-    mutationFn: () => queueExport(projectId, analysisId, { selection: selection.selection, includeProject: false }),
+    mutationFn: () =>
+      queueExport(projectId, analysisId, { selection: exportSelection(dependencies, selection.selection), includeProject: false }),
     onSuccess: onChanged,
   })
   const retryError = retryMutation.error instanceof ApiError ? retryMutation.error : null

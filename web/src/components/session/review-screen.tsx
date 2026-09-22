@@ -14,6 +14,7 @@ import { useSettingsPanel } from "@/components/settings/settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { useSelection } from "@/hooks/use-selection"
+import { exportSelection } from "@/lib/exportSelection"
 import {
   afterVectorOf,
   groupDependencies,
@@ -79,7 +80,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   const confirmMutation = useMutation({
     mutationFn: () =>
       queueExport(project.id, analysis.id, {
-        selection: Object.fromEntries(changedDependencies.map((d) => [d.name, [pickedVersionOf(d)]])),
+        selection: exportSelection(dependencies, selection.selection),
         includeProject: false,
       }),
     onSuccess: (created) => {
