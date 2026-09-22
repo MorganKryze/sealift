@@ -41,7 +41,7 @@ describe("FailureBlock", () => {
     await waitFor(() => {
       expect(screen.getByText(/database update failed/)).toBeInTheDocument()
     })
-    expect(fetch).toHaveBeenCalledWith("/api/projects/p1/analyses/a1/log")
+    expect(fetch).toHaveBeenCalledWith("/api/projects/p1/analyses/a1/log", undefined)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 

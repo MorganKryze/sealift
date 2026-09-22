@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, apiFetchProblem } from "./client"
+import { ApiError, apiFetch, apiFetchProblem, send } from "./client"
 import type { components } from "./schema"
 
 export type Project = components["schemas"]["Project"]
@@ -31,11 +31,7 @@ export function getProject(projectId: string): Promise<Project> {
  * that helper always parses the response as JSON.
  */
 export async function getAnalysisLog(projectId: string, analysisId: string): Promise<string> {
-  const response = await fetch(`/api/projects/${projectId}/analyses/${analysisId}/log`)
-  if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as Problem | null
-    throw new ApiError(response.status, problem)
-  }
+  const response = await send(`/api/projects/${projectId}/analyses/${analysisId}/log`, undefined, (status, problem) => new ApiError(status, problem))
   return response.text()
 }
 
@@ -86,12 +82,7 @@ export async function createProject(file: File): Promise<Project> {
   const body = new FormData()
   body.append("manifest", file)
 
-  const response = await fetch("/api/projects", { method: "POST", body })
-
-  if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as Problem | null
-    throw new ProjectUploadError(response.status, problem)
-  }
+  const response = await send("/api/projects", { method: "POST", body }, (status, problem) => new ProjectUploadError(status, problem))
 
   return (await response.json()) as Project
 }

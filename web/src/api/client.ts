@@ -29,6 +29,38 @@ export class ProblemError extends Error {
   }
 }
 
+/** What every screen shows when a request never reached the server. */
+export const UNREACHABLE: Problem = {
+  type: "sealift-unreachable",
+  title: "sealift is not reachable",
+  status: 0,
+  detail: "The request did not reach the server. Check that the sealift container is running, then try again.",
+}
+
+/**
+ * Sends a request and turns every failure into the caller's typed error:
+ * a response outside 2xx with its Problem body, and a request that never
+ * reached the server (fetch rejects with a TypeError) with UNREACHABLE.
+ * Screens only display typed errors, so an untyped one would fail silently.
+ */
+export async function send(
+  url: string,
+  init: RequestInit | undefined,
+  fail: (status: number, problem: Problem | null) => Error,
+): Promise<Response> {
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch {
+    throw fail(0, UNREACHABLE)
+  }
+  if (!response.ok) {
+    const problem = (await response.json().catch(() => null)) as Problem | null
+    throw fail(response.status, problem)
+  }
+  return response
+}
+
 /**
  * Fetches from the API. The path carries dynamic ids, so it stays a plain
  * string rather than a schema-derived literal; the caller supplies the
@@ -36,15 +68,11 @@ export class ProblemError extends Error {
  * keyed by method and status and a single generic cannot infer that shape.
  */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  })
-
-  if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as Problem | null
-    throw new ApiError(response.status, problem)
-  }
+  const response = await send(
+    `${baseUrl}${path}`,
+    { ...init, headers: { "Content-Type": "application/json", ...init?.headers } },
+    (status, problem) => new ApiError(status, problem),
+  )
 
   if (response.status === 204) {
     return undefined as T
@@ -58,15 +86,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
  * list a validation failure carries, not just its title and detail.
  */
 export async function apiFetchProblem<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  })
-
-  if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as Problem | null
-    throw new ProblemError(response.status, problem)
-  }
+  const response = await send(
+    `${baseUrl}${path}`,
+    { ...init, headers: { "Content-Type": "application/json", ...init?.headers } },
+    (status, problem) => new ProblemError(status, problem),
+  )
 
   if (response.status === 204) {
     return undefined as T
