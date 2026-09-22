@@ -39,10 +39,8 @@ func TestRemaining(t *testing.T) {
 }
 
 // TestStepResolveCandidatesEmitsEstimatedRemainingMs proves the progress
-// events resolve-candidates emits carry estimatedRemainingMs once at
-// least one candidate has resolved, and omit it for the first event
-// (done == 0), so the field never prints a guess computed from zero
-// data.
+// events resolve-candidates emits carry estimatedRemainingMs once
+// candidates have resolved.
 func TestStepResolveCandidatesEmitsEstimatedRemainingMs(t *testing.T) {
 	dep := npm.Dependency{Name: "foo", Version: "1.0.0"}
 	manifest := npm.Manifest{Dependencies: []npm.Dependency{dep}}

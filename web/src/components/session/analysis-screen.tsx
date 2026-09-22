@@ -13,7 +13,7 @@ import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { sessionSteps, TERMINAL_FAILED_STATES } from "@/lib/sessionSteps"
-import { formatDuration, humanizeSignal } from "@/lib/utils"
+import { formatDuration } from "@/lib/utils"
 
 interface AnalysisScreenProps {
   projectId: string
@@ -207,7 +207,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
           actions={
             <>
               <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
-                {analysis.failure ? `Retry from ${humanizeSignal(analysis.failure.step)}` : "Retry"}
+                Retry
               </Button>
               <Button variant="outline" asChild>
                 <Link to="/settings">Open settings</Link>

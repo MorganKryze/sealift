@@ -9,11 +9,10 @@ interface DropSummaryProps {
 }
 
 /**
- * The Drop step's read-only view once a session already exists. The
- * uploaded bytes are not kept past their sha256 (Project carries no
- * manifest content), so this reconstructs the dependency list from the
- * analysis that read them; before that analysis has a result, only the
- * project's own name and target are known.
+ * The Drop step's read-only view once a session already exists. The API
+ * does not serve the uploaded package.json back, so this reconstructs the
+ * dependency list from the analysis that read it; before that analysis has
+ * a result, only the project's own name and target are known.
  */
 export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
   const dependencies = analysis?.result?.dependencies ?? []
@@ -28,7 +27,7 @@ export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
         <p className="mt-1.5 max-w-[62ch] text-muted">
           {dependencies.length > 0
             ? "The dependencies this session's analysis read from package.json."
-            : "This session's package.json is not kept past its checksum; its dependency list shows here once the analysis has a result."}
+            : "The dependency list shows here once the analysis has a result."}
         </p>
       </div>
       <Card>

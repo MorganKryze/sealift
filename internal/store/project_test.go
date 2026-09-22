@@ -123,7 +123,7 @@ func TestProjectsByManifestSha256FindsTheMatchingProjectsNewestFirst(t *testing.
 	if err != nil {
 		t.Fatalf("CreateProject first: %v", err)
 	}
-	time.Sleep(time.Millisecond) // CreatedAt has second precision on disk (analysisIDLayout-style IDs elsewhere), but Project.CreatedAt itself is a plain timestamp, so this only guards against two calls landing on the exact same instant.
+	time.Sleep(time.Millisecond) // two CreateProject calls must not share an instant
 	second, err := s.CreateProject("left-pad-again", manifest)
 	if err != nil {
 		t.Fatalf("CreateProject second: %v", err)

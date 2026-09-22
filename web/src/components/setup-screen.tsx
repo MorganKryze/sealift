@@ -16,8 +16,8 @@ interface SetupScreenProps {
 
 /**
  * First-run gate: shown at "/" whenever GET /tools reports ready: false.
- * Nothing here installs on mount; every download starts from a click, per
- * the product rule that sealift never fetches a scanner on its own.
+ * Nothing here installs on mount: every download starts from a click, so
+ * nothing lands on the machine until the user asks for it.
  */
 export function SetupScreen({ tools }: SetupScreenProps) {
   const queryClient = useQueryClient()
