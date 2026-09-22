@@ -113,11 +113,14 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
   const cold = !active && !events.ended
   const failed = cold ? TERMINAL_FAILED_STATES.has(exportRecord.state) : events.ended && events.endState !== "done"
   const stoppedAt = events.ended ? events.steps.find((step) => step.state === "failed") : undefined
-  const failureMessage = exportRecord.failure?.message ?? stoppedAt?.error
+  // A cancel stops the download with a "context canceled" error; the user
+  // asked for that stop, so it reads as their action, not as a failure.
+  const cancelled = (cold ? exportRecord.state : events.endState) === "cancelled"
+  const failureMessage = cancelled ? "You cancelled this export." : (exportRecord.failure?.message ?? stoppedAt?.error)
   const progressPercent =
     events.progress && events.progress.total > 0 ? Math.round((events.progress.done / events.progress.total) * 100) : null
 
-  const title = failed ? (cold ? "Export failed" : `Export ${events.endState}`) : "Building the archive"
+  const title = failed ? (cancelled ? "Export cancelled" : "Export failed") : "Building the archive"
 
   return (
     <>
@@ -125,12 +128,7 @@ function ExportProgress({ projectId, analysisId, exportRecord, onChanged }: Expo
         <h1 className="text-2xl font-bold tracking-tight text-ink">{title}</h1>
         <p className="mt-1.5 max-w-[62ch] text-muted">
           {failed
-            ? (failureMessage ??
-              (exportRecord.state === "cancelled"
-                ? "You cancelled this export."
-                : stoppedAt
-                  ? `Stopped at ${stoppedAt.name}.`
-                  : "Stopped. The next action is below."))
+            ? (failureMessage ?? (stoppedAt ? `Stopped at ${stoppedAt.name}.` : "Stopped. The next action is below."))
             : events.progress?.estimatedRemainingMs !== undefined
               ? `Downloading each package from the registry, checking its integrity, then packing. About ${formatDuration(events.progress.estimatedRemainingMs)} remaining.`
               : "Downloading each package from the registry, checking its integrity, then packing."}
