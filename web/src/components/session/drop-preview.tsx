@@ -28,6 +28,7 @@ const STEPS: StepBarStep[] = [
  * there is no separate "create" step once this button is pressed.
  */
 export function DropPreview({ manifest, target, onAnalyse, onChangeFile, analysing, error }: DropPreviewProps) {
+  const problemCount = manifest.problems.length
   const prod = manifest.dependencies.filter((dep) => dep.kind === "prod")
   const dev = manifest.dependencies.filter((dep) => dep.kind === "dev")
   const shown = manifest.dependencies.slice(0, 18)
@@ -54,8 +55,8 @@ export function DropPreview({ manifest, target, onAnalyse, onChangeFile, analysi
               </div>
               <div>
                 <dt className="text-xs text-muted">Pinning</dt>
-                <dd className={cn("font-semibold", manifest.allPinned ? "text-severity-resolved-fg" : "text-severity-high")}>
-                  {manifest.allPinned ? "All exact" : "Some not pinned"}
+                <dd className={cn("font-semibold", problemCount === 0 ? "text-severity-resolved-fg" : "text-severity-critical-fg")}>
+                  {problemCount === 0 ? "All exact" : `${problemCount} ${problemCount === 1 ? "problem" : "problems"}`}
                 </dd>
               </div>
               {target ? (
@@ -84,11 +85,27 @@ export function DropPreview({ manifest, target, onAnalyse, onChangeFile, analysi
         </CardContent>
       </Card>
 
+      {problemCount > 0 ? (
+        <div role="alert" className="mt-5 rounded-lg border border-severity-critical/40 bg-severity-critical/5 p-4 text-sm">
+          <p className="font-medium text-ink">sealift cannot analyse this file yet</p>
+          <ul className="mt-2 space-y-1">
+            {manifest.problems.map((problem) => (
+              <li key={problem.where + problem.reason}>
+                <span className="font-mono text-xs text-muted">{problem.where}</span>: {problem.reason}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-muted">Fix these in the package.json, then drop it again.</p>
+        </div>
+      ) : null}
+
       {error ? <ProblemNotice status={error.status} problem={error.problem} className="mt-5" /> : null}
 
       <div className="mt-5 flex flex-wrap gap-3">
-        <Button size="lg" disabled={analysing} onClick={onAnalyse}>
-          {analysing ? "Starting…" : `Analyse ${manifest.dependencies.length} dependencies`}
+        <Button size="lg" disabled={analysing || problemCount > 0} onClick={onAnalyse}>
+          {analysing
+            ? "Starting…"
+            : `Analyse ${manifest.dependencies.length} ${manifest.dependencies.length === 1 ? "dependency" : "dependencies"}`}
         </Button>
         <Button variant="ghost" onClick={onChangeFile} disabled={analysing}>
           Choose another file
