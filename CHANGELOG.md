@@ -6,6 +6,18 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Settings open in a side panel over the current screen, and hold the light, dark or system theme.
+- The drop zone on the home screen spans the page, with a Choose a file button and the pinning rules inside it.
+
+### Fixed
+
+- A session analysed by v0.1.0 opens again. Its review crashed, because the API answered null where it promises a list of CVE ids.
+- An analysis that v0.1.0 stopped says at which step, and points at its log, instead of showing an empty cause.
+- A screen that fails now explains what happened and offers to try again, instead of "Something went wrong!".
+- Update Trivy and Update database show that they are running, then report the version installed, the new database date, or that nothing needed updating.
+
 ## [0.2.0] - 2026-09-22
 
 ### Added
