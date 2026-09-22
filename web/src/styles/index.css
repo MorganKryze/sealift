@@ -111,3 +111,16 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+@keyframes slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .animate-slide-in {
+    animation: slide-in 0.25s ease both;
+  }
+}

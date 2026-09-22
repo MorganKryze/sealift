@@ -11,6 +11,7 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { RouteError, RouteNotFound } from "./components/route-error"
+import { applyTheme, readStoredTheme } from "./components/theme-toggle"
 import { routeTree } from "./routeTree.gen"
 
 const router = createRouter({
@@ -24,6 +25,9 @@ declare module "@tanstack/react-router" {
     router: typeof router
   }
 }
+
+// The theme control lives in the settings panel, which is not mounted until opened.
+applyTheme(readStoredTheme())
 
 const queryClient = new QueryClient()
 

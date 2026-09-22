@@ -92,8 +92,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="flex max-w-xl flex-col gap-4">
-      <h2 className="text-lg font-semibold text-ink">Default target</h2>
-      <div className="grid grid-cols-2 gap-3">
+      <h2 className="text-base font-semibold text-ink">Default target</h2>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-3">
         <Field label="OS" {...field("os")} />
         <Field label="CPU" {...field("cpu")} />
         <Field label="libc" {...field("libc")} />
@@ -101,7 +101,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         <Field label="pnpm" {...field("pnpmVer")} />
       </div>
 
-      <h2 className="mt-2 text-lg font-semibold text-ink">Signing</h2>
+      <h2 className="mt-2 text-base font-semibold text-ink">Signing</h2>
       <label className="flex flex-col gap-1 text-sm text-ink">
         Signature key
         <input
@@ -113,8 +113,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         <span className="text-xs text-muted">{storedKey ? `Current: ${storedKey}. Leave blank to keep it.` : "Not set. Exports need it."}</span>
       </label>
 
-      <h2 className="mt-2 text-lg font-semibold text-ink">Limits</h2>
-      <div className="grid grid-cols-3 gap-3">
+      <h2 className="mt-2 text-base font-semibold text-ink">Limits</h2>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-3">
         <Field label="Min release age (days)" type="number" min={1} {...field("minReleaseAgeDays")} />
         <Field label="Resolution parallelism" type="number" min={1} {...field("resolveParallelism")} />
         <Field label="Download parallelism" type="number" min={1} {...field("downloadParallelism")} />

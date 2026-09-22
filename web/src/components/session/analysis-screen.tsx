@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 import { Check, Loader2, X } from "lucide-react"
 import { useState } from "react"
 
@@ -8,6 +8,7 @@ import { cancelAnalysis, queueAnalysis, type Analysis, type Project } from "@/ap
 import { FailureBlock } from "@/components/failure-block"
 import { ProblemNotice } from "@/components/problem-notice"
 import { StepBar, type StepId } from "@/components/step-bar"
+import { useSettingsPanel } from "@/components/settings/settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -58,6 +59,7 @@ export function failureMessage(analysis: Pick<Analysis, "state" | "failure">): s
 }
 
 export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavigateStep }: AnalysisScreenProps) {
+  const settingsPanel = useSettingsPanel()
   const navigate = useNavigate()
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -221,8 +223,8 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
               <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
                 Retry
               </Button>
-              <Button variant="outline" asChild>
-                <Link to="/settings">Open settings</Link>
+              <Button variant="outline" onClick={settingsPanel.open}>
+                Open settings
               </Button>
               <Button variant="ghost" onClick={() => void navigate({ to: "/" })}>
                 Choose another file
