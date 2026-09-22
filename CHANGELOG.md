@@ -6,17 +6,34 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/projects/{id}/manifest` returns the package.json a session was started from, and the Drop step shows it even when the analysis failed.
+
 ### Changed
 
 - Settings open in a side panel over the current screen, and hold the light, dark or system theme.
 - The drop zone on the home screen spans the page, with a Choose a file button and the pinning rules inside it.
+- Setup shows each tool's version and download size, each download running, then each tool ready, and waits for Continue.
+- The drop preview lists every problem the server would refuse, such as a range, an alias or an overrides field, and keeps Analyse disabled until the file is fixed.
+- Resuming a session that produced an archive opens its export.
+- The whole interface loads as one bundle, so a click never needs the server to fetch a screen.
 
 ### Fixed
 
+- Retrying a cancelled or failed export packed an empty archive that claimed every CVE fixed. The retry now sends the same selection as the review, and the API refuses an export with nothing to pack.
+- A request that cannot reach sealift says so, instead of doing nothing.
 - A session analysed by v0.1.0 opens again. Its review crashed, because the API answered null where it promises a list of CVE ids.
 - An analysis that v0.1.0 stopped says at which step, and points at its log, instead of showing an empty cause.
-- A screen that fails now explains what happened and offers to try again, instead of "Something went wrong!".
-- Update Trivy and Update database show that they are running, then report the version installed, the new database date, or that nothing needed updating.
+- A cancelled analysis or export reads as stopped by the user, not as a failure.
+- The step bar keeps a failed or running step as such on every screen, and marks Review done only once an export exists.
+- A screen that fails explains what happened and offers to try again, instead of "Something went wrong!". An unknown session says so at once.
+- Update Trivy and Update database show that they are running, then report the version installed, the new database date, or that nothing needed updating. An unreachable GitHub is named as such.
+- Settings refuse a Node or pnpm version that is not exact, and name the field.
+- A manifest with no dependency is refused before it runs.
+- A pick with more CVEs reads "Adds 5 CVEs" instead of "Fixes -5 CVEs".
+- Export steps read in words, with a running state and a percentage.
+- Focus returns to what opened the settings panel or the duplicate dialog, and candidate versions form a radio group.
 
 ## [0.2.0] - 2026-09-22
 
