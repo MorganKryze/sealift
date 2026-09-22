@@ -98,5 +98,7 @@ export function reasonFor(dependency: DependencyResult, selectedVersion: string)
   const fixed = totalOf(dependency.vector) - totalOf(candidate.vector)
   const kind = jumpKind(dependency.current, selectedVersion)
   const jumpText = kind === "major" ? "major jump" : kind === "zero-minor" ? "0.x minor jump, may break" : "minor or patch"
-  return `Fixes ${fixed} CVE${fixed === 1 ? "" : "s"}, ${jumpText}`
+  const plural = (n: number) => `${n} CVE${n === 1 ? "" : "s"}`
+  const effect = fixed > 0 ? `Fixes ${plural(fixed)}` : fixed < 0 ? `Adds ${plural(-fixed)}` : "Fixes no CVE"
+  return `${effect}, ${jumpText}`
 }

@@ -162,4 +162,22 @@ describe("reasonFor", () => {
     })
     expect(reasonFor(dep, "4.22.3")).toBe("Fixes 2 CVEs, minor or patch")
   })
+
+  it("says a pick adds CVEs instead of fixing a negative number", () => {
+    const dep = dependency({
+      current: "0.21.1",
+      vector: [0, 1, 0, 0, 0],
+      candidates: [candidate("1.6.0", { vector: [0, 3, 3, 0, 0] })],
+    })
+    expect(reasonFor(dep, "1.6.0")).toBe("Adds 5 CVEs, major jump")
+  })
+
+  it("says when a pick changes no CVE count", () => {
+    const dep = dependency({
+      current: "4.17.1",
+      vector: [0, 1, 0, 0, 0],
+      candidates: [candidate("4.17.3", { vector: [0, 1, 0, 0, 0] })],
+    })
+    expect(reasonFor(dep, "4.17.3")).toBe("Fixes no CVE, minor or patch")
+  })
 })
