@@ -118,6 +118,8 @@ export function HomeScreen() {
           onOpenChange={(open) => {
             if (!open) {
               setDuplicate(null)
+              // The dialog opened from a file choice, not a trigger, so focus goes back to the file button by hand.
+              requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-choose-file]")?.focus())
             }
           }}
           onResume={() => {

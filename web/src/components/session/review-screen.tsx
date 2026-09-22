@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { ChevronRight, CircleAlert, Info } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { ProblemError } from "@/api/client"
 import { queueExport, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
@@ -215,10 +215,10 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         }
         return (
           <section key={key} className="mt-7">
-            <div className="mb-2.5 flex items-baseline gap-2.5">
-              <h2 className="text-lg font-semibold text-ink">{copy.title}</h2>
+            <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+              <h2 className="text-lg font-semibold whitespace-nowrap text-ink">{copy.title}</h2>
               <span className="text-sm text-muted">{list.length}</span>
-              <span className="ml-auto text-sm text-muted">{copy.why}</span>
+              <span className="text-sm text-muted sm:ml-auto">{copy.why}</span>
             </div>
             <Card>
               {list.map((dependency, index) => (
@@ -290,6 +290,7 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
   const defaultCandidates = dependency.candidates.filter((c) => c.key || c.version === dependency.best)
   const extraCandidates = dependency.candidates.filter((c) => !defaultCandidates.includes(c))
   const [showAll, setShowAll] = useState(false)
+  const listRef = useRef<HTMLDivElement>(null)
   const shownCandidates = showAll ? dependency.candidates : defaultCandidates
   const cveTotal = dependency.vector.reduce((a, b) => a + b, 0)
   const extraCves = cveTotal - dependency.cves.length
@@ -333,13 +334,19 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
                 {cve.id}
               </span>
             ))}
-            {extraCves > 0 ? <span className="rounded-md border border-line px-2 py-0.5 font-mono text-xs text-muted">+{extraCves} more</span> : null}
+            {extraCves > 0 && dependency.cves.length > 0 ? (
+              <span className="rounded-md border border-line px-2 py-0.5 font-mono text-xs text-muted">+{extraCves} more</span>
+            ) : null}
+            {extraCves > 0 && dependency.cves.length === 0 ? (
+              <span className="text-xs text-muted">The version of sealift that ran this analysis did not record CVE ids.</span>
+            ) : null}
           </div>
 
-          <div className="grid gap-1.5">
-            {shownCandidates.map((candidate) => (
+          <div ref={listRef} role="radiogroup" aria-label={`Version of ${dependency.name}`} className="grid gap-1.5">
+            {shownCandidates.map((candidate, index) => (
               <CandidateRow
                 key={candidate.version}
+                firstExtra={showAll && index === defaultCandidates.length}
                 dependency={dependency}
                 candidate={candidate}
                 selected={picked === candidate.version}
@@ -348,6 +355,8 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
             ))}
             <button
               type="button"
+              role="radio"
+              aria-checked={kept}
               className={cn(
                 "grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border p-3 text-left",
                 kept ? "border-accent shadow-[0_0_0_3px_var(--color-accent)]/15" : "border-line hover:border-accent/50",
@@ -364,7 +373,16 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
           </div>
 
           {extraCandidates.length > 0 ? (
-            <button type="button" className="mt-2 py-1.5 text-sm font-medium text-accent" onClick={() => setShowAll((v) => !v)}>
+            <button
+              type="button"
+              className="mt-2 py-1.5 text-sm font-medium text-accent"
+              onClick={() => {
+                const expanding = !showAll
+                setShowAll(expanding)
+                // Focus follows the list, so a keyboard user lands on the first version just shown.
+                if (expanding) requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>("[data-first-extra]")?.focus())
+              }}
+            >
               {showAll ? "Show fewer versions" : `Show all ${dependency.candidates.length} newer versions`}
             </button>
           ) : null}
@@ -378,10 +396,12 @@ interface CandidateRowProps {
   dependency: DependencyResult
   candidate: Candidate
   selected: boolean
+  /** Marks the first version revealed by "Show all", which takes focus. */
+  firstExtra: boolean
   onPick: () => void
 }
 
-function CandidateRow({ dependency, candidate, selected, onPick }: CandidateRowProps) {
+function CandidateRow({ dependency, candidate, selected, firstExtra, onPick }: CandidateRowProps) {
   const blocking = candidate.signals.filter((s) => s.blocking)
   const notable = candidate.signals.filter((s) => !s.blocking)
   const blocked = blocking.length > 0
@@ -390,6 +410,9 @@ function CandidateRow({ dependency, candidate, selected, onPick }: CandidateRowP
   return (
     <button
       type="button"
+      role="radio"
+      aria-checked={selected}
+      data-first-extra={firstExtra || undefined}
       disabled={blocked}
       aria-disabled={blocked}
       className={cn(
@@ -411,7 +434,8 @@ function CandidateRow({ dependency, candidate, selected, onPick }: CandidateRowP
         {blocking.map((signal) => (
           <p key={signal.name} className="mt-1 flex items-start gap-1.5 text-xs text-severity-critical-fg">
             <CircleAlert className="mt-0.5 size-3 flex-none" />
-            <span>{signal.evidence}</span>
+            {/* The evidence counts days at analysis time; the line above counts them now, so the age is not repeated. */}
+            <span>{signal.name === "too-recent" ? "Held back as too recent for the minimum release age." : signal.evidence}</span>
           </p>
         ))}
         {notable.map((signal) => (

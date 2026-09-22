@@ -7,6 +7,7 @@ import { getSettings } from "@/api/settings"
 import { SettingsForm } from "@/components/settings/settings-form"
 import { ToolsPanel } from "@/components/settings/tools-panel"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { useReturnFocus } from "@/hooks/use-return-focus"
 
 const SettingsPanelContext = createContext<{ open: () => void } | null>(null)
 
@@ -21,15 +22,24 @@ export function useSettingsPanel() {
 
 export function SettingsPanelProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false)
+  const returnFocus = useReturnFocus()
 
   return (
-    <SettingsPanelContext.Provider value={{ open: () => setIsOpen(true) }}>
+    <SettingsPanelContext.Provider
+      value={{
+        open: () => {
+          returnFocus.remember()
+          setIsOpen(true)
+        },
+      }}
+    >
       {children}
       <DialogPrimitive.Root open={isOpen} onOpenChange={setIsOpen}>
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="animate-fade fixed inset-0 z-40 bg-ink/45" />
+          <DialogPrimitive.Overlay className="animate-fade fixed inset-0 z-40 bg-black/50" />
           <DialogPrimitive.Content
             aria-describedby={undefined}
+            onCloseAutoFocus={returnFocus.onCloseAutoFocus}
             className="animate-slide-in fixed top-0 right-0 bottom-0 z-50 flex w-[min(440px,100%)] flex-col overflow-y-auto border-l border-line bg-background shadow-xl outline-none"
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-background/95 px-6 py-4 backdrop-blur">

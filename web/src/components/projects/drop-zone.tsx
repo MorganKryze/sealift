@@ -60,6 +60,7 @@ export function DropZone({ onFile, onInvalidFile, children }: DropZoneProps) {
       <h2 className="text-lg font-semibold tracking-tight text-ink">Drop package.json here</h2>
       <Button
         type="button"
+        data-choose-file
         onClick={(event) => {
           event.stopPropagation()
           inputRef.current?.click()

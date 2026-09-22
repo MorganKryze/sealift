@@ -9,7 +9,7 @@ const DialogTrigger = DialogPrimitive.Trigger
 function DialogContent({ className, children, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="animate-fade fixed inset-0 z-40 grid place-items-center bg-ink/45 p-4">
+      <DialogPrimitive.Overlay className="animate-fade fixed inset-0 z-40 grid place-items-center bg-black/50 p-4">
         <DialogPrimitive.Content
           className={cn(
             "animate-enter w-full max-w-[460px] rounded-xl border border-line bg-background p-6 shadow-lg",
