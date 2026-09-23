@@ -72,7 +72,7 @@ Each entry of `manifest.json`'s `packages` describes one tarball:
 }
 ```
 
-`originalIntegrity` is the hash the npm registry published. `shippedSha512` is the hash of the file in `out/`. They match unless `publishConfigStripped` is `true`. An import tool can check every tarball against `shippedSha512` before it publishes anything.
+`originalIntegrity` is the hash the npm registry published. `shippedSha512` is the hash of the file in `out/`. They match unless `publishConfigStripped` is `true`. An import tool can check every tarball against `shippedSha512` before it publishes anything. [Archive format](dev/archive-format.md) describes every field.
 
 ## The import
 
