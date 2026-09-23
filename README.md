@@ -28,21 +28,21 @@ Open `http://localhost:8080`.
 
 On first run, sealift asks for Trivy, its vulnerability database and the signature key your Nexus import checks. It downloads nothing until you press Install, then shows each tool downloading and ready before you continue. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age instead.
 
-![The setup screen, listing Trivy, its vulnerability database and the signature key, with an install button naming both download sizes](docs/screenshots/setup.png)
+![The setup screen, listing Trivy, its vulnerability database and the signature key, with an install button naming both download sizes](docs/assets/setup.png)
 
 Drop a project's `package.json`. Its direct dependencies must be pinned to exact versions; the preview lists anything sealift would refuse before you start. If you dropped the same file before, sealift offers to resume that session.
 
 sealift resolves the project, scans it with Trivy, lists the newer versions of each dependency, and resolves each candidate against the rest of the project. The screen shows each step as it finishes, with the time left. You can close the page; the session keeps running.
 
-![The analysis screen, with five finished steps, candidate resolution at 14 of 254, and about 1 minute 20 seconds left](docs/screenshots/analysis.png)
+![The analysis screen, with five finished steps, candidate resolution at 14 of 254, and about 1 minute 20 seconds left](docs/assets/analysis.png)
 
 Review sealift's proposal. For each dependency it picks the oldest version that fixes the most CVEs, and holds back any release younger than the minimum release age. A proposal that is a major jump, or a 0.x minor jump, waits under "To decide". Open a row to see the CVE ids behind the current version, then choose another candidate or keep the current one.
 
-![The review screen: 45 CVEs today, none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed](docs/screenshots/review.png)
+![The review screen: 45 CVEs today, none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed](docs/assets/review.png)
 
 Confirm the selection. sealift resolves the project against it, downloads each package, checks its integrity, and packs `packages_npm.tar.gz` with the signature key, next to a CVE report, a CycloneDX SBOM and a summary. Carry the archive through your kiosk and import it on the air-gapped side.
 
-![The export screen: the sealed archive with its sha256, one download for the archive, and the five reports below it](docs/screenshots/export.png)
+![The export screen: the sealed archive with its sha256, one download for the archive, and the five reports below it](docs/assets/export-done.png)
 
 ## Configuration
 
