@@ -79,3 +79,37 @@ test("runExamples runs the marked blocks and checks their output", () => {
     ["page.md:8", "page.md:15"],
   )
 })
+
+test("checkLinks handles long fences, srcset and malformed escapes", () => {
+  const root = mkdtempSync(join(tmpdir(), "check-docs-"))
+  writeFileSync(join(root, "img.png"), "")
+  writeFileSync(
+    join(root, "a.md"),
+    [
+      "````md",
+      "```",
+      "[inside](nope-inside.md)",
+      "```",
+      "````",
+      '<source srcset="img.png 1x, missing.png 2x">',
+      "[bad](%E0%A4%A.md)",
+    ].join("\n"),
+  )
+  const failures = checkLinks(root).map((f) => `${f.file}:${f.line}: ${f.target}`)
+  assert.deepEqual(failures, ["a.md:6: missing.png", "a.md:7: %E0%A4%A.md"])
+})
+
+test("runExamples reports a run marker that reaches no sh block", () => {
+  const root = mkdtempSync(join(tmpdir(), "check-docs-"))
+  const fence = "```"
+  writeFileSync(
+    join(root, "page.md"),
+    ["- step", "", "  <!-- run -->", "  text in between", "", "<!-- run -->", `${fence}json`, "{}", fence].join("\n"),
+  )
+  const { ran, failures } = runExamples(root, "http://sealift:8080")
+  assert.equal(ran, 0)
+  assert.deepEqual(
+    failures.map((f) => `${f.file}:${f.line}: ${f.reason}`),
+    ["page.md:3: run marker with no block below it", "page.md:7: run marker on a block that is not sh"],
+  )
+})
