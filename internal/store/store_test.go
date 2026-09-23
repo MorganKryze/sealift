@@ -242,3 +242,22 @@ func TestSaveSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveSettingsRefusesLimitsOutOfRange(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for name, change := range map[string]func(*Settings){
+		"minimum release age":  func(set *Settings) { set.MinReleaseAgeDays = 0 },
+		"resolve parallelism":  func(set *Settings) { set.ResolveParallelism = -1 },
+		"download parallelism": func(set *Settings) { set.DownloadParallelism = 1000 },
+	} {
+		set := s.Settings()
+		change(&set)
+		err := s.SaveSettings(set)
+		if !errors.Is(err, ErrInvalidLimits) || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: SaveSettings = %v, want ErrInvalidLimits naming it", name, err)
+		}
+	}
+}

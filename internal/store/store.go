@@ -15,6 +15,18 @@ import (
 	"github.com/MorganKryze/sealift/npm"
 )
 
+// ErrInvalidLimits reports a minimum release age or a parallelism outside
+// the range the settings allow.
+var ErrInvalidLimits = errors.New("invalid limits")
+
+// Limits the settings accept. Parallelism past these runs more pnpm or
+// download processes than a single sealift host gains from.
+const (
+	minReleaseAgeDaysMax   = 90
+	resolveParallelismMax  = 16
+	downloadParallelismMax = 32
+)
+
 // ErrInvalidTarget reports a target with an empty field or a Node or pnpm
 // version that is not exact: the caller's own mistake, not a server failure.
 var ErrInvalidTarget = errors.New("invalid target")
@@ -114,9 +126,12 @@ func (s *Store) Settings() Settings {
 }
 
 // SaveSettings atomically writes settings to private/settings.json, mode
-// 0600, and refuses a target whose OS, CPU, Node or PnpmVer is empty.
+// 0600, and refuses an invalid target or limits out of range.
 func (s *Store) SaveSettings(set Settings) error {
 	if err := validateTarget(set.Target); err != nil {
+		return err
+	}
+	if err := validateLimits(set); err != nil {
 		return err
 	}
 	path := filepath.Join(s.root, "private", "settings.json")
@@ -126,6 +141,22 @@ func (s *Store) SaveSettings(set Settings) error {
 	s.mu.Lock()
 	s.settings = set
 	s.mu.Unlock()
+	return nil
+}
+
+func validateLimits(set Settings) error {
+	var problems []string
+	check := func(name string, value, low, high int) {
+		if value < low || value > high {
+			problems = append(problems, fmt.Sprintf("%s must be between %d and %d, not %d", name, low, high, value))
+		}
+	}
+	check("minimum release age", set.MinReleaseAgeDays, 1, minReleaseAgeDaysMax)
+	check("resolve parallelism", set.ResolveParallelism, 1, resolveParallelismMax)
+	check("download parallelism", set.DownloadParallelism, 1, downloadParallelismMax)
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", ErrInvalidLimits, strings.Join(problems, "; "))
+	}
 	return nil
 }
 
