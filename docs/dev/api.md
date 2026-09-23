@@ -61,7 +61,7 @@ curl -s http://localhost:8080/api/projects
 | `GET /api/projects/{projectId}/analyses/{analysisId}/log` | The full log, as `text/plain`. |
 | `POST /api/projects/{projectId}/analyses/{analysisId}/cancel` | Cancel the analysis, running or queued. |
 
-The states are `queued`, `running`, `done`, `failed`, `cancelled`, and `interrupted` for a job a server restart stopped. A failed analysis carries `failure` with the step id and the message:
+The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupted`. A failed analysis carries `failure` with the step id and the message:
 
 ```json
 {"message":"resolve project: pnpm install: exit status 1","step":"resolve-project"}
@@ -71,7 +71,7 @@ The states are `queued`, `running`, `done`, `failed`, `cancelled`, and `interrup
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. 400 for a version the analysis did not resolve, an export that packs nothing, or a missing key; 409 when the analysis is not done. |
+| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, an export that packs nothing, or a missing key; 409 when the analysis is not done. |
 | `GET /api/projects/{projectId}/exports/{exportId}` | The export: state, steps, failure, and once done its files. |
 | `DELETE /api/projects/{projectId}/exports/{exportId}` | Delete the export and its files. |
 | `POST /api/projects/{projectId}/exports/{exportId}/cancel` | Cancel the export, running or queued. |
@@ -109,7 +109,7 @@ curl -s http://localhost:8080/api/tools
 
 ## The event stream
 
-`GET /api/jobs/current/events` is a `text/event-stream` of the running job. It first replays every event the job has emitted so far, then streams the live ones, and ends after the `end` event. With no job running, the connection stays open and nothing arrives until one starts.
+`GET /api/jobs/current/events` is a `text/event-stream` of the running job. It first replays every `step` event of the job and its most recent other events, up to 128, then streams the live ones, and ends after the `end` event. With no job running, the connection stays open and nothing arrives until one starts.
 
 Each message names its kind in `event:` and repeats it in the JSON:
 

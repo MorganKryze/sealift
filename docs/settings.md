@@ -1,6 +1,6 @@
 # Settings
 
-This page describes each setting: what it changes, its range and its default. **Settings**, in the header, opens the panel over the current screen. A change applies to the next analysis or export; one that is running keeps the values it started with.
+This page describes each setting: what it changes, its range and its default. **Settings**, in the header, opens the panel over the current screen. A change to the limits applies to the next analysis or export; one that is running keeps the values it started with. A change to the target applies to sessions created after it: a session keeps the target it started with, retries included.
 
 ![The settings panel: appearance, target platform, signature key, limits and scanner](assets/settings.png)
 

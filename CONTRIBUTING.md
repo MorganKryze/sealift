@@ -35,10 +35,15 @@ docs/             user and developer documentation
 
 ## Run it locally
 
-Run the server on a scratch data directory, and the web app's dev server in front of it:
+Run the server on a scratch data directory in one terminal:
 
 ```sh
 go run ./cmd/sealift -addr 127.0.0.1:8080 -data "$(mktemp -d)"
+```
+
+and the web app's dev server in front of it in another:
+
+```sh
 pnpm -C web install
 pnpm -C web run dev
 ```

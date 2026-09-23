@@ -16,7 +16,7 @@ sealift proposes the oldest version among those with the fewest CVEs, and never 
 
 ## Can I choose a version sealift did not propose?
 
-Yes. Open the dependency in the review and pick any candidate without a blocking signal, or **Keep the current version**. **Show all newer versions** lists every candidate.
+Yes. Open the dependency in the review and pick any candidate without a blocking signal, or **Keep the current version**. **Show all 22 newer versions**, with the count for that dependency, lists every candidate.
 
 ## Does it handle Python, Docker images or other ecosystems?
 

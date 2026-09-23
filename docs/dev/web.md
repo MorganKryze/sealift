@@ -16,7 +16,7 @@ File-based, in `web/src/routes/`:
 | --- | --- |
 | `/` | Setup when a tool or the key is missing, otherwise home: the drop zone, the drop preview, past sessions |
 | `/settings` | Opens the settings panel over home |
-| `/sessions/$sessionId` | Redirects to the session's most useful step: export when an archive exists, review after a finished analysis, analysis otherwise |
+| `/sessions/$sessionId` | Redirects to the session's most useful step: export when the latest analysis has an export, finished or not, review after a finished analysis, analysis otherwise |
 | `/sessions/$sessionId/drop` | The manifest the session started from |
 | `/sessions/$sessionId/analysis` | The nine steps, the counter, the failure block |
 | `/sessions/$sessionId/review` | The proposal and the selection |

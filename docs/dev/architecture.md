@@ -44,7 +44,7 @@ A handler never touches the queue or the store layout. It calls `jobs.Service`, 
 
 `jobs.Queue` runs one job at a time, in submission order, in memory. Each job emits events while it runs: `step`, `progress`, `candidate` and `log`. The queue appends one `end` event with the final state once the job returns.
 
-`GET /api/jobs/current/events` streams those events. A new subscriber first receives every event the running job has emitted so far, then the live ones, so a reload rebuilds the screen.
+`GET /api/jobs/current/events` streams those events. A new subscriber first receives every `step` event of the running job and its most recent other events, up to 128, then the live ones, so a reload rebuilds the screen.
 
 Every event carries `storeId`, the directory id the store and the client use for the analysis or export. The queue's own job id is assigned per submission and does not survive a restart, and the service drops a job from its index once it ends. The queue stamps `storeId` on every event itself, the `end` event included, so the interface can match the final event to its screen without a lookup that could miss.
 
@@ -76,7 +76,7 @@ A failing step stops the job. Its id and message go into `status.json` as the fa
 
 | Id | Label | What it does |
 | --- | --- | --- |
-| `package-list` | List the packages to export | Resolves the project against the selection and reads the lockfile |
+| `package-list` | List the packages to export | Merges the lockfiles the analysis wrote for each selected version, adds the project's own when `includeProject` is set, and keeps the packages for the target platform |
 | `download` | Download and verify each package | Fetches each tarball, `downloadParallelism` at a time, checks it against the lockfile's sha512, fills the shared cache |
 | `strip` | Strip publishConfig | Rewrites the tarballs whose `package.json` holds `publishConfig` |
 | `archive` | Pack and sign the archive | Writes `out/*.tgz` and `out/signature.key` with `archive.WriteTarGz` |
@@ -91,6 +91,7 @@ The export refuses a selection that names a version the analysis did not resolve
   private/settings.json          settings and the signature key, mode 0600, app only
   projects/<project>/
     project.json                 name, target, the manifest's sha256
+    package.json                 the manifest as dropped
     analyses/<id>/
       status.json                state, steps, failure
       package.json               the manifest this analysis ran on

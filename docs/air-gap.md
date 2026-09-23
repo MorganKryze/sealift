@@ -6,6 +6,8 @@ This page covers what crosses from the connected side to the air-gapped side: th
 
 One export produces six files. Only the archive is needed for the import; the reports tell the import side what it receives.
 
+The archive holds the new versions and the packages they pull in, nothing else. A dependency kept at its current version is not packed, and neither is the rest of the current project: the import side must already hold those packages in Nexus, from earlier imports.
+
 | File | For |
 | --- | --- |
 | `packages_npm.tar.gz` | The packages and `signature.key`, for the Nexus import |
@@ -87,7 +89,7 @@ pnpm install --registry https://nexus.example.internal/repository/npm-hosted/
 
 ## Versions that drift
 
-sealift resolves the project on the day of the export and ships exactly what that resolution needs. On the air-gapped side, an install without a lockfile resolves again, against whatever Nexus holds. When earlier imports left other versions of the same packages there, pnpm may pick a different one than sealift scanned.
+sealift resolves each selected version on the day of the analysis, one dependency at a time, and the export ships what those resolutions need. On the air-gapped side, an install without a lockfile resolves again, against whatever Nexus holds. When earlier imports left other versions of the same packages there, pnpm may pick a different one than sealift scanned.
 
 Commit the lockfile the first install produces on the air-gapped side, and install with `pnpm install --frozen-lockfile` from then on. A lockfile that asks for a version Nexus lacks then fails the install, instead of installing something nobody scanned.
 
@@ -97,10 +99,11 @@ sealift checks:
 
 - every downloaded tarball against the sha512 the registry published;
 - Trivy against the sha256 of its release;
-- that no proposed version is younger than the minimum release age;
-- that nothing is installed or downloaded without a click.
+- that no proposed version of a direct dependency is younger than the minimum release age;
+- that nothing downloads before you press Install, Analyse or Confirm and build the archive.
 
 It does not:
 
 - detect a malicious package that has no known CVE yet: Trivy knows only published vulnerabilities;
+- apply the minimum release age to transitive packages: a package that a new version pulls in through a range can be days old;
 - sign the archive: `signature.key` is a shared value, and the sha256 is only as trustworthy as the channel that carries it.

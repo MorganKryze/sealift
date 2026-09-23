@@ -8,6 +8,8 @@ When an analysis or an export stops, the cause shows under What went wrong. **Sh
 
 ### sealift is not reachable
 
+On the home screen, the same problem reads Could not reach sealift.
+
 The browser sent a request and got no answer. The container is stopped, restarting, or the reverse proxy in front of it is down.
 
 Check the container with `docker ps` and its log with `docker logs sealift`, then try again.
@@ -101,9 +103,9 @@ pnpm could not install the project as dropped. **Show the log** gives pnpm's own
 
 sealift could not start pnpm as its `tools` user. The container runs with `no-new-privileges`, or without the `SETUID` and `SETGID` capabilities. [Deployment](deployment.md#compose) has a setup that works.
 
-### Analysis interrupted
+### A running analysis disappeared after a restart
 
-The server restarted while the analysis ran, for example during an upgrade. Press **Retry**.
+The server restarted while the analysis ran, for example during an upgrade, and discarded the unfinished job. The session shows its previous state. Start the analysis again.
 
 ### A dependency with CVEs shows under Nothing to do
 

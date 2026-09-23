@@ -2,7 +2,7 @@
 
 > Prepares npm dependency updates for air-gapped networks. On the connected side, it analyses a project's package.json with pnpm and Trivy, ranks the newer versions of each direct dependency by known CVEs, proposes the oldest version that fixes the most, and packs the chosen versions into packages_npm.tar.gz for a Nexus import on the air-gapped side. One Go binary with a React interface, shipped as the image ghcr.io/morgankryze/sealift for linux/amd64 and linux/arm64. GPL-3.0.
 
-Limits: npm only. Input is a package.json whose direct dependencies are pinned to exact versions; no lockfile, workspaces, overrides or resolutions. Only direct dependencies get new versions; transitive ones change through them. signature.key is a shared value written in plain text into the archive, not a cryptographic signature. sealift has no login. A malicious package with no published CVE is not detected.
+Limits: npm only. Input is a package.json whose direct dependencies are pinned to exact versions; no lockfile, workspaces, overrides or resolutions. Only direct dependencies get new versions; transitive ones change through them, without the minimum release age. The archive holds only the changed dependencies' trees. A session keeps the target platform it started with. signature.key is a shared value written in plain text into the archive, not a cryptographic signature. sealift has no login. A malicious package with no published CVE is not detected.
 
 Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 to 16), download parallelism 16 (1 to 32), target Linux x64 glibc with Node 22.17.1, pnpm 10.34.5.
 

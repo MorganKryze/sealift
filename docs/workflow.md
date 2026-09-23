@@ -36,13 +36,13 @@ Each past session shows its name, its target, its date and one status:
 | --- | --- |
 | Not analysed yet | The file was dropped; no analysis ran |
 | Analysing | The analysis is running |
-| Analysis failed | The analysis stopped on an error |
+| Analysis failed | The analysis stopped on an error, or was cancelled |
 | Awaiting export | The analysis finished; no archive yet |
 | Exporting | An export is running |
-| Export failed | The last export stopped on an error |
+| Export failed | The last export stopped on an error, or was cancelled |
 | Archive ready | The last export produced an archive |
 
-A click opens the session on its most useful step: the export for a session with an archive, the review for a finished analysis, the analysis otherwise.
+A click opens the session on its most useful step: the export for a session with an export, finished or not, the review for a finished analysis, the analysis otherwise.
 
 ## Drop
 
@@ -57,7 +57,7 @@ When the file breaks a rule, Pinning shows the number of problems and a list nam
 sealift reads `dependencies`, `devDependencies` and `optionalDependencies`, and refuses:
 
 - a range or a tag instead of an exact version: `^4.17.1`, `~4.17.1`, `latest` (version must be exact, such as 1.2.3);
-- a version from anywhere but the npm registry: `npm:`, `git+`, `github:`, `file:`, `link:`, `workspace:`, `http:` or `https:` (only npm registry versions are supported);
+- a version from anywhere but the npm registry: `npm:`, `git+`, `git:`, `github:`, `file:`, `link:`, `workspace:`, `http:` or `https:` (only npm registry versions are supported);
 - the fields `overrides`, `resolutions`, `pnpm.overrides` and `pnpm.patchedDependencies` (not supported);
 - a file with no dependency (lists no dependency to update).
 
@@ -88,7 +88,7 @@ Resolve candidate versions takes most of the time: sealift installs each newer v
 When a step fails, the screen reads Analysis stopped, with the cause under What went wrong and the actions that fit:
 
 - **Retry** starts the analysis again from the beginning, with the same file.
-- **Open settings** opens the settings panel, to change the target or a limit before retrying.
+- **Open settings** opens the settings panel, to change a limit before retrying. A session keeps the target it started with; a new target applies to new sessions.
 - **Choose another file** goes back to the drop screen.
 - **Show the log** unfolds everything pnpm and Trivy wrote, with the error code the message above leaves out.
 

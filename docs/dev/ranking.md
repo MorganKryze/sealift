@@ -76,4 +76,4 @@ The three groups of the review are computed in the browser, in `web/src/lib/revi
 | How the analysis assembles candidates | `internal/jobs/analysis_rank_test.go` |
 | The review groups | `web/src/lib/reviewGroups.test.ts` |
 
-The review and `summary.md` print a signal's evidence as it comes; only `too-recent` has its own wording, in `web/src/components/session/review-screen.tsx`. A new signal needs a row in [How sealift chooses](../how-sealift-chooses.md#signals).
+`summary.md` prints a signal's evidence as it comes. The review, in `web/src/components/session/review-screen.tsx`, gives `too-recent` its own sentence and prefixes the other evidence with a readable name from `humanizeSignal`. A new signal needs a row in [How sealift chooses](../how-sealift-chooses.md#signals).

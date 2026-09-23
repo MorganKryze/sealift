@@ -19,7 +19,7 @@ Some candidates are resolved first, and shown first in the review. They are the 
 - the latest release in the current major;
 - the latest release overall.
 
-**Show all newer versions** in the review lists the others.
+**Show all 22 newer versions** in the review, with the count for that dependency, lists the others.
 
 ## Ranking by CVE count
 
@@ -101,4 +101,4 @@ The demo project in [Getting started](getting-started.md) pins express 4.17.1, w
 
 ## After the choice
 
-Step 9 of the analysis resolves the whole project with every proposed version at once. When they conflict, the analysis still finishes: the log holds pnpm's output, and the API's analysis result carries the warning. Each proposal stays selectable, and an export of a selection that does not install together stops on pnpm's error. Choose another version for one of the conflicting dependencies, or keep its current one.
+Step 9 of the analysis resolves the whole project with every proposed version at once. When they conflict, the analysis still finishes: the log holds pnpm's output, and the API's analysis result carries the warning. Each proposal stays selectable. The export packs each selected version as the analysis resolved it, on its own, so it does not catch the conflict either: the install on the air-gapped side does. When the log shows one, choose another version for one of the conflicting dependencies, or keep its current one.

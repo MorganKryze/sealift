@@ -90,7 +90,7 @@ sealift needs HTTPS to:
 | `mirror.gcr.io` | The Trivy vulnerability database |
 | `registry.npmjs.org` | pnpm, package metadata and tarballs |
 
-To go through an npm mirror instead of `registry.npmjs.org`, set both variables to its URL:
+To resolve and download packages through an npm mirror, set both variables to its URL:
 
 ```yaml
     environment:
@@ -98,7 +98,7 @@ To go through an npm mirror instead of `registry.npmjs.org`, set both variables 
       NPM_CONFIG_REGISTRY: https://npm-mirror.example.internal
 ```
 
-`SEALIFT_NPM_REGISTRY` is where sealift reads package metadata; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads.
+`SEALIFT_NPM_REGISTRY` is where sealift reads package metadata; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads. The first analysis still downloads pnpm itself from `registry.npmjs.org`, so keep that host open.
 
 ## The data volume
 
@@ -108,7 +108,8 @@ Everything sealift keeps lives under `/data`:
 /data
   private/settings.json    settings, signature key included (app only)
   projects/<session>/
-    project.json           the session and its package.json
+    project.json           the session: name, target, the manifest's sha256
+    package.json           the manifest as dropped
     analyses/<id>/         each analysis: its result, its log, the resolved project
     exports/<id>/          each export: the archive and its five reports
   tools/trivy/<version>/   every Trivy installed; tools/trivy/current is the active one
@@ -131,7 +132,7 @@ docker rm -f sealift
 docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.io/morgankryze/sealift:0.2.2
 ```
 
-With Compose, change the tag and run `docker compose up -d`. Sessions, archives and settings carry over. A job running during the upgrade stops; its session reads Analysis interrupted, with **Retry**.
+With Compose, change the tag and run `docker compose up -d`. Sessions, archives and settings carry over. A job running during the upgrade is discarded: its session shows its previous state, and you start the job again.
 
 ## Backing up
 

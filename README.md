@@ -28,7 +28,7 @@ Updating one npm dependency on an air-gapped network means choosing a version on
 On the connected side, from a project's `package.json`:
 
 - scans the project with Trivy and counts its CVEs by severity;
-- resolves every newer version of each direct dependency against the project, and scans each one;
+- resolves every newer version of each direct dependency with the project's peer dependencies, and scans each one;
 - proposes, for each dependency, the oldest version that fixes the most CVEs, and holds back any release younger than 14 days;
 - flags what deserves a second look: a major jump, a lost provenance, a new publisher, an added install script;
 - lets you review the proposal, change any version, or keep the current one;
@@ -36,7 +36,7 @@ On the connected side, from a project's `package.json`:
 
 On the air-gapped side, the team receives:
 
-- `packages_npm.tar.gz`, with every package and the `signature.key` the Nexus import checks;
+- `packages_npm.tar.gz`, with every package the new versions need and the `signature.key` the Nexus import checks;
 - `manifest.json`, with the hashes of every package and of the archive;
 - `summary.md` and `findings.csv`, with the CVEs before and after, and what remains;
 - a CycloneDX SBOM and Trivy's raw report.
@@ -73,7 +73,7 @@ Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks t
 
 - npm only. Python packages and Docker images are not handled.
 - The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
-- sealift proposes new versions for direct dependencies. Transitive packages change through them.
+- sealift proposes new versions for direct dependencies. Transitive packages change through them, and the minimum release age does not apply to them.
 - `signature.key` is a shared value in plain text, not a cryptographic signature.
 - A malicious package with no published CVE passes the scan.
 - sealift has no login: keep it on `127.0.0.1` or behind an authenticating proxy.
