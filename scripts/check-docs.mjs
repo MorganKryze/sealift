@@ -1,5 +1,8 @@
-// Checks that every relative link and anchor in the repository's Markdown resolves.
+// Checks that every relative link and anchor in the repository's Markdown resolves,
+// or, with --run, runs the sh blocks marked <!-- run --> against a live sealift.
 // Usage: node scripts/check-docs.mjs [root]
+//        node scripts/check-docs.mjs --run <url> [root]
+import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -79,9 +82,56 @@ export function checkLinks(root) {
   return failures
 }
 
+// Yields each fenced block with its language, code, and the comment markers
+// on the lines above it, blank lines allowed in between.
+function* blocks(text) {
+  const lines = text.split("\n")
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^(```|~~~)(\S*)/)
+    if (!open) continue
+    const markers = []
+    for (let j = i - 1; j >= 0; j--) {
+      const m = lines[j].match(/^<!--\s*(.*?)\s*-->$/)
+      if (m) markers.unshift(m[1])
+      else if (lines[j].trim() !== "") break
+    }
+    let end = i + 1
+    while (end < lines.length && !lines[end].startsWith(open[1])) end++
+    yield { line: i + 1, lang: open[2], code: lines.slice(i + 1, end).join("\n"), markers }
+    i = end
+  }
+}
+
+export function runExamples(root, url) {
+  let ran = 0
+  const failures = []
+  for (const file of markdownFiles(root).sort()) {
+    for (const block of blocks(readFileSync(file, "utf8"))) {
+      if (block.lang !== "sh" || !block.markers.includes("run")) continue
+      ran++
+      const code = block.code.replaceAll("http://localhost:8080", url)
+      const r = spawnSync("sh", ["-e", "-c", code], { encoding: "utf8", timeout: 60_000 })
+      const output = `${r.stdout ?? ""}${r.stderr ?? ""}`
+      const expects = block.markers.filter((m) => m.startsWith("expect:")).map((m) => m.slice(7).trim())
+      const missing = expects.find((e) => !output.includes(e))
+      if (r.status !== 0 || missing !== undefined) {
+        const reason = r.status !== 0 ? `exit ${r.status ?? r.signal}` : `output lacks "${missing}"`
+        failures.push({ file: relative(root, file), line: block.line, reason, output })
+      }
+    }
+  }
+  return { ran, failures }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const root = process.argv[2] ?? "."
-  const failures = checkLinks(root)
+  const args = process.argv.slice(2)
+  if (args[0] === "--run") {
+    const { ran, failures } = runExamples(args[2] ?? ".", args[1])
+    for (const f of failures) console.error(`${f.file}:${f.line}: ${f.reason}\n${f.output}`)
+    console.log(`${ran} examples run, ${failures.length} failed`)
+    process.exit(failures.length ? 1 : 0)
+  }
+  const failures = checkLinks(args[0] ?? ".")
   for (const f of failures) console.error(`${f.file}:${f.line}: ${f.target}`)
   process.exit(failures.length ? 1 : 0)
 }

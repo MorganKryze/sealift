@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { checkLinks, slug } from "./check-docs.mjs"
+import { checkLinks, runExamples, slug } from "./check-docs.mjs"
 
 test("slug follows GitHub's rule", () => {
   assert.equal(slug("Get started"), "get-started")
@@ -36,4 +36,46 @@ test("checkLinks reports missing files and anchors only", () => {
   )
   const failures = checkLinks(root).map((f) => `${f.file}:${f.line}: ${f.target}`)
   assert.deepEqual(failures, ["b.md:7: a.md#missing", "b.md:8: a.md#inside-a-fence", "b.md:9: missing.md"])
+})
+
+test("runExamples runs the marked blocks and checks their output", () => {
+  const root = mkdtempSync(join(tmpdir(), "check-docs-"))
+  const fence = "```"
+  writeFileSync(
+    join(root, "page.md"),
+    [
+      "<!-- run -->",
+      "<!-- expect: http://sealift:8080/api -->",
+      `${fence}sh`,
+      "echo http://localhost:8080/api",
+      fence,
+      "",
+      "<!-- run -->",
+      `${fence}sh`,
+      "false",
+      fence,
+      "",
+      "<!-- run -->",
+      "<!-- expect: b -->",
+      "",
+      `${fence}sh`,
+      "echo a",
+      fence,
+      "",
+      "<!-- illustrative -->",
+      `${fence}sh`,
+      "exit 1",
+      fence,
+      "",
+      `${fence}sh`,
+      "exit 1",
+      fence,
+    ].join("\n"),
+  )
+  const { ran, failures } = runExamples(root, "http://sealift:8080")
+  assert.equal(ran, 3)
+  assert.deepEqual(
+    failures.map((f) => `${f.file}:${f.line}`),
+    ["page.md:8", "page.md:15"],
+  )
 })

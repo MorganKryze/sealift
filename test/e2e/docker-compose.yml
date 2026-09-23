@@ -53,6 +53,9 @@ services:
     working_dir: /e2e
     volumes:
       - .:/e2e
+      # The documentation's runnable examples run against this stack too.
+      - ../../docs:/repo/docs:ro
+      - ../../scripts:/repo/scripts:ro
     environment:
       SEALIFT_URL: http://sealift:8080
       REGISTRY_URL: http://registry:4873
