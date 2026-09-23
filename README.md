@@ -15,8 +15,8 @@
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/review-dark.png">
-  <img src="docs/assets/review.png" alt="The review screen: 45 CVEs today and none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/review-hero-dark.png">
+  <img src="docs/assets/review-hero.png" alt="The review screen: 45 CVEs today and none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed">
 </picture>
 
 ## The problem
