@@ -27,7 +27,7 @@ function renderPanel() {
   const queryClient = new QueryClient()
   render(
     <QueryClientProvider client={queryClient}>
-      <ToolsPanel minReleaseAgeDays={3} />
+      <ToolsPanel minReleaseAgeDays={3} pnpmVersion="10.34.5" />
     </QueryClientProvider>,
   )
 }

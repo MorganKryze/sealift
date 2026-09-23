@@ -40,6 +40,12 @@ export function SettingsPanelProvider({ children }: { children: ReactNode }) {
           <DialogPrimitive.Content
             aria-describedby={undefined}
             onCloseAutoFocus={returnFocus.onCloseAutoFocus}
+            // Focus the panel itself on open: Radix would focus the close button, which reads as the main action.
+            onOpenAutoFocus={(event) => {
+              event.preventDefault()
+              ;(event.currentTarget as HTMLElement).focus()
+            }}
+            tabIndex={-1}
             className="animate-slide-in fixed top-0 right-0 bottom-0 z-50 flex w-[min(440px,100%)] flex-col overflow-y-auto border-l border-line bg-background shadow-xl outline-none"
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-background/95 px-6 py-4 backdrop-blur">
@@ -64,8 +70,11 @@ function SettingsPanelBody() {
 
   return (
     <div className="flex flex-col gap-8 px-6 py-6">
-      <section className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold text-ink">Appearance</h2>
+      <section className="flex flex-col gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-ink">Appearance</h2>
+          <p className="mt-0.5 text-sm text-muted">Saved in this browser only.</p>
+        </div>
         <ThemeToggle />
       </section>
 
@@ -80,7 +89,7 @@ function SettingsPanelBody() {
       ) : (
         <>
           <SettingsForm settings={settingsQuery.data} />
-          <ToolsPanel minReleaseAgeDays={settingsQuery.data.minReleaseAgeDays} />
+          <ToolsPanel minReleaseAgeDays={settingsQuery.data.minReleaseAgeDays} pnpmVersion={settingsQuery.data.target.pnpmVer} />
         </>
       )}
     </div>

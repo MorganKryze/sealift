@@ -9,9 +9,11 @@ import { formatDbDate, formatGoDuration } from "@/lib/format-tools"
 
 interface ToolsPanelProps {
   minReleaseAgeDays: number
+  /** The pnpm version the server resolves with; read-only, since the binary is chosen at startup. */
+  pnpmVersion: string
 }
 
-export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
+export function ToolsPanel({ minReleaseAgeDays, pnpmVersion }: ToolsPanelProps) {
   const queryClient = useQueryClient()
   const toolsQuery = useQuery({ queryKey: ["tools"], queryFn: getTools })
 
@@ -58,38 +60,45 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
     }
   }
 
+  const card = "flex flex-col gap-3 rounded-lg border border-line bg-card p-4"
+  const otherVersions = tools.trivyInstalled.filter((version) => version !== tools.trivyActive)
+
   return (
-    <div className="flex flex-col gap-6">
-      <h2 className="text-base font-semibold text-ink">Scanner</h2>
+    <section className="flex flex-col gap-4">
+      <div>
+        <h2 className="text-base font-semibold text-ink">Scanner</h2>
+        <p className="mt-0.5 text-sm text-muted">Trivy, its vulnerability database, and the pnpm every project resolves with.</p>
+      </div>
 
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-ink">
-          Active Trivy: <span className="font-medium">{tools.trivyActive || "none installed"}</span>
-        </p>
-        <p className="text-sm text-muted">
-          {tools.trivyLatest
-            ? `Latest release ${tools.trivyLatest} · ${formatGoDuration(tools.trivyLatestAge)} ago`
-            : "Latest release unknown: sealift could not reach GitHub."}
-        </p>
-
-        <ul className="flex flex-col gap-1">
-          {tools.trivyInstalled.map((version) => (
-            <li key={version} className="flex items-center justify-between rounded-md border border-line p-2 text-sm">
-              <span className={version === tools.trivyActive ? "font-medium text-ink" : "text-ink"}>{version}</span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={version === tools.trivyActive || activateMutation.isPending}
-                onClick={() => activateMutation.mutate(version)}
-              >
-                Activate
-              </Button>
-            </li>
-          ))}
-        </ul>
-
-        {activateError ? <ProblemNotice status={activateError.status} problem={activateError.problem} /> : null}
-
+      <div className={card}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink">
+              Trivy <span className="font-mono">{tools.trivyActive || "not installed"}</span>
+            </p>
+            <p className="mt-0.5 text-xs text-muted">
+              {tools.trivyLatest
+                ? `Latest release ${tools.trivyLatest}, ${formatGoDuration(tools.trivyLatestAge)} ago`
+                : "Latest release unknown: sealift could not reach GitHub."}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" className="shrink-0" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate(false)}>
+            {updateMutation.isPending ? (
+              <>
+                <LoaderCircle className="size-4 animate-spin" /> Checking for a newer Trivy…
+              </>
+            ) : (
+              "Update Trivy"
+            )}
+          </Button>
+        </div>
+        {updateMutation.isSuccess ? (
+          <p role="status" className="text-sm text-severity-resolved-fg">
+            {updateMutation.data.state.trivyActive === updateMutation.data.before
+              ? `Trivy ${updateMutation.data.state.trivyActive} is already the newest release sealift installs.`
+              : `Trivy ${updateMutation.data.state.trivyActive} installed and active.`}
+          </p>
+        ) : null}
         {updateError ? (
           <ProblemNotice status={updateError.status} problem={updateError.problem}>
             {/* A 409 means the latest release is younger than the minimum age; only then does forcing it help. */}
@@ -100,41 +109,40 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
             ) : null}
           </ProblemNotice>
         ) : null}
-
-        <Button
-          variant="outline"
-          className="self-start"
-          disabled={updateMutation.isPending}
-          onClick={() => updateMutation.mutate(false)}
-        >
-          {updateMutation.isPending ? (
-            <>
-              <LoaderCircle className="size-4 animate-spin" /> Checking for a newer Trivy…
-            </>
-          ) : (
-            "Update Trivy"
-          )}
-        </Button>
-        {updateMutation.isSuccess ? (
-          <p role="status" className="text-sm text-severity-resolved-fg">
-            {updateMutation.data.state.trivyActive === updateMutation.data.before
-              ? `Trivy ${updateMutation.data.state.trivyActive} is already the newest release sealift installs.`
-              : `Trivy ${updateMutation.data.state.trivyActive} installed and active.`}
-          </p>
+        {otherVersions.length > 0 ? (
+          <div className="border-t border-line pt-3">
+            <p className="text-xs text-muted">Also installed, to roll back to:</p>
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {otherVersions.map((version) => (
+                <li key={version} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-mono text-ink">{version}</span>
+                  <Button variant="ghost" size="sm" disabled={activateMutation.isPending} onClick={() => activateMutation.mutate(version)}>
+                    Use this version
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
+        {activateError ? <ProblemNotice status={activateError.status} problem={activateError.problem} /> : null}
       </div>
 
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-ink">Vulnerability database: {formatDbDate(tools.trivyDbDate)}</p>
-        <Button variant="outline" className="self-start" disabled={dbMutation.isPending} onClick={() => dbMutation.mutate()}>
-          {dbMutation.isPending ? (
-            <>
-              <LoaderCircle className="size-4 animate-spin" /> Updating the database…
-            </>
-          ) : (
-            "Update database"
-          )}
-        </Button>
+      <div className={card}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink">Vulnerability database</p>
+            <p className="mt-0.5 text-xs text-muted">Downloaded {formatDbDate(tools.trivyDbDate)}. sealift refreshes it before each analysis.</p>
+          </div>
+          <Button variant="outline" size="sm" className="shrink-0" disabled={dbMutation.isPending} onClick={() => dbMutation.mutate()}>
+            {dbMutation.isPending ? (
+              <>
+                <LoaderCircle className="size-4 animate-spin" /> Updating the database…
+              </>
+            ) : (
+              "Update database"
+            )}
+          </Button>
+        </div>
         {dbMutation.isSuccess ? (
           <p role="status" className="text-sm text-severity-resolved-fg">
             {dbMutation.data.state.trivyDbDate === dbMutation.data.before
@@ -145,14 +153,14 @@ export function ToolsPanel({ minReleaseAgeDays }: ToolsPanelProps) {
         {dbError ? <ProblemNotice status={dbError.status} problem={dbError.problem} /> : null}
       </div>
 
-      <div className="flex flex-col gap-2">
-        <p className="text-sm text-ink">Installed pnpm versions</p>
-        <ul className="flex flex-col gap-1 text-sm text-muted">
-          {tools.pnpmInstalled.map((version) => (
-            <li key={version}>{version}</li>
-          ))}
-        </ul>
+      <div className={card}>
+        <div>
+          <p className="text-sm font-medium text-ink">
+            pnpm <span className="font-mono">{pnpmVersion}</span>
+          </p>
+          <p className="mt-0.5 text-xs text-muted">Resolves every project. sealift picks it when it starts.</p>
+        </div>
       </div>
-    </div>
+    </section>
   )
 }
