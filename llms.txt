@@ -1,0 +1,28 @@
+# sealift
+
+> Prepares npm dependency updates for air-gapped networks. On the connected side, it analyses a project's package.json with pnpm and Trivy, ranks the newer versions of each direct dependency by known CVEs, proposes the oldest version that fixes the most, and packs the chosen versions into packages_npm.tar.gz for a Nexus import on the air-gapped side. One Go binary with a React interface, shipped as the image ghcr.io/morgankryze/sealift for linux/amd64 and linux/arm64. GPL-3.0.
+
+Limits: npm only. Input is a package.json whose direct dependencies are pinned to exact versions; no lockfile, workspaces, overrides or resolutions. Only direct dependencies get new versions; transitive ones change through them. signature.key is a shared value written in plain text into the archive, not a cryptographic signature. sealift has no login. A malicious package with no published CVE is not detected.
+
+Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 to 16), download parallelism 16 (1 to 32), target Linux x64 glibc with Node 22.17.1, pnpm 10.34.5.
+
+## Docs
+
+- [Getting started](docs/getting-started.md): docker run, the setup screen, a first archive from a five-dependency project
+- [Workflow](docs/workflow.md): each screen of a session with every button label
+- [How sealift chooses](docs/how-sealift-chooses.md): CVE vectors by severity, tie-breaks, the eight signals, the minimum release age, the review groups
+- [Settings](docs/settings.md): target platform, Node version, signature key, limits, Trivy updates, the settings API
+- [The air gap](docs/air-gap.md): the archive, the reports, sha256 checks, the import, lockfile drift
+- [Deployment](docs/deployment.md): hardened Compose, capabilities, reverse proxy with SSE, outbound hosts, the /data volume, upgrades, backups
+- [Troubleshooting](docs/troubleshooting.md): each message with its cause and fix
+- [FAQ](docs/faq.md): lockfiles, transitive dependencies, other ecosystems, data, reset
+
+## Developers
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): requirements, layout, local stack, checks, commit style, releases
+- [Architecture](docs/dev/architecture.md): API, service, queue, the nine analysis steps, the export steps, the /data layout
+- [Ranking](docs/dev/ranking.md): rank.Signals, rank.Best, rank.KeyVersions, where the analysis calls them, tests
+- [API](docs/dev/api.md): every route, error statuses, the server-sent event stream
+- [Archive format](docs/dev/archive-format.md): packages_npm.tar.gz, manifest.json fields, what an import tool should check
+- [Web](docs/dev/web.md): routes, step bar, job events, checking a screen in a browser
+- [api/openapi.yaml](api/openapi.yaml): the API contract
