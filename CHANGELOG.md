@@ -6,6 +6,16 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- The settings panel offers the target as one platform choice (Linux x64 or arm64, glibc or musl), checks the Node version as you type, and shows pnpm as read-only.
+- The signature key shows as saved, with Replace and a confirmed Clear.
+- Each limit shows its unit, its range and what it changes; Save and Discard appear only when something changed, and errors show under their field.
+
+### Fixed
+
+- The API refuses a minimum release age outside 1 to 90 days, a resolve parallelism outside 1 to 16 and a download parallelism outside 1 to 32.
+
 ## [0.2.1] - 2026-09-22
 
 ### Added
