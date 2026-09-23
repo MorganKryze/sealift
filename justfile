@@ -56,6 +56,11 @@ web-check:
     pnpm -C web run lint
     pnpm -C web run test
 
+# Check the links and anchors of every Markdown page.
+docs:
+    node --test scripts/check-docs.test.mjs
+    node scripts/check-docs.mjs
+
 # Build the web app for production.
 web-build:
     pnpm -C web run build

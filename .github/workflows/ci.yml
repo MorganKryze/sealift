@@ -77,6 +77,8 @@ jobs:
         run: pnpm -C web run lint
       - name: test
         run: pnpm -C web run test
+      - name: docs links
+        run: node --test scripts/check-docs.test.mjs && node scripts/check-docs.mjs
       - name: build
         run: pnpm -C web run build
 
