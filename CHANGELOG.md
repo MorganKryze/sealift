@@ -6,6 +6,13 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A user guide under `docs/`: getting started, each screen of a session, how sealift chooses a version, the settings, the air gap, deployment, troubleshooting and a FAQ.
+- Developer documentation: a contributing guide, and pages on the architecture, the ranking, the API, the archive format and the web app.
+- A security policy, a code of conduct, issue and pull request templates, and `llms.txt`.
+- CI checks every link and anchor in the Markdown files, and runs the documentation's shell examples against the end-to-end stack.
+
 ## [0.2.2] - 2026-09-23
 
 ### Changed
