@@ -5,69 +5,78 @@
   </picture>
 </p>
 
-[![ci](https://github.com/MorganKryze/sealift/actions/workflows/ci.yml/badge.svg)](https://github.com/MorganKryze/sealift/actions/workflows/ci.yml)
-[![latest release](https://img.shields.io/github/v/release/MorganKryze/sealift)](https://github.com/MorganKryze/sealift/releases/latest)
+<p align="center">npm dependency updates for air-gapped networks, scanned, ranked and packed for the kiosk.</p>
 
-sealift prepares npm dependency updates for air-gapped networks. It scans a project for known vulnerabilities, ranks the newer versions of each dependency, and packs the chosen versions into an archive an offline registry can import.
+<p align="center">
+  <a href="https://github.com/MorganKryze/sealift/actions/workflows/ci.yml"><img src="https://github.com/MorganKryze/sealift/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/MorganKryze/sealift/releases/latest"><img src="https://img.shields.io/github/v/release/MorganKryze/sealift" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="license GPL-3.0"></a>
+  <a href="https://github.com/MorganKryze/sealift/pkgs/container/sealift"><img src="https://img.shields.io/badge/image-ghcr.io%2Fmorgankryze%2Fsealift-blue" alt="image on ghcr.io"></a>
+</p>
 
-## Install
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/review-dark.png">
+  <img src="docs/assets/review.png" alt="The review screen: 45 CVEs today and none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed">
+</picture>
 
-```sh
-docker run -d \
-  --name sealift \
-  -p 127.0.0.1:8080:8080 \
-  -v sealift-data:/data \
-  ghcr.io/morgankryze/sealift:latest
-```
+## The problem
 
-`-p 127.0.0.1:8080:8080` keeps the interface off the network; reach it through a tunnel or a reverse proxy instead of publishing it further. The named volume `sealift-data` holds every project, analysis, export and setting, so it survives a container restart or upgrade.
+Updating one npm dependency on an air-gapped network means choosing a version on the connected side, carrying every package it pulls in through the kiosk, and importing them into the offline registry. A version picked by hand often misses a transitive package, carries CVEs of its own, or turns out too new to trust. Each miss costs another round trip through the kiosk, and a round trip takes days.
 
-Open `http://localhost:8080`.
+## What sealift does
 
-## Usage
+On the connected side, from a project's `package.json`:
 
-On first run, sealift asks for Trivy, its vulnerability database and the signature key your Nexus import checks. It downloads nothing until you press Install, then shows each tool downloading and ready before you continue. When the latest Trivy release is younger than the minimum release age, it offers the newest release past that age instead.
+- scans the project with Trivy and counts its CVEs by severity;
+- resolves every newer version of each direct dependency against the project, and scans each one;
+- proposes, for each dependency, the oldest version that fixes the most CVEs, and holds back any release younger than 14 days;
+- flags what deserves a second look: a major jump, a lost provenance, a new publisher, an added install script;
+- lets you review the proposal, change any version, or keep the current one;
+- downloads every package the selection needs, checks each one against the registry's sha512, and packs a reproducible archive.
 
-![The setup screen, listing Trivy, its vulnerability database and the signature key, with an install button naming both download sizes](docs/assets/setup.png)
+On the air-gapped side, the team receives:
 
-Drop a project's `package.json`. Its direct dependencies must be pinned to exact versions; the preview lists anything sealift would refuse before you start. If you dropped the same file before, sealift offers to resume that session.
+- `packages_npm.tar.gz`, with every package and the `signature.key` the Nexus import checks;
+- `manifest.json`, with the hashes of every package and of the archive;
+- `summary.md` and `findings.csv`, with the CVEs before and after, and what remains;
+- a CycloneDX SBOM and Trivy's raw report.
 
-sealift resolves the project, scans it with Trivy, lists the newer versions of each dependency, and resolves each candidate against the rest of the project. The screen shows each step as it finishes, with the time left. You can close the page; the session keeps running.
+## How it works
 
-![The analysis screen, with five finished steps, candidate resolution at 14 of 254, and about 1 minute 20 seconds left](docs/assets/analysis.png)
-
-Review sealift's proposal. For each dependency it picks the oldest version that fixes the most CVEs, and holds back any release younger than the minimum release age. A proposal that is a major jump, or a 0.x minor jump, waits under "To decide". Open a row to see the CVE ids behind the current version, then choose another candidate or keep the current one.
-
-![The review screen: 45 CVEs today, none with the selection, express opened on its candidates, with 4.22.3 held back as too recent and 5.1.0 proposed](docs/assets/review.png)
-
-Confirm the selection. sealift resolves the project against it, downloads each package, checks its integrity, and packs `packages_npm.tar.gz` with the signature key, next to a CVE report, a CycloneDX SBOM and a summary. Carry the archive through your kiosk and import it on the air-gapped side.
-
-![The export screen: the sealed archive with its sha256, one download for the archive, and the five reports below it](docs/assets/export-done.png)
-
-## Configuration
-
-Every setting lives in the Settings panel, opened from the header, and applies to the next analysis or export. The panel also holds the light, dark or system theme.
-
-| Setting | Changes |
+| | |
 | --- | --- |
-| Target | The OS, CPU, libc, Node version and pnpm version sealift resolves and downloads packages for. |
-| Signature key | Written into `signature.key` inside every export archive. Masked once set; sealift never logs it. |
-| Minimum release age | How many days old a release must be before sealift proposes it or installs it as Trivy. 14 by default. |
-| Resolve parallelism | How many candidate versions sealift resolves at once. |
-| Download parallelism | How many package tarballs sealift downloads at once. |
+| ![The setup screen, listing Trivy, its vulnerability database and the signature key](docs/assets/setup.png) | ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) |
+| **Setup.** sealift lists Trivy, its database and the signature key, with their sizes, and downloads nothing until you press Install. | **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. |
+| ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) | ![Archive ready: the archive with its sha256, and five reports](docs/assets/export-done.png) |
+| **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, then shows its sha256 and the reports. |
 
-## Development
-
-Requires Go 1.27, Node 22, pnpm 12.3.4, [just](https://just.systems) and [golangci-lint](https://golangci-lint.run) 2.13.
+## Quickstart
 
 ```sh
-just hooks      # link the pre-commit hook
-just check      # formatting, vet, lint, race tests
-just web-check  # typecheck, lint and test the web app
-just generate   # regenerate the Go server and the web client from api/openapi.yaml
-just image      # build the image for the host's own architecture
-just e2e        # publish to a local registry, then pnpm install against it
+docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.io/morgankryze/sealift:latest
 ```
+
+Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks through a first archive in about ten minutes.
+
+## Documentation
+
+| Need | Pages |
+| --- | --- |
+| Start | [Getting started](docs/getting-started.md), [Workflow](docs/workflow.md) |
+| Use | [How sealift chooses](docs/how-sealift-chooses.md), [Settings](docs/settings.md), [The air gap](docs/air-gap.md) |
+| Deploy | [Deployment](docs/deployment.md), [Troubleshooting](docs/troubleshooting.md), [FAQ](docs/faq.md) |
+| Develop | [Contributing](CONTRIBUTING.md), [Architecture](docs/dev/architecture.md), [Ranking](docs/dev/ranking.md), [API](docs/dev/api.md), [Archive format](docs/dev/archive-format.md), [Web](docs/dev/web.md) |
+
+[docs/README.md](docs/README.md) lists every page with a line on each.
+
+## Current limits
+
+- npm only. Python packages and Docker images are not handled.
+- The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
+- sealift proposes new versions for direct dependencies. Transitive packages change through them.
+- `signature.key` is a shared value in plain text, not a cryptographic signature.
+- A malicious package with no published CVE passes the scan.
+- sealift has no login: keep it on `127.0.0.1` or behind an authenticating proxy.
 
 ## License
 
