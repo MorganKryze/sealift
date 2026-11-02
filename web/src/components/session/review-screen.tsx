@@ -7,6 +7,7 @@ import { ProblemError } from "@/api/client"
 import { queueExport, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
 import { getSettings } from "@/api/settings"
 import { ProblemNotice } from "@/components/problem-notice"
+import { AnalysisWarnings } from "@/components/session/analysis-warnings"
 import { SeverityCounts } from "@/components/severity-counts"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Badge } from "@/components/ui/badge"
@@ -145,6 +146,8 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
           another version, then confirm.
         </p>
       </div>
+
+      <AnalysisWarnings warnings={result.warnings} />
 
       <Card>
         <div className="grid grid-cols-1 items-center gap-4 p-5 sm:grid-cols-[1fr_auto_1fr]">

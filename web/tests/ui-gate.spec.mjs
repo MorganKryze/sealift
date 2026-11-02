@@ -144,7 +144,8 @@ for (const route of UI.routes) {
           await page.emulateMedia({ colorScheme: theme })
           await page.goto(url)
         }
-        await page.waitForLoadState("networkidle")
+        // /api/tools asks GitHub for the latest Trivy, which can take 30 s, so idle is a best effort.
+        await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {})
         await page.evaluate(settle)
         const axe = await new AxeBuilder({ page }).analyze()
         for (const v of axe.violations.filter((x) => x.impact === "serious" || x.impact === "critical")) {
