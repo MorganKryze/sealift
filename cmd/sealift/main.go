@@ -131,7 +131,9 @@ func run(addr, root string, log *slog.Logger) error {
 	if err := srv.Shutdown(shutdown); err != nil {
 		log.Error("shutdown", "error", err)
 	}
-	<-serveErr
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
 	return nil
 }
 

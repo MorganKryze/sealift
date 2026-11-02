@@ -91,7 +91,7 @@ func run(ctx context.Context, dir, name string, args []string, asUser *Credentia
 		// its cancellation.
 		killErr := killGroup(-pid, syscall.SIGKILL)
 		select {
-		case <-done: // reap the process; its exit error carries no useful information
+		case <-done: //nolint:errcheck // reap the process; its exit error carries no useful information
 			return out.String(), ctx.Err()
 		case <-time.After(killGrace):
 			if killErr != nil {
