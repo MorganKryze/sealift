@@ -78,13 +78,15 @@ func buildFullManifest(manifest npm.Manifest, overrides map[string]string) []byt
 
 // resolve runs one pnpm resolution in a fresh directory under the volume's
 // cache and returns the raw lockfile bytes and pnpm's combined output.
+// Every resolution holds to the minimum release age: any of these lockfiles
+// can reach an archive.
 func (a *Analysis) resolve(ctx context.Context, manifest []byte) ([]byte, string, error) {
 	dir, err := a.Store.NewResolveDir()
 	if err != nil {
 		return nil, "", err
 	}
 	defer os.RemoveAll(dir)
-	res, err := a.Pnpm.Resolve(ctx, runner.ResolveInput{Dir: dir, Manifest: manifest, Target: a.Project.Target})
+	res, err := a.Pnpm.Resolve(ctx, runner.ResolveInput{Dir: dir, Manifest: manifest, Target: a.Project.Target, MinReleaseAgeDays: a.Settings.MinReleaseAgeDays})
 	if err != nil {
 		return nil, res.Output, err
 	}
