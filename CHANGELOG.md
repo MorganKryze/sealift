@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- Deleting a project through the API while one of its jobs is queued or running answers 409 instead of failing partway with a 500.
 - The logo link and the settings panel's close button reach a 32 px target.
 
 ## [0.2.2] - 2026-09-23

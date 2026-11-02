@@ -17,6 +17,9 @@ import (
 // ErrNotFound is returned when a project ID has no matching directory.
 var ErrNotFound = errors.New("not found")
 
+// ErrBusy means a queued or running job still writes under the project.
+var ErrBusy = errors.New("a job is still writing to this project")
+
 // Project is one project directory: an uploaded package.json, its target
 // platform, and the analyses and exports run against it.
 type Project struct {
@@ -227,6 +230,21 @@ func (s *Store) DeleteProject(id string) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: stat %s: %w", dir, err)
+	}
+	// A job holds its .tmp directory from the moment it queues until it
+	// commits. Two races stay open: a job queued right after this check,
+	// and the status a job writes just after its commit. A .tmp a crash
+	// left behind answers busy until the sweep at the next start clears it.
+	for _, kind := range []string{"analyses", "exports"} {
+		entries, err := os.ReadDir(filepath.Join(dir, kind))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("store: list %s of %s: %w", kind, id, err)
+		}
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".tmp") {
+				return ErrBusy
+			}
+		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("store: delete %s: %w", dir, err)

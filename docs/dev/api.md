@@ -41,7 +41,7 @@ A project is a session: one `package.json` and its history.
 | `GET /api/projects` | List projects, each with its last analysis and export. `?manifestSha256=` keeps those created from that exact file, which is how the interface finds a duplicate. |
 | `POST /api/projects` | Create a project from a `multipart/form-data` upload, field `manifest`, optional `name`, and queue its analysis. 201 with the project. 400 when the manifest is refused, 409 when the tools are not ready. |
 | `GET /api/projects/{projectId}` | The project, its target, its analyses and its exports. |
-| `DELETE /api/projects/{projectId}` | Delete the project directory and everything in it. 204. |
+| `DELETE /api/projects/{projectId}` | Delete the project directory and everything in it. 204, or 409 while one of its jobs is queued or running. |
 | `PUT /api/projects/{projectId}/target` | Change the project's target platform and toolchain. |
 | `GET /api/projects/{projectId}/manifest` | The `package.json` the project was created from, byte for byte. |
 

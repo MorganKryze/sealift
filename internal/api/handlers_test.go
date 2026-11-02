@@ -972,6 +972,7 @@ func TestDeleteProjectAnalysisExport(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
+	waitForTerminalState(t, h, project.Id, "analysis", (*project.Analyses)[0].Id)
 
 	// Give the analysis a committed directory of its own to delete,
 	// independent of whether the fake pnpm/trivy tools let the real job
@@ -1000,17 +1001,32 @@ func TestDeleteProjectAnalysisExport(t *testing.T) {
 		t.Fatalf("AnalysisInfo after delete: err = %v, want ErrNotFound", err)
 	}
 
-	delProject, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/projects/"+project.Id, nil)
-	if err != nil {
-		t.Fatalf("build DELETE project: %v", err)
+	deleteProject := func() int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/projects/"+project.Id, nil)
+		if err != nil {
+			t.Fatalf("build DELETE project: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("DELETE project: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
 	}
-	delProjectResp, err := http.DefaultClient.Do(delProject)
+
+	pending, err := h.Store.NewDir("analyses", project.Id)
 	if err != nil {
-		t.Fatalf("DELETE project: %v", err)
+		t.Fatalf("NewDir: %v", err)
 	}
-	delProjectResp.Body.Close()
-	if delProjectResp.StatusCode != http.StatusNoContent {
-		t.Fatalf("DELETE project status = %d, want 204", delProjectResp.StatusCode)
+	if status := deleteProject(); status != http.StatusConflict {
+		t.Fatalf("DELETE project during a job: status = %d, want 409", status)
+	}
+	if err := pending.Discard(); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	if status := deleteProject(); status != http.StatusNoContent {
+		t.Fatalf("DELETE project status = %d, want 204", status)
 	}
 }
 
