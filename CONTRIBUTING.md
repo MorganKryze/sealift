@@ -7,7 +7,7 @@ Bug reports and ideas are contributions too. The issue templates, [Bug report](h
 - Go 1.27
 - Node 22 and pnpm 12.3.4 for the web app (`corepack enable` picks the pinned pnpm)
 - [just](https://just.systems) for the shortcuts
-- [golangci-lint](https://golangci-lint.run) 2.13
+- [golangci-lint](https://golangci-lint.run) 2.15
 - Docker, for the image and the end-to-end test
 - Trivy on your `PATH`, for the integration tests only
 
