@@ -204,6 +204,40 @@ func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	}
 }
 
+func TestDeleteProjectRefusesWhileAJobWrites(t *testing.T) {
+	for _, kind := range []string{"analyses", "exports"} {
+		t.Run(kind, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "data[1]")
+			s, err := Open(root)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			project, err := s.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+			if err != nil {
+				t.Fatalf("CreateProject: %v", err)
+			}
+			pending, err := s.NewDir(kind, project.ID)
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+
+			if err := s.DeleteProject(project.ID); !errors.Is(err, ErrBusy) {
+				t.Fatalf("DeleteProject with a pending job: err = %v, want ErrBusy", err)
+			}
+			if _, err := s.Project(project.ID); err != nil {
+				t.Fatalf("project after a refused delete: %v", err)
+			}
+
+			if err := pending.Commit(); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			if err := s.DeleteProject(project.ID); err != nil {
+				t.Fatalf("DeleteProject after the job committed: %v", err)
+			}
+		})
+	}
+}
+
 func TestProjectsSkipsADirectoryWithoutProjectJSON(t *testing.T) {
 	s := openTestStore(t)
 	good, err := s.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
