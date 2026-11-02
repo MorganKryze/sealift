@@ -49,7 +49,7 @@ export function FailureBlock({ projectId, analysisId, message, detail, heading =
       {detail ? <p className="mt-1.5 max-w-[70ch] text-xs text-muted">{detail}</p> : null}
       <div className="mt-3.5 flex flex-wrap gap-3">{actions}</div>
       <details className="mt-3.5" onToggle={handleToggle}>
-        <summary className="cursor-pointer text-sm text-muted">Show the log</summary>
+        <summary className="cursor-pointer py-1.5 text-sm text-muted">Show the log</summary>
         <pre className="mt-2.5 max-h-72 overflow-auto rounded-lg border border-line bg-background p-3.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink">
           {logQuery.isPending || logQuery.isFetching
             ? "Loading…"

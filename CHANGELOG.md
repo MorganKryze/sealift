@@ -15,7 +15,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- The logo link and the settings panel's close button reach a 32 px target.
+- The logo link and the settings panel's close button reach a 32 px target, as do the Technical detail and Show the log disclosures.
+- The text on an error screen meets the WCAG AA contrast ratio in the light theme.
 
 ## [0.2.2] - 2026-09-23
 

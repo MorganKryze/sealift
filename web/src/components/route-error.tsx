@@ -7,7 +7,7 @@ function ErrorLayout({ title, detail, children }: { title: string; detail: strin
     <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
       <div role="alert" className="rounded-xl border border-severity-critical/40 bg-severity-critical/5 p-6">
         <h1 className="text-xl font-bold tracking-tight text-ink">{title}</h1>
-        <p className="mt-2 max-w-[62ch] text-muted">{detail}</p>
+        <p className="mt-2 max-w-[62ch] text-ink">{detail}</p>
         <div className="mt-5 flex flex-wrap gap-2">{children}</div>
       </div>
     </div>
@@ -35,7 +35,7 @@ export function RouteError({ error, reset }: ErrorComponentProps) {
         <Link to="/">Back to sessions</Link>
       </Button>
       <details className="mt-3 w-full text-sm text-muted">
-        <summary className="cursor-pointer">Technical detail</summary>
+        <summary className="cursor-pointer py-1.5">Technical detail</summary>
         <pre className="mt-2 overflow-x-auto rounded-md border border-line bg-background p-3 font-mono text-xs text-ink">
           {error instanceof Error ? error.message : String(error)}
         </pre>
