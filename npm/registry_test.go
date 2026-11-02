@@ -137,8 +137,43 @@ func TestDownloadFile(t *testing.T) {
 	}
 }
 
+func TestParseIntegrityPicksTheStrongestHash(t *testing.T) {
+	sha1Sum := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	sha512Sum := base64.StdEncoding.EncodeToString(make([]byte, 64))
+	tests := []struct {
+		name, sri string
+		size      int
+	}{
+		{"sha512 alone", "sha512-" + sha512Sum, 64},
+		{"sha1 alone", "sha1-" + sha1Sum, 20},
+		{"sha1 first", "sha1-" + sha1Sum + " sha512-" + sha512Sum, 64},
+		{"sha512 first", "sha512-" + sha512Sum + " sha1-" + sha1Sum, 64},
+		{"sha384 beside sha512", "sha384-AAAA sha512-" + sha512Sum, 64},
+		{"an option after the digest", "sha1-" + sha1Sum + "?x=1 sha512-" + sha512Sum + "?x=1", 64},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newHash, sum, err := parseIntegrity(tt.sri)
+			if err != nil {
+				t.Fatalf("parseIntegrity: %v", err)
+			}
+			if newHash().Size() != tt.size || len(sum) != tt.size {
+				t.Errorf("hash size = %d, digest = %d bytes, want %d", newHash().Size(), len(sum), tt.size)
+			}
+		})
+	}
+}
+
 func TestParseIntegrityRejects(t *testing.T) {
-	for _, sri := range []string{"", "sha512", "md5-AA==", "sha512-not base64!"} {
+	sha1Sum := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	for _, sri := range []string{
+		"", "sha512", "md5-AA==", "sha512-not base64!",
+		"sha512-", "sha512-AAAA", "sha1-AAAA",
+		"sha1-" + sha1Sum + " sha512-",
+		"sha1-" + sha1Sum + " sha512-!!!!",
+		"sha384-AAAA sha1-" + sha1Sum,
+		"SHA512-AAAA sha1-" + sha1Sum,
+	} {
 		if _, _, err := parseIntegrity(sri); err == nil {
 			t.Errorf("parseIntegrity(%q): want an error", sri)
 		}

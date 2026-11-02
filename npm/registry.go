@@ -225,19 +225,43 @@ func parseIntegrity(sri string) (func() hash.Hash, []byte, error) {
 	if len(fields) == 0 {
 		return nil, nil, errors.New("empty integrity")
 	}
-	algo, encoded, ok := strings.Cut(fields[0], "-")
-	if !ok {
-		return nil, nil, fmt.Errorf("integrity %q: missing algorithm", sri)
+	var sha1Sum []byte
+	onlySHA1 := true
+	for _, field := range fields {
+		entry, _, _ := strings.Cut(field, "?") // SRI allows options after the digest
+		algo, encoded, ok := strings.Cut(entry, "-")
+		if !ok {
+			return nil, nil, fmt.Errorf("integrity %q: missing algorithm", sri)
+		}
+		switch algo {
+		case "sha512":
+			sum, err := decodeDigest(sri, encoded, sha512.Size)
+			return sha512.New, sum, err
+		case "sha1":
+			sum, err := decodeDigest(sri, encoded, sha1.Size)
+			if err != nil {
+				return nil, nil, err
+			}
+			sha1Sum = sum
+		default:
+			onlySHA1 = false
+		}
 	}
+	// sha1 stands in only where a package publishes nothing else: beside a
+	// hash sealift cannot check, it would turn a refusal into a weaker pass.
+	if sha1Sum == nil || !onlySHA1 {
+		return nil, nil, fmt.Errorf("integrity %q: unsupported algorithm", sri)
+	}
+	return sha1.New, sha1Sum, nil
+}
+
+func decodeDigest(sri, encoded string, size int) ([]byte, error) {
 	sum, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, nil, fmt.Errorf("integrity %q: %w", sri, err)
+		return nil, fmt.Errorf("integrity %q: %w", sri, err)
 	}
-	switch algo {
-	case "sha512":
-		return sha512.New, sum, nil
-	case "sha1":
-		return sha1.New, sum, nil
+	if len(sum) != size {
+		return nil, fmt.Errorf("integrity %q: digest is %d bytes, want %d", sri, len(sum), size)
 	}
-	return nil, nil, fmt.Errorf("integrity %q: unsupported algorithm", sri)
+	return sum, nil
 }
