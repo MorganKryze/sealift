@@ -14,7 +14,7 @@ export function Nav() {
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-background/90 backdrop-blur">
       <div className="mx-auto flex h-15 max-w-240 items-center gap-4 px-5">
-        <Link to="/" aria-label="sealift home" className="flex items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <Link to="/" aria-label="sealift home" className="flex h-8 items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <Lockup size={22} />
         </Link>
         <span className="flex-1" />
