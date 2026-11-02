@@ -52,7 +52,7 @@ export function SettingsPanelProvider({ children }: { children: ReactNode }) {
               <DialogPrimitive.Title className="text-lg font-semibold text-ink">Settings</DialogPrimitive.Title>
               <DialogPrimitive.Close
                 aria-label="Close settings"
-                className="rounded-md p-1.5 text-muted outline-none hover:bg-card hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+                className="rounded-md p-2 text-muted outline-none hover:bg-card hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
               >
                 <X className="size-4" />
               </DialogPrimitive.Close>

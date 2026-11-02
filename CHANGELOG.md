@@ -13,6 +13,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - A security policy, a code of conduct, issue and pull request templates, and `llms.txt`.
 - CI checks every link and anchor in the Markdown files, and runs the documentation's shell examples against the end-to-end stack.
 
+### Fixed
+
+- The logo link and the settings panel's close button reach a 32 px target.
+
 ## [0.2.2] - 2026-09-23
 
 ### Changed
