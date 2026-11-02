@@ -42,6 +42,14 @@ type fakePnpm struct {
 	// can prove which of Project.Target and Settings.Target actually
 	// reached pnpm.
 	targets []store.Target
+	// ages records, in call order, the manifest of each Resolve call and
+	// the minimum release age it asked for.
+	ages []resolvedAge
+}
+
+type resolvedAge struct {
+	manifest string
+	days     int
 }
 
 func (f *fakePnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
@@ -49,6 +57,7 @@ func (f *fakePnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.
 	f.calls++
 	f.dirs = append(f.dirs, in.Dir)
 	f.targets = append(f.targets, in.Target)
+	f.ages = append(f.ages, resolvedAge{string(in.Manifest), in.MinReleaseAgeDays})
 	if info, statErr := os.Stat(in.Dir); statErr == nil {
 		f.dirModes = append(f.dirModes, info.Mode().Perm())
 	}
@@ -475,6 +484,41 @@ func TestAnalysis_UsesProjectTargetNotSettingsTarget(t *testing.T) {
 	}
 	if status.Target != proj.Target {
 		t.Errorf("status.json target = %+v, want the project's own %+v", status.Target, proj.Target)
+	}
+}
+
+// TestAnalysis_EveryResolutionHoldsToTheReleaseAge proves the minimum release
+// age reaches every resolution: any of their lockfiles can reach an archive.
+func TestAnalysis_EveryResolutionHoldsToTheReleaseAge(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	settings := st.Settings()
+	settings.MinReleaseAgeDays = 21
+
+	pnpm := &fakePnpm{}
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     pnpm,
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: settings,
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(pnpm.ages) == 0 {
+		t.Fatal("pnpm never resolved anything")
+	}
+	for _, r := range pnpm.ages {
+		if r.days != 21 {
+			t.Errorf("resolved with age %d, want 21: %s", r.days, r.manifest)
+		}
 	}
 }
 

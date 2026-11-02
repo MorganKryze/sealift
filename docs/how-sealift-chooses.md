@@ -67,6 +67,8 @@ The other four inform:
 
 A new release gets 14 days before sealift proposes it. The wait gives the package's users and the registry time to find a bad or compromised publish, and to pull or deprecate it. The same wait applies to the Trivy release sealift installs.
 
+The wait also covers what a version pulls in: every resolution holds the packages under it to the same age. The exact versions your `package.json` pins and the version under test stay exempt, since sealift judges those itself. A project on a version younger than the wait can fail to resolve when that version pins equally young packages: the analysis names the package, and a shorter wait in the settings gets past it.
+
 [Settings](settings.md#minimum-release-age) changes the wait, from 1 to 90 days.
 
 ## The three groups

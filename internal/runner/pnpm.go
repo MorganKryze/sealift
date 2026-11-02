@@ -2,16 +2,20 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/MorganKryze/sealift/internal/store"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 // Pnpm resolves a package.json into a pnpm-lock.yaml without installing
@@ -23,10 +27,16 @@ type Pnpm interface {
 // ResolveInput is a resolution request. Dir is a temporary directory the
 // caller owns; Resolve writes the manifest and workspace file into it and
 // reads pnpm-lock.yaml back from it.
+//
+// MinReleaseAgeDays above zero holds every package back to releases at
+// least that old. The exact versions the manifest pins stay exempt: the
+// caller picked those and judges their age itself. The exemption names the
+// version, so the same package elsewhere in the tree still waits.
 type ResolveInput struct {
-	Dir      string
-	Manifest []byte
-	Target   store.Target
+	Dir               string
+	Manifest          []byte
+	Target            store.Target
+	MinReleaseAgeDays int
 }
 
 // ResolveResult is the outcome of a resolution.
@@ -55,8 +65,10 @@ func NewPnpmCLI(bin, cacheDir string, asUser *Credential) *PnpmCLI {
 // resolution to a target: the Node version engines checks run against, and
 // the platforms pnpm downloads optional dependencies for.
 type workspaceFile struct {
-	NodeVersion            string                 `yaml:"nodeVersion"`
-	SupportedArchitectures supportedArchitectures `yaml:"supportedArchitectures"`
+	NodeVersion              string                 `yaml:"nodeVersion"`
+	SupportedArchitectures   supportedArchitectures `yaml:"supportedArchitectures"`
+	MinimumReleaseAge        int                    `yaml:"minimumReleaseAge,omitempty"` // minutes
+	MinimumReleaseAgeExclude []string               `yaml:"minimumReleaseAgeExclude,omitempty"`
 }
 
 type supportedArchitectures struct {
@@ -83,6 +95,14 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 	}
 	if in.Target.Libc != "" {
 		ws.SupportedArchitectures.Libc = []string{in.Target.Libc}
+	}
+	if in.MinReleaseAgeDays > 0 {
+		pinned, err := pinnedDependencies(in.Manifest)
+		if err != nil {
+			return ResolveResult{}, fmt.Errorf("read manifest: %w", err)
+		}
+		ws.MinimumReleaseAge = in.MinReleaseAgeDays * 24 * 60
+		ws.MinimumReleaseAgeExclude = pinned
 	}
 	wsBytes, err := yaml.Marshal(ws)
 	if err != nil {
@@ -112,6 +132,29 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 		return ResolveResult{Output: output}, fmt.Errorf("read pnpm-lock.yaml: %w", err)
 	}
 	return ResolveResult{Lockfile: lockfile, Output: output}, nil
+}
+
+// pinnedDependencies lists the name@version pairs a manifest pins exactly,
+// sorted so the workspace file stays reproducible.
+func pinnedDependencies(manifest []byte) ([]string, error) {
+	var doc struct {
+		Dependencies         map[string]string `json:"dependencies"`
+		DevDependencies      map[string]string `json:"devDependencies"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
+		PeerDependencies     map[string]string `json:"peerDependencies"`
+	}
+	if err := json.Unmarshal(manifest, &doc); err != nil {
+		return nil, err
+	}
+	pinned := map[string]bool{}
+	for _, group := range []map[string]string{doc.Dependencies, doc.DevDependencies, doc.OptionalDependencies, doc.PeerDependencies} {
+		for name, version := range group {
+			if npm.IsExactVersion(version) {
+				pinned[name+"@"+version] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(pinned)), nil
 }
 
 // pnpmFailureLimit bounds the part of pnpm's output a failure message

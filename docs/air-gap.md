@@ -99,11 +99,10 @@ sealift checks:
 
 - every downloaded tarball against the sha512 the registry published;
 - Trivy against the sha256 of its release;
-- that no proposed version of a direct dependency is younger than the minimum release age;
+- that no proposed version of a direct dependency is younger than the minimum release age, and that neither are the packages it pulls in;
 - that nothing downloads before you press Install, Analyse or Confirm and build the archive.
 
 It does not:
 
 - detect a malicious package that has no known CVE yet: Trivy knows only published vulnerabilities;
-- apply the minimum release age to transitive packages: a package that a new version pulls in through a range can be days old;
 - sign the archive: `signature.key` is a shared value, and the sha256 is only as trustworthy as the channel that carries it.

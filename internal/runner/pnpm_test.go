@@ -120,6 +120,38 @@ exit 1
 	}
 }
 
+func TestPnpmCLI_Resolve_WritesTheReleaseAge(t *testing.T) {
+	installFakeNode(t, `printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml
+`)
+	target := store.Target{OS: "linux", CPU: "x64", Node: "22.17.1", PnpmVer: "10.34.5"}
+	manifest := []byte(`{"dependencies":{"b":"1.0.0"},"devDependencies":{"a":"1.0.0"},"peerDependencies":{"b":"1.0.0","c":"^2.0.0"}}`)
+	cli := NewPnpmCLI("/opt/pnpm.cjs", t.TempDir(), nil)
+
+	read := func(days int) string {
+		t.Helper()
+		dir := t.TempDir()
+		if _, err := cli.Resolve(context.Background(), ResolveInput{Dir: dir, Manifest: manifest, Target: target, MinReleaseAgeDays: days}); err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		ws, err := os.ReadFile(filepath.Join(dir, "pnpm-workspace.yaml"))
+		if err != nil {
+			t.Fatalf("read workspace: %v", err)
+		}
+		return string(ws)
+	}
+
+	ws := read(14)
+	if !strings.Contains(ws, "minimumReleaseAge: 20160\n") {
+		t.Errorf("workspace = %q, want 14 days in minutes", ws)
+	}
+	if !strings.Contains(ws, "minimumReleaseAgeExclude:\n    - a@1.0.0\n    - b@1.0.0\n") {
+		t.Errorf("workspace = %q, want the pinned versions exempt, sorted, once each, and no range", ws)
+	}
+	if ws := read(0); strings.Contains(ws, "minimumReleaseAge") {
+		t.Errorf("workspace = %q, want no release age at zero", ws)
+	}
+}
+
 func TestPnpmFailure(t *testing.T) {
 	tests := []struct {
 		name, output, want string
