@@ -55,6 +55,13 @@ pnpm -C web run test
 
 `just web-check` runs all three. Tests sit next to the code they cover, as `*.test.ts` and `*.test.tsx`.
 
+`web/tests/ui-gate.spec.mjs` loads `/` and `/settings` in Chromium at 1024 and 1280 px, in light and dark. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px, and starts its own server on port 18080. CI does not run it. Install the browser once, then run it:
+
+```sh
+pnpm -C web exec playwright install chromium
+pnpm -C web exec playwright test tests/ui-gate.spec.mjs
+```
+
 ## Checking a screen in a browser
 
 A unit test does not show that a screen renders the right thing once the real server answers. Before calling a screen done, drive it in a real browser against a real server, with Playwright or puppeteer:
