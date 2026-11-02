@@ -64,7 +64,7 @@ curl -s http://localhost:8080/api/projects
 The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupted`. A failed analysis carries `failure` with the step id and the message:
 
 ```json
-{"message":"resolve project: pnpm install: exit status 1","step":"resolve-project"}
+{"message":"resolve project: pnpm install: ERR_PNPM_NO_MATCHING_VERSION No matching version found for left-pad@99.0.0: exit status 1","step":"resolve-project"}
 ```
 
 ## Exports

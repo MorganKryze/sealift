@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A failed resolve shows pnpm's own reason on screen instead of `pnpm install: exit status 1`.
 - The logo link and the settings panel's close button reach a 32 px target.
 
 ## [0.2.2] - 2026-09-23

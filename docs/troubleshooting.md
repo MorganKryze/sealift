@@ -88,11 +88,11 @@ The file parses, but holds an array, a string or a number at its top level.
 
 The message under What went wrong starts with the step that failed, such as `resolve project:`.
 
-### resolve project: pnpm install: exit status 1
+### resolve project: pnpm install
 
-pnpm could not install the project as dropped. **Show the log** gives pnpm's own error. The common ones:
+pnpm could not install the project as dropped. The message carries pnpm's reason, and **Show the log** gives its full output. The common ones:
 
-| In the log | Cause | Fix |
+| In the message | Cause | Fix |
 | --- | --- | --- |
 | `ERR_PNPM_NO_MATCHING_VERSION` | A version that does not exist on the registry | Fix the version in the `package.json`, then drop it again |
 | `ERR_PNPM_FETCH_404` | A package name that does not exist, or a private package | Fix the name; sealift reads the public registry, or the mirror set in [Deployment](deployment.md#outbound-access) |

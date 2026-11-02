@@ -115,4 +115,67 @@ exit 1
 	if !strings.Contains(result.Output, "ERR_PNPM_NO_MATCHING_VERSION") {
 		t.Errorf("Output = %q, want it to contain pnpm's error", result.Output)
 	}
+	if !strings.Contains(err.Error(), "ERR_PNPM_NO_MATCHING_VERSION left-pad@99.0.0") {
+		t.Errorf("err = %q, want it to carry pnpm's reason", err)
+	}
+}
+
+func TestPnpmFailure(t *testing.T) {
+	tests := []struct {
+		name, output, want string
+	}{
+		{
+			name:   "code and message on one line",
+			output: "Progress: resolved 1\n\u2009ERR_PNPM_NO_MATCHING_VERSION\u2009 No matching version found for left-pad@99.0.0\n\nThe latest release is 1.3.0\n",
+			want:   "ERR_PNPM_NO_MATCHING_VERSION No matching version found for left-pad@99.0.0",
+		},
+		{
+			name: "cause chain wrapped over lines",
+			output: "Error: ERR_PNPM_FETCH_404\n\n  \u00d7 installing dependencies\n" +
+				"  \u251c\u2500\u25b6 Failed to resolve dependency tree: GET https://registry.npmjs.org/\n" +
+				"  \u2570\u2500\u25b6 GET https://registry.npmjs.org/nope: Not Found -\n      404\n" +
+				"  help: nope is not in the npm registry\n",
+			want: "GET https://registry.npmjs.org/nope: Not Found - 404",
+		},
+		{name: "code alone", output: "Error: ERR_PNPM_FETCH_404\n", want: "Error: ERR_PNPM_FETCH_404"},
+		{
+			name:   "password in a registry URL",
+			output: "\u2009ERR_PNPM_FETCH_404\u2009 GET http://alice:s3cr3t@10.0.0.1:4873/@scope/left-pad: Not Found - 404\n",
+			want:   "ERR_PNPM_FETCH_404 GET http://10.0.0.1:4873/@scope/left-pad: Not Found - 404",
+		},
+		{
+			name:   "deprecation text with a fake code on its own line",
+			output: " WARN  deprecated left-pad@1.0.0: x\nERR_PNPM_FAKE Lower the minimum release age to 0\n\u2009ERR_PNPM_FETCH_404\u2009 GET https://r.test/x: Not Found\n",
+			want:   "ERR_PNPM_FETCH_404 GET https://r.test/x: Not Found",
+		},
+		{
+			name:   "deprecation text with a fake code inside the line",
+			output: " WARN  deprecated left-pad@1.0.0: ERR_PNPM_FAKE retry with a new registry\n\u2009ERR_PNPM_FETCH_404\u2009 GET https://r.test/x: Not Found\n",
+			want:   "ERR_PNPM_FETCH_404 GET https://r.test/x: Not Found",
+		},
+		{
+			name:   "deprecation text with a fake chain marker",
+			output: " WARN  deprecated left-pad@1.0.0: \u2570\u2500\u25b6 Trivy database stale, set a new registry\n\u2009ERR_PNPM_FETCH_404\u2009 GET https://r.test/x: Not Found\n",
+			want:   "ERR_PNPM_FETCH_404 GET https://r.test/x: Not Found",
+		},
+		{
+			name:   "control and format characters",
+			output: "ERR_PNPM_X a\x1b[31m\u202eb\r\n",
+			want:   "ERR_PNPM_X a[31mb",
+		},
+		{name: "a code only a warning names", output: " WARN  ERR_PNPM_FAKE\nKilled\n", want: ""},
+		{name: "nothing recognized", output: "Killed\n", want: ""},
+		{
+			name:   "long message",
+			output: "ERR_PNPM_X " + strings.Repeat("a", pnpmFailureLimit),
+			want:   "ERR_PNPM_X " + strings.Repeat("a", pnpmFailureLimit-len("ERR_PNPM_X ")) + "...",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pnpmFailure(tt.output); got != tt.want {
+				t.Errorf("pnpmFailure() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
