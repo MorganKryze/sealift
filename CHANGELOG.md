@@ -15,6 +15,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A `package.json` with an invalid package name is refused on the drop screen.
+- A package with several integrity hashes is checked against the strongest one, whatever their order.
 - The review shows the analysis warnings: a dependency the analysis could not check no longer reads as clean.
 - A failed resolve shows pnpm's own reason on screen instead of `pnpm install: exit status 1`.
 - Deleting a project through the API while one of its jobs is queued or running answers 409 instead of failing partway with a 500.
