@@ -104,6 +104,10 @@ func (m Manifest) Validate() []Problem {
 		problems = append(problems, Problem{Field: "dependencies", Reason: "lists no dependency to update"})
 	}
 	for _, d := range m.Dependencies {
+		if len(d.Name) > maxPackageNameLength || !packageName.MatchString(d.Name) {
+			problems = append(problems, Problem{Field: string(d.Kind), Name: d.Name, Reason: "not a valid npm package name"})
+			continue
+		}
 		if reason := specProblem(d.Version); reason != "" {
 			problems = append(problems, Problem{Field: string(d.Kind), Name: d.Name, Value: d.Version, Reason: reason})
 		}
@@ -112,6 +116,12 @@ func (m Manifest) Validate() []Problem {
 }
 
 var sourcePrefixes = []string{"npm:", "git+", "git:", "github:", "file:", "link:", "workspace:", "http:", "https:"}
+
+// A package name reaches file paths, so it must stay one path segment, or
+// two for a scope. Uppercase is legal on the registry for legacy packages.
+var packageName = regexp.MustCompile(`^(@[A-Za-z0-9_~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9_~-][A-Za-z0-9._~-]*$`)
+
+const maxPackageNameLength = 214
 
 func specProblem(spec string) string {
 	for _, prefix := range sourcePrefixes {

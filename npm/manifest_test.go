@@ -1,6 +1,8 @@
 package npm
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -84,6 +86,33 @@ func TestParseManifestRejectsInvalidJSON(t *testing.T) {
 
 // An analysis of a manifest with no dependency runs every step on nothing
 // and ends with "sealift picked a version for each dependency".
+func TestValidatePackageNames(t *testing.T) {
+	valid := []string{"left-pad", "@scope/left-pad", "JSONStream", "lodash.merge", "~tilde", "a_b", "_private", "@lingo.dev/_sdk"}
+	invalid := []string{"../../etc/x", "..", ".hidden", "a/b", "@scope/../x", "@scope/", "/abs", "a b", `a\b`, strings.Repeat("a", 215)}
+	check := func(name string) []Problem {
+		manifest, err := json.Marshal(map[string]any{"dependencies": map[string]string{name: "1.0.0"}})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		m, err := ParseManifest(bytes.NewReader(manifest))
+		if err != nil {
+			t.Fatalf("ParseManifest(%q): %v", name, err)
+		}
+		return m.Validate()
+	}
+	for _, name := range valid {
+		if problems := check(name); len(problems) != 0 {
+			t.Errorf("Validate(%q) = %v, want none", name, problems)
+		}
+	}
+	for _, name := range invalid {
+		problems := check(name)
+		if len(problems) != 1 || problems[0].Reason != "not a valid npm package name" {
+			t.Errorf("Validate(%q) = %v, want one name problem", name, problems)
+		}
+	}
+}
+
 func TestValidateRefusesAManifestWithNoDependency(t *testing.T) {
 	m, err := ParseManifest(strings.NewReader(`{"name":"empty","devDependencies":{}}`))
 	if err != nil {
