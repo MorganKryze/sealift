@@ -101,4 +101,4 @@ The demo project in [Getting started](getting-started.md) pins express 4.17.1, w
 
 ## After the choice
 
-Step 9 of the analysis resolves the whole project with every proposed version at once. When they conflict, the analysis still finishes: the log holds pnpm's output, and the API's analysis result carries the warning. Each proposal stays selectable. The export packs each selected version as the analysis resolved it, on its own, so it does not catch the conflict either: the install on the air-gapped side does. When the log shows one, choose another version for one of the conflicting dependencies, or keep its current one.
+Step 9 of the analysis resolves the whole project with every proposed version at once. When they conflict, the analysis still finishes: the review shows the warning above the summary, and the log holds pnpm's output. Each proposal stays selectable. The export packs each selected version as the analysis resolved it, on its own, so it does not catch the conflict either: the install on the air-gapped side does. When the log shows one, choose another version for one of the conflicting dependencies, or keep its current one.

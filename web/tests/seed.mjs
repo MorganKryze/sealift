@@ -33,7 +33,7 @@ write(`analyses/${analysis}/status.json`, {
 write(`analyses/${analysis}/ranking.json`, {
   before: [1, 4, 3, 1, 0],
   after: [0, 0, 1, 1, 0],
-  warnings: [],
+  warnings: ["lodash: metadata unreachable: the registry answered 503"],
   target,
   dependencies: [
     {
