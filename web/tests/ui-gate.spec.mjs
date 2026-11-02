@@ -8,9 +8,16 @@
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/. The binary embeds web/dist/app, so the build comes first.
-  start: `pnpm run build && go run ../cmd/sealift -addr 127.0.0.1:18080 -data "$(mktemp -d)"`,
-  // A fresh data directory holds no session, so the session routes need seeded data first.
-  routes: ["/", "/settings"],
+  start: `data="$(mktemp -d)" && node tests/seed.mjs "$data" && pnpm run build && go run ../cmd/sealift -addr 127.0.0.1:18080 -data "$data"`,
+  routes: [
+    "/",
+    "/settings",
+    "/sessions/demo/drop",
+    "/sessions/demo/analysis",
+    "/sessions/demo/review",
+    "/sessions/demo/export",
+    "/sessions/missing/review",
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
