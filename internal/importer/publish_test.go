@@ -210,3 +210,17 @@ func TestPublishSendsCredentials(t *testing.T) {
 		t.Errorf("last request = %+v", last)
 	}
 }
+
+func TestPublishCutsOversizedNexusCopy(t *testing.T) {
+	f := newFakeNexus(t)
+	pkg := stage(t, t.TempDir(), "left-pad", "1.0.0", []byte("one"))
+	// The bound is twice the shipped size plus the slack.
+	f.put("left-pad", "1.0.0", make([]byte, 2*3+maxCopySlack+1))
+	res := Publish(context.Background(), f.client(t), []Package{pkg}, t.TempDir())
+	if r := res[0]; r.State != Failed || !strings.Contains(r.Reason, "larger than") {
+		t.Fatalf("got %+v", r)
+	}
+	if n := f.uploadCount(); n != 0 {
+		t.Errorf("%d uploads", n)
+	}
+}
