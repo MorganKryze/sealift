@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +32,12 @@ const (
 	// maxTrailingBytes is the most zero padding Verify accepts after the tar
 	// end marker: 16 KiB, above the 10 KiB record padding of GNU tar.
 	maxTrailingBytes = 16 << 10
+	// entryOverhead is the tar framing Verify allows each entry on top of its
+	// content: 4 KiB covers the header block, the padding of the content and
+	// the PAX path header a name over 100 bytes needs.
+	entryOverhead = 4 << 10
+	// tarEndBytes is the tar end marker: two zero blocks of 512 bytes.
+	tarEndBytes = 1 << 10
 	// sparsePrefix starts the PAX records of a sparse file, which the tar
 	// reader expands into zeros far beyond the bytes the archive holds.
 	sparsePrefix = "GNU.sparse."
@@ -58,6 +65,54 @@ func (l Limits) orDefault() Limits {
 		l.NameBytes = DefaultLimits.NameBytes
 	}
 	return l
+}
+
+// streamBound is the most inflated tar data an archive within l may hold:
+// its content, the framing of each entry with a name of NameBytes, and the
+// end marker. It saturates at the largest int64.
+func (l Limits) streamBound() int64 {
+	perEntry := entryOverhead + int64(l.NameBytes)
+	if int64(l.Entries) > (math.MaxInt64-tarEndBytes)/perEntry {
+		return math.MaxInt64
+	}
+	framing := int64(l.Entries)*perEntry + tarEndBytes
+	if l.Unpacked > math.MaxInt64-framing {
+		return math.MaxInt64
+	}
+	return l.Unpacked + framing
+}
+
+// boundedReader passes on at most left bytes and fails with err at the next
+// one. The tar reader folds any number of consecutive extended and long-name
+// headers, up to 1 MiB each, into a single call to Next, so neither the entry
+// count nor the declared sizes see the inflation they cause.
+type boundedReader struct {
+	r    io.Reader
+	left int64
+	err  error
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	// Read one byte past the limit to tell the end of the data from more of it.
+	if int64(len(p)) > b.left {
+		p = p[:b.left+1]
+	}
+	n, err := b.r.Read(p)
+	if int64(n) > b.left {
+		n, err = int(b.left), b.err
+	}
+	b.left -= int64(n)
+	return n, err
+}
+
+// readRefusal names why reading the archive's tar data failed: a refusal from
+// the reader below, such as the bound on the inflated stream, or the error.
+func readRefusal(err error) error {
+	var r *Refusal
+	if errors.As(err, &r) {
+		return r
+	}
+	return refuse("could not read the archive: %v", err)
 }
 
 // VerifyOptions tell Verify what to expect and where to put the tarballs.
@@ -178,7 +233,9 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		return nil, refuse("could not read the archive: %v", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	bound := limits.streamBound()
+	tooMuch := refuse("the archive holds more than %d bytes of tar data, the most %d entries and %d bytes of content need", bound, limits.Entries, limits.Unpacked)
+	tr := tar.NewReader(&boundedReader{r: gz, left: bound, err: tooMuch})
 
 	checked := make([]Checked, len(m.Packages))
 	done := make([]bool, len(m.Packages))
@@ -191,7 +248,7 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 			break
 		}
 		if err != nil {
-			return nil, refuse("could not read the archive: %v", err)
+			return nil, readRefusal(err)
 		}
 		if n > limits.Entries {
 			return nil, refuse("the archive holds more than %d entries", limits.Entries)
@@ -301,7 +358,7 @@ func checkEntryName(h *tar.Header, seen map[string]bool) error {
 func checkKey(r io.Reader, want []byte) error {
 	got, err := io.ReadAll(io.LimitReader(r, maxKeySize+1))
 	if err != nil {
-		return refuse("could not read the archive: %v", err)
+		return readRefusal(err)
 	}
 	if len(got) > maxKeySize {
 		return refuse("%s is larger than %d bytes", keyEntry, maxKeySize)
@@ -333,7 +390,7 @@ func copyPackage(r io.Reader, p *pending, dir string) (Checked, error) {
 		return Checked{}, fmt.Errorf("copy %s: %w", p.pkg.File, local.err)
 	}
 	if copyErr != nil {
-		return Checked{}, refuse("could not read the archive: %v", copyErr)
+		return Checked{}, readRefusal(copyErr)
 	}
 	if closeErr != nil {
 		return Checked{}, fmt.Errorf("copy %s: %w", p.pkg.File, closeErr)

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 const (
@@ -437,7 +438,14 @@ func sparseArchive(t *testing.T, name string, realsize int) []byte {
 		t.Fatal(err)
 	}
 	data := raw.Bytes()
-	data[156] = tar.TypeXHeader
+	retype(data, tar.TypeXHeader)
+	return gzipped(t, data)
+}
+
+// retype gives the first header block of data another type flag and fixes
+// its checksum.
+func retype(data []byte, typeflag byte) {
+	data[156] = typeflag
 	for i := 148; i < 156; i++ {
 		data[i] = ' '
 	}
@@ -446,16 +454,31 @@ func sparseArchive(t *testing.T, name string, realsize int) []byte {
 		sum += int(c)
 	}
 	copy(data[148:], fmt.Sprintf("%06o\x00 ", sum))
+}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(data); err != nil {
+// metaHeaders is count consecutive tar meta headers of one type, each
+// carrying data, as an archive may place before any entry. The tar writer
+// emits at most one per entry, so the header is a regular entry retyped.
+func metaHeaders(t *testing.T, typeflag byte, count int, data string) []byte {
+	t.Helper()
+	hdr := &tar.Header{Name: "meta", Typeflag: tar.TypeReg, Size: int64(len(data))}
+	if typeflag == tar.TypeGNULongName {
+		hdr.Format = tar.FormatGNU
+	}
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
-	if err := gz.Close(); err != nil {
+	if _, err := tw.Write([]byte(data)); err != nil {
 		t.Fatal(err)
 	}
-	return buf.Bytes()
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	one := raw.Bytes()
+	retype(one, typeflag)
+	return bytes.Repeat(one, count)
 }
 
 func TestVerifyRefusesSparseEntries(t *testing.T) {
@@ -517,6 +540,138 @@ func TestVerifyRefusesDataAfterTheTarEnd(t *testing.T) {
 			f.m.Archive = digestOf(f.data)
 			_, err := f.verify()
 			assertRefusal(t, err, "after the end of the tar")
+		})
+	}
+}
+
+func TestVerifyRefusesMetaHeadersBeyondTheBound(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeflag byte
+		data     string
+	}{
+		{"extended headers", tar.TypeXHeader, paxRecord("comment", strings.Repeat("a", 4000))},
+		{"long names", tar.TypeGNULongName, "out/" + strings.Repeat("\x00", 4000)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, baseItems())
+			f.data = gzipped(t, append(metaHeaders(t, tt.typeflag, 64, tt.data), gunzipped(t, f.data)...))
+			f.m.Archive = digestOf(f.data)
+
+			// Under the default bound the same archive is valid, so the
+			// refusal below comes from the cap on the inflated stream.
+			if _, err := f.verify(); err != nil {
+				t.Fatalf("Verify under the default limits: %v", err)
+			}
+			f.opts.Limits = Limits{Entries: 4, Unpacked: 1 << 10}
+			f.opts.Dir = t.TempDir()
+			_, err := f.verify()
+			assertRefusal(t, err, "bytes of tar data")
+			assertNoKey(t, err)
+		})
+	}
+}
+
+func TestVerifyAcceptsTarFramingWithinTheBound(t *testing.T) {
+	// A name over 100 bytes costs a PAX header and its data on top of the
+	// entry's own header and padding.
+	name := strings.Repeat("n", 247) + ".tgz"
+	items := replace(baseItems(), "out/"+alphaFile, reg("out/"+name, alphaBody))
+	f := newFixture(t, items)
+	f.m.Packages[1].File = name
+	f.opts.Limits = Limits{Entries: 4, Unpacked: int64(len(alphaBody) + len(betaBody) + len(testKey)), NameBytes: 255}
+	if _, err := f.verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestVerifyAcceptsLimitsAtTheMaximum(t *testing.T) {
+	f := newFixture(t, baseItems())
+	f.opts.Limits = Limits{Entries: math.MaxInt, Unpacked: math.MaxInt64, NameBytes: math.MaxInt32}
+	if _, err := f.verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestReadFailuresKeepTheirReason(t *testing.T) {
+	past := refuse("past the bound")
+	broken := errors.New("disk gone")
+	tests := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"refusal", past, "past the bound"},
+		{"wrapped refusal", fmt.Errorf("read: %w", past), "past the bound"},
+		{"other error", broken, "could not read the archive: disk gone"},
+	}
+	reads := map[string]func(r io.Reader) error{
+		"signature key": func(r io.Reader) error { return checkKey(r, []byte(testKey)) },
+		"tarball": func(r io.Reader) error {
+			_, err := copyPackage(r, &pending{pkg: Package{File: alphaFile}}, t.TempDir())
+			return err
+		},
+	}
+	for read, fn := range reads {
+		for _, tt := range tests {
+			t.Run(read+"/"+tt.name, func(t *testing.T) {
+				r := io.MultiReader(strings.NewReader("part"), iotest.ErrReader(tt.err))
+				var got *Refusal
+				if err := fn(r); !errors.As(err, &got) || got.Reason != tt.reason {
+					t.Errorf("error = %v, want the reason %q", err, tt.reason)
+				}
+			})
+		}
+	}
+}
+
+func TestStreamBound(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits Limits
+		want   int64
+	}{
+		{"defaults", DefaultLimits, 10<<30 + 10000*(4<<10+255) + 1<<10},
+		{"small", Limits{Entries: 4, Unpacked: 1 << 10, NameBytes: 10}, 1<<10 + 4*(4<<10+10) + 1<<10},
+		{"unpacked at the maximum", Limits{Entries: 4, Unpacked: math.MaxInt64, NameBytes: 10}, math.MaxInt64},
+		{"entries at the maximum", Limits{Entries: math.MaxInt, Unpacked: 1, NameBytes: 10}, math.MaxInt64},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.limits.streamBound(); got != tt.want {
+				t.Errorf("streamBound = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBoundedReader(t *testing.T) {
+	tests := []struct {
+		name  string
+		limit int64
+		size  int
+		fails bool
+	}{
+		{"empty", 0, 0, false},
+		{"exactly the limit", 10, 10, false},
+		{"one byte past", 10, 11, true},
+		{"far past", 10, 1000, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errBound := errors.New("past the bound")
+			r := &boundedReader{r: bytes.NewReader(make([]byte, tt.size)), left: tt.limit, err: errBound}
+			got, err := io.ReadAll(r)
+			if tt.fails != errors.Is(err, errBound) {
+				t.Fatalf("error = %v, want the bound error: %v", err, tt.fails)
+			}
+			if !tt.fails && (err != nil || len(got) != tt.size) {
+				t.Errorf("read %d bytes (%v), want %d", len(got), err, tt.size)
+			}
+			if tt.fails && int64(len(got)) > tt.limit {
+				t.Errorf("passed %d bytes on, the limit is %d", len(got), tt.limit)
+			}
 		})
 	}
 }
