@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,21 @@ func TestPublishCutsOversizedNexusCopy(t *testing.T) {
 	}
 	if n := f.uploadCount(); n != 0 {
 		t.Errorf("%d uploads", n)
+	}
+}
+
+func TestPublishRepositoryReasonIsBounded(t *testing.T) {
+	f := newFakeNexus(t)
+	format, _ := json.Marshal(strings.Repeat("\x1b[31m", 50000))
+	f.repoBody = `[{"name":"npm-hosted","format":` + string(format) + `,"type":"hosted"}]`
+	dir := t.TempDir()
+	var pkgs []Package
+	for _, n := range []string{"aaa", "bbb", "ccc"} {
+		pkgs = append(pkgs, stage(t, dir, n, "1.0.0", []byte(n)))
+	}
+	for _, r := range Publish(context.Background(), f.client(t), pkgs, t.TempDir()) {
+		if r.State != Failed || len(r.Reason) > 600 || strings.ContainsAny(r.Reason, "\x1b\x07") {
+			t.Errorf("%s: %d bytes, %q", r.Name, len(r.Reason), r.Reason[:min(len(r.Reason), 80)])
+		}
 	}
 }

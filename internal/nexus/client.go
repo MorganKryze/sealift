@@ -144,7 +144,7 @@ func (c *Client) CheckRepository(ctx context.Context) error {
 			continue
 		}
 		if r.Format != "npm" || r.Type != "hosted" {
-			return fmt.Errorf("nexus repository %q is %s %s, not npm hosted", c.repo, r.Format, r.Type)
+			return fmt.Errorf("nexus repository %q is %s %s, not npm hosted", c.repo, c.clean(r.Format), c.clean(r.Type))
 		}
 		return nil
 	}
@@ -171,7 +171,7 @@ func (c *Client) Fetch(ctx context.Context, name, version string, w io.Writer, l
 	}
 	n, err := io.Copy(w, io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return true, fmt.Errorf("nexus unreachable: %s", c.scrub(err.Error()))
+		return true, fmt.Errorf("nexus unreachable: %s", c.clean(err.Error()))
 	}
 	if n > limit {
 		return true, fmt.Errorf("nexus copy is larger than %d bytes", limit)
@@ -217,7 +217,7 @@ func (c *Client) endpoint(path, query string) string {
 func (c *Client) do(ctx context.Context, method, target string, body io.Reader, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
-		return nil, fmt.Errorf("nexus request: %s", c.scrub(err.Error()))
+		return nil, fmt.Errorf("nexus request: %s", c.clean(err.Error()))
 	}
 	req.SetBasicAuth(c.user, string(c.pass))
 	if contentType != "" {
@@ -228,7 +228,7 @@ func (c *Client) do(ctx context.Context, method, target string, body io.Reader, 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("nexus unreachable: %s", c.scrub(err.Error()))
+		return nil, fmt.Errorf("nexus unreachable: %s", c.clean(err.Error()))
 	}
 	return resp, nil
 }

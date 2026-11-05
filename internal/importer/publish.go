@@ -51,8 +51,9 @@ type Publisher interface {
 func Publish(ctx context.Context, p Publisher, pkgs []Package, dir string) []Result {
 	results := make([]Result, len(pkgs))
 	if err := p.CheckRepository(ctx); err != nil {
+		reason := "repository check failed: " + err.Error()
 		for i, pkg := range pkgs {
-			results[i] = failed(pkg, "repository check failed: "+err.Error())
+			results[i] = failed(pkg, reason)
 		}
 		return results
 	}

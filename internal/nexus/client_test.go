@@ -3,6 +3,7 @@ package nexus
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -235,3 +236,64 @@ func TestClientIgnoresProxyEnvironment(t *testing.T) {
 		t.Fatal("the client routes requests through a proxy, which would carry the credentials")
 	}
 }
+
+func TestRepositoryFieldsCleaned(t *testing.T) {
+	hostile := strings.Repeat("\x1b[31m\x07x", 50000)
+	for name, body := range map[string]string{
+		"format": `[{"name":"npm-hosted","format":` + jsonString(hostile) + `,"type":"hosted"}]`,
+		"type":   `[{"name":"npm-hosted","format":"npm","type":` + jsonString(hostile) + `}]`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+		err := newClient(t, srv, "").CheckRepository(context.Background())
+		srv.Close()
+		if err == nil {
+			t.Fatalf("%s: want an error", name)
+		}
+		if !strings.Contains(err.Error(), "not npm hosted") || len(err.Error()) > 2*maxMessageChars || strings.ContainsAny(err.Error(), "\x1b\x07") {
+			t.Errorf("%s: %d bytes, %q", name, len(err.Error()), err.Error()[:80])
+		}
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestTransportErrorsCut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\n"+strings.Repeat("a", 100000)+"\r\n\r\n")
+		conn.Close()
+	}))
+	defer srv.Close()
+	c := newClient(t, srv, "")
+	_, fetchErr := c.Fetch(context.Background(), "pkg", "1.0.0", io.Discard, 10)
+	for name, err := range map[string]error{
+		"check":  c.CheckRepository(context.Background()),
+		"fetch":  fetchErr,
+		"upload": c.Upload(context.Background(), "pkg-1.0.0.tgz", strings.NewReader("x")),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "unreachable") {
+			t.Errorf("%s: want an unreachable error, got %v", name, err)
+			continue
+		}
+		if len(err.Error()) > 2*maxMessageChars {
+			t.Errorf("%s: %d bytes", name, len(err.Error()))
+		}
+	}
+}
+
+func TestFetchCopyErrorCut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "body") }))
+	defer srv.Close()
+	c := newClient(t, srv, "")
+	_, err := c.Fetch(context.Background(), "pkg", "1.0.0", errWriter{errors.New(strings.Repeat("w\x07", 5000))}, 10)
+	if err == nil || len(err.Error()) > 2*maxMessageChars || strings.Contains(err.Error(), "\x07") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) { return 0, w.err }
