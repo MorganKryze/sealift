@@ -28,6 +28,9 @@ const (
 	keyEntry = "signature.key"
 	// maxKeySize is the most Verify reads of the archive's signature key: 64 KiB.
 	maxKeySize = 64 << 10
+	// maxTrailingBytes is the most zero padding Verify accepts after the tar
+	// end marker: 16 KiB, above the 10 KiB record padding of GNU tar.
+	maxTrailingBytes = 16 << 10
 	// sparsePrefix starts the PAX records of a sparse file, which the tar
 	// reader expands into zeros far beyond the bytes the archive holds.
 	sparsePrefix = "GNU.sparse."
@@ -231,9 +234,8 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		}
 		checked[pend.index], done[pend.index] = c, true
 	}
-	// The gzip trailer carries a checksum the tar reader never reaches.
-	if _, err := io.Copy(io.Discard, gz); err != nil {
-		return nil, refuse("could not read the archive: %v", err)
+	if err := checkTrailing(gz); err != nil {
+		return nil, err
 	}
 
 	for i, ok := range done {
@@ -245,6 +247,21 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		return nil, refuse("%s is absent from the archive", keyEntry)
 	}
 	return checked, nil
+}
+
+// checkTrailing reads what follows the tar end marker, which also reaches the
+// gzip trailer and its checksum. Only zero padding is accepted, and reading
+// stops at the bound, so appended data costs no more than maxTrailingBytes of
+// inflation.
+func checkTrailing(gz io.Reader) error {
+	rest, err := io.ReadAll(io.LimitReader(gz, maxTrailingBytes+1))
+	if err != nil {
+		return refuse("could not read the archive: %v", err)
+	}
+	if len(rest) > maxTrailingBytes || slices.ContainsFunc(rest, func(b byte) bool { return b != 0 }) {
+		return refuse("the archive holds more than %d bytes of zero padding after the end of the tar", maxTrailingBytes)
+	}
+	return nil
 }
 
 // checkEntryName accepts only the directory out/ and regular files directly

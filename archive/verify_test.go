@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -463,6 +464,78 @@ func TestVerifyRefusesSparseEntries(t *testing.T) {
 	f.m.Archive = digestOf(f.data)
 	_, err := f.verify()
 	assertRefusal(t, err, "is a sparse file")
+}
+
+// gzipped compresses tar bytes into one gzip member.
+func gzipped(t *testing.T, tarBytes []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(tarBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func gunzipped(t *testing.T, data []byte) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestVerifyRefusesADamagedGzipTrailer(t *testing.T) {
+	f := newFixture(t, baseItems())
+	// The last 8 bytes are the CRC-32 and the length of the content.
+	f.data[len(f.data)-8] ^= 0xff
+	f.m.Archive = digestOf(f.data)
+	_, err := f.verify()
+	assertRefusal(t, err, "invalid checksum")
+}
+
+func TestVerifyRefusesDataAfterTheTarEnd(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra func() []byte
+	}{
+		{"zeros beyond the padding", func() []byte { return make([]byte, maxTrailingBytes+1) }},
+		{"entry after the end marker", func() []byte { return gunzipped(t, build(t, []item{reg("out/late.tgz", "x")})) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, baseItems())
+			f.data = gzipped(t, append(gunzipped(t, f.data), tt.extra()...))
+			f.m.Archive = digestOf(f.data)
+			_, err := f.verify()
+			assertRefusal(t, err, "after the end of the tar")
+		})
+	}
+}
+
+func TestVerifyRefusesAGzipMemberAfterTheFirst(t *testing.T) {
+	f := newFixture(t, baseItems())
+	f.data = append(f.data, gzipped(t, make([]byte, 4<<20))...)
+	f.m.Archive = digestOf(f.data)
+	_, err := f.verify()
+	assertRefusal(t, err, "after the end of the tar")
+}
+
+func TestVerifyAcceptsTarPadding(t *testing.T) {
+	f := newFixture(t, baseItems())
+	f.data = gzipped(t, append(gunzipped(t, f.data), make([]byte, maxTrailingBytes)...))
+	f.m.Archive = digestOf(f.data)
+	if _, err := f.verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
 }
 
 func TestVerifyRefusesWritesNothingOutsideDir(t *testing.T) {
