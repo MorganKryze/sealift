@@ -972,7 +972,13 @@ func TestDeleteProjectAnalysisExport(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
-	waitForTerminalState(t, h, project.Id, "analysis", (*project.Analyses)[0].Id)
+	// The analysis the create call queued is not the one this test deletes.
+	// Cancel it: with real pnpm and Trivy it can outlast any short wait.
+	queued := (*project.Analyses)[0].Id
+	if _, err := h.Service.Cancel(project.Id, "analysis", queued); err != nil && !errors.Is(err, jobs.ErrNotFound) {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminalState(t, h, project.Id, "analysis", queued)
 
 	// Give the analysis a committed directory of its own to delete,
 	// independent of whether the fake pnpm/trivy tools let the real job
