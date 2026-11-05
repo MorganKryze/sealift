@@ -100,7 +100,7 @@ When a step fails, the screen reads Analysis stopped, with the cause under What 
 
 The review opens on sealift's proposal. The summary compares the CVEs today with the CVEs left with the selection, by severity, and counts the dependencies that change.
 
-A warnings block above the summary names what the analysis could not check, such as a dependency whose registry metadata failed. Such a dependency can look clean in the list, so read the block before you confirm.
+A warnings block above the summary names what the analysis could not check, such as a dependency whose registry metadata failed. Such a dependency can look clean in the list, so read the block before you confirm. The analysis checked its proposal as a whole: once you change a pick, the bar above Confirm says your selection was not installed together.
 
 ![The review: 45 CVEs today, none with the selection, express opened on its candidates](assets/review.png)
 
