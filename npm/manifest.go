@@ -104,7 +104,7 @@ func (m Manifest) Validate() []Problem {
 		problems = append(problems, Problem{Field: "dependencies", Reason: "lists no dependency to update"})
 	}
 	for _, d := range m.Dependencies {
-		if len(d.Name) > maxPackageNameLength || !packageName.MatchString(d.Name) {
+		if !ValidName(d.Name) {
 			problems = append(problems, Problem{Field: string(d.Kind), Name: d.Name, Reason: "not a valid npm package name"})
 			continue
 		}
@@ -122,6 +122,11 @@ var sourcePrefixes = []string{"npm:", "git+", "git:", "github:", "file:", "link:
 var packageName = regexp.MustCompile(`^(@[A-Za-z0-9_~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9_~-][A-Za-z0-9._~-]*$`)
 
 const maxPackageNameLength = 214
+
+// ValidName reports whether name is a package name that stays safe in a path.
+func ValidName(name string) bool {
+	return len(name) <= maxPackageNameLength && packageName.MatchString(name)
+}
 
 func specProblem(spec string) string {
 	for _, prefix := range sourcePrefixes {

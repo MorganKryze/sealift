@@ -64,15 +64,30 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 `manifest.json` travels next to the archive, not inside it: the archive's sha256 cannot be part of its own content.
 
-## What an import tool should check
+## What `sealift import` checks
 
-1. The sha256 of `packages_npm.tar.gz` matches `archive.sha256`, and the value received through a separate channel.
-2. `out/signature.key` holds the expected value.
-3. Every entry under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
-4. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`.
-5. Entry paths stay under `out/`: no `..`, no absolute path, no link.
+`sealift import` reads the archive once and publishes nothing unless every check passes. The first problem found ends the run with its reason, except that a wrong size or sha256 is named before any other problem. The archive and the manifest are opened read-only.
 
-Only then publish each tarball to the npm hosted repository.
+The manifest:
+
+1. It is at most 16 MiB, and valid JSON with nothing after the document.
+2. `formatVersion` is 1. Every field in the table above is present: a missing field refuses the manifest. `target.libc` must be present but may be empty, as older versions let a project save it empty. `packages` is not empty.
+3. Each `file` is a plain file name of at most 255 bytes that starts with a letter, a digit or `_`, holds only letters, digits and `._~+-`, and ends in `.tgz`. No two packages share a `file` or a name and version.
+4. Each `name` is a valid npm package name and each `version` an exact version of at most 256 bytes, as sealift's own checks read them. `shippedSha512` is 128 lowercase hex digits and `originalIntegrity` a usable integrity string of at most 4 KiB.
+5. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters. A control character, a bidirectional override or any other format character refuses the manifest, so a report that prints these values cannot be made to write escape sequences. The refusal does not repeat the value.
+6. Fields this version does not know are ignored. A change that alters what the import must check bumps `formatVersion`, so an older import refuses it.
+
+The archive:
+
+1. Its size and sha256 match `archive.size` and `archive.sha256`. With `-sha256`, it also matches the value received through a separate channel.
+2. Entry names are exactly `out/` and `out/<file>`. An absolute path, a `..`, a `./out/` prefix, a path outside `out/`, a subdirectory, a directory other than `out/`, a link, a sparse file, anything but a regular file and a name that appears twice are refused.
+3. The archive holds at most 10,000 entries and 10 GiB of unpacked content, counted from each entry's declared size before the entry is read, and no entry name passes 255 bytes. The inflated tar data is capped as well: the content bound, plus 4 KiB and the name bound for each entry, plus the 1 KiB end marker. Repeated extended or long-name headers before an entry count against that cap.
+4. After the tar end marker, the archive holds at most 16 KiB of zero bytes. The gzip checksum is verified, and anything appended, a second entry or a second gzip member included, is refused without being inflated further.
+5. Every file under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
+6. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`. When it is `true`, sealift rewrote the file, so `originalIntegrity` no longer describes it and is not compared.
+7. `out/signature.key` is present, at most 64 KiB, and equals the expected value byte for byte. The comparison takes constant time, and a refusal prints neither value.
+
+Only then does the import publish each tarball to the npm hosted repository.
 
 ## The reports
 

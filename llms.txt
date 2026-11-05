@@ -23,6 +23,6 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 - [Architecture](docs/dev/architecture.md): API, service, queue, the nine analysis steps, the export steps, the /data layout
 - [Ranking](docs/dev/ranking.md): rank.Signals, rank.Best, rank.KeyVersions, where the analysis calls them, tests
 - [API](docs/dev/api.md): every route, error statuses, the server-sent event stream
-- [Archive format](docs/dev/archive-format.md): packages_npm.tar.gz, manifest.json fields, what an import tool should check
+- [Archive format](docs/dev/archive-format.md): packages_npm.tar.gz, manifest.json fields, what `sealift import` checks
 - [Web](docs/dev/web.md): routes, step bar, job events, checking a screen in a browser
 - [api/openapi.yaml](api/openapi.yaml): the API contract
