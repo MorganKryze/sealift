@@ -107,11 +107,11 @@ type rawPackage struct {
 
 // rawTarget maps the JSON names of a target, which differ from the Go names.
 type rawTarget struct {
-	OS      string `json:"os"`
-	CPU     string `json:"cpu"`
-	Libc    string `json:"libc"`
-	Node    string `json:"node"`
-	PnpmVer string `json:"pnpmVer"`
+	OS      string  `json:"os"`
+	CPU     string  `json:"cpu"`
+	Libc    *string `json:"libc"`
+	Node    string  `json:"node"`
+	PnpmVer string  `json:"pnpmVer"`
 }
 
 // ParseManifest reads and checks a manifest.json. Any problem comes back as a
@@ -162,8 +162,25 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 	if target == nil {
 		target = &rawTarget{}
 	}
+	// An empty libc is a setting the store has always accepted: the key must
+	// be present, its value may be empty.
+	var libc string
+	if target.Libc != nil {
+		libc = *target.Libc
+	}
+	for _, f := range []struct {
+		name    string
+		present bool
+	}{
+		{"target.os", target.OS != ""}, {"target.cpu", target.CPU != ""}, {"target.libc", target.Libc != nil},
+		{"target.node", target.Node != ""}, {"target.pnpmVer", target.PnpmVer != ""},
+	} {
+		if !f.present {
+			return Manifest{}, refuse("%s is missing", f.name)
+		}
+	}
 	for _, f := range []struct{ name, value string }{
-		{"target.os", target.OS}, {"target.cpu", target.CPU}, {"target.libc", target.Libc},
+		{"target.os", target.OS}, {"target.cpu", target.CPU},
 		{"target.node", target.Node}, {"target.pnpmVer", target.PnpmVer},
 	} {
 		if f.value == "" {
@@ -171,7 +188,7 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 		}
 	}
 	for _, f := range []struct{ name, value string }{
-		{"target.os", target.OS}, {"target.cpu", target.CPU}, {"target.libc", target.Libc},
+		{"target.os", target.OS}, {"target.cpu", target.CPU}, {"target.libc", libc},
 		{"target.node", target.Node}, {"target.pnpmVer", target.PnpmVer},
 	} {
 		if err := checkText(f.name, f.value); err != nil {
@@ -186,7 +203,7 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 	}
 	m := Manifest{
 		FormatVersion: 1, ToolVersion: raw.ToolVersion, AnalysisID: raw.AnalysisID, CreatedAt: raw.CreatedAt,
-		Target:  Target{OS: target.OS, CPU: target.CPU, Libc: target.Libc, Node: target.Node, PnpmVer: target.PnpmVer},
+		Target:  Target{OS: target.OS, CPU: target.CPU, Libc: libc, Node: target.Node, PnpmVer: target.PnpmVer},
 		Archive: Summary{SHA256: raw.Archive.SHA256, Size: *raw.Archive.Size},
 	}
 	if len(raw.Packages) == 0 {

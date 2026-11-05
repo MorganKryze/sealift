@@ -74,6 +74,18 @@ func TestParseManifestAccepts(t *testing.T) {
 	}
 }
 
+func TestParseManifestAcceptsAnEmptyLibc(t *testing.T) {
+	doc := manifestDoc()
+	doc["target"].(map[string]any)["libc"] = ""
+	m, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.Target.Libc != "" || m.Target.OS != "linux" {
+		t.Errorf("target = %+v", m.Target)
+	}
+}
+
 func TestParseManifestRefuses(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -90,6 +102,7 @@ func TestParseManifestRefuses(t *testing.T) {
 		{"target os missing", func(d map[string]any) { delete(d["target"].(map[string]any), "os") }, "target.os"},
 		{"target cpu missing", func(d map[string]any) { delete(d["target"].(map[string]any), "cpu") }, "target.cpu"},
 		{"target libc missing", func(d map[string]any) { delete(d["target"].(map[string]any), "libc") }, "target.libc"},
+		{"target libc null", func(d map[string]any) { d["target"].(map[string]any)["libc"] = nil }, "target.libc"},
 		{"target node missing", func(d map[string]any) { delete(d["target"].(map[string]any), "node") }, "target.node"},
 		{"target pnpmVer missing", func(d map[string]any) { delete(d["target"].(map[string]any), "pnpmVer") }, "target.pnpmVer"},
 		{"archive missing", func(d map[string]any) { delete(d, "archive") }, "archive.sha256"},

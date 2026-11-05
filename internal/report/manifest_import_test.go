@@ -13,12 +13,21 @@ import (
 // The import reads manifest.json through archive.ParseManifest. This test
 // fails at the first field the export renames, adds as required or retypes.
 func TestManifestParsesAsTheImportReadsIt(t *testing.T) {
+	// An empty libc is a setting the store has always accepted, so an export
+	// made from one must still import.
+	for _, libc := range []string{"glibc", ""} {
+		t.Run("libc "+libc, func(t *testing.T) { checkManifestParses(t, libc) })
+	}
+}
+
+func checkManifestParses(t *testing.T, libc string) {
+	t.Helper()
 	m := Manifest{
 		FormatVersion: ManifestFormatVersion,
 		ToolVersion:   "0.3.0",
 		AnalysisID:    "20260923T120255Z",
 		CreatedAt:     time.Date(2026, 9, 23, 12, 4, 24, 410131126, time.UTC),
-		Target:        store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
+		Target:        store.Target{OS: "linux", CPU: "x64", Libc: libc, Node: "22.17.1", PnpmVer: "10.34.5"},
 		Archive:       ArchiveManifest{SHA256: "7412191e280551b2bb3071c767b661b39e9b6966528f0fb3afd9d167141043b7", Size: 7031361},
 		Packages: []PackageEntry{
 			{
@@ -40,7 +49,7 @@ func TestManifestParsesAsTheImportReadsIt(t *testing.T) {
 	}
 	p := got.Packages[0]
 	if got.FormatVersion != m.FormatVersion || got.ToolVersion != m.ToolVersion || got.AnalysisID != m.AnalysisID ||
-		got.Target != (archive.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}) ||
+		got.Target != (archive.Target{OS: "linux", CPU: "x64", Libc: libc, Node: "22.17.1", PnpmVer: "10.34.5"}) ||
 		got.Archive != (archive.Summary{SHA256: m.Archive.SHA256, Size: m.Archive.Size}) ||
 		p.Name != "@babel/code-frame" || p.File != m.Packages[0].File || !p.PublishConfigStripped ||
 		p.ShippedSHA512 != m.Packages[0].ShippedSHA512 || p.OriginalIntegrity != m.Packages[0].OriginalIntegrity {
