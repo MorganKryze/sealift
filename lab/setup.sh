@@ -1,0 +1,47 @@
+#!/bin/sh
+# Prepares a fresh lab once `docker compose up -d` has started it: the Nexus
+# admin password and repositories, and a MinIO bucket per user.
+set -eu
+cd "$(dirname "$0")"
+NEXUS=http://127.0.0.1:18441
+NEXUS_PASSWORD=${NEXUS_PASSWORD:-lab-admin-password}
+
+echo "waiting for Nexus, about two minutes on a first start"
+until curl -sf "$NEXUS/service/rest/v1/status/writable" >/dev/null; do sleep 5; done
+
+if docker compose exec -T nexus test -f /nexus-data/admin.password; then
+	initial=$(docker compose exec -T nexus cat /nexus-data/admin.password)
+	curl -sf -u "admin:$initial" -X PUT -H 'Content-Type: text/plain' \
+		--data "$NEXUS_PASSWORD" "$NEXUS/service/rest/v1/security/users/admin/change-password"
+fi
+auth="admin:$NEXUS_PASSWORD"
+
+# The community edition refuses writes until its EULA is accepted.
+eula=$(curl -sf -u "$auth" "$NEXUS/service/rest/v1/system/eula" || true)
+if [ -n "$eula" ] && ! printf '%s' "$eula" | grep -q '"accepted" *: *true'; then
+	printf '%s' "$eula" | sed 's/"accepted" *: *false/"accepted": true/' |
+		curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' --data @- \
+			"$NEXUS/service/rest/v1/system/eula"
+fi
+
+# Installs read anonymously, as on the air-gapped side; publishing needs the admin account.
+curl -sf -u "$auth" -X PUT -H 'Content-Type: application/json' \
+	--data '{"enabled":true,"userId":"anonymous","realmName":"NexusAuthorizingRealm"}' \
+	"$NEXUS/service/rest/v1/security/anonymous" >/dev/null
+
+for format in npm pypi; do
+	if ! curl -sf -u "$auth" "$NEXUS/service/rest/v1/repositories/$format/hosted/$format" >/dev/null; then
+		curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' \
+			--data "{\"name\":\"$format\",\"online\":true,\"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true,\"writePolicy\":\"allow_once\"}}" \
+			"$NEXUS/service/rest/v1/repositories/$format/hosted"
+	fi
+done
+echo "Nexus ready: repositories npm and pypi"
+
+for user in alice bob; do
+	docker compose run --rm -T mc mb --ignore-existing "lab/user-$user" >/dev/null 2>&1
+	for kind in npm pip; do
+		printf '' | docker compose run --rm -T mc pipe "lab/user-$user/packages/$kind/.keep" >/dev/null 2>&1
+	done
+done
+echo "MinIO ready: buckets user-alice and user-bob"

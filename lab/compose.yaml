@@ -1,0 +1,140 @@
+# A local mirror of both sides of the air gap, for development and proofs of
+# concept. Lab only: every secret below is a fixed development value, and
+# every port binds to 127.0.0.1.
+name: sealift-lab
+
+networks:
+  # The connected side: sealift and anything that may reach the internet.
+  connected: {}
+  # The air-gapped side: Docker gives an internal network no route out.
+  airgap:
+    internal: true
+  # Only the gateway joins it, so the host can reach the air-gapped services.
+  edge: {}
+
+volumes:
+  sealift-data: {}
+  nexus-data: {}
+  minio-data: {}
+
+services:
+  sealift:
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.3.0}
+    networks: [connected]
+    ports:
+      - 127.0.0.1:18450:8080
+    volumes:
+      - sealift-data:/data
+
+  nexus:
+    image: sonatype/nexus3:3.96.5@sha256:d70482a3d5d44c8733fb244742fef5ca8ac967da56ccb97398f807bb8d3e585e
+    networks: [airgap]
+    environment:
+      INSTALL4J_ADD_VM_PARAMS: -Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g
+    volumes:
+      - nexus-data:/nexus-data
+
+  minio:
+    # MinIO no longer publishes images; Chainguard builds it from source.
+    image: chainguard/minio@sha256:cee9a8e35885e93f14b3cb32960e5017aff74e2adfb52ba87c65003b0163886b
+    command: [server, /data, --console-address, ":9001"]
+    networks: [airgap]
+    environment:
+      MINIO_ROOT_USER: lab-admin
+      MINIO_ROOT_PASSWORD: lab-admin-password
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:18442
+    volumes:
+      - minio-data:/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0@sha256:27b3230fbabb8c9ff3c66c864cf09dcd8a41aca82e5100679d109ef0eeb05741
+    command: [start-dev, --import-realm]
+    networks: [airgap]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Tokens carry the address the browser uses; services inside the
+      # network still reach Keycloak at keycloak:8080.
+      KC_HOSTNAME: http://localhost:18444
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-lab.json:/opt/keycloak/data/import/realm-lab.json:ro
+
+  oauth2-proxy:
+    restart: on-failure
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
+    networks: [airgap]
+    command:
+      - --provider=keycloak-oidc
+      - --client-id=oauth2-proxy
+      - --client-secret=lab-client-secret
+      - --oidc-issuer-url=http://localhost:18444/realms/lab
+      # Discovery would fetch the browser's address from inside the network,
+      # so each endpoint is given where the caller can reach it.
+      - --skip-oidc-discovery=true
+      - --login-url=http://localhost:18444/realms/lab/protocol/openid-connect/auth
+      - --redeem-url=http://keycloak:8080/realms/lab/protocol/openid-connect/token
+      - --oidc-jwks-url=http://keycloak:8080/realms/lab/protocol/openid-connect/certs
+      - --validate-url=http://keycloak:8080/realms/lab/protocol/openid-connect/userinfo
+      - --redirect-url=http://localhost:18440/oauth2/callback
+      - --http-address=0.0.0.0:4180
+      - --upstream=static://202
+      - --reverse-proxy=true
+      - --set-xauthrequest=true
+      - --pass-access-token=true
+      - --email-domain=*
+      - --code-challenge-method=S256
+      - --cookie-secret=lab-cookie-secret-0123456789abcd
+      - --cookie-secure=false
+      - --whitelist-domain=localhost:18440
+      - --skip-provider-button=true
+    depends_on: [keycloak]
+
+  # Stands in for the import tool until it exists: it echoes the request,
+  # so the headers the gateway adds can be read.
+  app:
+    image: traefik/whoami:v1.11@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab
+    networks: [airgap]
+
+  gateway:
+    # nginx resolves its upstreams at start; a retry covers a slow neighbour.
+    restart: on-failure
+    image: nginx:1.30.6@sha256:f12e4e280502f79dae4488c9f677ab3ebe8a7079818bbfbf3242f236bac64d34
+    networks: [airgap, edge]
+    ports:
+      - 127.0.0.1:18440:18440 # the app, behind oauth2-proxy
+      - 127.0.0.1:18441:18441 # Nexus
+      - 127.0.0.1:18442:18442 # MinIO console
+      - 127.0.0.1:18443:18443 # MinIO S3 API
+      - 127.0.0.1:18444:18444 # Keycloak
+    volumes:
+      - ./gateway/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [nexus, minio, keycloak, oauth2-proxy, app]
+
+  # Run with `docker compose run`: a shell on each side, for checks and
+  # publishing tests.
+  airgap-shell:
+    # The air-gapped hosts run linux x64, the target sealift exports for:
+    # an arm64 shell would ask for platform packages the archive leaves out.
+    platform: linux/amd64
+    image: node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+    profiles: [tools]
+    networks: [airgap]
+    volumes:
+      - ./transfer:/transfer
+      - ./scripts:/scripts:ro
+  connected-shell:
+    image: node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+    profiles: [tools]
+    networks: [connected]
+
+  mc:
+    image: chainguard/minio-client@sha256:ac75abc3947742b7d5d11e145eb0759c5b59ae697956fda325e91f6fd742b005
+    profiles: [tools]
+    networks: [airgap]
+    environment:
+      MC_HOST_lab: http://lab-admin:lab-admin-password@minio:9000
+    volumes:
+      - ./transfer:/transfer
