@@ -10,7 +10,7 @@ export function AnalysisWarnings({ warnings }: { warnings: string[] }) {
       <p className="font-medium">sealift could not check everything</p>
       <p className="mt-1 max-w-[62ch]">
         A dependency named here can look clean without having been checked. Read each line before you confirm, and
-        analyse again if the registry was at fault.
+        analyse again once its cause is fixed.
       </p>
       <ul className="mt-2 list-disc space-y-1 pl-5">
         {warnings.map((warning) => (
