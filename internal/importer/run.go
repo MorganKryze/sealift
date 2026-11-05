@@ -9,6 +9,8 @@ import (
 	"github.com/MorganKryze/sealift/archive"
 )
 
+type publishFunc func(context.Context, Publisher, []Package, string) []Result
+
 // Options tell Run what to import and where to.
 type Options struct {
 	Settings       Settings
@@ -22,6 +24,11 @@ type Options struct {
 // publishes its packages. It writes only to one private temporary directory,
 // removed before it returns, and never to the archive or the manifest.
 func Run(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error)) Report {
+	return run(ctx, opts, newPublisher, Publish)
+}
+
+// run takes the publishing step as a parameter so a test can fix its results.
+func run(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), publishAll publishFunc) Report {
 	rep := Report{
 		Outcome:       OutcomeRefused,
 		Unencrypted:   opts.Settings.NexusURL.Scheme == "http",
@@ -66,7 +73,7 @@ func Run(ctx context.Context, opts Options, newPublisher func(Settings) (Publish
 		}
 	}
 
-	rep.Packages = publish(ctx, opts, newPublisher, pkgs, dir)
+	rep.Packages = publish(ctx, opts, newPublisher, publishAll, pkgs, dir)
 	for _, r := range rep.Packages {
 		switch r.State {
 		case Published:
@@ -108,7 +115,7 @@ func verify(opts Options, m archive.Manifest, dir string) ([]archive.Checked, er
 
 // publish uploads the checked packages. A failure to set up the client or the
 // working directory fails every package with that reason.
-func publish(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), pkgs []Package, dir string) []Result {
+func publish(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), publishAll publishFunc, pkgs []Package, dir string) []Result {
 	fail := func(reason string) []Result {
 		out := make([]Result, len(pkgs))
 		for i, p := range pkgs {
@@ -126,9 +133,11 @@ func publish(ctx context.Context, opts Options, newPublisher func(Settings) (Pub
 	if err := os.Mkdir(work, 0o700); err != nil {
 		return fail("could not keep the nexus copies: " + err.Error())
 	}
-	results := Publish(ctx, pub, pkgs, work)
+	results := publishAll(ctx, pub, pkgs, work)
+	// A note from the publisher is evidence of how the verdict was reached
+	// and stays; the default only fills an empty one.
 	for i, p := range pkgs {
-		if p.PublishConfigStripped && results[i].State != Failed {
+		if p.PublishConfigStripped && results[i].State != Failed && results[i].Note == "" {
 			results[i].Note = "sealift removed publishConfig at export"
 		}
 	}

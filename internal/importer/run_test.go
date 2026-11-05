@@ -153,3 +153,41 @@ func TestRunNotesStrippedPublishConfig(t *testing.T) {
 		t.Fatalf("got %+v", rep)
 	}
 }
+
+func TestRunKeepsNoteFromPublish(t *testing.T) {
+	const kept = "same content, packed differently"
+	for name, tc := range map[string]struct {
+		result Result
+		want   string
+	}{
+		"note set by publish is kept": {Result{State: Present, Note: kept}, kept},
+		"empty note gets the default": {Result{State: Published}, "sealift removed publishConfig at export"},
+		"failed package has no note":  {Result{State: Failed, Reason: "upload failed: x"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRunFixture(t)
+			b, _ := os.ReadFile(r.opts.Manifest)
+			s := strings.Replace(string(b), `"publishConfigStripped":false`, `"publishConfigStripped":true`, 2)
+			if err := os.WriteFile(r.opts.Manifest, []byte(s), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			fake := func(_ context.Context, _ Publisher, pkgs []Package, _ string) []Result {
+				out := make([]Result, len(pkgs))
+				for i, p := range pkgs {
+					out[i] = tc.result
+					out[i].Name, out[i].Version, out[i].File = p.Name, p.Version, p.File
+				}
+				return out
+			}
+			rep := run(context.Background(), r.opts, func(Settings) (Publisher, error) { return r.f.client(t), nil }, fake)
+			if len(rep.Packages) != 2 {
+				t.Fatalf("got %+v", rep)
+			}
+			for _, p := range rep.Packages {
+				if p.Note != tc.want {
+					t.Errorf("%s note %q, want %q", p.Name, p.Note, tc.want)
+				}
+			}
+		})
+	}
+}

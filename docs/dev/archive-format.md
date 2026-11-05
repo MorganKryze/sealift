@@ -106,7 +106,7 @@ Only then does the import publish each tarball to the npm hosted repository.
 | `packages[].name`, `.version`, `.file` | The package, as the manifest lists it |
 | `packages[].state` | `published`, `present` or `failed` |
 | `packages[].reason` | Why a package failed; empty otherwise |
-| `packages[].note` | `sealift removed publishConfig at export` for a package whose manifest entry has `publishConfigStripped` |
+| `packages[].note` | Empty for a failed package. For a package whose manifest entry has `publishConfigStripped`, the note the publish step set, or `sealift removed publishConfig at export` when it set none |
 
 A refused report lists no package and holds zero counts. A package is `present` when Nexus already serves the same bytes, `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
 
