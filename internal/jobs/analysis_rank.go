@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/MorganKryze/sealift/npm"
@@ -199,6 +200,10 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 			r.result.Warnings = append(r.result.Warnings, fmt.Sprintf("the best candidates together do not resolve: %v", err))
 			return nil
 		}
+		if warning := peerWarning(r.projectOutput, output); warning != "" {
+			r.log("pnpm: " + output)
+			r.result.Warnings = append(r.result.Warnings, warning)
+		}
 		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "combined"), 0o770); werr != nil {
 			return werr
 		}
@@ -218,4 +223,65 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		r.result.After = &after
 		return nil
 	})
+}
+
+// peerWarning names the peer dependencies the best candidates leave unmet
+// that the project as given does not. pnpm only warns on them and exits 0,
+// so the resolution succeeds, and the install on the air-gapped side then
+// runs with a peer it did not ask for. It returns "" when there is none.
+func peerWarning(projectOutput, combinedOutput string) string {
+	before := map[string]bool{}
+	for _, issue := range peerIssues(projectOutput) {
+		before[peerKey(issue)] = true
+	}
+	var added []string
+	for _, issue := range peerIssues(combinedOutput) {
+		if !before[peerKey(issue)] {
+			added = append(added, issue)
+		}
+	}
+	if len(added) == 0 {
+		return ""
+	}
+	return "the best candidates together leave peer dependencies unmet: " + strings.Join(added, "; ")
+}
+
+// peerKey names an issue by the package that wants the peer and the peer's
+// name, leaving out both versions: an issue the project already has stays
+// the same issue when a proposal moves either version.
+func peerKey(issue string) string {
+	parent, rest, _ := strings.Cut(issue, ": ")
+	if i := strings.LastIndex(parent, " "); i > 0 {
+		parent = parent[:i]
+	}
+	kind, spec, ok := strings.Cut(rest, " peer ")
+	if !ok {
+		return issue
+	}
+	spec, _, _ = strings.Cut(spec, ":")
+	if i := strings.LastIndex(spec, "@"); i > 0 {
+		spec = spec[:i]
+	}
+	return parent + " " + kind + " " + spec
+}
+
+// peerIssues lists the unmet or missing peers in pnpm's output, each after
+// the package that wants it. pnpm 10 prints them as a tree; later versions
+// print a one-line summary, which counts as one issue.
+func peerIssues(output string) []string {
+	var issues []string
+	parent := ""
+	for _, line := range strings.Split(output, "\n") {
+		if _, rest, ok := strings.Cut(line, "\u2500\u252c "); ok {
+			parent = strings.TrimSpace(rest)
+			continue
+		}
+		if _, rest, ok := strings.Cut(line, "\u2715 "); ok && strings.Contains(rest, "peer") {
+			issues = append(issues, parent+": "+strings.TrimSpace(rest))
+		}
+	}
+	if len(issues) == 0 && strings.Contains(output, "Issues with peer dependencies found") {
+		issues = append(issues, "pnpm reports peer dependency issues")
+	}
+	return issues
 }

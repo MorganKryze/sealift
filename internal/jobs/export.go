@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -386,12 +387,20 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downloadedPackage, hit bool, err error) {
 	if key, ok := sha512CacheKey(p.Integrity); ok {
 		cachePath := filepath.Join(e.Store.Root(), "cache", "tarballs", key+".tgz")
-		if st, err := os.Stat(cachePath); err == nil && st.Mode().IsRegular() {
+		// The name claims the content: a file left wrong by an earlier run
+		// would otherwise ship. A mismatch drops it and downloads again.
+		if sum, err := fileSHA512(cachePath); err == nil && sum == key {
 			return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: key}, true, nil
+		} else if err == nil {
+			if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+				return downloadedPackage{}, false, fmt.Errorf("jobs: drop corrupt cache entry for %s@%s: %w", p.Name, p.Version, err)
+			}
 		}
 	}
 
-	tmpPath := filepath.Join(e.Dir, "downloads", npm.PackFileName(p.Name, p.Version))
+	// PackFileName folds a scope into the name, so @a/b and a-b would
+	// share a file; escaping the name keeps each download apart.
+	tmpPath := filepath.Join(e.Dir, "downloads", url.PathEscape(p.Name)+"@"+p.Version+".tgz")
 	sha512Hex, err := e.Registry.DownloadFile(ctx, p.Name, p.Version, p.Integrity, tmpPath)
 	if err != nil {
 		if errors.Is(err, npm.ErrIntegrity) {
@@ -404,6 +413,23 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downlo
 		return downloadedPackage{}, false, fmt.Errorf("jobs: cache %s@%s: %w", p.Name, p.Version, err)
 	}
 	return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: sha512Hex}, false, nil
+}
+
+// fileSHA512 returns the hex sha512 of the regular file at path.
+func fileSHA512(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return "", fmt.Errorf("jobs: %s is not a regular file", path)
+	}
+	h := sha512.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // sha512CacheKey returns the tarball cache's hex key when integrity is

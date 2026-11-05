@@ -77,6 +77,15 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   }
 
   const changedDependencies = dependencies.filter((d) => pickedVersionOf(d) !== d.current)
+  // Step 9 resolved the proposal as a whole; any other selection was never
+  // resolved together, so a conflict in it would only show on the far side.
+  // Before the seeding effect runs, a dependency has no entry yet and
+  // stands for the proposal, as exportSelection reads it.
+  const departsFromProposal = dependencies.some((d) => {
+    const proposed = d.best || d.current
+    const chosen = selection.selection[d.name] === undefined ? proposed : pickedVersionOf(d)
+    return chosen !== proposed
+  })
 
   const confirmMutation = useMutation({
     mutationFn: () =>
@@ -242,12 +251,17 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
 
       <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
-          <span className="text-sm">
+          <div className="text-sm">
             <span className="font-semibold text-ink">
               {changedDependencies.length} change{changedDependencies.length === 1 ? "" : "s"}
             </span>
             <span className="text-muted"> · {afterTotal} CVEs left</span>
-          </span>
+            {departsFromProposal ? (
+              <p className="mt-0.5 text-muted">
+                The analysis checked its proposal as a whole. Your changes to it were not installed together.
+              </p>
+            ) : null}
+          </div>
           <div className="flex flex-col items-end gap-2">
             <Button
               size="lg"
