@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
 ### Added
 
 - A user guide under `docs/`: getting started, each screen of a session, how sealift chooses a version, the settings, the air gap, deployment, troubleshooting and a FAQ.
@@ -13,20 +15,23 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - A security policy, a code of conduct, issue and pull request templates, and `llms.txt`.
 - CI checks every link and anchor in the Markdown files, and runs the documentation's shell examples against the end-to-end stack.
 
+### Changed
+
+- The minimum release age also holds back every package a version pulls in, not only the direct dependency. A fix released inside the wait stays out of the proposal until the wait ends.
+- A `package.json` with an invalid package name is refused on the drop screen.
+- Deleting a project through the API while one of its jobs is queued or running answers 409 instead of failing partway with a 500.
+
 ### Fixed
 
-- The "Archive ready" badge and the major-version chip meet the WCAG AA contrast ratio in the light theme, and the review counts a single CVE as one CVE.
-- The review says when your selection departs from the proposal the analysis checked as a whole.
-- The review warns when the proposals together leave a peer dependency unmet, which pnpm only reports as a warning.
-- The export checks a cached tarball against its sha512 before shipping it, and downloads it again when it no longer matches.
-- The minimum release age also holds back every package a version pulls in, not only the direct dependency.
-- A `package.json` with an invalid package name is refused on the drop screen.
-- A package with several integrity hashes is checked against the strongest one, whatever their order.
 - The review shows the analysis warnings: a dependency the analysis could not check no longer reads as clean.
+- The review warns when the proposals together leave a peer dependency unmet, which pnpm only reports as a warning.
+- The review says when your selection departs from the proposal the analysis checked as a whole.
+- The export checks a cached tarball against its sha512 before shipping it, and downloads it again when it no longer matches.
+- A package with several integrity hashes is checked against the strongest one, whatever their order.
 - A failed resolve shows pnpm's own reason on screen instead of `pnpm install: exit status 1`.
-- Deleting a project through the API while one of its jobs is queued or running answers 409 instead of failing partway with a 500.
 - The logo link and the settings panel's close button reach a 32 px target, as do the Technical detail and Show the log disclosures.
 - The text on an error screen meets the WCAG AA contrast ratio in the light theme.
+- The "Archive ready" badge and the major-version chip meet the WCAG AA contrast ratio in the light theme, and the review counts a single CVE as one CVE.
 
 ## [0.2.2] - 2026-09-23
 
@@ -108,7 +113,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MorganKryze/sealift/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/MorganKryze/sealift/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/MorganKryze/sealift/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/MorganKryze/sealift/compare/v0.1.0...v0.2.0
