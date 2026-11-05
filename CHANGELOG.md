@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The export checks a cached tarball against its sha512 before shipping it, and downloads it again when it no longer matches.
 - The minimum release age also holds back every package a version pulls in, not only the direct dependency.
 - A `package.json` with an invalid package name is refused on the drop screen.
 - A package with several integrity hashes is checked against the strongest one, whatever their order.

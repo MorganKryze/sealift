@@ -600,6 +600,41 @@ func TestExportDownloadSkipsCacheHit(t *testing.T) {
 	}
 }
 
+// TestExportDownloadReplacesACorruptCacheEntry proves a cache file whose
+// bytes no longer match its sha512 name is downloaded again, never shipped.
+func TestExportDownloadReplacesACorruptCacheEntry(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	if err := h.newExport(t, analysisDir, filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp"), false).Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	entries, err := filepath.Glob(filepath.Join(h.store.Root(), "cache", "tarballs", "*.tgz"))
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("cache entries = %v, %v", entries, err)
+	}
+	for _, entry := range entries {
+		if err := os.WriteFile(entry, []byte("not the package"), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := h.requests.Load()
+
+	if err := h.newExport(t, analysisDir, filepath.Join(t.TempDir(), "exports", "20260917T101503Z.tmp"), false).Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if h.requests.Load() == before {
+		t.Error("second export made no request: the corrupt cache entries were trusted")
+	}
+	for _, entry := range entries {
+		sum, err := fileSHA512(entry)
+		if err != nil || sum+".tgz" != filepath.Base(entry) {
+			t.Errorf("cache entry %s holds sha512 %s, %v", filepath.Base(entry), sum, err)
+		}
+	}
+}
+
 // TestExportDownloadReportsCacheHits proves the running cache-hit count in
 // each progress event reflects downloadOne's own cache-hit accounting: a
 // second export of the same selection, once every tarball already sits in
