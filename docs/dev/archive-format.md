@@ -79,8 +79,8 @@ The manifest:
 The archive:
 
 1. Its size and sha256 match `archive.size` and `archive.sha256`. With `-sha256`, it also matches the value received through a separate channel.
-2. Entry names are exactly `out/` and `out/<file>`. An absolute path, a `..`, a `./out/` prefix, a path outside `out/`, a subdirectory, a directory other than `out/`, a link, anything but a regular file and a name that appears twice are refused.
-3. The archive holds at most 10,000 entries and 10 GiB of unpacked content, and no entry name passes 255 bytes.
+2. Entry names are exactly `out/` and `out/<file>`. An absolute path, a `..`, a `./out/` prefix, a path outside `out/`, a subdirectory, a directory other than `out/`, a link, a sparse file, anything but a regular file and a name that appears twice are refused.
+3. The archive holds at most 10,000 entries and 10 GiB of unpacked content, counted from each entry's declared size before the entry is read, and no entry name passes 255 bytes.
 4. Every file under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
 5. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`. When it is `true`, sealift rewrote the file, so `originalIntegrity` no longer describes it and is not compared.
 6. `out/signature.key` is present, at most 64 KiB, and equals the expected value byte for byte. The comparison takes constant time, and a refusal prints neither value.

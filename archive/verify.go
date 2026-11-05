@@ -28,6 +28,9 @@ const (
 	keyEntry = "signature.key"
 	// maxKeySize is the most Verify reads of the archive's signature key: 64 KiB.
 	maxKeySize = 64 << 10
+	// sparsePrefix starts the PAX records of a sparse file, which the tar
+	// reader expands into zeros far beyond the bytes the archive holds.
+	sparsePrefix = "GNU.sparse."
 )
 
 // Limits bounds what an archive may hold. A zero field takes its default.
@@ -200,10 +203,16 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		if h.Typeflag == tar.TypeDir {
 			continue
 		}
-		unpacked += h.Size
-		if unpacked > limits.Unpacked {
+		for key := range h.PAXRecords {
+			if strings.HasPrefix(key, sparsePrefix) {
+				return nil, refuse("entry %s is a sparse file", shown(h.Name))
+			}
+		}
+		// Compare before adding: a size near MaxInt64 would wrap the sum.
+		if h.Size > limits.Unpacked-unpacked {
 			return nil, refuse("the archive holds more than %d bytes unpacked", limits.Unpacked)
 		}
+		unpacked += h.Size
 		file := strings.TrimPrefix(h.Name, root)
 		if file == keyEntry {
 			if err := checkKey(tr, opts.SignatureKey); err != nil {

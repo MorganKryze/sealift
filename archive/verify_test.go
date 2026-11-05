@@ -9,9 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -328,6 +331,138 @@ func TestVerifyRefusesEntries(t *testing.T) {
 			assertNoKey(t, err)
 		})
 	}
+}
+
+// buildEnding is build with a last header that declares size bytes and ends
+// the archive there, as an archive does when it lies about its entry.
+func buildEnding(t *testing.T, items []item, last *tar.Header, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, it := range items {
+		h := &tar.Header{Name: it.name, Typeflag: it.typeflag, Mode: 0o644}
+		if it.typeflag == tar.TypeDir {
+			h.Mode = 0o755
+		}
+		if it.typeflag == tar.TypeReg {
+			h.Size = int64(len(it.body))
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(it.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// A second writer emits the last header and stops short of its body.
+	if err := tar.NewWriter(gz).WriteHeader(last); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gz.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestVerifyRefusesSizesThatOverflow(t *testing.T) {
+	items := []item{{name: "out/", typeflag: tar.TypeDir}, reg("out/"+alphaFile, alphaBody)}
+	tests := []struct {
+		name string
+		size int64
+	}{
+		{"largest size", math.MaxInt64},
+		{"one past the room left", DefaultLimits.Unpacked - int64(len(alphaBody)) + 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, baseItems())
+			f.data = buildEnding(t, items, &tar.Header{Name: "out/" + betaFile, Typeflag: tar.TypeReg, Mode: 0o644, Size: tt.size}, []byte(betaBody))
+			f.m.Archive = digestOf(f.data)
+			_, err := f.verify()
+			assertRefusal(t, err, "bytes unpacked")
+			entries, _ := os.ReadDir(f.opts.Dir)
+			for _, e := range entries {
+				if e.Name() == betaFile {
+					t.Errorf("%s was written before the bound refused it", betaFile)
+				}
+			}
+		})
+	}
+}
+
+// paxRecord is one "length key=value\n" record of a PAX extended header.
+func paxRecord(key, value string) string {
+	n := len(key) + len(value) + 3
+	for {
+		s := fmt.Sprintf("%d %s=%s\n", n, key, value)
+		if len(s) == n {
+			return s
+		}
+		n = len(s)
+	}
+}
+
+// sparseArchive holds one PAX 1.0 sparse entry named name that expands to
+// realsize bytes of zeros. The tar writer cannot emit one, so the extended
+// header is a regular entry whose type flag and checksum are patched.
+func sparseArchive(t *testing.T, name string, realsize int) []byte {
+	t.Helper()
+	records := paxRecord("GNU.sparse.major", "1") + paxRecord("GNU.sparse.minor", "0") +
+		paxRecord("GNU.sparse.name", name) + paxRecord("GNU.sparse.realsize", strconv.Itoa(realsize))
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	if err := tw.WriteHeader(&tar.Header{Name: "out/PaxHeader", Typeflag: tar.TypeReg, Size: int64(len(records))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(records)); err != nil {
+		t.Fatal(err)
+	}
+	// The sparse map is a block that lists no data segment.
+	block := append([]byte("0\n"), make([]byte, 510)...)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(block))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(block); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := raw.Bytes()
+	data[156] = tar.TypeXHeader
+	for i := 148; i < 156; i++ {
+		data[i] = ' '
+	}
+	sum := 0
+	for _, c := range data[:512] {
+		sum += int(c)
+	}
+	copy(data[148:], fmt.Sprintf("%06o\x00 ", sum))
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestVerifyRefusesSparseEntries(t *testing.T) {
+	f := newFixture(t, baseItems())
+	f.data = sparseArchive(t, "out/"+alphaFile, 1<<20)
+	f.m.Archive = digestOf(f.data)
+	_, err := f.verify()
+	assertRefusal(t, err, "is a sparse file")
 }
 
 func TestVerifyRefusesWritesNothingOutsideDir(t *testing.T) {
