@@ -94,6 +94,7 @@ func (r *run) stepResolveProject(manifest npm.Manifest) ([]npm.LockPackage, erro
 			r.log("pnpm: " + output)
 			return fmt.Errorf("resolve project: %w", rerr)
 		}
+		r.projectOutput = output
 		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); werr != nil {
 			return werr
 		}

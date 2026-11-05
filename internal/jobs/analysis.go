@@ -174,6 +174,9 @@ type run struct {
 	logFile *os.File
 	result  *Result
 	steps   []stepRecord
+	// projectOutput is pnpm's output for the project as given, kept so
+	// step 9 reports only the peer issues the proposals bring.
+	projectOutput string
 }
 
 // runStep runs fn, emits exactly one "step" event for name and records its
