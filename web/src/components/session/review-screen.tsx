@@ -79,9 +79,13 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   const changedDependencies = dependencies.filter((d) => pickedVersionOf(d) !== d.current)
   // Step 9 resolved the proposal as a whole; any other selection was never
   // resolved together, so a conflict in it would only show on the far side.
-  const departsFromProposal = dependencies.some(
-    (d) => (selection.selection[d.name]?.length ?? 0) > 1 || pickedVersionOf(d) !== (d.best || d.current),
-  )
+  // Before the seeding effect runs, a dependency has no entry yet and
+  // stands for the proposal, as exportSelection reads it.
+  const departsFromProposal = dependencies.some((d) => {
+    const proposed = d.best || d.current
+    const chosen = selection.selection[d.name] === undefined ? proposed : pickedVersionOf(d)
+    return chosen !== proposed
+  })
 
   const confirmMutation = useMutation({
     mutationFn: () =>

@@ -392,7 +392,7 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downlo
 		if sum, err := fileSHA512(cachePath); err == nil && sum == key {
 			return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: key}, true, nil
 		} else if err == nil {
-			if err := os.Remove(cachePath); err != nil {
+			if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
 				return downloadedPackage{}, false, fmt.Errorf("jobs: drop corrupt cache entry for %s@%s: %w", p.Name, p.Version, err)
 			}
 		}

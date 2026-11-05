@@ -232,11 +232,11 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 func peerWarning(projectOutput, combinedOutput string) string {
 	before := map[string]bool{}
 	for _, issue := range peerIssues(projectOutput) {
-		before[issue] = true
+		before[peerKey(issue)] = true
 	}
 	var added []string
 	for _, issue := range peerIssues(combinedOutput) {
-		if !before[issue] {
+		if !before[peerKey(issue)] {
 			added = append(added, issue)
 		}
 	}
@@ -244,6 +244,25 @@ func peerWarning(projectOutput, combinedOutput string) string {
 		return ""
 	}
 	return "the best candidates together leave peer dependencies unmet: " + strings.Join(added, "; ")
+}
+
+// peerKey names an issue by the package that wants the peer and the peer's
+// name, leaving out both versions: an issue the project already has stays
+// the same issue when a proposal moves either version.
+func peerKey(issue string) string {
+	parent, rest, _ := strings.Cut(issue, ": ")
+	if i := strings.LastIndex(parent, " "); i > 0 {
+		parent = parent[:i]
+	}
+	kind, spec, ok := strings.Cut(rest, " peer ")
+	if !ok {
+		return issue
+	}
+	spec, _, _ = strings.Cut(spec, ":")
+	if i := strings.LastIndex(spec, "@"); i > 0 {
+		spec = spec[:i]
+	}
+	return parent + " " + kind + " " + spec
 }
 
 // peerIssues lists the unmet or missing peers in pnpm's output, each after
