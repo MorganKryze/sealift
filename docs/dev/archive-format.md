@@ -73,8 +73,9 @@ The manifest:
 1. It is at most 16 MiB, and valid JSON with nothing after the document.
 2. `formatVersion` is 1. Every field in the table above is present: a missing field refuses the manifest. `packages` is not empty.
 3. Each `file` is a plain file name of at most 255 bytes that starts with a letter, a digit or `_`, holds only letters, digits and `._~+-`, and ends in `.tgz`. No two packages share a `file` or a name and version.
-4. Each `name` is a valid npm package name and each `version` an exact version, as sealift's own checks read them. `shippedSha512` is 128 lowercase hex digits and `originalIntegrity` a usable integrity string.
-5. Fields this version does not know are ignored. A change that alters what the import must check bumps `formatVersion`, so an older import refuses it.
+4. Each `name` is a valid npm package name and each `version` an exact version of at most 256 bytes, as sealift's own checks read them. `shippedSha512` is 128 lowercase hex digits and `originalIntegrity` a usable integrity string of at most 4 KiB.
+5. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters. A control character, a bidirectional override or any other format character refuses the manifest, so a report that prints these values cannot be made to write escape sequences. The refusal does not repeat the value.
+6. Fields this version does not know are ignored. A change that alters what the import must check bumps `formatVersion`, so an older import refuses it.
 
 The archive:
 

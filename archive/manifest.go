@@ -7,13 +7,26 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/MorganKryze/sealift/npm"
 )
 
 // MaxManifestSize is the largest manifest.json ParseManifest reads: 16 MiB.
 const MaxManifestSize = 16 << 20
+
+// maxTextBytes is the longest free-text field of a manifest: 256 bytes, the
+// bound node-semver puts on a version.
+const maxTextBytes = 256
+
+// maxVersionBytes is the longest package version a manifest may list: 256 bytes.
+const maxVersionBytes = 256
+
+// maxIntegrityBytes is the longest originalIntegrity a manifest may list: 4 KiB.
+const maxIntegrityBytes = 4 << 10
 
 // maxFileNameBytes is the longest package file name a manifest may list: 255 bytes.
 const maxFileNameBytes = 255
@@ -135,6 +148,13 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 			return Manifest{}, refuse("%s is missing", f.name)
 		}
 	}
+	for _, f := range []struct{ name, value string }{
+		{"toolVersion", raw.ToolVersion}, {"analysisId", raw.AnalysisID}, {"createdAt", raw.CreatedAt},
+	} {
+		if err := checkText(f.name, f.value); err != nil {
+			return Manifest{}, err
+		}
+	}
 	if _, err := time.Parse(time.RFC3339Nano, raw.CreatedAt); err != nil {
 		return Manifest{}, refuse("createdAt is not an RFC 3339 time")
 	}
@@ -148,6 +168,14 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 	} {
 		if f.value == "" {
 			return Manifest{}, refuse("%s is missing", f.name)
+		}
+	}
+	for _, f := range []struct{ name, value string }{
+		{"target.os", target.OS}, {"target.cpu", target.CPU}, {"target.libc", target.Libc},
+		{"target.node", target.Node}, {"target.pnpmVer", target.PnpmVer},
+	} {
+		if err := checkText(f.name, f.value); err != nil {
+			return Manifest{}, err
 		}
 	}
 	if raw.Archive == nil || !hexSHA256.MatchString(raw.Archive.SHA256) {
@@ -204,6 +232,12 @@ func checkPackage(i int, p rawPackage) (Package, error) {
 	if !npm.ValidName(p.Name) {
 		return Package{}, refuse("%s is not a valid package name: %q", at("name"), p.Name)
 	}
+	if len(p.Version) > maxVersionBytes {
+		return Package{}, refuse("%s is longer than %d bytes", at("version"), maxVersionBytes)
+	}
+	if len(p.OriginalIntegrity) > maxIntegrityBytes {
+		return Package{}, refuse("%s is longer than %d bytes", at("originalIntegrity"), maxIntegrityBytes)
+	}
 	if !npm.IsExactVersion(p.Version) {
 		return Package{}, refuse("%s is not an exact version: %q", at("version"), p.Version)
 	}
@@ -218,6 +252,20 @@ func checkPackage(i int, p rawPackage) (Package, error) {
 		OriginalIntegrity: p.OriginalIntegrity, ShippedSHA512: p.ShippedSHA512,
 		PublishConfigStripped: *p.PublishConfigStripped,
 	}, nil
+}
+
+// checkText bounds a free-text field and keeps control and format characters
+// out of it, so a tool that prints the value cannot be made to move the
+// cursor, retitle the terminal or reorder the line. The refusal does not
+// repeat the value.
+func checkText(name, value string) error {
+	if len(value) > maxTextBytes {
+		return refuse("%s is longer than %d bytes", name, maxTextBytes)
+	}
+	if !utf8.ValidString(value) || strings.IndexFunc(value, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return refuse("%s holds a control or unprintable character", name)
+	}
+	return nil
 }
 
 // jsonProblem names a decoding problem without echoing manifest content.

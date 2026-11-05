@@ -130,6 +130,84 @@ func TestParseManifestRefuses(t *testing.T) {
 	}
 }
 
+func TestParseManifestRefusesUnsafeText(t *testing.T) {
+	long := strings.Repeat("a", maxTextBytes+1)
+	unsafe := map[string]string{
+		"escape sequence": "\x1b]0;owned\a\x1b[2J",
+		"bidi override":   "\u202eevil",
+		"newline":         "a\nb",
+		"delete":          "a\x7f",
+		"zero width":      "a\u200bb",
+	}
+	type field struct {
+		name string
+		set  func(doc map[string]any, v string)
+	}
+	target := func(key string) func(map[string]any, string) {
+		return func(d map[string]any, v string) { d["target"].(map[string]any)[key] = v }
+	}
+	fields := []field{
+		{"toolVersion", func(d map[string]any, v string) { d["toolVersion"] = v }},
+		{"analysisId", func(d map[string]any, v string) { d["analysisId"] = v }},
+		{"target.os", target("os")},
+		{"target.cpu", target("cpu")},
+		{"target.libc", target("libc")},
+		{"target.node", target("node")},
+		{"target.pnpmVer", target("pnpmVer")},
+	}
+	for _, f := range fields {
+		t.Run(f.name+" too long", func(t *testing.T) {
+			doc := manifestDoc()
+			f.set(doc, long)
+			_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+			assertRefusal(t, err, f.name+" is longer than")
+		})
+		for kind, value := range unsafe {
+			t.Run(f.name+" "+kind, func(t *testing.T) {
+				doc := manifestDoc()
+				f.set(doc, "x"+value)
+				_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+				assertRefusal(t, err, f.name+" holds a control or unprintable character")
+				if strings.ContainsAny(err.Error(), "\x1b\u202e\u200b\a\n") {
+					t.Errorf("the refusal repeats the manifest's text: %q", err)
+				}
+			})
+		}
+	}
+
+	others := []struct {
+		name   string
+		edit   func(d map[string]any)
+		reason string
+	}{
+		{"createdAt too long", func(d map[string]any) {
+			d["createdAt"] = "2026-09-23T12:04:24." + strings.Repeat("0", maxTextBytes) + "Z"
+		}, "createdAt is longer than"},
+		{"version too long", func(d map[string]any) { pkgOf(d, 0)["version"] = "1.0.0-" + strings.Repeat("a", maxVersionBytes) }, "packages[0].version is longer than"},
+		{"originalIntegrity too long", func(d map[string]any) {
+			pkgOf(d, 0)["originalIntegrity"] = testIntegrity + strings.Repeat(" ", maxIntegrityBytes)
+		}, "packages[0].originalIntegrity is longer than"},
+	}
+	for _, tt := range others {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := manifestDoc()
+			tt.edit(doc)
+			_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+			assertRefusal(t, err, tt.reason)
+		})
+	}
+}
+
+func TestParseManifestAcceptsTextAtTheBound(t *testing.T) {
+	doc := manifestDoc()
+	doc["toolVersion"] = strings.Repeat("a", maxTextBytes)
+	doc["target"].(map[string]any)["os"] = strings.Repeat("é", maxTextBytes/2)
+	pkgOf(doc, 0)["version"] = "1.0.0-" + strings.Repeat("a", maxVersionBytes-len("1.0.0-"))
+	if _, err := ParseManifest(bytes.NewReader(encode(t, doc))); err != nil {
+		t.Errorf("text of exactly the bound: %v", err)
+	}
+}
+
 func TestParseManifestRefusesBadDocuments(t *testing.T) {
 	big := append([]byte(`{"toolVersion":"`), bytes.Repeat([]byte("a"), MaxManifestSize)...)
 	tests := []struct {
