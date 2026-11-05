@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -189,5 +190,152 @@ func TestRunKeepsNoteFromPublish(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newInterruptFixture builds an archive of three packages and a fake that
+// holds the second upload until the test releases it.
+func newInterruptFixture(t *testing.T) (r *runFixture, held chan struct{}) {
+	t.Helper()
+	r = newRunFixture(t)
+	arch, manifest := testArchive(t, r.archives, testKey,
+		[3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"}, [3]string{"right-pad", "1.0.0", "right body"})
+	r.opts.Archive, r.opts.Manifest = arch, manifest
+	held, release := make(chan struct{}), make(chan struct{})
+	r.f.onUpload = func(f *fakeNexus, u upload) {
+		if u.File == "left-pad-1.3.0.tgz" {
+			f.put("left-pad", "1.3.0", u.Body)
+			return
+		}
+		close(held)
+		<-release
+	}
+	// Registered after the fake, so it runs first and frees the held handler.
+	t.Cleanup(func() { close(release) })
+	return r, held
+}
+
+func TestRunInterrupted(t *testing.T) {
+	t.Run("during an upload", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+		r, held := newInterruptFixture(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan Report, 1)
+		go func() {
+			done <- Run(ctx, r.opts, func(Settings) (Publisher, error) { return r.f.client(t), nil })
+		}()
+		<-held
+		r.f.mu.Lock()
+		atCancel := len(r.f.requests)
+		r.f.mu.Unlock()
+		cancel()
+		rep := <-done
+
+		if rep.Outcome != OutcomeIncomplete || rep.ExitCode() != 1 {
+			t.Fatalf("outcome %q (%s), exit %d", rep.Outcome, rep.Reason, rep.ExitCode())
+		}
+		if len(rep.Packages) != 3 || rep.Packages[0].State != Published {
+			t.Fatalf("got %+v", rep.Packages)
+		}
+		for _, p := range rep.Packages[1:] {
+			if p.State != Failed || p.Reason != "interrupted" {
+				t.Errorf("%s: %q %q, want failed interrupted", p.Name, p.State, p.Reason)
+			}
+		}
+		if rep.Counts.Published != 1 || rep.Counts.Failed != 2 {
+			t.Errorf("counts %+v", rep.Counts)
+		}
+		r.f.mu.Lock()
+		after := len(r.f.requests)
+		r.f.mu.Unlock()
+		if after != atCancel {
+			t.Errorf("%d requests started after the cancel", after-atCancel)
+		}
+		if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+			t.Errorf("temporary directory holds %v, %v", left, err)
+		}
+	})
+
+	t.Run("during the checks", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+		r, _ := newInterruptFixture(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rep := Run(ctx, r.opts, func(Settings) (Publisher, error) {
+			r.built++
+			return r.f.client(t), nil
+		})
+		if rep.Outcome != OutcomeIncomplete || rep.ExitCode() != 1 || len(rep.Packages) != 3 || rep.Counts.Failed != 3 {
+			t.Fatalf("got %q %+v", rep.Outcome, rep.Counts)
+		}
+		for _, p := range rep.Packages {
+			if p.State != Failed || p.Reason != "interrupted" {
+				t.Errorf("%s: %q %q, want failed interrupted", p.Name, p.State, p.Reason)
+			}
+		}
+		if r.built != 0 || len(r.f.requests) != 0 {
+			t.Errorf("publisher built %d times, %d requests", r.built, len(r.f.requests))
+		}
+		if left, err := os.ReadDir(tmp); err != nil || len(left) != 0 {
+			t.Errorf("temporary directory holds %v, %v", left, err)
+		}
+	})
+}
+
+// cancelOnFetch ignores its context and cancels it on the first Fetch, so
+// only the check between packages can stop the loop.
+type cancelOnFetch struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (c *cancelOnFetch) CheckRepository(context.Context) error { return nil }
+
+func (c *cancelOnFetch) Fetch(context.Context, string, string, io.Writer, int64) (bool, error) {
+	c.calls++
+	c.cancel()
+	return false, context.Canceled
+}
+
+func (c *cancelOnFetch) Upload(context.Context, string, io.Reader) error {
+	c.calls++
+	return nil
+}
+
+func TestPublishStopsBetweenPackages(t *testing.T) {
+	dir := t.TempDir()
+	pkgs := []Package{
+		stage(t, dir, "a", "1.0.0", []byte("a")),
+		stage(t, dir, "b", "1.0.0", []byte("b")),
+		stage(t, dir, "c", "1.0.0", []byte("c")),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pub := &cancelOnFetch{cancel: cancel}
+	results := Publish(ctx, pub, pkgs, t.TempDir())
+	if pub.calls != 1 {
+		t.Errorf("%d calls reached the publisher, want 1", pub.calls)
+	}
+	for i, r := range results {
+		if r.State != Failed || r.Reason != "interrupted" {
+			t.Errorf("package %d: %q %q, want failed interrupted", i, r.State, r.Reason)
+		}
+	}
+}
+
+func TestPublishCheckInterrupted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := newFakeNexus(t)
+	pkgs := []Package{stage(t, t.TempDir(), "a", "1.0.0", []byte("a"))}
+	results := Publish(ctx, f.client(t), pkgs, t.TempDir())
+	if results[0].Reason != "interrupted" {
+		t.Fatalf("reason %q", results[0].Reason)
+	}
+	if len(f.requests) != 0 {
+		t.Errorf("%d requests", len(f.requests))
 	}
 }

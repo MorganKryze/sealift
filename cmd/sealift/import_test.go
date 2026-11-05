@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/MorganKryze/sealift/archive"
@@ -36,6 +37,8 @@ type nexusDouble struct {
 	byFile map[string]string // upload file name to the path it is served at
 	fail   bool
 	hits   int
+	held   chan struct{} // closed when an upload is held; nil means no hold
+	freed  chan struct{} // the test closes it to let the held upload go
 }
 
 func newNexusDouble(t *testing.T, name, version string) *nexusDouble {
@@ -60,6 +63,12 @@ func newNexusDouble(t *testing.T, name, version string) *nexusDouble {
 				return
 			}
 			b, _ := io.ReadAll(part)
+			if n.held != nil {
+				n.mu.Unlock()
+				close(n.held)
+				<-n.freed
+				n.mu.Lock()
+			}
 			n.files[n.byFile[part.FileName()]] = b
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -291,5 +300,44 @@ func TestSecretsNeverPrinted(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestImportStopsOnSignal(t *testing.T) {
+	f := newImportFixture(t)
+	f.nexus.held, f.nexus.freed = make(chan struct{}), make(chan struct{})
+	// Registered after the double, so it runs first and frees the handler.
+	t.Cleanup(func() { close(f.nexus.freed) })
+
+	type result struct {
+		code        int
+		stdout, err string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, errb bytes.Buffer
+		code := runImport(context.Background(), []string{"-settings", f.settings, "-report", f.report, f.archive}, &out, &errb)
+		done <- result{code, out.String(), errb.String()}
+	}()
+	<-f.nexus.held
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Signal(syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	res := <-done
+	if res.code != 1 || res.err != "" {
+		t.Fatalf("exit %d, stderr %q", res.code, res.err)
+	}
+	for _, want := range []string{"import incomplete", "0 published", "1 failed", "interrupted"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, res.stdout)
+		}
+	}
+	b, err := os.ReadFile(f.report)
+	if err != nil || !strings.Contains(string(b), `"reason": "interrupted"`) {
+		t.Errorf("report %s, %v", b, err)
 	}
 }

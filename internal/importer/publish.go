@@ -54,16 +54,33 @@ type Publisher interface {
 func Publish(ctx context.Context, p Publisher, pkgs []Package, dir string) []Result {
 	results := make([]Result, len(pkgs))
 	if err := p.CheckRepository(ctx); err != nil {
-		reason := "repository check failed: " + err.Error()
+		reason := interruptedOr(ctx, "repository check failed: "+err.Error())
 		for i, pkg := range pkgs {
 			results[i] = failed(pkg, reason)
 		}
 		return results
 	}
 	for i, pkg := range pkgs {
+		// A package that has not started never starts after an interrupt.
+		if ctx.Err() != nil {
+			results[i] = failed(pkg, reasonInterrupted)
+			continue
+		}
 		results[i] = publishOne(ctx, p, pkg, dir)
 	}
 	return results
+}
+
+// reasonInterrupted is the reason of a package an interrupt kept from finishing.
+const reasonInterrupted = "interrupted"
+
+// interruptedOr returns the interrupt reason when ctx is done, since a
+// cancelled request reports an error that says nothing about Nexus.
+func interruptedOr(ctx context.Context, reason string) string {
+	if ctx.Err() != nil {
+		return reasonInterrupted
+	}
+	return reason
 }
 
 func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Result {
@@ -80,7 +97,7 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 
 	remote, found, err := fetchDigest(ctx, p, pkg, dir, limit)
 	if err != nil {
-		return failed(pkg, err.Error())
+		return failed(pkg, interruptedOr(ctx, err.Error()))
 	}
 	if found {
 		if bytes.Equal(remote, pkg.SHA512) {
@@ -102,12 +119,12 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 		return failed(pkg, "cannot read the checked file: "+err.Error())
 	}
 	if err := p.Upload(ctx, pkg.File, f); err != nil {
-		return failed(pkg, "upload failed: "+err.Error())
+		return failed(pkg, interruptedOr(ctx, "upload failed: "+err.Error()))
 	}
 
 	remote, found, err = fetchDigest(ctx, p, pkg, dir, limit)
 	if err != nil {
-		return failed(pkg, "read back failed: "+err.Error())
+		return failed(pkg, interruptedOr(ctx, "read back failed: "+err.Error()))
 	}
 	if !found {
 		return failed(pkg, "nexus accepted the upload but does not serve the version")

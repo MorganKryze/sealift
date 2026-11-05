@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -61,7 +62,17 @@ func run(ctx context.Context, opts Options, newPublisher func(Settings) (Publish
 	}
 	defer os.RemoveAll(dir)
 
-	checked, err := verify(opts, m, dir)
+	checked, err := verify(ctx, opts, m, dir)
+	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		// No package was handled: the checks did not finish.
+		rep.Outcome = OutcomeIncomplete
+		rep.Packages = make([]Result, len(m.Packages))
+		for i, p := range m.Packages {
+			rep.Packages[i] = failed(Package{Name: p.Name, Version: p.Version, File: p.File}, reasonInterrupted)
+		}
+		rep.Counts.Failed = len(rep.Packages)
+		return rep
+	}
 	if err != nil {
 		return refuse(err)
 	}
@@ -100,13 +111,27 @@ func readManifest(path string) (archive.Manifest, error) {
 	return archive.ParseManifest(f)
 }
 
-func verify(opts Options, m archive.Manifest, dir string) ([]archive.Checked, error) {
+// ctxReader stops a read once ctx is done, so an interrupt does not wait for
+// the whole archive.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+func verify(ctx context.Context, opts Options, m archive.Manifest, dir string) ([]archive.Checked, error) {
 	f, err := os.Open(opts.Archive)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return archive.Verify(f, m, archive.VerifyOptions{
+	return archive.Verify(ctxReader{ctx, f}, m, archive.VerifyOptions{
 		ExpectedSHA256: opts.ExpectedSHA256,
 		SignatureKey:   opts.Settings.SignatureKey,
 		Dir:            dir,
