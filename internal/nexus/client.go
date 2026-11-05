@@ -70,7 +70,7 @@ type Client struct {
 }
 
 // New builds a client that trusts the system roots plus CAFile, refuses
-// redirects and never skips certificate verification.
+// redirects, uses no proxy and never skips certificate verification.
 func New(cfg Config) (*Client, error) {
 	if cfg.URL == nil || cfg.URL.Host == "" || (cfg.URL.Scheme != "http" && cfg.URL.Scheme != "https") {
 		return nil, errors.New("nexus url must be http or https with a host")
@@ -92,6 +92,9 @@ func New(cfg Config) (*Client, error) {
 		}
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// The credentials go to the configured address only, so no proxy from the
+	// environment may sit between the client and Nexus.
+	tr.Proxy = nil
 	tr.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: dialTimeout}).DialContext
 	tr.TLSHandshakeTimeout = handshakeTimeout
 	tr.ResponseHeaderTimeout = headerTimeout

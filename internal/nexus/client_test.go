@@ -223,3 +223,15 @@ func TestFetchLimitAndPath(t *testing.T) {
 		t.Fatalf("want a path error, got %v", err)
 	}
 }
+
+func TestClientIgnoresProxyEnvironment(t *testing.T) {
+	tr, ok := newClient(t, httptest.NewServer(http.NotFoundHandler()), "").http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("transport is not an http.Transport")
+	}
+	// ProxyFromEnvironment reads the environment once per process, so a
+	// setenv test would prove nothing.
+	if tr.Proxy != nil {
+		t.Fatal("the client routes requests through a proxy, which would carry the credentials")
+	}
+}
