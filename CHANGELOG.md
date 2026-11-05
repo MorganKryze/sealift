@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- The "Archive ready" badge and the major-version chip meet the WCAG AA contrast ratio in the light theme, and the review counts a single CVE as one CVE.
 - The review says when your selection departs from the proposal the analysis checked as a whole.
 - The review warns when the proposals together leave a peer dependency unmet, which pnpm only reports as a warning.
 - The export checks a cached tarball against its sha512 before shipping it, and downloads it again when it no longer matches.

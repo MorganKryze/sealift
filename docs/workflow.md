@@ -109,7 +109,7 @@ Dependencies fall into three groups:
 | Group | Holds |
 | --- | --- |
 | To decide | A proposal that may break: a major jump, a 0.x minor jump, or a signal worth a second look |
-| Proposed | Safe jumps that fix CVEs |
+| Proposed | Jumps that fix CVEs |
 | Nothing to do | No CVE, or no newer version helps |
 
 A row names the dependency, the CVEs its proposal fixes, the kind of jump, the release age, and the change from the current version to the proposed one. A click opens it:

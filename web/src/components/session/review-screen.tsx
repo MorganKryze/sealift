@@ -34,7 +34,7 @@ interface ReviewScreenProps {
 
 const GROUP_COPY: Record<ReviewGroupKey, { title: string; why: string }> = {
   decide: { title: "To decide", why: "Breaking change possible, or a signal worth a second look" },
-  proposed: { title: "Proposed", why: "Safe jumps that fix CVEs" },
+  proposed: { title: "Proposed", why: "Jumps that fix CVEs" },
   nothing: { title: "Nothing to do", why: "No CVEs, or no newer version helps" },
 }
 
@@ -161,14 +161,14 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
       <Card>
         <div className="grid grid-cols-1 items-center gap-4 p-5 sm:grid-cols-[1fr_auto_1fr]">
           <div>
-            <p className="mb-1.5 text-xs text-muted">Today · {beforeTotal} CVEs</p>
+            <p className="mb-1.5 text-xs text-muted">Today · {beforeTotal} CVE{beforeTotal === 1 ? "" : "s"}</p>
             <SeverityCounts vector={before} />
           </div>
           <span className="hidden text-muted sm:inline" aria-hidden>
             →
           </span>
           <div>
-            <p className="mb-1.5 text-xs text-muted">With this selection · {afterTotal} CVEs</p>
+            <p className="mb-1.5 text-xs text-muted">With this selection · {afterTotal} CVE{afterTotal === 1 ? "" : "s"}</p>
             <SeverityCounts vector={after} />
           </div>
         </div>
@@ -182,7 +182,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
       </Card>
 
       <p className="mt-4 max-w-[70ch] text-sm text-muted">
-        sealift proposes the oldest version that fixes the most CVEs: a release with no known CVE may simply be too
+        sealift proposes the oldest version that fixes the most CVEs: a release with no known CVE may be too
         new to have any, and older ones have had more eyes on them.
         {settingsQuery.data ? ` Releases younger than ${settingsQuery.data.minReleaseAgeDays} days are held back.` : ""}
       </p>
@@ -255,7 +255,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
             <span className="font-semibold text-ink">
               {changedDependencies.length} change{changedDependencies.length === 1 ? "" : "s"}
             </span>
-            <span className="text-muted"> · {afterTotal} CVEs left</span>
+            <span className="text-muted"> · {afterTotal} CVE{afterTotal === 1 ? "" : "s"} left</span>
             {departsFromProposal ? (
               <p className="mt-0.5 text-muted">
                 The analysis checked its proposal as a whole. Your changes to it were not installed together.
@@ -331,7 +331,7 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
           </span>
           <span className={kept ? "font-semibold text-muted" : "font-semibold text-accent"}>{picked}</span>
           {kind && kind !== "minor-or-patch" ? (
-            <Badge className="border-severity-high/35 bg-transparent text-severity-high">
+            <Badge className="border-severity-high/60 bg-transparent text-ink">
               {kind === "major" ? "Major" : "0.x, may break"}
             </Badge>
           ) : null}
