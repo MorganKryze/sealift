@@ -130,7 +130,7 @@ func (c *Client) Packument(ctx context.Context, name string) (Packument, error) 
 // whatever the integrity algorithm was: an export's cache key and manifest
 // always use sha512, even for the legacy packages that publish sha1 only.
 func (c *Client) DownloadFile(ctx context.Context, name, version, integrity, path string) (string, error) {
-	newHash, want, err := parseIntegrity(integrity)
+	newHash, want, err := ParseIntegrity(integrity)
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +220,9 @@ func (c *Client) backoff(retry int) time.Duration {
 	return 500 * time.Millisecond << (retry - 1)
 }
 
-func parseIntegrity(sri string) (func() hash.Hash, []byte, error) {
+// ParseIntegrity returns the hash and the digest an SRI string asks for: sha512
+// when it lists one, sha1 only when it lists nothing else.
+func ParseIntegrity(sri string) (func() hash.Hash, []byte, error) {
 	fields := strings.Fields(sri)
 	if len(fields) == 0 {
 		return nil, nil, errors.New("empty integrity")
