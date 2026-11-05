@@ -19,6 +19,7 @@ import (
 const (
 	testKey      = "test-key"
 	otherKey     = "other-key-value"
+	sameLenKey   = "test-kez"
 	alphaBody    = "alpha"
 	betaBody     = "beta"
 	alphaFile    = "alpha-1.0.0.tgz"
@@ -173,6 +174,11 @@ func TestVerifyRefuses(t *testing.T) {
 			reason: "signature.key differs",
 		},
 		{
+			name:   "key of the same length",
+			items:  func() []item { return replace(baseItems(), "out/signature.key", reg("out/signature.key", sameLenKey)) },
+			reason: "signature.key differs",
+		},
+		{
 			name: "key longer than the expected key",
 			items: func() []item {
 				return replace(baseItems(), "out/signature.key", reg("out/signature.key", testKey+"\n"))
@@ -223,7 +229,7 @@ func digestOf(data []byte) Summary {
 
 func assertNoKey(t *testing.T, err error) {
 	t.Helper()
-	for _, secret := range []string{testKey, otherKey, base64.StdEncoding.EncodeToString([]byte(testKey)), hex.EncodeToString([]byte(testKey))} {
+	for _, secret := range []string{testKey, otherKey, sameLenKey, base64.StdEncoding.EncodeToString([]byte(testKey)), hex.EncodeToString([]byte(testKey))} {
 		if strings.Contains(err.Error(), secret) {
 			t.Errorf("a refusal repeats a key value")
 		}
