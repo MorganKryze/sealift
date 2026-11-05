@@ -24,6 +24,10 @@ import (
 )
 
 func main() {
+	// The subcommand is chosen before flag.Parse, so `sealift -addr ...` is unchanged.
+	if len(os.Args) > 1 && os.Args[1] == "import" {
+		os.Exit(runImport(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	}
 	// The host-side restriction comes from the publish flag
 	// (-p 127.0.0.1:8080:8080), not from the bind address: binding to
 	// 127.0.0.1 here would make the server unreachable through a published

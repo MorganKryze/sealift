@@ -89,6 +89,38 @@ The archive:
 
 Only then does the import publish each tarball to the npm hosted repository.
 
+## The import report
+
+`sealift import` prints a text report on stdout and, with `-report <file>`, writes the same account as JSON. The file is written once, at the end, with mode 0644. If that write fails, stderr says so and an exit code 0 becomes 1.
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `complete` when every package is `published` or `present`, `incomplete` when at least one failed, `refused` when a check failed and nothing was published |
+| `reason` | Why the archive was refused; empty otherwise |
+| `unencrypted` | `true` when the Nexus URL starts with `http:` |
+| `importVersion` | The sealift release that ran the import |
+| `archive.file`, `.sha256`, `.size` | The archive's file name, and the sha256 and size its manifest declares. A refusal for a wrong digest or size names the measured value in `reason` |
+| `toolVersion`, `analysisId`, `target` | Copied from the manifest |
+| `nexus.url`, `nexus.repository` | Where the import published to |
+| `counts.published`, `.present`, `.failed` | Packages by state |
+| `packages[].name`, `.version`, `.file` | The package, as the manifest lists it |
+| `packages[].state` | `published`, `present` or `failed` |
+| `packages[].reason` | Why a package failed; empty otherwise |
+| `packages[].note` | `sealift removed publishConfig at export` for a package whose manifest entry has `publishConfigStripped` |
+
+A refused report lists no package and holds zero counts. A package is `present` when Nexus already serves the same bytes, `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
+
+The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive, manifest and Nexus lines, and one line per package: `<name>@<version> <state>[: <reason>][ (<note>)]`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Complete |
+| 1 | Incomplete: at least one package failed, or the JSON report could not be written |
+| 2 | Usage or settings error: one line on stderr, no report |
+| 3 | Refused: nothing was published |
+
+The archive and the manifest are opened read-only. The command writes the JSON report and one private temporary directory, which it removes on every exit.
+
 ## The reports
 
 | File | Format | Content |

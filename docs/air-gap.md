@@ -78,7 +78,31 @@ Each entry of `manifest.json`'s `packages` describes one tarball:
 
 ## The import
 
-The import project, on the air-gapped side, reads the archive: it checks `signature.key`, then publishes each tarball of `out/` to the npm hosted repository in Nexus. sealift does not ship that project; its owner knows what it checks.
+`sealift import` runs on the air-gapped side. It checks the archive against its manifest and `signature.key`, then publishes each tarball of `out/` to the npm hosted repository in Nexus and reads each one back. It publishes nothing unless every check passes. [Archive format](dev/archive-format.md) lists the checks, the report and the exit codes.
+
+<!-- illustrative -->
+```sh
+sealift import -settings /import/settings.yaml -sha256 <sha256 received separately> -report report.json packages_npm.tar.gz
+```
+
+The command reads `manifest.json` from the archive's directory; `-manifest <file>` names another. `-sha256` is optional and compares the archive with the value you received by a separate channel. The exit code is 0 for a complete import, 1 when a package failed, 2 for a usage or settings error and 3 for a refused archive.
+
+The settings file is YAML. Each secret lives in its own file, and a relative path resolves from the settings file's directory:
+
+<!-- illustrative -->
+```yaml
+nexus:
+  url: https://nexus.example.internal
+  repository: npm-hosted
+  user: sealift-import
+  passwordFile: nexus-password
+  caFile: nexus-ca.pem          # optional, added to the system roots
+signatureKeyFile: signature-key
+```
+
+`signatureKeyFile` holds the key saved in the sealift settings of the connected side. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
+
+Use a Nexus user that can only read and add to the npm hosted repository, so that a stolen password cannot delete or overwrite a package.
 
 Once imported, projects install from Nexus as usual:
 

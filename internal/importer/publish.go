@@ -34,9 +34,12 @@ type Package struct {
 
 // Result is what happened to one package.
 type Result struct {
-	Name, Version, File string
-	State               State
-	Reason, Note        string
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	File    string `json:"file"`
+	State   State  `json:"state"`
+	Reason  string `json:"reason"`
+	Note    string `json:"note"`
 }
 
 // Publisher is the part of the Nexus client the run uses.
