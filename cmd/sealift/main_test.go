@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -201,5 +202,30 @@ func TestRunCancelsRunningJobBeforeShuttingDownServer(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("run took %v to return, want it well under the shutdown timeout", elapsed)
+	}
+}
+
+func TestSubcommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantName string
+		wantRest []string
+	}{
+		{"none", nil, "", nil},
+		{"import", []string{"import", "-settings", "s", "a.tgz"}, "import", []string{"-settings", "s", "a.tgz"}},
+		{"import-server", []string{"import-server", "-settings", "s"}, "import-server", []string{"-settings", "s"}},
+		{"import without arguments", []string{"import"}, "import", []string{}},
+		{"server flags keep their place", []string{"-addr", "x"}, "", []string{"-addr", "x"}},
+		{"unknown word", []string{"serve"}, "", []string{"serve"}},
+		{"prefix of a subcommand", []string{"import-servers"}, "", []string{"import-servers"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, rest := subcommand(tt.args)
+			if name != tt.wantName || strings.Join(rest, "\x00") != strings.Join(tt.wantRest, "\x00") {
+				t.Errorf("subcommand(%q) = %q, %q; want %q, %q", tt.args, name, rest, tt.wantName, tt.wantRest)
+			}
+		})
 	}
 }

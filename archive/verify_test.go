@@ -802,3 +802,20 @@ func TestVerifyDoesNotOverwrite(t *testing.T) {
 		t.Errorf("an existing file was overwritten: %q", data)
 	}
 }
+
+func TestVerifyRefusesRelativeDir(t *testing.T) {
+	for _, dir := range []string{"", "work", "./work"} {
+		t.Run("dir="+dir, func(t *testing.T) {
+			f := newFixture(t, baseItems())
+			f.opts.Dir = dir
+			_, err := f.verify()
+			if err == nil || !strings.Contains(err.Error(), "needs an absolute directory") {
+				t.Fatalf("error %v, want one containing %q", err, "needs an absolute directory")
+			}
+			var r *Refusal
+			if errors.As(err, &r) {
+				t.Errorf("a bad directory read as a refusal: %v", err)
+			}
+		})
+	}
+}

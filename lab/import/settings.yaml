@@ -5,3 +5,14 @@ nexus:
   user: sealift-import
   passwordFile: nexus-password
 signatureKeyFile: signature-key
+# Lab values for `sealift import-server`: the realm's keys and issuer as the
+# gateway's oauth2-proxy sees them, and the MinIO user setup.sh creates.
+token:
+  keySetUrl: http://keycloak:8080/realms/lab/protocol/openid-connect/certs
+  issuer: http://localhost:18444/realms/lab
+  audience: oauth2-proxy
+minio:
+  url: http://minio:9000
+  region: us-east-1
+  accessKeyFile: minio-access-key
+  secretKeyFile: minio-secret-key

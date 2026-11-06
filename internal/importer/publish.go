@@ -29,6 +29,10 @@ const (
 	Failed    State = "failed"
 )
 
+// Pending marks a listed package that has not ended. Only the stored progress
+// of a running attempt carries it; a report never does.
+const Pending State = "pending"
+
 // Package is one verified tarball waiting to be published.
 type Package struct {
 	Name, Version, File, Path string
@@ -56,21 +60,33 @@ type Publisher interface {
 // Publish handles each package once, in order. Nexus copies are written to
 // files in dir, which the caller removes.
 func Publish(ctx context.Context, p Publisher, pkgs []Package, dir string) []Result {
+	return PublishEach(ctx, p, pkgs, dir, nil)
+}
+
+// PublishEach is Publish that calls ended with each package's result as soon
+// as it is known, before the next package starts. ended may be nil.
+func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, ended func(int, Result)) []Result {
 	results := make([]Result, len(pkgs))
+	done := func(i int, r Result) {
+		results[i] = r
+		if ended != nil {
+			ended(i, r)
+		}
+	}
 	if err := p.CheckRepository(ctx); err != nil {
 		reason := interruptedOr(ctx, "repository check failed: "+err.Error())
 		for i, pkg := range pkgs {
-			results[i] = failed(pkg, reason)
+			done(i, failed(pkg, reason))
 		}
 		return results
 	}
 	for i, pkg := range pkgs {
 		// A package that has not started never starts after an interrupt.
 		if ctx.Err() != nil {
-			results[i] = failed(pkg, reasonInterrupted)
+			done(i, failed(pkg, reasonInterrupted))
 			continue
 		}
-		results[i] = publishOne(ctx, p, pkg, dir)
+		done(i, publishOne(ctx, p, pkg, dir))
 	}
 	return results
 }

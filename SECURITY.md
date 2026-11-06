@@ -21,6 +21,10 @@ Include the version, what an attacker needs, and the steps that show the problem
 - `sealift import` publishes nothing until the archive passes every check: its sha256 and size match `manifest.json` (and the sha256 you pass with `-sha256`, when you give one), `signature.key` holds the configured key, every tarball matches its `shippedSha512`, and the listing has no extra, missing or oversized entry.
 - The import never overwrites. A version Nexus already holds with other bytes fails with both digests, and the only exception is a copy that differs from the shipped one by the `publishConfig` that sealift removed.
 - The import never turns TLS off, refuses redirects and warns when the Nexus URL is plain HTTP. Its credentials stay in memory: the password and the key are not written to the output, the report or an error.
+- `sealift import-server` acts for a user only after the access token passes every check against the realm's keys: signature, algorithm, issuer, audience and expiry. A token signed by another key and a token with `alg` none each answered 401 in the lab. The user is the token's `preferred_username` claim alone; no forwarded header names one.
+- The service reads and deletes only under `packages/npm/` in the bucket of the checked user, and never writes to MinIO. It removes an archive only after the import ended `complete` and both objects are unchanged.
+- The import binary holds no Linux capability and is built to run under `--cap-drop ALL`. The image cannot set that flag: you set it in the compose file or on the `docker run` line, as [Deployment](docs/deployment.md#the-import-service) shows. Without it, the container keeps Docker's default capability bounding set, and the setuid binaries of the base image can use it.
+- Tokens, the MinIO secret key, the Nexus password and the signature key stay out of logs, responses and stored records.
 
 ## What it does not
 
@@ -30,3 +34,6 @@ Include the version, what an attacker needs, and the steps that show the problem
 - sealift has no login. Anyone who reaches its port can run sessions, download archives and change the key. [Deployment](docs/deployment.md#access) shows how to keep it private.
 - The import checks `signature.key` and nothing more: it adds no signature of its own. A Nexus repository that allows redeploy can be overwritten by another tool between the check and the upload.
 - The sha256 of an archive is only as trustworthy as the channel that carries it to the import side.
+- A valid token acts as its user. Anyone who holds one, for as long as it is valid and the realm accepts it, can list that user's archives and start imports in their name.
+- The service's MinIO key reads every user's folder: the MinIO policy covers every `user-*` bucket, and the service alone keeps a request to the checked user's bucket. A flaw in the service reaches every folder.
+- The service trusts the gateway to forward the token it checked. It reads the token from one header and cannot tell a gateway from a client that reaches it directly; keep its port off any network users can reach but the gateway.

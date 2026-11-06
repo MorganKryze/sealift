@@ -16,6 +16,7 @@ volumes:
   sealift-data: {}
   nexus-data: {}
   minio-data: {}
+  import-data: {}
 
 services:
   sealift:
@@ -90,13 +91,27 @@ services:
       - --cookie-secure=false
       - --whitelist-domain=localhost:18440
       - --skip-provider-button=true
+      # Renews the access token a minute after sign-in, so a session outlives
+      # the realm's 5-minute token lifetime.
+      - --cookie-refresh=1m
     depends_on: [keycloak]
 
-  # Stands in for the import web app until it exists: it echoes the request,
-  # so the headers the gateway adds can be read.
-  app:
-    image: traefik/whoami:v1.11@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab
+  # The import service, as the air-gapped side runs it: it checks the access
+  # token the gateway forwards, reads the user's MinIO folder and publishes to
+  # Nexus. The image's own default user is app; no capability is granted.
+  # Until a release carries the import, the default image is the local build
+  # from `just image`.
+  import-server:
+    image: ${SEALIFT_IMAGE:-sealift:dev}
+    command: [sealift, import-server, -settings, /import/settings.yaml]
     networks: [airgap]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    volumes:
+      - import-data:/data
+      - ./import:/import:ro
+    depends_on: [keycloak, minio, nexus]
 
   gateway:
     # nginx resolves its upstreams at start; a retry covers a slow neighbour.
@@ -111,7 +126,7 @@ services:
       - 127.0.0.1:18444:18444 # Keycloak
     volumes:
       - ./gateway/gateway.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on: [nexus, minio, keycloak, oauth2-proxy, app]
+    depends_on: [nexus, minio, keycloak, oauth2-proxy, import-server]
 
   # Run with `docker compose run`: a shell on each side, for checks and
   # publishing tests.
@@ -128,7 +143,7 @@ services:
   import:
     # The import as the air-gapped side runs it: settings read-only, the
     # archive from the transfer folder, Nexus on the internal network.
-    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.3.0}
+    image: ${SEALIFT_IMAGE:-sealift:dev}
     profiles: [tools]
     networks: [airgap]
     volumes:
@@ -147,3 +162,4 @@ services:
       MC_HOST_lab: http://lab-admin:lab-admin-password@minio:9000
     volumes:
       - ./transfer:/transfer
+      - ./import:/import:ro

@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -448,5 +450,61 @@ func TestCleanStripsControlCharactersAndCuts(t *testing.T) {
 				t.Fatalf("clean(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPublishEachReportsEachPackageAsItEnds(t *testing.T) {
+	f := newFakeNexus(t)
+	dir := t.TempDir()
+	first := stage(t, dir, "alpha", "1.0.0", []byte("alpha"))
+	second := stage(t, dir, "beta", "2.0.0", []byte("beta"))
+	f.storeUploads(first)
+	// Nexus holds other bytes for the second package, so it fails.
+	f.put("beta", "2.0.0", packed(t, "beta", "2.0.0", "not beta"))
+
+	var mu sync.Mutex
+	var ended []int
+	var states []State
+	var endedBeforeSecond []int
+	f.onGet = func(path string) {
+		if path == tarballPath("beta", "2.0.0") {
+			mu.Lock()
+			endedBeforeSecond = append([]int(nil), ended...)
+			mu.Unlock()
+		}
+	}
+	res := PublishEach(context.Background(), f.client(t), []Package{first, second}, t.TempDir(), func(i int, r Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		ended = append(ended, i)
+		states = append(states, r.State)
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(ended, []int{0, 1}) || !slices.Equal(states, []State{Published, Failed}) {
+		t.Fatalf("callbacks %v %v, want [0 1] [published failed]", ended, states)
+	}
+	if !slices.Equal(endedBeforeSecond, []int{0}) {
+		t.Errorf("when package 1 reached nexus the callbacks were %v, want [0]", endedBeforeSecond)
+	}
+	if len(res) != 2 || res[0].State != Published || res[1].State != Failed {
+		t.Errorf("results %+v", res)
+	}
+}
+
+func TestPublishEachReportsEveryPackageOfAFailedCheck(t *testing.T) {
+	f := newFakeNexus(t)
+	f.repoStatus = 500
+	pkgs := []Package{stage(t, t.TempDir(), "a", "1.0.0", []byte("a")), stage(t, t.TempDir(), "b", "1.0.0", []byte("b"))}
+	var ended []int
+	PublishEach(context.Background(), f.client(t), pkgs, t.TempDir(), func(i int, r Result) {
+		if r.State != Failed || !strings.Contains(r.Reason, "repository check failed") {
+			t.Errorf("package %d: %q %q", i, r.State, r.Reason)
+		}
+		ended = append(ended, i)
+	})
+	if !slices.Equal(ended, []int{0, 1}) {
+		t.Fatalf("callbacks %v, want [0 1]", ended)
 	}
 }

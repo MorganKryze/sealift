@@ -1,0 +1,537 @@
+openapi: 3.1.0
+info:
+  title: sealift import service
+  version: "1"
+  description: >
+    Tells a signed-in user who the service acts for, lists the archives in
+    the user's MinIO folder, and starts and follows imports. Every operation
+    needs the access token the gateway forwards in the X-Access-Token header.
+servers:
+  - url: /api
+tags:
+  - name: session
+    description: The signed-in user
+  - name: archives
+    description: The archives in the user's MinIO folder
+  - name: imports
+    description: Imports of those archives into Nexus
+paths:
+  /me:
+    get:
+      operationId: getMe
+      tags:
+        - session
+      summary: Name the user the checked token stands for
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        default:
+          $ref: "#/components/responses/Problem"
+  /archives:
+    get:
+      operationId: listArchives
+      tags:
+        - archives
+      summary: List the archives in the user's folder
+      description: >
+        Lists the objects under packages/npm/ in the bucket user-<name> and
+        pairs each archive with the manifest.json of its own folder. Reads no
+        manifest. 502 when MinIO cannot be reached or refuses the call.
+      responses:
+        "200":
+          description: The archives, none when MinIO is not configured or the bucket does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchiveList"
+        default:
+          $ref: "#/components/responses/Problem"
+  /imports:
+    get:
+      operationId: listImports
+      tags:
+        - imports
+      summary: List the user's imports, newest first
+      responses:
+        "200":
+          description: The imports of the checked user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportList"
+        default:
+          $ref: "#/components/responses/Problem"
+    post:
+      operationId: startImport
+      tags:
+        - imports
+      summary: Queue an import of one archive in the user's folder
+      description: >
+        Imports run one at a time across all users, in the order they were
+        started. The key must name an importable archive in the user's own
+        folder; any other key answers 404 without a MinIO request. A request
+        with a foreign Origin, Sec-Fetch-Site cross-site or a body that is not
+        application/json answers 403 and changes nothing. 409 when the same
+        archive (key and ETag) already has an import that is queued, running or
+        not complete; the body names that import.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartImport"
+      responses:
+        "202":
+          description: The import, queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        "409":
+          description: The archive already has an import, or MinIO is not configured
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ImportConflict"
+        default:
+          $ref: "#/components/responses/Problem"
+  /imports/{importId}:
+    get:
+      operationId: getImport
+      tags:
+        - imports
+      summary: Read one import
+      description: Another user's id answers 404 like a missing one.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The import
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        default:
+          $ref: "#/components/responses/Problem"
+  /imports/{importId}/retry:
+    post:
+      operationId: retryImport
+      tags:
+        - imports
+      summary: Add an attempt to an import
+      description: >
+        Queues a new attempt that reads the archive and the manifest again,
+        checks them again and reads every package from Nexus again; nothing
+        carries over from an earlier attempt. Accepted whatever the last
+        outcome was, while no attempt is queued or running and the archive is
+        still in MinIO. 409 otherwise. The attempt ends refused, publishing
+        nothing, when the archive or the manifest changed in MinIO since the
+        import was created. Another user's id answers 404 like a missing one.
+        The guard against cross-site requests is the one of startImport.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: An empty object
+      responses:
+        "202":
+          description: The import, with its new attempt queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        "409":
+          description: An attempt is queued or running, the archive is no longer in MinIO, or MinIO is not configured
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ImportConflict"
+        default:
+          $ref: "#/components/responses/Problem"
+components:
+  responses:
+    Problem:
+      description: >
+        Error. 401 when the token fails a check (the detail names the check),
+        403 when its preferred_username cannot name a user folder or a start
+        looks cross-site, 404 for an unknown import or an archive outside the
+        user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503
+        when the realm's keys cannot be had or the service is stopping.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Me:
+      type: object
+      properties:
+        user:
+          type: string
+          description: The checked token's preferred_username, which names the user's bucket and folder
+        minioConfigured:
+          type: boolean
+          description: Whether the settings file has a minio section
+      required:
+        - user
+        - minioConfigured
+    ArchiveList:
+      type: object
+      properties:
+        minioConfigured:
+          type: boolean
+        bucket:
+          type: string
+          description: The user's bucket, user-<name>
+        folder:
+          type: string
+          description: The folder the list covers, packages/npm/
+        bucketMissing:
+          type: boolean
+          description: True when MinIO has no bucket for the user
+        message:
+          type: string
+          description: Says what an empty list means when the bucket is missing
+        truncated:
+          type: boolean
+          description: True when the folder holds more objects than the list read
+        unencrypted:
+          type: array
+          description: The links that run over plain http, among keySet, minio and nexus
+          items:
+            type: string
+        archives:
+          type: array
+          items:
+            $ref: "#/components/schemas/Archive"
+      required:
+        - minioConfigured
+        - bucket
+        - folder
+        - bucketMissing
+        - truncated
+        - unencrypted
+        - archives
+    Archive:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The object key, under packages/npm/
+        size:
+          type: integer
+          format: int64
+        modified:
+          type: string
+          format: date-time
+        importable:
+          type: boolean
+        reason:
+          type: string
+          description: Why the archive cannot be imported; absent when it can
+        latestImport:
+          $ref: "#/components/schemas/LatestImport"
+      required:
+        - key
+        - size
+        - modified
+        - importable
+    LatestImport:
+      type: object
+      description: The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
+      properties:
+        id:
+          type: string
+        outcome:
+          type: string
+          description: queued, running, complete, incomplete, refused or interrupted
+      required:
+        - id
+        - outcome
+    StartImport:
+      type: object
+      properties:
+        archive:
+          type: string
+          description: The archive's object key, under packages/npm/
+        expectedSha256:
+          type: string
+          description: The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused
+      required:
+        - archive
+    ImportList:
+      type: object
+      properties:
+        imports:
+          type: array
+          items:
+            $ref: "#/components/schemas/Import"
+      required:
+        - imports
+    Object:
+      type: object
+      description: A MinIO object as it was when the import was created
+      properties:
+        key:
+          type: string
+        etag:
+          type: string
+        size:
+          type: integer
+          format: int64
+      required:
+        - key
+        - etag
+        - size
+    Import:
+      type: object
+      properties:
+        id:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        archive:
+          $ref: "#/components/schemas/Object"
+        manifest:
+          $ref: "#/components/schemas/Object"
+        expectedSha256:
+          type: string
+        outcome:
+          type: string
+          description: The latest attempt's outcome, or queued or running while it has none
+        archiveRemoved:
+          type: boolean
+          description: >
+            Whether an attempt removed the archive from MinIO. A complete
+            attempt removes the archive and its manifest only after checking
+            that both still carry the ETags it read; its removal says why not.
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Attempt"
+      required:
+        - id
+        - createdAt
+        - archive
+        - manifest
+        - expectedSha256
+        - outcome
+        - archiveRemoved
+        - attempts
+    Attempt:
+      type: object
+      properties:
+        n:
+          type: integer
+        status:
+          type: string
+          description: queued, running or ended
+        queuedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+          description: complete, incomplete, refused or interrupted once the attempt has ended
+        report:
+          $ref: "#/components/schemas/Report"
+        removal:
+          $ref: "#/components/schemas/Removal"
+      required:
+        - n
+        - status
+        - outcome
+        - report
+    Removal:
+      type: object
+      description: What became of the archive after a complete attempt
+      properties:
+        removed:
+          type: boolean
+        reason:
+          type: string
+      required:
+        - removed
+        - reason
+    Report:
+      type: object
+      description: The account of one attempt; a package still pending has not ended
+      properties:
+        outcome:
+          type: string
+        reason:
+          type: string
+        unencrypted:
+          type: boolean
+          description: True when Nexus, MinIO or the key set is reached over plain http
+        importVersion:
+          type: string
+        archive:
+          $ref: "#/components/schemas/ReportArchive"
+        toolVersion:
+          type: string
+        analysisId:
+          type: string
+        target:
+          $ref: "#/components/schemas/ReportTarget"
+        nexus:
+          $ref: "#/components/schemas/ReportNexus"
+        counts:
+          $ref: "#/components/schemas/ReportCounts"
+        packages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportPackage"
+      required:
+        - outcome
+        - reason
+        - unencrypted
+        - importVersion
+        - archive
+        - toolVersion
+        - analysisId
+        - target
+        - nexus
+        - counts
+        - packages
+    ReportArchive:
+      type: object
+      properties:
+        file:
+          type: string
+        sha256:
+          type: string
+        size:
+          type: integer
+          format: int64
+      required:
+        - file
+        - sha256
+        - size
+    ReportTarget:
+      type: object
+      properties:
+        os:
+          type: string
+        cpu:
+          type: string
+        libc:
+          type: string
+        node:
+          type: string
+        pnpmVer:
+          type: string
+      required:
+        - os
+        - cpu
+        - libc
+        - node
+        - pnpmVer
+    ReportNexus:
+      type: object
+      properties:
+        url:
+          type: string
+        repository:
+          type: string
+      required:
+        - url
+        - repository
+    ReportCounts:
+      type: object
+      properties:
+        published:
+          type: integer
+        present:
+          type: integer
+        failed:
+          type: integer
+      required:
+        - published
+        - present
+        - failed
+    ReportPackage:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        file:
+          type: string
+        state:
+          type: string
+          description: pending, published, present or failed
+        reason:
+          type: string
+        note:
+          type: string
+      required:
+        - name
+        - version
+        - file
+        - state
+        - reason
+        - note
+    ImportConflict:
+      type: object
+      description: A Problem that names the import in the way
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        importId:
+          type: string
+          description: The import that holds the archive; absent when MinIO is not configured
+      required:
+        - title
+        - status
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details for HTTP APIs
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI identifying the problem type
+          default: about:blank
+        title:
+          type: string
+          description: A short, human-readable summary of the problem type
+        status:
+          type: integer
+          description: The HTTP status code repeated for clients that read the body only
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence
+      required:
+        - title
+        - status

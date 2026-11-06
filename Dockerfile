@@ -55,6 +55,10 @@ ENV SEALIFT_TOOLS_UID=10001
 ENV SEALIFT_TOOLS_GID=2000
 
 COPY --from=caps /sealift /usr/local/bin/sealift
+# The import roles parse untrusted archives and need no capability: this copy
+# carries none, so it can run under --cap-drop ALL (the operator sets the flag;
+# an image cannot) and holds nothing if one is granted. docker-entrypoint.sh starts them from here.
+COPY --from=build /out/sealift /usr/local/bin/sealift-import
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
