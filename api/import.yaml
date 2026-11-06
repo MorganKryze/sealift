@@ -210,7 +210,7 @@ components:
         - importable
     LatestImport:
       type: object
-      description: The newest import of this archive, by key
+      description: The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
       properties:
         id:
           type: string

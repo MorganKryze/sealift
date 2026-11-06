@@ -167,7 +167,7 @@ Request headers get 10 seconds to arrive and are capped at 64 KiB.
 
 `GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest.
 
-The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key.
+The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key made from the archive and manifest now in MinIO. An import counts only when the ETags of both match, so an upload that replaces the archive or its manifest under the same name shows no `latestImport` until it is imported.
 
 An archive pairs with the `manifest.json` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive nor a `manifest.json`.
 

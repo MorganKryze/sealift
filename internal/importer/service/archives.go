@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"unicode"
@@ -196,13 +197,16 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 	}
 	out.Truncated = listing.Truncated
 	out.Archives = pair(listing.Objects)
-	h.addLatestImports(user, out.Archives)
+	h.addLatestImports(user, out.Archives, listing.Objects)
 	return ListArchives200JSONResponse(out), nil
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest
-// import of it. A store that cannot be read leaves the list as it is.
-func (h *Handlers) addLatestImports(user string, archives []Archive) {
+// import of the objects now in MinIO: the same archive and manifest keys with
+// the same ETags. Folders reuse their names from one export to the next, so an
+// import of an earlier upload must not stand for this one. A store that cannot
+// be read leaves the list as it is.
+func (h *Handlers) addLatestImports(user string, archives []Archive, listed []s3.Object) {
 	if h.store == nil {
 		return
 	}
@@ -211,12 +215,21 @@ func (h *Handlers) addLatestImports(user string, archives []Archive) {
 		h.log.Warn("could not read the imports for the archive list", "error", cleanText(err.Error()))
 		return
 	}
-	latest := map[string]LatestImport{}
+	etags := make(map[string]string, len(listed))
+	for _, o := range listed {
+		etags[o.Key] = o.ETag
+	}
+	type objects struct{ archive, manifest, key string }
+	latest := map[objects]LatestImport{}
 	for i := len(imps) - 1; i >= 0; i-- { // oldest first, so the newest wins
-		latest[imps[i].Archive.Key] = LatestImport{Id: imps[i].ID, Outcome: imps[i].Outcome()}
+		imp := imps[i]
+		at := objects{imp.Archive.ETag, imp.Manifest.ETag, imp.Archive.Key}
+		latest[at] = LatestImport{Id: imp.ID, Outcome: imp.Outcome()}
 	}
 	for i := range archives {
-		if li, ok := latest[archives[i].Key]; ok {
+		key := archives[i].Key
+		at := objects{etags[key], etags[path.Dir(key)+"/"+manifestName], key}
+		if li, ok := latest[at]; ok {
 			archives[i].LatestImport = &li
 		}
 	}

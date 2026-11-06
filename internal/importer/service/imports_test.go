@@ -567,6 +567,35 @@ func TestListShowsLatestImport(t *testing.T) {
 	}
 }
 
+// A listed archive shows an import only when that import read the objects
+// now in MinIO: the folder's names stay the same from one export to the next.
+func TestListLatestImportNeedsTheSameObjects(t *testing.T) {
+	for name, replaced := range map[string]string{"archive": archiveKey, "manifest": manifestKey} {
+		t.Run(name, func(t *testing.T) {
+			r := newImportRig(t, rigOptions{})
+			r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+			first := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+			if done := waitEnded(t, r.store, first); done.Outcome() != importer.OutcomeComplete {
+				t.Fatalf("outcome %q, want complete", done.Outcome())
+			}
+			if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li == nil || li.Id != first {
+				t.Fatalf("latestImport = %+v, want %s", li, first)
+			}
+
+			r.minio.change(replaced)
+			if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li != nil {
+				t.Errorf("latestImport = %+v after the %s was replaced, want none", li, name)
+			}
+
+			second := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+			waitEnded(t, r.store, second)
+			if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li == nil || li.Id != second {
+				t.Errorf("latestImport = %+v, want the new import %s", li, second)
+			}
+		})
+	}
+}
+
 func ids(imps []Import) []string {
 	out := []string{}
 	for _, i := range imps {

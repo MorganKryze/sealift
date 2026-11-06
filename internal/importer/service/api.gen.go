@@ -23,7 +23,7 @@ type Archive struct {
 	// Key The object key, under packages/npm/
 	Key string `json:"key"`
 
-	// LatestImport The newest import of this archive, by key
+	// LatestImport The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
 	LatestImport *LatestImport `json:"latestImport,omitempty"`
 	Modified     time.Time     `json:"modified"`
 
@@ -111,7 +111,7 @@ type ImportList struct {
 	Imports []Import `json:"imports"`
 }
 
-// LatestImport The newest import of this archive, by key
+// LatestImport The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
 type LatestImport struct {
 	Id string `json:"id"`
 
