@@ -314,6 +314,29 @@ func (s *Store) Finish(user, id string, n int, rep importer.Report, rem *Removal
 	return nil
 }
 
+// Removed stores what became of the archive after attempt n ended complete.
+// The removal comes after the end so that a crash between the two leaves a
+// complete attempt. It is stored once, and for attempt n even when a retry
+// has since queued a later one.
+func (s *Store) Removed(user, id string, n int, rem Removal) error {
+	_, err := s.update(user, id, func(imp *Import) (string, error) {
+		i := slices.IndexFunc(imp.Attempts, func(a Attempt) bool { return a.N == n })
+		if i < 0 {
+			return "", fmt.Errorf("imports: no attempt %d", n)
+		}
+		a := &imp.Attempts[i]
+		switch {
+		case a.Status != StatusEnded || a.Outcome != importer.OutcomeComplete:
+			return "", fmt.Errorf("imports: attempt %d did not end complete", a.N)
+		case a.Removal != nil:
+			return "", fmt.Errorf("imports: attempt %d already has a removal", a.N)
+		}
+		a.Removal = &rem
+		return "", nil
+	})
+	return err
+}
+
 func running(imp *Import, n int) (*Attempt, error) {
 	a := &imp.Attempts[len(imp.Attempts)-1]
 	if a.N != n {

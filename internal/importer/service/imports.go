@@ -329,9 +329,10 @@ func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Imp
 // RunAttempt runs one attempt of imp: it checks both objects against the
 // recorded ETags, reads them from the user's bucket and imports them as
 // `sealift import` does. A complete attempt then removes the archive and its
-// manifest from MinIO, when both are unchanged. It keeps its files in a
+// manifest from MinIO, when both are unchanged; it returns that removal as a
+// function for the queue to call once the end is stored. It keeps its files in a
 // directory of its own below dir and removes it.
-func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, *imports.Removal) {
+func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 	bucket := bucketOf(imp.User)
 	if rep := h.unchanged(ctx, bucket, imp); rep != nil {
 		return *rep, nil
@@ -354,7 +355,7 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 	if !everyPackageIn(rep) {
 		return rep, nil
 	}
-	return rep, h.remove(ctx, bucket, imp)
+	return rep, func(ctx context.Context) *imports.Removal { return h.remove(ctx, bucket, imp) }
 }
 
 // everyPackageIn reports whether the report is complete and each of its

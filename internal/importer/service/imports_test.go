@@ -83,7 +83,7 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
 		Settings: nx.settings(t, ca), NewPublisher: newPublisher, ImportVersion: "0.3.0",
 	})
-	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, *imports.Removal) {
+	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 		if o.hold {
 			r.entered <- imp.ID
 			select {
@@ -143,7 +143,8 @@ func waitEnded(t *testing.T, st *imports.Store, id string) imports.Import {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if a := imp.Attempts[len(imp.Attempts)-1]; a.Status == imports.StatusEnded {
+		// A complete attempt is stored first and its removal after, so wait for both.
+		if a := imp.Attempts[len(imp.Attempts)-1]; a.Status == imports.StatusEnded && (a.Outcome != importer.OutcomeComplete || a.Removal != nil) {
 			return imp
 		}
 		if time.Now().After(deadline) {

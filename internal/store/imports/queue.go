@@ -10,8 +10,14 @@ import (
 )
 
 // RunFunc runs one attempt of imp in dir, a working directory the queue owns,
-// and reports each package's state through p. It never writes the attempt's end.
-type RunFunc func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, *Removal)
+// and reports each package's state through p. It never writes the attempt's
+// end. The Remover it returns is nil unless the attempt may remove the archive.
+type RunFunc func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, Remover)
+
+// Remover deletes the archive and says what became of it. The queue calls it
+// only after the attempt's complete end is stored, so a crash during the
+// delete leaves a complete attempt and never an interrupted one.
+type Remover func(ctx context.Context) *Removal
 
 type queued struct{ user, id string }
 
@@ -135,11 +141,11 @@ func (q *Queue) process(it queued) {
 			}
 		},
 	}
-	rep, rem := q.guarded(it, imp, dir, progress)
+	rep, remove := q.guarded(it, imp, dir, progress)
 	// A run that was cut short reports incomplete; a report that finished
 	// every package stays what it says, even when Close came last.
 	if q.ctx.Err() != nil && rep.Outcome == importer.OutcomeIncomplete {
-		rep.Outcome, rem = OutcomeInterrupted, nil
+		rep.Outcome, remove = OutcomeInterrupted, nil
 		if rep.Reason == "" {
 			rep.Reason = OutcomeInterrupted
 		}
@@ -147,21 +153,28 @@ func (q *Queue) process(it queued) {
 	if rep.Packages == nil {
 		rep.Packages = []importer.Result{}
 	}
-	if err := q.s.Finish(it.user, it.id, n, rep, rem); err != nil {
+	if err := q.s.Finish(it.user, it.id, n, rep, nil); err != nil {
 		logf("could not store the end of an attempt", err)
 		abandon("the end of the import could not be stored; see the service log")
 		return
+	}
+	if remove != nil {
+		if rem := remove(q.ctx); rem != nil {
+			if err := q.s.Removed(it.user, it.id, n, *rem); err != nil {
+				logf("could not store the removal of an archive", err)
+			}
+		}
 	}
 	q.log.Info("import attempt ended", "user", it.user, "id", it.id, "outcome", rep.Outcome)
 }
 
 // guarded runs one attempt. A panic in the run, in archive parsing for one,
 // ends that attempt incomplete and leaves the worker alive for every user.
-func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, rem *Removal) {
+func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, remove Remover) {
 	defer func() {
 		if r := recover(); r != nil {
 			q.log.Error("an import attempt panicked", "user", it.user, "id", it.id, "panic", fmt.Sprint(r))
-			rep, rem = importer.Report{Outcome: importer.OutcomeIncomplete, Reason: reasonPanic, Packages: []importer.Result{}}, nil
+			rep, remove = importer.Report{Outcome: importer.OutcomeIncomplete, Reason: reasonPanic, Packages: []importer.Result{}}, nil
 		}
 	}()
 	return q.run(q.ctx, imp, dir, p)

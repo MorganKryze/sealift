@@ -253,6 +253,8 @@ The attempt's `removal` holds `removed` and a `reason`, and `archiveRemoved` on 
 
 An `incomplete`, `refused` or `interrupted` attempt deletes nothing, and a failed removal leaves the import `complete`. A retry after a failed removal checks every package again before it tries to remove anything.
 
+The service stores the `complete` end first and the removal after the delete. A client that reads between the two sees a `complete` attempt with no `removal`. If the service stops in that moment, the attempt stays `complete` with no `removal` and `archiveRemoved` false, whether or not the archive went; check MinIO before a retry.
+
 The ETag check and the delete are two requests, so an object replaced in the few milliseconds between them is still deleted. The check closes the wider window of an upload that lands while the attempt runs.
 
 Stopping the service cancels the running attempt, which ends `interrupted`, and starts none of the attempts still queued. The next start marks those `interrupted` as well and starts nothing by itself.

@@ -46,7 +46,11 @@ func newAttemptRig(t *testing.T) *attemptRig {
 func (a *attemptRig) run(t *testing.T) (importer.Report, *imports.Removal, string) {
 	t.Helper()
 	dir := t.TempDir()
-	rep, rem := a.h.RunAttempt(context.Background(), a.imp, dir, importer.Progress{})
+	rep, remove := a.h.RunAttempt(context.Background(), a.imp, dir, importer.Progress{})
+	var rem *imports.Removal
+	if remove != nil {
+		rem = remove(context.Background())
+	}
 	return rep, rem, dir
 }
 

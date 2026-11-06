@@ -112,7 +112,7 @@ func TestQueueEndsAStuckRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	ran := false
-	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, *Removal) {
+	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
 		ran = true
 		return completeReport(), nil
 	}, quietLog())
@@ -141,7 +141,7 @@ func TestQueueSurvivesAPanic(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
 	first, second := newImport(t, s, "alice"), newImport(t, s, "alice")
 	done := make(chan string, 1)
-	q := NewQueue(s, func(_ context.Context, imp Import, _ string, _ importer.Progress) (importer.Report, *Removal) {
+	q := NewQueue(s, func(_ context.Context, imp Import, _ string, _ importer.Progress) (importer.Report, Remover) {
 		if imp.ID == first.ID {
 			panic("boom with /secret/path")
 		}
@@ -170,7 +170,7 @@ func TestQueueSurvivesAPanic(t *testing.T) {
 func TestQueueSubmitAfterClose(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
 	imp := newImport(t, s, "alice")
-	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, *Removal) {
+	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
 		return completeReport(), nil
 	}, quietLog())
 	if !q.Submit(imp.User, imp.ID) {
@@ -179,5 +179,44 @@ func TestQueueSubmitAfterClose(t *testing.T) {
 	q.Close()
 	if q.Submit(imp.User, imp.ID) {
 		t.Error("Submit accepted work after Close")
+	}
+}
+
+func TestStoreRecordsARemovalOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome string
+		n       int
+		first   bool
+		wantErr bool
+	}{
+		{"after a complete end", importer.OutcomeComplete, 1, false, false},
+		{"for another attempt", importer.OutcomeComplete, 2, false, true},
+		{"after an incomplete end", importer.OutcomeIncomplete, 1, false, true},
+		{"over a removal already stored", importer.OutcomeComplete, 1, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openStore(t, testRoot(t))
+			imp := newImport(t, s, "alice")
+			if _, _, err := s.Begin("alice", imp.ID); err != nil {
+				t.Fatal(err)
+			}
+			var first *Removal
+			if tc.first {
+				first = &Removal{Reason: "kept"}
+			}
+			rep := importer.Report{Outcome: tc.outcome, Packages: []importer.Result{}}
+			if err := s.Finish("alice", imp.ID, 1, rep, first); err != nil {
+				t.Fatal(err)
+			}
+			err := s.Removed("alice", imp.ID, tc.n, Removal{Removed: true})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Removed error = %v, want error %v", err, tc.wantErr)
+			}
+			got, _ := s.Get("alice", imp.ID)
+			if rem := got.Attempts[0].Removal; tc.wantErr == (rem != nil && rem.Removed) {
+				t.Errorf("stored removal = %+v", rem)
+			}
+		})
 	}
 }
