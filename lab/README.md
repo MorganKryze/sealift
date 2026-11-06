@@ -40,7 +40,7 @@ The air-gapped shell must reach nexus, minio and keycloak, and neither registry.
 
 The protocol follows the real crossing. The `transfer/` folder plays the USB key and the kiosk: it is the only path between the two sides, and only a person moves files through it.
 
-1. Connected side: in sealift at http://localhost:18450, set a signature key in the settings, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz` and `manifest.json` into `lab/transfer/`.
+1. Connected side: in sealift at http://localhost:18450, set the signature key to `lab-signature-key` in the settings, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz` and `manifest.json` into `lab/transfer/`.
 2. Check the archive before it crosses: `shasum -a 256 transfer/packages_npm.tar.gz` must print the `archive.sha256` of `manifest.json`.
 3. Air-gapped side: upload it into the user's bucket, as users do through the MinIO browser:
 
