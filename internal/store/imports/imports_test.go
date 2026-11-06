@@ -64,6 +64,8 @@ func pendingResults() []importer.Result {
 	}
 }
 
+func listedReport() importer.Report { return importer.Report{Packages: pendingResults()} }
+
 func TestValidUser(t *testing.T) {
 	for name, tc := range map[string]struct {
 		user string
@@ -155,7 +157,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("running attempt %+v", got.Attempts[0])
 	}
 
-	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err != nil {
+	if err := s.Listed("alice", imp.ID, 1, listedReport()); err != nil {
 		t.Fatal(err)
 	}
 	ended := pendingResults()[0]
@@ -218,7 +220,7 @@ func TestSlicesAreNeverWrittenNull(t *testing.T) {
 	if bytes.Contains(b, []byte("null")) {
 		t.Errorf("queued record holds null:\n%s", b)
 	}
-	if err := s.Listed("alice", imp.ID, 1, nil); err == nil {
+	if err := s.Listed("alice", imp.ID, 1, importer.Report{}); err == nil {
 		// A listing of no package is stored as an empty list.
 		b, _ = os.ReadFile(filepath.Join(root, "alice", imp.ID, "import.json"))
 		if bytes.Contains(b, []byte("null")) {
@@ -253,7 +255,13 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 // edit to its decoded form.
 func plantFixture(t *testing.T, root, user string, edit func(m map[string]any)) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "import-v1.json"))
+	return plantFile(t, "import-v1.json", root, user, edit)
+}
+
+// plantFile is plantFixture for any file of testdata.
+func plantFile(t *testing.T, name, root, user string, edit func(m map[string]any)) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +371,7 @@ func TestEndedWritesEachPackage(t *testing.T) {
 	if _, _, err := s.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err != nil {
+	if err := s.Listed("alice", imp.ID, 1, listedReport()); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, "alice", imp.ID)
@@ -414,7 +422,7 @@ func TestEndedWritesEachPackage(t *testing.T) {
 func TestStateChangesAreChecked(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
 	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
-	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err == nil {
+	if err := s.Listed("alice", imp.ID, 1, listedReport()); err == nil {
 		t.Error("Listed on a queued attempt succeeded")
 	}
 	if _, _, err := s.Begin("alice", imp.ID); err != nil {
@@ -497,3 +505,133 @@ func TestListNewestFirst(t *testing.T) {
 }
 
 var _ io.Writer = (*logBuffer)(nil)
+
+func TestStoreReadsV040Fixture(t *testing.T) {
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	dir := plantFile(t, "import-v0.4.0-incomplete.json", root, "alice", nil)
+	got, err := s.Get("alice", "20261106T110000Z-7c2e55aa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := got.Attempts[0].Report
+	if rep.ArchiveChecked != nil {
+		t.Errorf("archiveChecked = %v, want absent", *rep.ArchiveChecked)
+	}
+	if len(rep.Packages) != 4 || rep.Counts.Failed != 3 || got.Outcome() != importer.OutcomeIncomplete {
+		t.Fatalf("report %+v", rep)
+	}
+	for _, p := range rep.Packages {
+		if p.Kind != "" {
+			t.Errorf("%s: kind %q, want absent", p.Name, p.Kind)
+		}
+	}
+
+	// A write through the store keeps the record readable and holds no null.
+	if err := s.Removed("alice", got.ID, 1, Removal{}); err == nil {
+		t.Fatal("Removed accepted an incomplete attempt")
+	}
+	if _, err := s.Retry("alice", got.ID); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte("null")) {
+		t.Errorf("record rewritten from a v0.4.0 one holds null:\n%s", b)
+	}
+	if bytes.Contains(b, []byte(`"archiveChecked"`)) || bytes.Contains(b, []byte(`"kind"`)) {
+		t.Errorf("the store invented a field on an old record:\n%s", b)
+	}
+	again, err := s.Get("alice", got.ID)
+	if err != nil || len(again.Attempts) != 2 || again.Attempts[0].Report.Packages[1].Reason == "" {
+		t.Errorf("record after the rewrite: %+v, %v", again, err)
+	}
+}
+
+func TestStoreListedKeepsTheReport(t *testing.T) {
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	if _, _, err := s.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	unchecked := false
+	rep := importer.Report{
+		ImportVersion: "0.5.0", ArchiveChecked: &unchecked,
+		Archive:  importer.ArchiveInfo{File: "packages_npm.tar.gz", SHA256: "ab", Size: 12},
+		Target:   importer.TargetInfo{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
+		Nexus:    importer.NexusInfo{URL: "http://nexus:8081", Repository: "npm-hosted"},
+		Counts:   importer.Counts{Failed: 9},
+		Packages: pendingResults(),
+	}
+	if err := s.Listed("alice", imp.ID, 1, rep); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get("alice", imp.ID)
+	stored := got.Attempts[0].Report
+	if stored.Outcome != "" || stored.Reason != "" || stored.Target.OS != "linux" || stored.Archive.SHA256 != "ab" || stored.Nexus.Repository != "npm-hosted" || stored.ImportVersion != "0.5.0" {
+		t.Errorf("stored report %+v", stored)
+	}
+	if stored.ArchiveChecked == nil || *stored.ArchiveChecked {
+		t.Errorf("archiveChecked = %v, want false", stored.ArchiveChecked)
+	}
+	if len(stored.Packages) != 2 || stored.Counts != (importer.Counts{}) {
+		t.Errorf("packages %+v, counts %+v: counts are recomputed from the packages", stored.Packages, stored.Counts)
+	}
+	if got.Outcome() != string(StatusRunning) {
+		t.Errorf("outcome %q, want running", got.Outcome())
+	}
+
+	// A list of no package is stored as an empty list.
+	other, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	if _, _, err := s.Begin("alice", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Listed("alice", other.ID, 1, importer.Report{}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(root, "alice", other.ID, "import.json"))
+	if bytes.Contains(b, []byte("null")) {
+		t.Errorf("record holds null:\n%s", b)
+	}
+}
+
+func TestStoreChecked(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	if err := s.Checked("alice", imp.ID, 1); err == nil {
+		t.Error("Checked on a queued attempt succeeded")
+	}
+	if _, _, err := s.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	unchecked := false
+	if err := s.Listed("alice", imp.ID, 1, importer.Report{ArchiveChecked: &unchecked, Packages: pendingResults()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Checked("alice", imp.ID, 2); err == nil {
+		t.Error("Checked named an attempt that is not the latest")
+	}
+	got, _ := s.Get("alice", imp.ID)
+	if c := got.Attempts[0].Report.ArchiveChecked; c == nil || *c {
+		t.Errorf("archiveChecked = %v after a refused call, want false", c)
+	}
+	if err := s.Checked("alice", imp.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get("alice", imp.ID)
+	if c := got.Attempts[0].Report.ArchiveChecked; c == nil || !*c {
+		t.Errorf("archiveChecked = %v, want true", c)
+	}
+	if len(got.Attempts[0].Report.Packages) != 2 {
+		t.Errorf("Checked changed the packages: %+v", got.Attempts[0].Report.Packages)
+	}
+	if err := s.Finish("alice", imp.ID, 1, importer.Report{Outcome: importer.OutcomeRefused}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Checked("alice", imp.ID, 1); err == nil {
+		t.Error("Checked on an ended attempt succeeded")
+	}
+}

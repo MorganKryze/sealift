@@ -61,7 +61,7 @@ func (s *Store) endUnfinished(user, id, outcome, reason, pending string) error {
 		a.Report.Outcome, a.Report.Reason = outcome, reason
 		for i, p := range a.Report.Packages {
 			if p.State == importer.Pending {
-				a.Report.Packages[i].State, a.Report.Packages[i].Reason = importer.Failed, pending
+				a.Report.Packages[i].State, a.Report.Packages[i].Reason, a.Report.Packages[i].Kind = importer.Failed, pending, importer.KindInterrupted
 			}
 		}
 		recount(&a.Report)

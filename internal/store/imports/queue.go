@@ -130,9 +130,14 @@ func (q *Queue) process(it queued) {
 		return
 	}
 	progress := importer.Progress{
-		Listed: func(pkgs []importer.Result) {
-			if err := q.s.Listed(it.user, it.id, n, pkgs); err != nil {
+		Listed: func(rep importer.Report) {
+			if err := q.s.Listed(it.user, it.id, n, rep); err != nil {
 				logf("could not store the package list", err)
+			}
+		},
+		Checked: func() {
+			if err := q.s.Checked(it.user, it.id, n); err != nil {
+				logf("could not store that the archive passed its checks", err)
 			}
 		},
 		Ended: func(i int, r importer.Result) {

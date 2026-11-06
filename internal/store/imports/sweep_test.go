@@ -23,7 +23,7 @@ func TestSweep(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(work, "left-pad-1.3.0.tgz"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Listed("alice", running.ID, 1, pendingResults()); err != nil {
+	if err := s.Listed("alice", running.ID, 1, listedReport()); err != nil {
 		t.Fatal(err)
 	}
 	done := pendingResults()[0]
@@ -68,7 +68,10 @@ func TestSweep(t *testing.T) {
 		t.Fatalf("running import after the sweep: %+v", a)
 	}
 	pkgs := a.Report.Packages
-	if len(pkgs) != 2 || pkgs[0].State != importer.Published || pkgs[1].State != importer.Failed || pkgs[1].Reason != "interrupted" {
+	if pkgs[0].Kind != "" {
+		t.Errorf("a published package gained the kind %q", pkgs[0].Kind)
+	}
+	if len(pkgs) != 2 || pkgs[0].State != importer.Published || pkgs[1].State != importer.Failed || pkgs[1].Reason != "interrupted" || pkgs[1].Kind != importer.KindInterrupted {
 		t.Errorf("packages after the sweep: %+v", pkgs)
 	}
 	if c := a.Report.Counts; c.Published != 1 || c.Failed != 1 || c.Present != 0 {

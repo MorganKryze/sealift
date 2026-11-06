@@ -222,6 +222,10 @@ Before it reads anything, each attempt, the first included, heads the archive an
 
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
 
+The report carries two fields that `sealift import -report` writes too, described in [The import report](archive-format.md#the-import-report). `archiveChecked` is `true` once the archive passed its checks and `false` before, or when the attempt ended without passing them. Each failed package has a `kind`: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. A client reads the kind to tell what to do next and reads `reason` for the words. An attempt that ended before it read the archive because an object changed in MinIO has `archiveChecked` false and no package. An import recorded by sealift 0.4.0 or earlier has neither field, and the service serves it as it is, without a `kind` and without `archiveChecked`.
+
+While an attempt runs, its report grows in two steps. Before the manifest is read, the packages are empty and `archiveChecked` is absent. Once the manifest is read, the report holds the manifest's `target`, the `archive` and `nexus` objects and every package as `pending`, with `archiveChecked` false and no `outcome`. When the archive passes its checks, `archiveChecked` turns `true`, and each package then moves to its final state. The `outcome` and the `reason` are written with the end.
+
 ### Retrying an import
 
 `POST /api/imports/{importId}/retry` takes the body `{}` and adds a queued attempt numbered one past the latest. It is accepted whatever the last outcome was, a `complete` import whose archive was kept included, while no attempt is queued or running and the archive is still in MinIO. The earlier attempts and their reports stay as they are. The cross-site rules of [Starting an import](#starting-an-import) apply.

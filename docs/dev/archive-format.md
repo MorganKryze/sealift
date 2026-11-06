@@ -106,9 +106,22 @@ Only then does the import publish each tarball to the npm hosted repository.
 | `packages[].name`, `.version`, `.file` | The package, as the manifest lists it |
 | `packages[].state` | `published`, `present` or `failed` |
 | `packages[].reason` | Why a package failed; empty otherwise |
+| `archiveChecked` | `true` when the archive passed its checks against the manifest and the signature key, `false` when the run was refused or stopped before they passed. A report written by 0.4.0 or earlier has no such field |
+| `packages[].kind` | Set on a failed package only, one of the six kinds below. A report written by 0.4.0 or earlier has no `kind` on any package |
 | `packages[].note` | Empty for a failed package. For a package whose manifest entry has `publishConfigStripped`, the note the publish step set, or `sealift removed publishConfig at export` when it set none |
 
-A refused report lists no package and holds zero counts.
+A refused report lists no package, holds zero counts and has `archiveChecked` false.
+
+Each failed package has one `kind`, set where the failure happens:
+
+| Kind | Set when |
+| --- | --- |
+| `conflict` | Nexus holds this version with other bytes, found before any upload |
+| `nexus` | Nexus refused the repository check, answered an upload or a read with an error, accepted an upload but does not serve the version, or served other bytes after the upload |
+| `source` | The import service could not finish reading the archive from MinIO, so every package fails with that reason |
+| `interrupted` | The run was stopped before the package ended, by an interrupt or by the service stopping |
+| `mismatch` | The tarball is not a valid package, or names another name or version than the manifest entry |
+| `local` | A file or the Nexus client on the import's own side failed: the checked tarball cannot be opened or read, it changed after the checks, the Nexus copy cannot be kept, or the client cannot be set up |
 
 Before it looks at Nexus, the import reads each tarball: its `package.json` must name the manifest entry's name and version, hold no unsafe path and no second first-level `package.json`, stay under 100,000 entries, 10 GiB unpacked and 16 MiB for `package.json`, and no entry name or link target passes 4,096 bytes. A tarball that fails is `failed` with that reason and the others go on. Entry names in a reason are quoted, and text read from a tarball, the Nexus copy included, is cut to 300 characters with control characters removed.
 

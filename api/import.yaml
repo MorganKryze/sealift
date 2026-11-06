@@ -403,6 +403,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ReportPackage"
+        archiveChecked:
+          type: boolean
+          description: >
+            True when the archive passed its checks against the manifest and
+            the signature key, false when the attempt ended or stands before
+            they passed. Absent in a report written by sealift 0.4.0 or earlier.
       required:
         - outcome
         - reason
@@ -487,6 +493,24 @@ components:
           type: string
         note:
           type: string
+        kind:
+          type: string
+          enum:
+            - conflict
+            - nexus
+            - source
+            - interrupted
+            - mismatch
+            - local
+          description: >
+            Why a failed package failed: conflict (Nexus holds this version
+            with other bytes), nexus (Nexus refused, did not answer or served
+            other bytes after the upload), source (the archive could not be
+            read from MinIO), interrupted (the service stopped before the
+            package ended), mismatch (the tarball is not the package the
+            manifest names), local (a file or the Nexus client on the import's
+            own side failed). Set on a failed package only. Absent in a report
+            written by sealift 0.4.0 or earlier.
       required:
         - name
         - version

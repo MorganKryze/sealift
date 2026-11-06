@@ -63,7 +63,7 @@ func (s *Store) sweepOne(user, id string) (int, error) {
 		}
 		for j, p := range a.Report.Packages {
 			if p.State == importer.Pending {
-				a.Report.Packages[j].State, a.Report.Packages[j].Reason = importer.Failed, OutcomeInterrupted
+				a.Report.Packages[j].State, a.Report.Packages[j].Reason, a.Report.Packages[j].Kind = importer.Failed, OutcomeInterrupted, importer.KindInterrupted
 				changed = true
 			}
 		}

@@ -16,6 +16,36 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ReportPackageKind.
+const (
+	Conflict    ReportPackageKind = "conflict"
+	Interrupted ReportPackageKind = "interrupted"
+	Local       ReportPackageKind = "local"
+	Mismatch    ReportPackageKind = "mismatch"
+	Nexus       ReportPackageKind = "nexus"
+	Source      ReportPackageKind = "source"
+)
+
+// Valid indicates whether the value is a known member of the ReportPackageKind enum.
+func (e ReportPackageKind) Valid() bool {
+	switch e {
+	case Conflict:
+		return true
+	case Interrupted:
+		return true
+	case Local:
+		return true
+	case Mismatch:
+		return true
+	case Nexus:
+		return true
+	case Source:
+		return true
+	default:
+		return false
+	}
+}
+
 // Archive defines model for Archive.
 type Archive struct {
 	Importable bool `json:"importable"`
@@ -158,16 +188,19 @@ type Removal struct {
 
 // Report The account of one attempt; a package still pending has not ended
 type Report struct {
-	AnalysisId    string          `json:"analysisId"`
-	Archive       ReportArchive   `json:"archive"`
-	Counts        ReportCounts    `json:"counts"`
-	ImportVersion string          `json:"importVersion"`
-	Nexus         ReportNexus     `json:"nexus"`
-	Outcome       string          `json:"outcome"`
-	Packages      []ReportPackage `json:"packages"`
-	Reason        string          `json:"reason"`
-	Target        ReportTarget    `json:"target"`
-	ToolVersion   string          `json:"toolVersion"`
+	AnalysisId string        `json:"analysisId"`
+	Archive    ReportArchive `json:"archive"`
+
+	// ArchiveChecked True when the archive passed its checks against the manifest and the signature key, false when the attempt ended or stands before they passed. Absent in a report written by sealift 0.4.0 or earlier.
+	ArchiveChecked *bool           `json:"archiveChecked,omitempty"`
+	Counts         ReportCounts    `json:"counts"`
+	ImportVersion  string          `json:"importVersion"`
+	Nexus          ReportNexus     `json:"nexus"`
+	Outcome        string          `json:"outcome"`
+	Packages       []ReportPackage `json:"packages"`
+	Reason         string          `json:"reason"`
+	Target         ReportTarget    `json:"target"`
+	ToolVersion    string          `json:"toolVersion"`
 
 	// Unencrypted True when Nexus, MinIO or the key set is reached over plain http
 	Unencrypted bool `json:"unencrypted"`
@@ -195,15 +228,21 @@ type ReportNexus struct {
 
 // ReportPackage defines model for ReportPackage.
 type ReportPackage struct {
-	File   string `json:"file"`
-	Name   string `json:"name"`
-	Note   string `json:"note"`
-	Reason string `json:"reason"`
+	File string `json:"file"`
+
+	// Kind Why a failed package failed: conflict (Nexus holds this version with other bytes), nexus (Nexus refused, did not answer or served other bytes after the upload), source (the archive could not be read from MinIO), interrupted (the service stopped before the package ended), mismatch (the tarball is not the package the manifest names), local (a file or the Nexus client on the import's own side failed). Set on a failed package only. Absent in a report written by sealift 0.4.0 or earlier.
+	Kind   *ReportPackageKind `json:"kind,omitempty"`
+	Name   string             `json:"name"`
+	Note   string             `json:"note"`
+	Reason string             `json:"reason"`
 
 	// State pending, published, present or failed
 	State   string `json:"state"`
 	Version string `json:"version"`
 }
+
+// ReportPackageKind Why a failed package failed: conflict (Nexus holds this version with other bytes), nexus (Nexus refused, did not answer or served other bytes after the upload), source (the archive could not be read from MinIO), interrupted (the service stopped before the package ended), mismatch (the tarball is not the package the manifest names), local (a file or the Nexus client on the import's own side failed). Set on a failed package only. Absent in a report written by sealift 0.4.0 or earlier.
+type ReportPackageKind string
 
 // ReportTarget defines model for ReportTarget.
 type ReportTarget struct {

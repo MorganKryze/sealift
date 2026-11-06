@@ -1,0 +1,37 @@
+{
+  "formatVersion": 1,
+  "id": "20261106T110000Z-7c2e55aa",
+  "user": "alice",
+  "createdAt": "2026-11-06T11:00:00Z",
+  "archive": {"key": "packages/npm/b/packages_npm.tar.gz", "etag": "\"aa11\"", "size": 98765},
+  "manifest": {"key": "packages/npm/b/manifest.json", "etag": "\"bb22\"", "size": 1024},
+  "expectedSha256": "",
+  "attempts": [
+    {
+      "n": 1,
+      "status": "ended",
+      "queuedAt": "2026-11-06T11:00:00Z",
+      "startedAt": "2026-11-06T11:00:01Z",
+      "endedAt": "2026-11-06T11:02:10Z",
+      "outcome": "incomplete",
+      "report": {
+        "outcome": "incomplete",
+        "reason": "",
+        "unencrypted": false,
+        "importVersion": "0.4.0",
+        "archive": {"file": "packages_npm.tar.gz", "sha256": "1a1b1c1d1e1f1a1b1c1d1e1f1a1b1c1d1e1f1a1b1c1d1e1f1a1b1c1d1e1f1a1b", "size": 98765},
+        "toolVersion": "0.3.0",
+        "analysisId": "20261105T120000Z",
+        "target": {"os": "linux", "cpu": "x64", "libc": "glibc", "node": "22.17.1", "pnpmVer": "10.34.5"},
+        "nexus": {"url": "https://nexus.example:8443", "repository": "npm-hosted"},
+        "counts": {"published": 1, "present": 0, "failed": 3},
+        "packages": [
+          {"name": "left-pad", "version": "1.3.0", "file": "left-pad-1.3.0.tgz", "state": "published", "reason": "", "note": ""},
+          {"name": "zeta", "version": "2.0.0", "file": "zeta-2.0.0.tgz", "state": "failed", "reason": "nexus holds this version with other bytes: shipped sha512 aa, nexus sha512 bb", "note": ""},
+          {"name": "@scope/eta", "version": "1.0.0", "file": "scope-eta-1.0.0.tgz", "state": "failed", "reason": "upload failed: nexus answered 500", "note": ""},
+          {"name": "theta", "version": "3.1.0", "file": "theta-3.1.0.tgz", "state": "failed", "reason": "interrupted", "note": ""}
+        ]
+      }
+    }
+  ]
+}

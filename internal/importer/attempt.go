@@ -31,8 +31,9 @@ type Source struct {
 // Progress receives the attempt's package states as they change. Either field
 // may be nil.
 type Progress struct {
-	Listed func(pkgs []Result)   // every package of the manifest, pending
-	Ended  func(i int, r Result) // package i has ended
+	Listed  func(rep Report)      // the manifest is read: the report so far, every package pending, no outcome
+	Checked func()                // the archive passed its checks
+	Ended   func(i int, r Result) // package i has ended
 }
 
 // Attempt is one try at importing an archive.
@@ -59,12 +60,13 @@ func RunAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), publishAll publishEachFunc) Report {
 	defer emptyDir(a.Dir)
 	rep := Report{
-		Outcome:       OutcomeRefused,
-		Unencrypted:   a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
-		ImportVersion: a.ImportVersion,
-		Archive:       ArchiveInfo{File: a.Source.Name},
-		Nexus:         NexusInfo{URL: a.Settings.NexusURL.String(), Repository: a.Settings.Repository},
-		Packages:      []Result{},
+		Outcome:        OutcomeRefused,
+		Unencrypted:    a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
+		ImportVersion:  a.ImportVersion,
+		Archive:        ArchiveInfo{File: a.Source.Name},
+		Nexus:          NexusInfo{URL: a.Settings.NexusURL.String(), Repository: a.Settings.Repository},
+		Packages:       []Result{},
+		ArchiveChecked: ptr(false),
 	}
 	interrupted := func(err error) bool { return err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) }
 	// stop ends the attempt on an error before any package is listed.
@@ -96,14 +98,18 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		listed[i] = Result{Name: p.Name, Version: p.Version, File: p.File, State: Pending}
 	}
 	if a.Progress.Listed != nil {
-		a.Progress.Listed(append([]Result(nil), listed...))
+		snap := rep
+		snap.Outcome, snap.Reason = "", ""
+		snap.Packages = append([]Result(nil), listed...)
+		snap.ArchiveChecked = ptr(false)
+		a.Progress.Listed(snap)
 	}
 	// failAll ends every listed package with one reason.
-	failAll := func(reason string) {
+	failAll := func(kind Kind, reason string) {
 		rep.Outcome, rep.Reason = OutcomeIncomplete, ""
 		rep.Packages = make([]Result, len(listed))
 		for i, r := range listed {
-			rep.Packages[i] = failed(Package{Name: r.Name, Version: r.Version, File: r.File}, reason)
+			rep.Packages[i] = failed(Package{Name: r.Name, Version: r.Version, File: r.File}, kind, reason)
 			if a.Progress.Ended != nil {
 				a.Progress.Ended(i, rep.Packages[i])
 			}
@@ -116,17 +122,21 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 	switch {
 	case interrupted(err):
 		// No package was handled: the checks did not finish.
-		failAll(reasonInterrupted)
+		failAll(KindInterrupted, reasonInterrupted)
 		return rep
 	case errors.As(err, &ref):
 		rep.Reason = cut(ref.Reason)
 		return rep
 	case errors.Is(err, ErrSource):
-		failAll(cut(clean(err.Error())))
+		failAll(KindSource, cut(clean(err.Error())))
 		return rep
 	case err != nil:
 		rep.Reason = cut("could not check the archive: " + err.Error())
 		return rep
+	}
+	*rep.ArchiveChecked = true
+	if a.Progress.Checked != nil {
+		a.Progress.Checked()
 	}
 	pkgs := make([]Package, len(checked))
 	for i, c := range checked {
@@ -216,7 +226,7 @@ func publish(ctx context.Context, a Attempt, newPublisher func(Settings) (Publis
 	fail := func(reason string) []Result {
 		out := make([]Result, len(pkgs))
 		for i, p := range pkgs {
-			out[i] = failed(p, reason)
+			out[i] = failed(p, KindLocal, reason)
 			ended(i, out[i])
 		}
 		return out
@@ -261,3 +271,5 @@ func emptyDir(dir string) {
 		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 	}
 }
+
+func ptr[T any](v T) *T { return &v }

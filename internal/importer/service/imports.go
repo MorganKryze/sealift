@@ -284,12 +284,15 @@ func (h *Handlers) RetryImport(ctx context.Context, req RetryImportRequestObject
 
 // stopped is the report of an attempt that ended before it read the archive.
 func (h *Handlers) stopped(imp imports.Import, outcome, reason string) importer.Report {
+	unchecked := false
 	return importer.Report{
 		Outcome: outcome, Reason: reason,
 		Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
 		Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
 		Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
 		Packages: []importer.Result{},
+		// No object was read, so no check ran.
+		ArchiveChecked: &unchecked,
 	}
 }
 

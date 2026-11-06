@@ -40,7 +40,21 @@ type Package struct {
 	PublishConfigStripped     bool
 }
 
-// Result is what happened to one package.
+// Kind says why a package failed, so a reader can tell what to do next
+// without reading the reason.
+type Kind string
+
+// The kinds of failure. A package that did not fail has none.
+const (
+	KindConflict    Kind = "conflict"    // Nexus holds this version with other bytes
+	KindNexus       Kind = "nexus"       // Nexus refused, did not answer or served something else after the upload
+	KindSource      Kind = "source"      // the archive could not be read from where it is kept
+	KindInterrupted Kind = "interrupted" // the service stopped before the package ended
+	KindMismatch    Kind = "mismatch"    // the tarball is not the package the manifest names
+	KindLocal       Kind = "local"       // a file or a client on the import's own side failed
+)
+
+// Result is what happened to one package. Kind is set on a failed package only.
 type Result struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -48,6 +62,7 @@ type Result struct {
 	State   State  `json:"state"`
 	Reason  string `json:"reason"`
 	Note    string `json:"note"`
+	Kind    Kind   `json:"kind,omitempty"`
 }
 
 // Publisher is the part of the Nexus client the run uses.
@@ -74,16 +89,15 @@ func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, e
 		}
 	}
 	if err := p.CheckRepository(ctx); err != nil {
-		reason := interruptedOr(ctx, "repository check failed: "+err.Error())
 		for i, pkg := range pkgs {
-			done(i, failed(pkg, reason))
+			done(i, failedOr(ctx, pkg, KindNexus, "repository check failed: "+err.Error()))
 		}
 		return results
 	}
 	for i, pkg := range pkgs {
 		// A package that has not started never starts after an interrupt.
 		if ctx.Err() != nil {
-			done(i, failed(pkg, reasonInterrupted))
+			done(i, failed(pkg, KindInterrupted, reasonInterrupted))
 			continue
 		}
 		done(i, publishOne(ctx, p, pkg, dir))
@@ -94,37 +108,52 @@ func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, e
 // reasonInterrupted is the reason of a package an interrupt kept from finishing.
 const reasonInterrupted = "interrupted"
 
-// interruptedOr returns the interrupt reason when ctx is done, since a
-// cancelled request reports an error that says nothing about Nexus.
-func interruptedOr(ctx context.Context, reason string) string {
+// failedOr fails pkg as interrupted when ctx is done, since a cancelled
+// request reports an error that says nothing about Nexus, and as kind with
+// reason otherwise.
+func failedOr(ctx context.Context, pkg Package, kind Kind, reason string) Result {
 	if ctx.Err() != nil {
-		return reasonInterrupted
+		return failed(pkg, KindInterrupted, reasonInterrupted)
 	}
-	return reason
+	return failed(pkg, kind, reason)
+}
+
+// localError marks a failure on the import's own side inside a helper that
+// also reports Nexus failures.
+type localError struct{ error }
+
+func (e localError) Unwrap() error { return e.error }
+
+// kindOf is KindLocal for a localError and KindNexus for any other error of a call to Nexus.
+func kindOf(err error) Kind {
+	if errors.As(err, new(localError)) {
+		return KindLocal
+	}
+	return KindNexus
 }
 
 func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Result {
 	f, err := os.Open(pkg.Path)
 	if err != nil {
-		return failed(pkg, "cannot open the checked file: "+err.Error())
+		return failed(pkg, KindLocal, "cannot open the checked file: "+err.Error())
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return failed(pkg, "cannot read the checked file: "+err.Error())
+		return failed(pkg, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 	limit := 2*info.Size() + maxCopySlack
 
 	if reason := mismatch(f, pkg); reason != "" {
-		return failed(pkg, reason)
+		return failed(pkg, KindMismatch, reason)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return failed(pkg, "cannot read the checked file: "+err.Error())
+		return failed(pkg, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 
 	remote, found, same, err := fetchDigest(ctx, p, pkg, dir, limit, f, info.Size())
 	if err != nil {
-		return failed(pkg, interruptedOr(ctx, err.Error()))
+		return failedOr(ctx, pkg, kindOf(err), err.Error())
 	}
 	if found {
 		if bytes.Equal(remote, pkg.SHA512) {
@@ -133,34 +162,34 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 		if same {
 			return Result{Name: pkg.Name, Version: pkg.Version, File: pkg.File, State: Present, Note: noteSameContent}
 		}
-		return failed(pkg, "nexus holds this version with other bytes: "+digests(pkg.SHA512, remote))
+		return failed(pkg, KindConflict, "nexus holds this version with other bytes: "+digests(pkg.SHA512, remote))
 	}
 
 	// The file is hashed again here: nothing reaches Nexus that the checks
 	// did not hash, even if the file changed since.
 	h := sha512.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return failed(pkg, "cannot read the checked file: "+err.Error())
+		return failed(pkg, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 	if now := h.Sum(nil); !bytes.Equal(now, pkg.SHA512) {
-		return failed(pkg, "the file changed after the checks: "+digests(pkg.SHA512, now))
+		return failed(pkg, KindLocal, "the file changed after the checks: "+digests(pkg.SHA512, now))
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return failed(pkg, "cannot read the checked file: "+err.Error())
+		return failed(pkg, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 	if err := p.Upload(ctx, pkg.File, f); err != nil {
-		return failed(pkg, interruptedOr(ctx, "upload failed: "+err.Error()))
+		return failedOr(ctx, pkg, KindNexus, "upload failed: "+err.Error())
 	}
 
 	remote, found, _, err = fetchDigest(ctx, p, pkg, dir, limit, nil, 0)
 	if err != nil {
-		return failed(pkg, interruptedOr(ctx, "read back failed: "+err.Error()))
+		return failedOr(ctx, pkg, kindOf(err), "read back failed: "+err.Error())
 	}
 	if !found {
-		return failed(pkg, "nexus accepted the upload but does not serve the version")
+		return failed(pkg, KindNexus, "nexus accepted the upload but does not serve the version")
 	}
 	if !bytes.Equal(remote, pkg.SHA512) {
-		return failed(pkg, "nexus serves other bytes after the upload: "+digests(pkg.SHA512, remote))
+		return failed(pkg, KindNexus, "nexus serves other bytes after the upload: "+digests(pkg.SHA512, remote))
 	}
 	return Result{Name: pkg.Name, Version: pkg.Version, File: pkg.File, State: Published}
 }
@@ -216,7 +245,7 @@ func shown(s string) string {
 func fetchDigest(ctx context.Context, p Publisher, pkg Package, dir string, limit int64, shipped io.ReaderAt, size int64) (digest []byte, found, same bool, err error) {
 	tmp, err := os.CreateTemp(dir, "nexus-*.tgz")
 	if err != nil {
-		return nil, false, false, fmt.Errorf("cannot keep the nexus copy: %w", err)
+		return nil, false, false, localError{fmt.Errorf("cannot keep the nexus copy: %w", err)}
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
@@ -230,7 +259,7 @@ func fetchDigest(ctx context.Context, p Publisher, pkg Package, dir string, limi
 		return nil, false, false, nil
 	}
 	if err := tmp.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) {
-		return nil, false, false, fmt.Errorf("cannot keep the nexus copy: %w", err)
+		return nil, false, false, localError{fmt.Errorf("cannot keep the nexus copy: %w", err)}
 	}
 	digest = h.Sum(nil)
 	if shipped == nil || !pkg.PublishConfigStripped || bytes.Equal(digest, pkg.SHA512) {
@@ -248,7 +277,7 @@ func fetchDigest(ctx context.Context, p Publisher, pkg Package, dir string, limi
 // checks never reads as the same content.
 func sameContent(nexusCopy *os.File, shipped io.ReaderAt, size int64, want []byte) (bool, error) {
 	if _, err := nexusCopy.Seek(0, io.SeekStart); err != nil {
-		return false, fmt.Errorf("cannot read the nexus copy: %w", err)
+		return false, localError{fmt.Errorf("cannot read the nexus copy: %w", err)}
 	}
 	h := sha512.New()
 	tee := io.TeeReader(io.NewSectionReader(shipped, 0, size), h)
@@ -257,7 +286,7 @@ func sameContent(nexusCopy *os.File, shipped io.ReaderAt, size int64, want []byt
 		return false, errors.New(clean("cannot compare the nexus copy: " + err.Error()))
 	}
 	if _, err := io.Copy(io.Discard, tee); err != nil {
-		return false, fmt.Errorf("cannot read the checked file: %w", err)
+		return false, localError{fmt.Errorf("cannot read the checked file: %w", err)}
 	}
 	return same && bytes.Equal(h.Sum(nil), want), nil
 }
@@ -266,6 +295,6 @@ func digests(shipped, nexus []byte) string {
 	return "shipped sha512 " + hex.EncodeToString(shipped) + ", nexus sha512 " + hex.EncodeToString(nexus)
 }
 
-func failed(pkg Package, reason string) Result {
-	return Result{Name: pkg.Name, Version: pkg.Version, File: pkg.File, State: Failed, Reason: reason}
+func failed(pkg Package, kind Kind, reason string) Result {
+	return Result{Name: pkg.Name, Version: pkg.Version, File: pkg.File, State: Failed, Reason: reason, Kind: kind}
 }
