@@ -2,12 +2,9 @@ package importer
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/MorganKryze/sealift/archive"
 )
 
 type publishFunc func(context.Context, Publisher, []Package, string) []Result
@@ -25,146 +22,45 @@ type Options struct {
 // publishes its packages. It writes only to one private temporary directory,
 // removed before it returns, and never to the archive or the manifest.
 func Run(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error)) Report {
-	return run(ctx, opts, newPublisher, Publish)
+	return runFiles(ctx, opts, newPublisher, PublishEach)
 }
 
 // run takes the publishing step as a parameter so a test can fix its results.
 func run(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), publishAll publishFunc) Report {
-	rep := Report{
-		Outcome:       OutcomeRefused,
-		Unencrypted:   opts.Settings.NexusURL.Scheme == "http",
-		ImportVersion: opts.ImportVersion,
-		Archive:       ArchiveInfo{File: filepath.Base(opts.Archive)},
-		Nexus:         NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
-		Packages:      []Result{},
-	}
-	refuse := func(err error) Report {
-		var ref *archive.Refusal
-		if errors.As(err, &ref) {
-			rep.Reason = ref.Reason
-		} else {
-			rep.Reason = "could not check the archive: " + err.Error()
-		}
-		return rep
-	}
-
-	m, err := readManifest(opts.Manifest)
-	if err != nil {
-		return refuse(err)
-	}
-	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
-	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Libc: m.Target.Libc, Node: m.Target.Node, PnpmVer: m.Target.PnpmVer}
-	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
-
-	dir, err := os.MkdirTemp("", "sealift-import-")
-	if err != nil {
-		return refuse(err)
-	}
-	defer os.RemoveAll(dir)
-
-	checked, err := verify(ctx, opts, m, dir)
-	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-		// No package was handled: the checks did not finish.
-		rep.Outcome = OutcomeIncomplete
-		rep.Packages = make([]Result, len(m.Packages))
-		for i, p := range m.Packages {
-			rep.Packages[i] = failed(Package{Name: p.Name, Version: p.Version, File: p.File}, reasonInterrupted)
-		}
-		rep.Counts.Failed = len(rep.Packages)
-		return rep
-	}
-	if err != nil {
-		return refuse(err)
-	}
-	pkgs := make([]Package, len(checked))
-	for i, c := range checked {
-		pkgs[i] = Package{
-			Name: c.Package.Name, Version: c.Package.Version, File: c.Package.File,
-			Path: c.Path, SHA512: c.SHA512, PublishConfigStripped: c.Package.PublishConfigStripped,
-		}
-	}
-
-	rep.Packages = publish(ctx, opts, newPublisher, publishAll, pkgs, dir)
-	for _, r := range rep.Packages {
-		switch r.State {
-		case Published:
-			rep.Counts.Published++
-		case Present:
-			rep.Counts.Present++
-		default:
-			rep.Counts.Failed++
-		}
-	}
-	rep.Outcome = OutcomeComplete
-	if rep.Counts.Failed > 0 {
-		rep.Outcome = OutcomeIncomplete
-	}
-	return rep
-}
-
-func readManifest(path string) (archive.Manifest, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return archive.Manifest{}, err
-	}
-	defer f.Close()
-	return archive.ParseManifest(f)
-}
-
-// ctxReader stops a read once ctx is done, so an interrupt does not wait for
-// the whole archive.
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
-}
-
-func verify(ctx context.Context, opts Options, m archive.Manifest, dir string) ([]archive.Checked, error) {
-	f, err := os.Open(opts.Archive)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return archive.Verify(ctxReader{ctx, f}, m, archive.VerifyOptions{
-		ExpectedSHA256: opts.ExpectedSHA256,
-		SignatureKey:   opts.Settings.SignatureKey,
-		Dir:            dir,
+	return runFiles(ctx, opts, newPublisher, func(ctx context.Context, p Publisher, pkgs []Package, dir string, _ func(int, Result)) []Result {
+		return publishAll(ctx, p, pkgs, dir)
 	})
 }
 
-// publish uploads the checked packages. A failure to set up the client or the
-// working directory fails every package with that reason.
-func publish(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), publishAll publishFunc, pkgs []Package, dir string) []Result {
-	fail := func(reason string) []Result {
-		out := make([]Result, len(pkgs))
-		for i, p := range pkgs {
-			out[i] = failed(p, reason)
-		}
-		return out
+// runFiles runs one attempt that reads the two files of opts. A local read
+// failure is not marked ErrSource, so it stays a refusal.
+func runFiles(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error), publishAll publishEachFunc) Report {
+	open := func(path string) func(context.Context) (io.ReadCloser, error) {
+		return func(context.Context) (io.ReadCloser, error) { return os.Open(path) }
 	}
-	pub, err := newPublisher(opts.Settings)
+	a := Attempt{
+		Settings:       opts.Settings,
+		Source:         Source{Name: filepath.Base(opts.Archive), Manifest: open(opts.Manifest), Archive: open(opts.Archive)},
+		ExpectedSHA256: opts.ExpectedSHA256,
+		ImportVersion:  opts.ImportVersion,
+	}
+	dir, err := os.MkdirTemp("", "sealift-import-")
+	if err == nil {
+		// MkdirTemp gives a relative path when TMPDIR is relative.
+		dir, err = filepath.Abs(dir)
+	}
 	if err != nil {
-		return fail("could not set up the nexus client: " + err.Error())
-	}
-	// A package file never holds a directory name, so the Nexus copies cannot
-	// collide with the checked tarballs.
-	work := filepath.Join(dir, "nexus")
-	if err := os.Mkdir(work, 0o700); err != nil {
-		return fail("could not keep the nexus copies: " + err.Error())
-	}
-	results := publishAll(ctx, pub, pkgs, work)
-	// A note from the publisher is evidence of how the verdict was reached
-	// and stays; the default only fills an empty one.
-	for i, p := range pkgs {
-		if p.PublishConfigStripped && results[i].State != Failed && results[i].Note == "" {
-			results[i].Note = "sealift removed publishConfig at export"
+		return Report{
+			Outcome:       OutcomeRefused,
+			Reason:        cut("could not check the archive: " + err.Error()),
+			Unencrypted:   opts.Settings.NexusURL.Scheme == "http",
+			ImportVersion: opts.ImportVersion,
+			Archive:       ArchiveInfo{File: a.Source.Name},
+			Nexus:         NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
+			Packages:      []Result{},
 		}
 	}
-	return results
+	defer os.RemoveAll(dir)
+	a.Dir = dir
+	return runAttempt(ctx, a, newPublisher, publishAll)
 }

@@ -119,7 +119,7 @@ func readRefusal(err error) error {
 type VerifyOptions struct {
 	ExpectedSHA256 string // hex sha256 received through a separate channel; empty skips the check
 	SignatureKey   []byte // expected content of out/signature.key; the caller trims its newline
-	Dir            string // existing private directory that receives the tarballs
+	Dir            string // absolute, existing, private directory that receives the tarballs
 	Limits         Limits
 }
 
@@ -137,6 +137,11 @@ type Checked struct {
 // other error is a local failure. Files already copied stay in Dir after an
 // error, for the caller to remove.
 func Verify(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
+	// A relative directory would resolve against the working directory, which
+	// a service does not control.
+	if !filepath.IsAbs(opts.Dir) {
+		return nil, errors.New("archive: Verify needs an absolute directory")
+	}
 	if len(opts.SignatureKey) == 0 {
 		return nil, refuse("no expected signature key was given")
 	}

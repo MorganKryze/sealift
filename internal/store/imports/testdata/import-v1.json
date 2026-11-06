@@ -1,0 +1,36 @@
+{
+  "formatVersion": 1,
+  "id": "20261106T101500Z-3f9a0c1d",
+  "user": "alice",
+  "createdAt": "2026-11-06T10:15:00Z",
+  "archive": {"key": "packages/npm/a/packages_npm.tar.gz", "etag": "\"abc123\"", "size": 123456},
+  "manifest": {"key": "packages/npm/a/manifest.json", "etag": "\"def456\"", "size": 2048},
+  "expectedSha256": "0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b",
+  "attempts": [
+    {
+      "n": 1,
+      "status": "ended",
+      "queuedAt": "2026-11-06T10:15:00Z",
+      "startedAt": "2026-11-06T10:15:02Z",
+      "endedAt": "2026-11-06T10:16:30Z",
+      "outcome": "incomplete",
+      "report": {
+        "outcome": "incomplete",
+        "reason": "",
+        "unencrypted": true,
+        "importVersion": "0.3.0",
+        "archive": {"file": "packages_npm.tar.gz", "sha256": "0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b", "size": 123456},
+        "toolVersion": "0.3.0",
+        "analysisId": "20261105T120000Z",
+        "target": {"os": "linux", "cpu": "x64", "libc": "glibc", "node": "22.17.1", "pnpmVer": "10.34.5"},
+        "nexus": {"url": "http://nexus:8081", "repository": "npm-hosted"},
+        "counts": {"published": 1, "present": 0, "failed": 1},
+        "packages": [
+          {"name": "left-pad", "version": "1.3.0", "file": "left-pad-1.3.0.tgz", "state": "published", "reason": "", "note": ""},
+          {"name": "@scope/zeta", "version": "2.0.0", "file": "scope-zeta-2.0.0.tgz", "state": "failed", "reason": "upload failed: nexus answered 500", "note": ""}
+        ]
+      },
+      "removal": {"removed": true, "reason": ""}
+    }
+  ]
+}
