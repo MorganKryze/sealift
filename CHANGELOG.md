@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- The import roles, `sealift import` and `sealift import-server`, run from a copy of the binary that holds no capability, and start under `--cap-drop ALL`. The collection role keeps its own.
 - The export refuses a package whose tarball holds data after its end-of-archive marker, which pnpm refuses at install.
 
 ## [0.3.0] - 2026-11-05

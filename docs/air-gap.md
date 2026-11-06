@@ -111,6 +111,25 @@ Once imported, projects install from Nexus as usual:
 pnpm install --registry https://nexus.example.internal/repository/npm-hosted/
 ```
 
+## The import through the service
+
+Where `sealift import-server` runs, users import without a shell on the air-gapped side. Each user uploads the archive and `manifest.json` into their own MinIO bucket, `user-<name>`, under `packages/npm/`, with the manifest next to the archive. The archive may sit in one folder below, such as `packages/npm/second/`. The service lists the archives of the signed-in user and no one else's: another user's bucket answered an empty list in the lab.
+
+An import takes the archive through the same checks as `sealift import`, then publishes to Nexus with the service's own Nexus user. Imports run one at a time. The result for each package is stored as it ends:
+
+| Outcome | Meaning | The archive in MinIO |
+| --- | --- | --- |
+| `complete` | Every package is published or already in Nexus | Removed, with its manifest, after both are checked unchanged |
+| `incomplete` | At least one package failed, such as a version Nexus holds with other bytes | Kept |
+| `interrupted` | The service stopped during the import | Kept |
+| `refused` | A check failed before anything was published | Kept |
+
+In the lab, an archive whose `bytes@3.1.2` already existed in Nexus with other bytes ended `incomplete` with 100 packages `present` and that one `failed`, and both objects stayed in MinIO. After the planted component was deleted in Nexus, a retry ended `complete`, uploaded that one package and removed the archive. Restarting the service during an import ended it `interrupted`, and a retry ended `complete`.
+
+A retry reads every package from Nexus again and uploads only what Nexus no longer serves. It needs the archive to be in MinIO still and unchanged. Delete or replace nothing in the user's folder while an import is queued or running.
+
+[Deployment](deployment.md#the-import-service) covers running the service.
+
 ## Versions that drift
 
 sealift resolves each selected version on the day of the analysis, one dependency at a time, and the export ships what those resolutions need. On the air-gapped side, an install without a lockfile resolves again, against whatever Nexus holds. When earlier imports left other versions of the same packages there, pnpm may pick a different one than sealift scanned.

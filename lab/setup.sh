@@ -1,6 +1,7 @@
 #!/bin/sh
 # Prepares a fresh lab once `docker compose up -d` has started it: the Nexus
-# admin password and repositories, and a MinIO bucket per user.
+# admin password and repositories, a MinIO bucket per user and the MinIO user
+# of the import service.
 set -eu
 cd "$(dirname "$0")"
 NEXUS=http://127.0.0.1:18441
@@ -65,3 +66,12 @@ for user in alice bob; do
 	done
 done
 echo "MinIO ready: buckets user-alice and user-bob"
+
+# The import service reads and deletes under packages/npm/ in any user bucket
+# and writes nothing. The policy and the user are rewritten on every run, so
+# an older lab picks up a changed policy.
+mc() { docker compose run --rm -T mc "$@"; }
+mc admin policy create lab sealift-import /import/minio-policy.json >/dev/null
+mc admin user add lab "$(cat import/minio-access-key)" "$(cat import/minio-secret-key)" >/dev/null
+mc admin policy attach lab sealift-import --user "$(cat import/minio-access-key)" >/dev/null 2>&1 || true
+echo "MinIO ready: user sealift-import"
