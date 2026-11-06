@@ -64,10 +64,10 @@ func InspectTarball(r io.Reader) (TarballInfo, error) {
 		var fields map[string]json.RawMessage
 		dec := json.NewDecoder(boundedManifest(body))
 		if err := dec.Decode(&fields); err != nil {
-			return fmt.Errorf("%s: %w", h.Name, err)
+			return fmt.Errorf("%q: %w", h.Name, err)
 		}
 		if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
-			return fmt.Errorf("%s: unexpected data after the JSON object", h.Name)
+			return fmt.Errorf("%q: unexpected data after the JSON object", h.Name)
 		}
 		info.ManifestPath = h.Name
 		_, info.HasPublishConfig = fields["publishConfig"]
@@ -102,7 +102,7 @@ func StripPublishConfig(w io.Writer, r io.Reader) error {
 			}
 			data, err := withoutPublishConfig(body)
 			if err != nil {
-				return fmt.Errorf("%s: %w", h.Name, err)
+				return fmt.Errorf("%q: %w", h.Name, err)
 			}
 			rewritten = true
 			firstManifest = h.Name
@@ -262,7 +262,7 @@ func digestTarball(r io.Reader) (map[[sha256.Size]byte]entryDigest, bool, error)
 		if isManifest(h) {
 			data, err := withoutPublishConfig(body)
 			if err != nil {
-				return fmt.Errorf("%s: %w", h.Name, err)
+				return fmt.Errorf("%q: %w", h.Name, err)
 			}
 			hash.Write(data)
 		} else if _, err := io.Copy(hash, body); err != nil {

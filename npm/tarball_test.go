@@ -322,3 +322,15 @@ func TestTarballEntryNameBound(t *testing.T) {
 		})
 	}
 }
+
+func TestTarballErrorsQuoteEntryNames(t *testing.T) {
+	name := "\x1b[2J\r\nforged/package.json"
+	data := pack(t, reg(name, "not json"))
+	_, errInspect := InspectTarball(bytes.NewReader(data))
+	_, errSame := SameContent(bytes.NewReader(data), bytes.NewReader(data))
+	for _, err := range []error{errInspect, errSame} {
+		if err == nil || strings.ContainsAny(err.Error(), "\x1b\r\n") || !strings.Contains(err.Error(), `\x1b[2J\r\nforged`) {
+			t.Errorf("err = %q", err)
+		}
+	}
+}

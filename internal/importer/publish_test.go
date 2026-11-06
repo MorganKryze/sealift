@@ -349,3 +349,43 @@ func TestPublishStrippedSameContent(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishReasonsFromTarballTextAreClean(t *testing.T) {
+	forged := "\x1b[2J\r\nleft-pad@1.0.0 published\n"
+	hostile := func(name string) []byte {
+		return packEntries(t, tarEntry{name, "not json"})
+	}
+	for _, tc := range []struct {
+		name    string
+		shipped []byte
+		nexus   []byte // when set, the package is stripped and Nexus holds this copy
+		want    string
+	}{
+		{"shipped entry name with control characters", hostile(forged + "/package.json"), nil, "the tarball is not a valid package"},
+		{"shipped entry name near the bound", hostile(strings.Repeat("n", 4000) + "/package.json"), nil, "the tarball is not a valid package"},
+		{"shipped entry name of 500 KB", hostile("package/" + strings.Repeat("n", 500_000)), nil, "the tarball is not a valid package"},
+		{"nexus entry name with control characters", packed(t, "left-pad", "1.0.0", "x"), hostile(forged + "/package.json"), "cannot compare the nexus copy"},
+		{"nexus entry name near the bound", packed(t, "left-pad", "1.0.0", "x"), hostile(strings.Repeat("n", 4000) + "/package.json"), "cannot compare the nexus copy"},
+		{"nexus entry name of 500 KB", packed(t, "left-pad", "1.0.0", "x"), hostile("package/" + strings.Repeat("n", 500_000)), "cannot compare the nexus copy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeNexus(t)
+			pkg := stage(t, t.TempDir(), "left-pad", "1.0.0", nil)
+			sum := sha512.Sum512(tc.shipped)
+			pkg.SHA512, pkg.PublishConfigStripped = sum[:], tc.nexus != nil
+			if err := os.WriteFile(pkg.Path, tc.shipped, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.nexus != nil {
+				f.put("left-pad", "1.0.0", tc.nexus)
+			}
+			r := Publish(context.Background(), f.client(t), []Package{pkg}, t.TempDir())[0]
+			if r.State != Failed || !strings.Contains(r.Reason, tc.want) {
+				t.Fatalf("got %+v, want a reason with %q", r, tc.want)
+			}
+			if len([]rune(r.Reason)) > 300 || strings.ContainsAny(r.Reason, "\x1b\r\n") {
+				t.Fatalf("reason of %d bytes carries control characters or is not cut: %.120q", len(r.Reason), r.Reason)
+			}
+		})
+	}
+}

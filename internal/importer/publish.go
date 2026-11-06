@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"unicode"
 
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -158,12 +160,29 @@ const maxShownName = 100
 func mismatch(f io.Reader, pkg Package) string {
 	info, err := npm.InspectTarball(f)
 	if err != nil {
-		return "the tarball is not a valid package: " + err.Error()
+		return clean("the tarball is not a valid package: " + err.Error())
 	}
 	if info.Name != pkg.Name || info.Version != pkg.Version {
 		return fmt.Sprintf("the tarball is %s@%s, the manifest says %s@%s", shown(info.Name), shown(info.Version), pkg.Name, pkg.Version)
 	}
 	return ""
+}
+
+// maxReasonChars is the longest text read from a tarball that reaches a reason.
+const maxReasonChars = 300
+
+// clean removes control characters from text read from a tarball, then cuts it.
+func clean(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, ""))
+	if r := []rune(s); len(r) > maxReasonChars {
+		s = string(r[:maxReasonChars])
+	}
+	return s
 }
 
 // shown quotes text from a tarball and cuts it to maxShownName characters.
@@ -219,7 +238,7 @@ func sameContent(nexusCopy *os.File, shipped io.ReaderAt, size int64, want []byt
 	tee := io.TeeReader(io.NewSectionReader(shipped, 0, size), h)
 	same, err := npm.SameContent(tee, nexusCopy)
 	if err != nil {
-		return false, fmt.Errorf("cannot compare the nexus copy: %w", err)
+		return false, errors.New(clean("cannot compare the nexus copy: " + err.Error()))
 	}
 	if _, err := io.Copy(io.Discard, tee); err != nil {
 		return false, fmt.Errorf("cannot read the checked file: %w", err)
