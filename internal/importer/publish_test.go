@@ -317,6 +317,11 @@ func TestPublishStrippedSameContent(t *testing.T) {
 	// The copy Nexus holds came from another packer: other order, publishConfig still in.
 	nexusCopy := packEntries(t, tarEntry{"package/index.js", "code"}, tarEntry{"package/package.json", withConfig})
 	changed := packEntries(t, tarEntry{"package/index.js", "code!"}, tarEntry{"package/package.json", withConfig})
+	// pnpm refuses entries after the end marker, so such a copy is not the same content.
+	withTail := packEntriesThen(t, gzip.DefaultCompression, tarBytes(t, tarEntry{"package/install.js", "x"}),
+		tarEntry{"package/index.js", "code"}, tarEntry{"package/package.json", withConfig})
+	padded := packEntriesThen(t, gzip.DefaultCompression, make([]byte, 9216),
+		tarEntry{"package/index.js", "code"}, tarEntry{"package/package.json", withConfig})
 
 	for _, tc := range []struct {
 		name     string
@@ -329,6 +334,8 @@ func TestPublishStrippedSameContent(t *testing.T) {
 		{"same content", nexusCopy, true, Present, "same content, packed differently", ""},
 		{"not stripped", nexusCopy, false, Failed, "", "nexus holds this version with other bytes"},
 		{"other content", changed, true, Failed, "", "nexus holds this version with other bytes"},
+		{"zero padding after the end marker", padded, true, Present, "same content, packed differently", ""},
+		{"data after the end marker", withTail, true, Failed, "", "shipped sha512 "},
 		{"not a tarball", []byte("plain"), true, Failed, "", "cannot compare the nexus copy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

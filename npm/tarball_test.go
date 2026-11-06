@@ -103,6 +103,32 @@ func TestTarballRejectsTrailingData(t *testing.T) {
 	}
 }
 
+func TestTarballDataAfterTheEndMarker(t *testing.T) {
+	base := []packedEntry{reg("package/package.json", `{"name":"a","version":"1.0.0"}`), reg("package/index.js", "one")}
+	extra := rawTar(t, reg("package/install.js", "x"))
+	for _, tc := range []struct {
+		name string
+		src  []byte
+		ok   bool
+	}{
+		{"nothing", packThen(t, nil, base...), true},
+		{"zero padding", packThen(t, make([]byte, 9216), base...), true},
+		{"entries", packThen(t, extra, base...), false},
+		{"one byte after zeros", packThen(t, append(make([]byte, 20000), 1), base...), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := InspectTarball(bytes.NewReader(tc.src))
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, errTrailingData)) {
+				t.Errorf("InspectTarball: err = %v", err)
+			}
+			err = StripPublishConfig(io.Discard, bytes.NewReader(tc.src))
+			if tc.ok != (err == nil) {
+				t.Errorf("StripPublishConfig: err = %v", err)
+			}
+		})
+	}
+}
+
 func TestTarballRejectsDuplicateManifest(t *testing.T) {
 	src := makeTarball(t,
 		tarFile{"package/package.json", `{"name":"a"}`},
@@ -217,9 +243,14 @@ func reg(name, body string) packedEntry {
 
 func pack(t *testing.T, entries ...packedEntry) []byte {
 	t.Helper()
+	return packThen(t, nil, entries...)
+}
+
+// rawTar returns an uncompressed tar stream, end marker included.
+func rawTar(t *testing.T, entries ...packedEntry) []byte {
+	t.Helper()
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
+	tw := tar.NewWriter(&buf)
 	for _, e := range entries {
 		h := e.hdr
 		h.Size = int64(len(e.body))
@@ -231,6 +262,21 @@ func pack(t *testing.T, entries ...packedEntry) []byte {
 		}
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// packThen is pack with raw bytes written into the gzip stream after the
+// tar end marker.
+func packThen(t *testing.T, after []byte, entries ...packedEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(rawTar(t, entries...)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gz.Write(after); err != nil {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
@@ -289,6 +335,10 @@ func TestSameContent(t *testing.T) {
 			return e
 		}), false},
 		{"name twice in one", pack(t, base()...), with(func(e []packedEntry) []packedEntry { return append(e, e[1]) }), false},
+		{"name twice in the first", with(func(e []packedEntry) []packedEntry { return append(e, e[1]) }), pack(t, base()...), false},
+		{"entries after the end marker", pack(t, base()...), packThen(t, rawTar(t, reg("package/install.js", "x"), reg("package/index.js", "other")), base()...), false},
+		{"entries after the end marker in the first", packThen(t, rawTar(t, reg("package/install.js", "x")), base()...), pack(t, base()...), false},
+		{"zero padding after the end marker", pack(t, base()...), packThen(t, make([]byte, 9216), base()...), true},
 		{"name twice in both", with(func(e []packedEntry) []packedEntry { return append(e, e[1]) }), with(func(e []packedEntry) []packedEntry { return append(e, e[1]) }), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

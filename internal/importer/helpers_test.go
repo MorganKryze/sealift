@@ -77,6 +77,13 @@ func packEntries(t *testing.T, entries ...tarEntry) []byte {
 // the size depend only on the entries, not on their order.
 func packEntriesAt(t *testing.T, level int, entries ...tarEntry) []byte {
 	t.Helper()
+	return packEntriesThen(t, level, nil, entries...)
+}
+
+// packEntriesThen is packEntriesAt with raw bytes written into the gzip
+// stream after the tar end marker.
+func packEntriesThen(t *testing.T, level int, after []byte, entries ...tarEntry) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	gz, err := gzip.NewWriterLevel(&buf, level)
 	if err != nil {
@@ -95,7 +102,30 @@ func packEntriesAt(t *testing.T, level int, entries ...tarEntry) []byte {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := gz.Write(after); err != nil {
+		t.Fatal(err)
+	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// tarBytes returns an uncompressed tar stream of the given regular files,
+// end marker included.
+func tarBytes(t *testing.T, entries ...tarEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, e := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()

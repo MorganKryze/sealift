@@ -157,17 +157,21 @@ func withoutPublishConfig(r io.Reader) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// errTrailingData marks a tarball with data after its end-of-archive marker.
+var errTrailingData = errors.New("tarball has data after its end-of-archive marker")
+
 func walkTarball(r io.Reader, fn func(*tar.Header, io.Reader) error) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("open tarball: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(&boundedReader{r: gz, left: maxTarballBytes, what: "tarball", unit: "10 GiB"})
+	stream := &boundedReader{r: gz, left: maxTarballBytes, what: "tarball", unit: "10 GiB"}
+	tr := tar.NewReader(stream)
 	for entries := 0; ; entries++ {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return zeroRest(stream)
 		}
 		if err != nil {
 			return fmt.Errorf("read tarball: %w", err)
@@ -187,6 +191,25 @@ func walkTarball(r io.Reader, fn func(*tar.Header, io.Reader) error) error {
 		}
 		if err := fn(h, tr); err != nil {
 			return err
+		}
+	}
+}
+
+// zeroRest reads what follows the end-of-archive marker and refuses any
+// non-zero byte. pnpm refuses such a tarball, while npm and bsdtar extract
+// only the entries before the marker; writers pad the marker with zeros.
+func zeroRest(r io.Reader) error {
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := r.Read(buf)
+		if len(bytes.Trim(buf[:n], "\x00")) > 0 {
+			return errTrailingData
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read tarball: %w", err)
 		}
 	}
 }
@@ -231,14 +254,21 @@ type entryDigest struct {
 // SameContent reports whether two gzip-compressed package tarballs hold the
 // same entry names, types, modes and bytes. Owners, times and entry order are
 // ignored. The first-level package.json compares as decoded JSON once
-// publishConfig is removed from both. A tarball that holds a name twice never
+// publishConfig is removed from both. A tarball that holds a name twice, or
+// data after its end-of-archive marker other than zero padding, never
 // compares equal. The error is for unreadable or over-bound input.
 func SameContent(a, b io.Reader) (bool, error) {
 	da, dupA, err := digestTarball(a)
+	if errors.Is(err, errTrailingData) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
 	db, dupB, err := digestTarball(b)
+	if errors.Is(err, errTrailingData) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
