@@ -108,7 +108,13 @@ Only then does the import publish each tarball to the npm hosted repository.
 | `packages[].reason` | Why a package failed; empty otherwise |
 | `packages[].note` | Empty for a failed package. For a package whose manifest entry has `publishConfigStripped`, the note the publish step set, or `sealift removed publishConfig at export` when it set none |
 
-A refused report lists no package and holds zero counts. A package is `present` when Nexus already serves the same bytes, `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
+A refused report lists no package and holds zero counts.
+
+Before it looks at Nexus, the import reads each tarball: its `package.json` must name the manifest entry's name and version, hold no unsafe path and no second first-level `package.json`, stay under 100,000 entries, 10 GiB unpacked and 16 MiB for `package.json`. A tarball that fails is `failed` with that reason and the others go on.
+
+A package is `present` when Nexus already serves the same bytes. For a package with `publishConfigStripped`, it is also `present` when Nexus serves other bytes with the same content, noted `same content, packed differently`. Same content means the same entry names, types, modes, link targets and file bytes, as written. Owners, times and entry order do not count. The `package.json` compares as decoded JSON once `publishConfig` is removed from both. A tarball that holds a name twice never matches. Any other difference is `failed`, naming both sha512 digests.
+
+A package is `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
 
 The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive, manifest and Nexus lines, and one line per package: `<name>@<version> <state>[: <reason>][ (<note>)]`.
 

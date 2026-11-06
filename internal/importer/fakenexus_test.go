@@ -164,6 +164,7 @@ func stage(t *testing.T, dir, name, version string, content []byte) Package {
 	t.Helper()
 	file := npm.PackFileName(name, version)
 	path := filepath.Join(dir, file)
+	content = packed(t, name, version, string(content))
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}

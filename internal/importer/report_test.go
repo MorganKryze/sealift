@@ -11,7 +11,7 @@ import (
 func TestReportFields(t *testing.T) {
 	r := newRunFixture(t)
 	r.serveUploads()
-	r.f.put("left-pad", "1.3.0", []byte("left body")) // already there
+	r.f.put("left-pad", "1.3.0", packed(t, "left-pad", "1.3.0", "left body")) // already there
 	rep := r.run(t)
 
 	var doc map[string]any

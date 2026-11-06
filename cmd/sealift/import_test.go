@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -103,7 +105,7 @@ func newImportFixture(t *testing.T) importFixture {
 	write("signature-key", importKey+"\n")
 	settings := write("settings.yaml", "nexus:\n  url: "+nx.srv.URL+"\n  repository: npm-hosted\n  user: sealift-import\n  passwordFile: nexus-password\nsignatureKeyFile: signature-key\n")
 
-	body := "left body"
+	body := leftPadTarball(t)
 	sum := sha512.Sum512([]byte(body))
 	var buf bytes.Buffer
 	entries := []archive.Entry{
@@ -129,6 +131,29 @@ func newImportFixture(t *testing.T) importFixture {
 		manifest: write("manifest.json", string(doc)),
 		report:   filepath.Join(dir, "report.json"),
 	}
+}
+
+// leftPadTarball returns a valid left-pad@1.3.0 package tarball.
+func leftPadTarball(t *testing.T) string {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for _, e := range [][2]string{{"package/package.json", `{"name":"left-pad","version":"1.3.0"}`}, {"package/index.js", "left body"}} {
+		if err := tw.WriteHeader(&tar.Header{Name: e[0], Mode: 0o644, Size: int64(len(e[1])), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
 }
 
 func (f importFixture) archiveSHA(t *testing.T) string {
@@ -169,7 +194,7 @@ func TestImportSubcommand(t *testing.T) {
 	if rep.Outcome != "complete" || rep.ImportVersion != jobs.ToolVersion || len(rep.Packages) != 1 || rep.Packages[0].State != "published" {
 		t.Errorf("report = %s", b)
 	}
-	if got := f.nexus.files[npm.TarballURL("/repository/npm-hosted", "left-pad", "1.3.0")]; string(got) != "left body" {
+	if got := f.nexus.files[npm.TarballURL("/repository/npm-hosted", "left-pad", "1.3.0")]; !bytes.Equal(got, []byte(leftPadTarball(t))) {
 		t.Errorf("nexus holds %q", got)
 	}
 
