@@ -92,7 +92,7 @@ services:
       - --skip-provider-button=true
     depends_on: [keycloak]
 
-  # Stands in for the import tool until it exists: it echoes the request,
+  # Stands in for the import web app until it exists: it echoes the request,
   # so the headers the gateway adds can be read.
   app:
     image: traefik/whoami:v1.11@sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab
@@ -125,6 +125,15 @@ services:
     volumes:
       - ./transfer:/transfer
       - ./scripts:/scripts:ro
+  import:
+    # The import as the air-gapped side runs it: settings read-only, the
+    # archive from the transfer folder, Nexus on the internal network.
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.3.0}
+    profiles: [tools]
+    networks: [airgap]
+    volumes:
+      - ./import:/import:ro
+      - ./transfer:/transfer
   connected-shell:
     image: node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
     profiles: [tools]
