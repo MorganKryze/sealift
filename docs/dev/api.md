@@ -199,7 +199,7 @@ A `POST` is refused with 403, and nothing changes, when its `Origin` is not the 
 | 202 | The import is recorded and queued. |
 | 400 | The body cannot be read, or `expectedSha256` is not 64 hex digits. |
 | 404 | The key is not an archive in the user's folder. |
-| 409 | The archive, with the same key and ETag, already has an import that is queued, running or has not ended `complete`: `importId` names it. Also when the settings file has no `minio` section. |
+| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running or has not ended `complete`: `importId` names it. Also when the settings file has no `minio` section. |
 | 502 | MinIO failed to list or describe the archive. |
 
 ### Following an import
@@ -212,7 +212,7 @@ An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, 
 | --- | --- |
 | `complete` | Every package was published or read back from Nexus with the shipped bytes. |
 | `incomplete` | At least one package failed, or the service could not finish reading the archive from MinIO. A read that stops partway fails every package of the manifest with that reason and is never a refusal. |
-| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`). Nothing was published. |
+| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`, reading `the manifest` for `the archive` when the manifest moved). Nothing was published. |
 | `interrupted` | The service stopped, or restarted, before the attempt ended. |
 
 An attempt reads the manifest and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.

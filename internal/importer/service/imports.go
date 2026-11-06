@@ -101,7 +101,8 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 		return nil, err
 	}
 	for _, imp := range existing { // newest first
-		if imp.Archive.Key == archive.Key && imp.Archive.ETag == archive.ETag {
+		// A replaced manifest makes another import: a refusal for it must not block the objects now in MinIO.
+		if imp.Archive.Key == archive.Key && imp.Archive.ETag == archive.ETag && imp.Manifest.ETag == manifest.ETag {
 			if imp.Outcome() != importer.OutcomeComplete {
 				return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 			}

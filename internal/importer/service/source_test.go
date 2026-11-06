@@ -143,8 +143,9 @@ func TestAttemptChangedObjectIsRefused(t *testing.T) {
 			a := newAttemptRig(t)
 			a.minio.change(key)
 			rep, _, _ := a.run(t)
-			if rep.Outcome != importer.OutcomeRefused || rep.Reason != "the archive changed in MinIO; start a new import" {
-				t.Errorf("outcome %q, reason %q; want refused with the A29 reason", rep.Outcome, rep.Reason)
+			want := "the " + name + " changed in MinIO; start a new import"
+			if rep.Outcome != importer.OutcomeRefused || rep.Reason != want {
+				t.Errorf("outcome %q, reason %q; want refused with %q", rep.Outcome, rep.Reason, want)
 			}
 			if a.nexus.uploadCount() != 0 {
 				t.Error("a changed archive was uploaded")

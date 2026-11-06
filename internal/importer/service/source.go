@@ -14,8 +14,11 @@ import (
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
-// reasonChanged is why an attempt refuses an object whose ETag moved since the import was created.
-const reasonChanged = "the archive changed in MinIO; start a new import"
+// changed is why an attempt refuses an object whose ETag moved since the import
+// was created. what names the object: "the archive" or "the manifest".
+func changed(what string) error {
+	return &archive.Refusal{Reason: what + " changed in MinIO; start a new import"}
+}
 
 // minioCallTimeout is how long a list or a head may take: 30 seconds.
 const minioCallTimeout = 30 * time.Second
@@ -45,7 +48,7 @@ func minioSource(o Objects, bucket string, imp imports.Import) importer.Source {
 func sourceError(what string, err error) error {
 	switch {
 	case errors.Is(err, s3.ErrChanged):
-		return &archive.Refusal{Reason: reasonChanged}
+		return changed(what)
 	case errors.Is(err, s3.ErrNotFound):
 		return fmt.Errorf("%w: %s is no longer in MinIO", importer.ErrSource, what)
 	}
@@ -63,7 +66,7 @@ func openObject(ctx context.Context, o Objects, bucket string, want imports.Obje
 	if got.ETag != want.ETag {
 		_ = body.Close()
 		cancel()
-		return nil, &archive.Refusal{Reason: reasonChanged}
+		return nil, changed(what)
 	}
 	b := &objectBody{ctx: ctx, cancel: cancel, rc: body, size: got.Size, what: what}
 	b.timer = time.AfterFunc(idleReadTimeout, cancel)

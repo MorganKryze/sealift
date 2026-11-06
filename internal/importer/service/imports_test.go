@@ -596,6 +596,29 @@ func TestListLatestImportNeedsTheSameObjects(t *testing.T) {
 	}
 }
 
+// A manifest replaced between the start and the run refuses that import. The
+// next start is another import of the objects now in MinIO, not a 409.
+func TestChangedManifestAllowsANewStart(t *testing.T) {
+	r := newImportRig(t, rigOptions{hold: true})
+	r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+	first := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+	waitEntered(t, r)
+	r.minio.change(manifestKey)
+	close(r.release)
+	done := waitEnded(t, r.store, first.Id)
+	if done.Outcome() != importer.OutcomeRefused || done.Attempts[0].Report.Reason != "the manifest changed in MinIO; start a new import" {
+		t.Fatalf("outcome %q, reason %q; want refused naming the manifest", done.Outcome(), done.Attempts[0].Report.Reason)
+	}
+
+	second := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+	if second.Id == first.Id {
+		t.Error("the new start reused the refused import")
+	}
+	if got := waitEnded(t, r.store, second.Id).Outcome(); got != importer.OutcomeComplete {
+		t.Errorf("second outcome %q, want complete", got)
+	}
+}
+
 func ids(imps []Import) []string {
 	out := []string{}
 	for _, i := range imps {
