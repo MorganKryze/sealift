@@ -102,7 +102,7 @@ signatureKeyFile: signature-key
 
 `signatureKeyFile` holds the key saved in the sealift settings of the connected side. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
 
-Use a Nexus user that can only read and add to the npm hosted repository, so that a stolen password cannot delete or overwrite a package.
+Give the import its own Nexus user, with these privileges on the npm hosted repository and no others: `nx-repository-view-npm-<repository>-browse`, `-read`, `-add` and `-edit`, and `nx-component-upload`. Nexus refuses an upload without the edit privilege, so the user's rights do not stop an overwrite. The repository's deployment policy does: set it to **Disable redeploy**. The import checks each version before it uploads and fails one that holds other bytes, and the policy makes Nexus refuse the overwrite itself.
 
 Once imported, projects install from Nexus as usual:
 
