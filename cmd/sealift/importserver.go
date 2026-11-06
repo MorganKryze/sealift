@@ -19,6 +19,8 @@ import (
 	"github.com/MorganKryze/sealift/internal/importer/s3"
 	"github.com/MorganKryze/sealift/internal/importer/service"
 	"github.com/MorganKryze/sealift/internal/importer/token"
+	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/nexus"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
@@ -45,6 +47,15 @@ func subcommand(args []string) (name string, rest []string) {
 		return args[0], args[1:]
 	}
 	return "", args
+}
+
+// nexusPublisher builds the Nexus client an import publishes with.
+func nexusPublisher(s importer.Settings) (importer.Publisher, error) {
+	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, User: s.User, Password: s.Password, CAFile: s.CAFile})
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func minioURL(s importer.Settings) *url.URL {
@@ -119,7 +130,13 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 	if err != nil {
 		return usage("token: %v", err)
 	}
-	cfg := service.Config{Verifier: verifier, Log: log}
+	// The queue needs the handlers to run an attempt and the handlers need the
+	// queue to submit one; Submit reads queue once the server is listening.
+	var queue *imports.Queue
+	cfg := service.Config{
+		Verifier: verifier, Log: log, Store: store, Settings: settings, NewPublisher: nexusPublisher, ImportVersion: jobs.ToolVersion,
+		Submit: func(user, id string) { queue.Submit(user, id) },
+	}
 	// A link over plain http is named for the archive list and warned about at start.
 	for _, link := range []struct {
 		name string
@@ -138,6 +155,8 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 		cfg.MinIO = client
 	}
 	handlers := service.New(cfg)
+	queue = imports.NewQueue(store, handlers.RunAttempt, log)
+	defer queue.Close()
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -158,6 +177,8 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 		return fail("the server stopped", err)
 	case <-ctx.Done():
 	}
+	// The running attempt ends interrupted before the server stops answering.
+	queue.Close()
 	shutdown, cancel := context.WithTimeout(context.Background(), importShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdown); err != nil {

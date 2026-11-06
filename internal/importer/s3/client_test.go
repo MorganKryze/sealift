@@ -453,3 +453,17 @@ func TestErrorsCarryNoSecret(t *testing.T) {
 		}
 	})
 }
+
+func TestClientAsksForNoCompression(t *testing.T) {
+	f := newFake(t, false)
+	f.set("get", answer{Status: 200, Header: map[string]string{"ETag": `"abc"`}, Body: "stored bytes"})
+	body, _, err := f.client(t).Get(context.Background(), "user-alice", "packages/npm/a.tgz", `"abc"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Close()
+	// Go adds Accept-Encoding: gzip, and decodes the answer, unless compression is off.
+	if got := f.requests()[0].Header.Get("Accept-Encoding"); got != "" {
+		t.Errorf("Accept-Encoding = %q, want none: a stored object must come back byte for byte", got)
+	}
+}

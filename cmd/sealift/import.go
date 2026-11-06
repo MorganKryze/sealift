@@ -15,7 +15,6 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/jobs"
-	"github.com/MorganKryze/sealift/internal/nexus"
 )
 
 // importUsage is the one line printed for a usage error.
@@ -74,13 +73,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	rep := importer.Run(ctx, importer.Options{
 		Settings: settings, Archive: archivePath, Manifest: *manifestPath,
 		ExpectedSHA256: *expected, ImportVersion: jobs.ToolVersion,
-	}, func(s importer.Settings) (importer.Publisher, error) {
-		c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, User: s.User, Password: s.Password, CAFile: s.CAFile})
-		if err != nil {
-			return nil, err
-		}
-		return c, nil
-	})
+	}, nexusPublisher)
 
 	code := rep.ExitCode()
 	if *reportPath != "" {

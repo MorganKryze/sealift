@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/MorganKryze/sealift/internal/importer/token"
@@ -39,10 +40,33 @@ func named(name string) token.Claims {
 	return token.Claims{"preferred_username": b}
 }
 
+// safeBuffer is a log buffer the queue's goroutine and the test both touch.
+type safeBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *safeBuffer) Bytes() []byte { return []byte(s.String()) }
+
+func (s *safeBuffer) Len() int { return len(s.String()) }
+
 // rig is a service over a fake verifier, with its log kept in a buffer.
 type rig struct {
-	h    http.Handler
-	logs *bytes.Buffer
+	h        http.Handler
+	handlers *Handlers
+	logs     *safeBuffer
 }
 
 func newRig(t *testing.T, v Verifier, unencrypted ...string) rig {
@@ -53,9 +77,10 @@ func newRig(t *testing.T, v Verifier, unencrypted ...string) rig {
 // newRigConfig is newRig for a full Config; its Log is the rig's buffer.
 func newRigConfig(t *testing.T, cfg Config) rig {
 	t.Helper()
-	logs := &bytes.Buffer{}
+	logs := &safeBuffer{}
 	cfg.Log = slog.New(slog.NewJSONHandler(logs, nil))
-	return rig{h: Routes(New(cfg)), logs: logs}
+	h := New(cfg)
+	return rig{h: Routes(h), handlers: h, logs: logs}
 }
 
 // get sends GET path with the token header set when tok is not empty.

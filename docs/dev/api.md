@@ -147,13 +147,16 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 | --- | --- |
 | `GET /api/me` | The user the checked token stands for, and whether the settings file has a `minio` section: `{"user":"alice","minioConfigured":true}`. |
 | `GET /api/archives` | The archives in the user's MinIO folder. |
+| `POST /api/imports` | Queue an import of one of those archives. |
+| `GET /api/imports` | The user's imports, newest first. |
+| `GET /api/imports/{importId}` | One import with its attempts. |
 
 The service checks each token against the keys of the realm named in the settings file before it acts for anyone. The user is the token's `preferred_username` claim and nothing else: a header such as `X-Auth-Request-Preferred-Username` is ignored. Failures use the problem body described under [Errors](#errors).
 
 | Status | When |
 | --- | --- |
 | 401 | The token is absent or fails a check. `detail` names the check: `absent`, `malformed`, `algorithm`, `key`, `signature`, `issuer`, `audience`, `expiry` or `not before`. It never repeats the token. |
-| 403 | The claim is absent, is not a string, or cannot name a folder: lower case letters, digits, dots and hyphens, 1 to 58 characters, no `..`. |
+| 403 | The claim is absent, is not a string, or cannot name a folder: lower case letters, digits, dots and hyphens, 1 to 58 characters, no `..`. A `POST` that looks cross-site also answers 403 (see [Starting an import](#starting-an-import)). |
 | 413 | A request body over 64 KiB. |
 | 503 | The realm's keys cannot be had. |
 | 500 | Anything else; the server log has the cause. |
@@ -164,13 +167,13 @@ Request headers get 10 seconds to arrive and are capped at 64 KiB.
 
 `GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest.
 
-The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`.
+The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key.
 
 An archive pairs with the `manifest.json` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive nor a `manifest.json`.
 
 | Reason | When |
 | --- | --- |
-| `its name cannot be imported` | The key is not under `packages/npm/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment, holds a control character, is not UTF-8 or is over 1,024 bytes. |
+| `its name cannot be imported` | The key is not under `packages/npm/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment (also once percent-decoded), holds a control character, is not UTF-8 or is over 1,024 bytes. |
 | `the folder holds more than one archive` | Its folder holds two or more archives. Each one is listed with this reason. |
 | `no manifest.json in its folder` | Its folder holds no `manifest.json`. |
 
@@ -182,3 +185,38 @@ An archive pairs with the `manifest.json` in its own folder, at the root of `pac
 | MinIO is unreachable or refuses the call | 502. `detail` holds MinIO's reason with control characters removed, cut to 300 characters. |
 
 `unencrypted` names each link that runs over plain `http`: `keySet`, `minio`, `nexus`.
+
+### Starting an import
+
+`POST /api/imports` takes `{"archive": "<key>", "expectedSha256": "<hex>"}`. `expectedSha256` is optional: 64 hex digits received through another channel, and a different archive is refused. A malformed value answers 400 and creates nothing.
+
+The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive and its manifest, and records both ETags and sizes. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
+
+A `POST` is refused with 403, and nothing changes, when its `Origin` is not the request's own host (port included), when `Origin` is `null`, when `Sec-Fetch-Site` is `cross-site`, or when `Content-Type` is not `application/json`. A client that sends no `Origin` and sends JSON passes, as `curl` does. Behind a gateway, the gateway must pass the original host for an `Origin` from a browser to match.
+
+| Status | When |
+| --- | --- |
+| 202 | The import is recorded and queued. |
+| 400 | The body cannot be read, or `expectedSha256` is not 64 hex digits. |
+| 404 | The key is not an archive in the user's folder. |
+| 409 | The archive, with the same key and ETag, already has an import that is queued, running or has not ended `complete`: `importId` names it. Also when the settings file has no `minio` section. |
+| 502 | MinIO failed to list or describe the archive. |
+
+### Following an import
+
+Imports run one at a time across all users, the first started first. The queue owns an attempt's start and its end. The run writes only the state of each package, as soon as that package ends, so a reader of `GET /api/imports/{importId}` sees the packages move from `pending` to `published`, `present` or `failed` while the attempt is `running`. Another user's id, a missing id and a malformed id all answer 404 with the same body.
+
+An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, `etag`, `size`), `expectedSha256`, `outcome`, `archiveRemoved` and its `attempts`. `outcome` is the latest attempt's: `queued`, `running`, `complete`, `incomplete`, `refused` or `interrupted`. Each attempt has its `status` (`queued`, `running` or `ended`), its times, its `outcome` and the same `report` that `sealift import -report` writes. `archiveRemoved` stays false: this version never removes an archive from MinIO.
+
+| Outcome | Meaning |
+| --- | --- |
+| `complete` | Every package was published or read back from Nexus with the shipped bytes. |
+| `incomplete` | At least one package failed, or the service could not finish reading the archive from MinIO. A read that stops partway fails every package of the manifest with that reason and is never a refusal. |
+| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`). Nothing was published. |
+| `interrupted` | The service stopped, or restarted, before the attempt ended. |
+
+An attempt reads the manifest and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.
+
+A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
+
+Stopping the service cancels the running attempt, which ends `interrupted`, and starts none of the attempts still queued. The next start marks those `interrupted` as well and starts nothing by itself.

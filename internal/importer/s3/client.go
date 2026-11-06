@@ -140,6 +140,8 @@ func New(cfg Config) (*Client, error) {
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool},
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
+		// An object stored with gzip metadata must reach the checks as stored.
+		DisableCompression: true,
 	}
 	region := cfg.Region
 	if region == "" {

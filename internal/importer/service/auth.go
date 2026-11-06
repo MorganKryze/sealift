@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/MorganKryze/sealift/internal/importer/token"
 	"github.com/MorganKryze/sealift/internal/store/imports"
@@ -73,4 +76,43 @@ func (h *Handlers) authenticate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, user)))
 	})
+}
+
+// refuseCrossSite stops a POST that another site could have caused: a foreign
+// or null Origin, Sec-Fetch-Site cross-site, or a body that is not JSON. A
+// client that sends no Origin and sends JSON passes, as curl must. It answers
+// without repeating anything from the request.
+func refuseCrossSite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			next.ServeHTTP(w, r)
+			return
+		}
+		refuse := func(why string) {
+			writeProblem(w, http.StatusForbidden, "Request refused", why)
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && !sameHost(origin, r.Host) {
+			refuse("the Origin of this request is not this service's own host")
+			return
+		}
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			refuse("this request comes from another site")
+			return
+		}
+		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+			refuse("the body must be application/json")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameHost reports whether an Origin names host, port included. "null" and
+// anything that does not parse as scheme://host do not.
+func sameHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
 }

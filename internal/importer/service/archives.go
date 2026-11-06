@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 	"unicode"
@@ -59,6 +60,21 @@ func ArchiveKey(key string) error {
 	case !strings.HasSuffix(key, archiveSuffix):
 		return errors.New("the key must end with " + archiveSuffix)
 	}
+	if err := checkSegments(key); err != nil {
+		return err
+	}
+	// A gateway or a proxy may decode the key once more, so the decoded form
+	// must pass too. An escape that does not decode is a plain name.
+	if decoded, err := url.PathUnescape(key); err == nil && decoded != key {
+		if !strings.HasPrefix(decoded, Folder) {
+			return errors.New("the key must start with " + Folder + " once decoded")
+		}
+		return checkSegments(decoded)
+	}
+	return nil
+}
+
+func checkSegments(key string) error {
 	segments := strings.Split(strings.TrimPrefix(key, Folder), "/")
 	for _, s := range segments {
 		if s == "" || s == "." || s == ".." {
@@ -162,7 +178,9 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 	if h.objects == nil {
 		return ListArchives200JSONResponse(out), nil
 	}
-	listing, err := h.objects.List(ctx, out.Bucket, Folder, MaxListed)
+	lctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
+	defer cancel()
+	listing, err := h.objects.List(lctx, out.Bucket, Folder, MaxListed)
 	switch {
 	case s3.IsNoBucket(err):
 		msg := "MinIO has no bucket " + out.Bucket + " yet: nothing to list"
@@ -178,5 +196,28 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 	}
 	out.Truncated = listing.Truncated
 	out.Archives = pair(listing.Objects)
+	h.addLatestImports(user, out.Archives)
 	return ListArchives200JSONResponse(out), nil
+}
+
+// addLatestImports gives each archive the id and outcome of its user's newest
+// import of it. A store that cannot be read leaves the list as it is.
+func (h *Handlers) addLatestImports(user string, archives []Archive) {
+	if h.store == nil {
+		return
+	}
+	imps, err := h.store.List(user)
+	if err != nil {
+		h.log.Warn("could not read the imports for the archive list", "error", cleanText(err.Error()))
+		return
+	}
+	latest := map[string]LatestImport{}
+	for i := len(imps) - 1; i >= 0; i-- { // oldest first, so the newest wins
+		latest[imps[i].Archive.Key] = LatestImport{Id: imps[i].ID, Outcome: imps[i].Outcome()}
+	}
+	for i := range archives {
+		if li, ok := latest[archives[i].Key]; ok {
+			archives[i].LatestImport = &li
+		}
+	}
 }

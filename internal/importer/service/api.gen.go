@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/oapi-codegen/runtime"
 )
 
 // Archive defines model for Archive.
@@ -19,8 +21,11 @@ type Archive struct {
 	Importable bool `json:"importable"`
 
 	// Key The object key, under packages/npm/
-	Key      string    `json:"key"`
-	Modified time.Time `json:"modified"`
+	Key string `json:"key"`
+
+	// LatestImport The newest import of this archive, by key
+	LatestImport *LatestImport `json:"latestImport,omitempty"`
+	Modified     time.Time     `json:"modified"`
 
 	// Reason Why the archive cannot be imported; absent when it can
 	Reason *string `json:"reason,omitempty"`
@@ -51,6 +56,69 @@ type ArchiveList struct {
 	Unencrypted []string `json:"unencrypted"`
 }
 
+// Attempt defines model for Attempt.
+type Attempt struct {
+	EndedAt *time.Time `json:"endedAt,omitempty"`
+	N       int        `json:"n"`
+
+	// Outcome complete, incomplete, refused or interrupted once the attempt has ended
+	Outcome  string     `json:"outcome"`
+	QueuedAt *time.Time `json:"queuedAt,omitempty"`
+
+	// Removal What became of the archive after a complete attempt
+	Removal *Removal `json:"removal,omitempty"`
+
+	// Report The account of one attempt; a package still pending has not ended
+	Report    Report     `json:"report"`
+	StartedAt *time.Time `json:"startedAt,omitempty"`
+
+	// Status queued, running or ended
+	Status string `json:"status"`
+}
+
+// Import defines model for Import.
+type Import struct {
+	// Archive A MinIO object as it was when the import was created
+	Archive Object `json:"archive"`
+
+	// ArchiveRemoved Whether an attempt removed the archive from MinIO
+	ArchiveRemoved bool      `json:"archiveRemoved"`
+	Attempts       []Attempt `json:"attempts"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ExpectedSha256 string    `json:"expectedSha256"`
+	Id             string    `json:"id"`
+
+	// Manifest A MinIO object as it was when the import was created
+	Manifest Object `json:"manifest"`
+
+	// Outcome The latest attempt's outcome, or queued or running while it has none
+	Outcome string `json:"outcome"`
+}
+
+// ImportConflict A Problem that names the import in the way
+type ImportConflict struct {
+	Detail *string `json:"detail,omitempty"`
+
+	// ImportId The import that holds the archive; absent when MinIO is not configured
+	ImportId *string `json:"importId,omitempty"`
+	Status   int     `json:"status"`
+	Title    string  `json:"title"`
+	Type     *string `json:"type,omitempty"`
+}
+
+// ImportList defines model for ImportList.
+type ImportList struct {
+	Imports []Import `json:"imports"`
+}
+
+// LatestImport The newest import of this archive, by key
+type LatestImport struct {
+	Id string `json:"id"`
+
+	// Outcome queued, running, complete, incomplete, refused or interrupted
+	Outcome string `json:"outcome"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	// MinioConfigured Whether the settings file has a minio section
@@ -58,6 +126,13 @@ type Me struct {
 
 	// User The checked token's preferred_username, which names the user's bucket and folder
 	User string `json:"user"`
+}
+
+// Object A MinIO object as it was when the import was created
+type Object struct {
+	Etag string `json:"etag"`
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
 }
 
 // Problem RFC 9457 Problem Details for HTTP APIs
@@ -75,11 +150,96 @@ type Problem struct {
 	Type *string `json:"type,omitempty"`
 }
 
+// Removal What became of the archive after a complete attempt
+type Removal struct {
+	Reason  string `json:"reason"`
+	Removed bool   `json:"removed"`
+}
+
+// Report The account of one attempt; a package still pending has not ended
+type Report struct {
+	AnalysisId    string          `json:"analysisId"`
+	Archive       ReportArchive   `json:"archive"`
+	Counts        ReportCounts    `json:"counts"`
+	ImportVersion string          `json:"importVersion"`
+	Nexus         ReportNexus     `json:"nexus"`
+	Outcome       string          `json:"outcome"`
+	Packages      []ReportPackage `json:"packages"`
+	Reason        string          `json:"reason"`
+	Target        ReportTarget    `json:"target"`
+	ToolVersion   string          `json:"toolVersion"`
+
+	// Unencrypted True when Nexus, MinIO or the key set is reached over plain http
+	Unencrypted bool `json:"unencrypted"`
+}
+
+// ReportArchive defines model for ReportArchive.
+type ReportArchive struct {
+	File   string `json:"file"`
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// ReportCounts defines model for ReportCounts.
+type ReportCounts struct {
+	Failed    int `json:"failed"`
+	Present   int `json:"present"`
+	Published int `json:"published"`
+}
+
+// ReportNexus defines model for ReportNexus.
+type ReportNexus struct {
+	Repository string `json:"repository"`
+	Url        string `json:"url"`
+}
+
+// ReportPackage defines model for ReportPackage.
+type ReportPackage struct {
+	File   string `json:"file"`
+	Name   string `json:"name"`
+	Note   string `json:"note"`
+	Reason string `json:"reason"`
+
+	// State pending, published, present or failed
+	State   string `json:"state"`
+	Version string `json:"version"`
+}
+
+// ReportTarget defines model for ReportTarget.
+type ReportTarget struct {
+	Cpu     string `json:"cpu"`
+	Libc    string `json:"libc"`
+	Node    string `json:"node"`
+	Os      string `json:"os"`
+	PnpmVer string `json:"pnpmVer"`
+}
+
+// StartImport defines model for StartImport.
+type StartImport struct {
+	// Archive The archive's object key, under packages/npm/
+	Archive string `json:"archive"`
+
+	// ExpectedSha256 The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused
+	ExpectedSha256 *string `json:"expectedSha256,omitempty"`
+}
+
+// StartImportJSONRequestBody defines body for StartImport for application/json ContentType.
+type StartImportJSONRequestBody = StartImport
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListArchives List the archives in the user's folder
 	// (GET /archives)
 	ListArchives(w http.ResponseWriter, r *http.Request)
+	// ListImports List the user's imports, newest first
+	// (GET /imports)
+	ListImports(w http.ResponseWriter, r *http.Request)
+	// StartImport Queue an import of one archive in the user's folder
+	// (POST /imports)
+	StartImport(w http.ResponseWriter, r *http.Request)
+	// GetImport Read one import
+	// (GET /imports/{importId})
+	GetImport(w http.ResponseWriter, r *http.Request, importId string)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -99,6 +259,60 @@ func (siw *ServerInterfaceWrapper) ListArchives(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListArchives(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListImports operation middleware
+func (siw *ServerInterfaceWrapper) ListImports(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListImports(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartImport operation middleware
+func (siw *ServerInterfaceWrapper) StartImport(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartImport(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetImport operation middleware
+func (siw *ServerInterfaceWrapper) GetImport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "importId" -------------
+	var importId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "importId", r.PathValue("importId"), &importId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "importId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetImport(w, r, importId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -244,6 +458,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/archives", wrapper.ListArchives)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports", wrapper.ListImports)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports", wrapper.StartImport)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports/{importId}", wrapper.GetImport)
 
 	return m
 }
@@ -277,6 +494,136 @@ type ListArchivesdefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response ListArchivesdefaultApplicationProblemPlusJSONResponse) VisitListArchivesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListImportsRequestObject struct {
+}
+
+type ListImportsResponseObject interface {
+	VisitListImportsResponse(w http.ResponseWriter) error
+}
+
+type ListImports200JSONResponse ImportList
+
+func (response ListImports200JSONResponse) VisitListImportsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListImportsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListImportsdefaultApplicationProblemPlusJSONResponse) VisitListImportsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartImportRequestObject struct {
+	Body *StartImportJSONRequestBody
+}
+
+type StartImportResponseObject interface {
+	VisitStartImportResponse(w http.ResponseWriter) error
+}
+
+type StartImport202JSONResponse Import
+
+func (response StartImport202JSONResponse) VisitStartImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartImport409ApplicationProblemPlusJSONResponse ImportConflict
+
+func (response StartImport409ApplicationProblemPlusJSONResponse) VisitStartImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartImportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response StartImportdefaultApplicationProblemPlusJSONResponse) VisitStartImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImportRequestObject struct {
+	ImportId string `json:"importId"`
+}
+
+type GetImportResponseObject interface {
+	VisitGetImportResponse(w http.ResponseWriter) error
+}
+
+type GetImport200JSONResponse Import
+
+func (response GetImport200JSONResponse) VisitGetImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetImportdefaultApplicationProblemPlusJSONResponse) VisitGetImportResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -331,6 +678,15 @@ type StrictServerInterface interface {
 	// ListArchives List the archives in the user's folder
 	// (GET /archives)
 	ListArchives(ctx context.Context, request ListArchivesRequestObject) (ListArchivesResponseObject, error)
+	// ListImports List the user's imports, newest first
+	// (GET /imports)
+	ListImports(ctx context.Context, request ListImportsRequestObject) (ListImportsResponseObject, error)
+	// StartImport Queue an import of one archive in the user's folder
+	// (POST /imports)
+	StartImport(ctx context.Context, request StartImportRequestObject) (StartImportResponseObject, error)
+	// GetImport Read one import
+	// (GET /imports/{importId})
+	GetImport(ctx context.Context, request GetImportRequestObject) (GetImportResponseObject, error)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -392,6 +748,87 @@ func (sh *strictHandler) ListArchives(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListArchivesResponseObject); ok {
 		if err := validResponse.VisitListArchivesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListImports operation middleware
+func (sh *strictHandler) ListImports(w http.ResponseWriter, r *http.Request) {
+	var request ListImportsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListImports(ctx, request.(ListImportsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListImports")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListImportsResponseObject); ok {
+		if err := validResponse.VisitListImportsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartImport operation middleware
+func (sh *strictHandler) StartImport(w http.ResponseWriter, r *http.Request) {
+	var request StartImportRequestObject
+
+	var body StartImportJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartImport(ctx, request.(StartImportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartImport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartImportResponseObject); ok {
+		if err := validResponse.VisitStartImportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetImport operation middleware
+func (sh *strictHandler) GetImport(w http.ResponseWriter, r *http.Request, importId string) {
+	var request GetImportRequestObject
+
+	request.ImportId = importId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetImport(ctx, request.(GetImportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetImport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetImportResponseObject); ok {
+		if err := validResponse.VisitGetImportResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

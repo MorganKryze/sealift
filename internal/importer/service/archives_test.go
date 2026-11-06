@@ -166,6 +166,12 @@ func TestArchiveKey(t *testing.T) {
 		{"newline", base + "a\nb.tar.gz", "control"},
 		{"not UTF-8", base + "a\xffb.tar.gz", "UTF-8"},
 		{"over 1024 bytes", base + strings.Repeat("a", 1024) + ".tar.gz", "1024"},
+		{"encoded dot dot", base + "%2e%2e/a.tar.gz", ".."},
+		{"encoded dot dot in capitals", base + "%2E%2E/a.tar.gz", ".."},
+		{"double dots hidden in an encoded slash", base + "a%2f..%2fb.tar.gz", ".."},
+		{"encoded slash into a third folder", base + "a%2fb%2fc.tar.gz", "one folder"},
+		{"a percent sign in a name", base + "100%.tar.gz", ""},
+		{"an escape that does not decode", base + "%zz/a.tar.gz", ""},
 		{"exactly 1024 bytes", base + strings.Repeat("a", 1024-len(base)-len(".tar.gz")) + ".tar.gz", ""},
 	}
 	for _, tt := range tests {
