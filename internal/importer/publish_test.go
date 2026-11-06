@@ -2,6 +2,7 @@ package importer
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
@@ -387,5 +388,41 @@ func TestPublishReasonsFromTarballTextAreClean(t *testing.T) {
 				t.Fatalf("reason of %d bytes carries control characters or is not cut: %.120q", len(r.Reason), r.Reason)
 			}
 		})
+	}
+}
+
+func TestPublishStrippedSwappedShippedFile(t *testing.T) {
+	const withConfig = `{"name":"left-pad","version":"1.0.0","publishConfig":{"registry":"https://example.com"}}`
+	const without = `{"name":"left-pad","version":"1.0.0"}`
+	manifest, index := tarEntry{"package/package.json", without}, tarEntry{"package/index.js", "code"}
+	shippedData := packEntriesAt(t, gzip.NoCompression, manifest, index)
+	// The same content in another order has the same size and other bytes. It
+	// replaces the shipped file while Nexus is being asked, and Nexus holds the
+	// same content too.
+	swapped := packEntriesAt(t, gzip.NoCompression, index, manifest)
+	nexusCopy := packEntriesAt(t, gzip.NoCompression, index, tarEntry{"package/package.json", withConfig})
+	if len(swapped) != len(shippedData) || bytes.Equal(swapped, shippedData) {
+		t.Fatalf("fixture: %d and %d bytes", len(swapped), len(shippedData))
+	}
+
+	f := newFakeNexus(t)
+	pkg := stage(t, t.TempDir(), "left-pad", "1.0.0", nil)
+	sum := sha512.Sum512(shippedData)
+	pkg.SHA512, pkg.PublishConfigStripped = sum[:], true
+	if err := os.WriteFile(pkg.Path, shippedData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.put("left-pad", "1.0.0", nexusCopy)
+	f.onGet = func(string) {
+		if err := os.WriteFile(pkg.Path, swapped, 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	r := Publish(context.Background(), f.client(t), []Package{pkg}, t.TempDir())[0]
+	if r.State != Failed || !strings.Contains(r.Reason, "nexus holds this version with other bytes") {
+		t.Fatalf("got %+v", r)
+	}
+	if n := f.uploadCount(); n != 0 {
+		t.Errorf("%d uploads", n)
 	}
 }

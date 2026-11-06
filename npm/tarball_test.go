@@ -275,6 +275,15 @@ func TestSameContent(t *testing.T) {
 			e[1] = packedEntry{hdr: tar.Header{Name: "package/index.js", Mode: 0o644, Typeflag: tar.TypeSymlink, Linkname: "lib/b.js"}}
 			return e
 		}), false},
+		{"symlink target changed", with(func(e []packedEntry) []packedEntry {
+			return append(e, packedEntry{hdr: tar.Header{Name: "package/link", Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: "index.js"}})
+		}), with(func(e []packedEntry) []packedEntry {
+			return append(e, packedEntry{hdr: tar.Header{Name: "package/link", Mode: 0o777, Typeflag: tar.TypeSymlink, Linkname: "lib/b.js"}})
+		}), false},
+		{"type changed, same empty body and mode", with(func(e []packedEntry) []packedEntry { return append(e, reg("package/empty", "")) }),
+			with(func(e []packedEntry) []packedEntry {
+				return append(e, packedEntry{hdr: tar.Header{Name: "package/empty", Mode: 0o644, Typeflag: tar.TypeFifo}})
+			}), false},
 		{"scripts changed", pack(t, base()...), with(func(e []packedEntry) []packedEntry {
 			e[0].body = `{"name":"a","version":"1.0.0","scripts":{"test":"y"}}`
 			return e

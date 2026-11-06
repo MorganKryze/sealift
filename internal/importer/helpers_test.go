@@ -70,8 +70,18 @@ type tarEntry struct{ name, body string }
 // packEntries returns a gzip-compressed tarball of the given regular files.
 func packEntries(t *testing.T, entries ...tarEntry) []byte {
 	t.Helper()
+	return packEntriesAt(t, gzip.DefaultCompression, entries...)
+}
+
+// packEntriesAt is packEntries with a gzip level; gzip.NoCompression makes
+// the size depend only on the entries, not on their order.
+func packEntriesAt(t *testing.T, level int, entries ...tarEntry) []byte {
+	t.Helper()
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	gz, err := gzip.NewWriterLevel(&buf, level)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tw := tar.NewWriter(gz)
 	for _, e := range entries {
 		hdr := &tar.Header{Name: e.name, Mode: 0o644, Size: int64(len(e.body)), Typeflag: tar.TypeReg}
