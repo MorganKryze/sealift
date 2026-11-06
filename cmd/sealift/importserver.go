@@ -23,6 +23,8 @@ import (
 const (
 	// importHeaderTimeout is how long a client has to send its request headers.
 	importHeaderTimeout = 10 * time.Second
+	// importIdleTimeout is how long a keep-alive connection may sit unused before the server closes it.
+	importIdleTimeout = 60 * time.Second
 	// importMaxHeaderBytes caps the request headers: 64 KiB.
 	importMaxHeaderBytes = 64 << 10
 	// importShutdownTimeout is how long a stop waits for requests in flight.
@@ -48,6 +50,7 @@ func newImportHTTPServer(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr: addr, Handler: h,
 		ReadHeaderTimeout: importHeaderTimeout,
+		IdleTimeout:       importIdleTimeout,
 		MaxHeaderBytes:    importMaxHeaderBytes,
 	}
 }

@@ -259,4 +259,7 @@ func TestImportHTTPServerBounds(t *testing.T) {
 	if srv.MaxHeaderBytes != 64<<10 {
 		t.Errorf("MaxHeaderBytes = %d, want 65536", srv.MaxHeaderBytes)
 	}
+	if srv.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %v, want 60s", srv.IdleTimeout)
+	}
 }
