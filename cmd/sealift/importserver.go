@@ -22,6 +22,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/nexus"
 	"github.com/MorganKryze/sealift/internal/store/imports"
+	"github.com/MorganKryze/sealift/web"
 )
 
 const (
@@ -75,6 +76,20 @@ func newImportHTTPServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
+type importServerFlags struct{ settings, addr, data *string }
+
+// importFlags declares the flags of `sealift import-server`. None of them
+// reaches the token check.
+func importFlags() (*flag.FlagSet, importServerFlags) {
+	fs := flag.NewFlagSet("import-server", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs, importServerFlags{
+		settings: fs.String("settings", "", "settings file"),
+		addr:     fs.String("addr", "0.0.0.0:8080", "address to listen on"),
+		data:     fs.String("data", "/data", "data volume"),
+	}
+}
+
 // runImportServer runs `sealift import-server` until ctx ends or a signal
 // arrives. It returns 2 for a usage or settings error and 1 for a failure to
 // start or serve.
@@ -83,17 +98,14 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sealift import-server: "+format+"\n", a...)
 		return 2
 	}
-	fs := flag.NewFlagSet("import-server", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	settingsPath := fs.String("settings", "", "settings file")
-	addr := fs.String("addr", "0.0.0.0:8080", "address to listen on")
-	data := fs.String("data", "/data", "data volume")
+	fs, flags := importFlags()
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return usage("usage: sealift import-server -settings <file> [-addr <host:port>] [-data <dir>]")
 		}
 		return usage("%v", err)
 	}
+	settingsPath, addr, data := flags.settings, flags.addr, flags.data
 	if *settingsPath == "" {
 		return usage("-settings is required")
 	}
@@ -164,7 +176,11 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 	if err != nil {
 		return fail("could not listen", err)
 	}
-	srv := newImportHTTPServer(*addr, service.Routes(handlers))
+	screens, err := web.ImportScreens()
+	if err != nil {
+		return fail("could not open the import screens", err)
+	}
+	srv := newImportHTTPServer(*addr, service.Routes(handlers, screens))
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	log.Info("listening", "addr", ln.Addr().String(), "data", *data)

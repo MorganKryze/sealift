@@ -21,7 +21,7 @@ func TestRoutesServeOnlyTheImportContract(t *testing.T) {
 	}{
 		{"/healthz", "", http.StatusOK},
 		{"/api/me", "t", http.StatusOK},
-		{"/", "t", http.StatusNotFound},
+		{"/", "t", http.StatusOK},
 		{"/settings", "t", http.StatusNotFound},
 		{"/sessions/x", "t", http.StatusNotFound},
 		{"/api/projects", "t", http.StatusNotFound},

@@ -8,6 +8,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `sealift import-server` serves its own screens: Archives at `/`, Imports at `/imports` and an import at `/imports/<id>`, with the header and the Settings sheet. The files need no token, every other path outside `/api` and `/healthz` answers 404, and every answer carries a Content-Security-Policy and framing headers.
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
 
 ### Changed

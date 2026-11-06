@@ -80,7 +80,7 @@ func newRigConfig(t *testing.T, cfg Config) rig {
 	logs := &safeBuffer{}
 	cfg.Log = slog.New(slog.NewJSONHandler(logs, nil))
 	h := New(cfg)
-	return rig{h: Routes(h), handlers: h, logs: logs}
+	return rig{h: Routes(h, testScreens()), handlers: h, logs: logs}
 }
 
 // get sends GET path with the token header set when tok is not empty.

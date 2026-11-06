@@ -25,3 +25,23 @@ func Static() (fs.FS, error) {
 	}
 	return fs.Sub(Dist, "dist")
 }
+
+// ImportScreens returns the import role's screens: dist/import once
+// `pnpm -C web run build` has run, else only the placeholder, so the role
+// never serves the collection's build that sits beside it in dist.
+func ImportScreens() (fs.FS, error) {
+	if info, err := fs.Stat(Dist, "dist/import/index.html"); err == nil && !info.IsDir() {
+		return fs.Sub(Dist, "dist/import")
+	}
+	return placeholderOnly{fs.FS(Dist)}, nil
+}
+
+// placeholderOnly shows dist/index.html as index.html and nothing else.
+type placeholderOnly struct{ dist fs.FS }
+
+func (p placeholderOnly) Open(name string) (fs.File, error) {
+	if name != "index.html" {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return p.dist.Open("dist/index.html")
+}

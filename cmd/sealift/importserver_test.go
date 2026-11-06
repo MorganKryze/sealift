@@ -3,17 +3,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/importer"
+	"github.com/MorganKryze/sealift/internal/importer/service"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
@@ -211,10 +217,52 @@ func TestImportServerChecksTokens(t *testing.T) {
 	if code != http.StatusUnauthorized || !strings.Contains(body, "absent") {
 		t.Errorf("GET /api/me without a token = %d %q, want 401 naming the check", code, body)
 	}
-	if code, _ := get(t, "http://"+s.addr+"/"); code != http.StatusNotFound {
-		t.Errorf("GET / = %d, want 404", code)
+	if code, _ := get(t, "http://"+s.addr+"/settings"); code != http.StatusNotFound {
+		t.Errorf("GET /settings = %d, want 404", code)
 	}
 	s.stop(t)
+}
+
+func TestImportServerServesScreens(t *testing.T) {
+	s := startServer(t, "-settings", serverSettings(t, tokenSection(serverKeySet)), "-data", t.TempDir(), "-addr", "127.0.0.1:0")
+	for _, path := range []string{"/", "/imports", "/imports/20261106T101500Z-3f9a0c1d"} {
+		resp, err := http.Get("http://" + s.addr + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Content-Security-Policy"); got != service.ScreensPolicy || !strings.Contains(got, "frame-ancestors 'none'") {
+			t.Errorf("GET %s: Content-Security-Policy = %q, want the screens' policy", path, got)
+		}
+	}
+	s.stop(t)
+}
+
+func TestImportServerTakesNoAuthSwitch(t *testing.T) {
+	fs, _ := importFlags()
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+	sort.Strings(names)
+	if want := []string{"addr", "data", "settings"}; !slices.Equal(names, want) {
+		t.Errorf("the flags are %v, want exactly %v", names, want)
+	}
+	// A new field in the settings is a new way to configure the check: this list changes only with a review.
+	var fields []string
+	for _, typ := range []reflect.Type{reflect.TypeFor[importer.Settings](), reflect.TypeFor[importer.TokenSettings]()} {
+		for i := range typ.NumField() {
+			fields = append(fields, typ.Name()+"."+typ.Field(i).Name)
+		}
+	}
+	want := []string{
+		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.SignatureKey", "Settings.Token", "Settings.MinIO",
+		"TokenSettings.KeySetURL", "TokenSettings.Issuer", "TokenSettings.Audience", "TokenSettings.CAFile",
+	}
+	if !slices.Equal(fields, want) {
+		t.Errorf("the settings fields are %v, want %v", fields, want)
+	}
 }
 
 func TestImportServerWarnsUnencrypted(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -70,9 +71,13 @@ func New(cfg Config) *Handlers {
 }
 
 // Routes serves GET /healthz, the contract under /api behind the token check,
-// and 404 for every other path.
-func Routes(h *Handlers) http.Handler {
+// the import screens from screens without a token (none when screens is nil),
+// and 404 for every other path. Every answer carries the screens' headers.
+func Routes(h *Handlers, screens fs.FS) http.Handler {
 	mux := http.NewServeMux()
+	if screens != nil {
+		serveScreens(mux, screens)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
@@ -95,7 +100,7 @@ func Routes(h *Handlers) http.Handler {
 		Middlewares:      []MiddlewareFunc{refuseCrossSite, h.authenticate, limitBody},
 		ErrorHandlerFunc: badParameter,
 	})
-	return mux
+	return secure(refuseUnclean(mux))
 }
 
 // badParameter answers a malformed parameter with a Problem that repeats none

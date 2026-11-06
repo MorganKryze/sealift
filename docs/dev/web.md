@@ -10,7 +10,9 @@ The API types in `web/src/api/schema.d.ts` are generated from `api/openapi.yaml`
 
 ## Routes
 
-File-based, in `web/src/routes/`:
+`web/` holds two entries, built apart. The collection's is `web/index.html`, built to `web/dist/app` and served by `sealift`. The import role's is `web/import/index.html`, built to `web/dist/import` by `web/vite.import.config.ts` and served by `sealift import-server`. The import role serves nothing else, and its build holds no collection screen. `pnpm -C web run build` runs both builds.
+
+The collection's routes are file-based, in `web/src/routes/`:
 
 | Route | Screen |
 | --- | --- |
@@ -21,6 +23,16 @@ File-based, in `web/src/routes/`:
 | `/sessions/$sessionId/analysis` | The nine steps, the counter, the failure block |
 | `/sessions/$sessionId/review` | The proposal and the selection |
 | `/sessions/$sessionId/export` | The export progress and the archive |
+
+The import entry has its own tree in `web/src/import/routes/`, with its generated `routeTree.gen.ts` beside it. The server answers these paths with the shell, without a token, and 404 for any other path outside `/api` and `/healthz`:
+
+| Route | Screen |
+| --- | --- |
+| `/` | Archives |
+| `/imports` | Imports |
+| `/imports/$importId` | One import |
+
+The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and the settings sheet is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
 
 A dropped file has no route until the session exists: the drop preview is state on the home screen, and **Analyse** creates the project.
 
@@ -54,6 +66,8 @@ pnpm -C web run test
 ```
 
 `just web-check` runs all three. Tests sit next to the code they cover, as `*.test.ts` and `*.test.tsx`.
+
+ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may import only each other and `@/components/ui/*`, `@/components/brand/*`, `@/components/theme-toggle`, `@/hooks/use-return-focus` and `@/lib/utils`. An import of the collection's API client, routes, session, settings or project components, or of `use-job-events`, fails the lint. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
 
 `web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It starts its own server on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run it. Install the browser once, then run it:
 
