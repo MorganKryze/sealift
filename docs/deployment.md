@@ -191,7 +191,9 @@ oauth2-proxy needs `--pass-access-token=true` and `--set-xauthrequest=true` for 
 
 Keycloak's access token lives 5 minutes. oauth2-proxy renews it when `--cookie-refresh` has passed, and the lab sets `--cookie-refresh=1m`. With the session cookie of the first sign-in, `GET /api/me` still answered 200 six minutes later with no new sign-in, where the first token alone answered 401 `expiry`. The service checks the renewed token like any other.
 
-The renewal needs two things from the gateway. oauth2-proxy answers the first request after the minute with a new session cookie of about 3.3 KiB next to the token headers. nginx's default header buffer is 4 KiB, and the lab's gateway answered 500 with `upstream sent too big header` until `proxy_buffer_size` was raised to 16k on `/oauth2/auth`. The gateway also has to hand the new cookie to the browser, with `auth_request_set` on `Set-Cookie`; without it, oauth2-proxy renews the session on every request.
+The renewal needs two things from the gateway. oauth2-proxy answers the first request after the minute with a new session cookie of about 3.3 KiB next to the token headers. nginx's default header buffer is 4 KiB, and the lab's gateway answered 500 with `upstream sent too big header` until `proxy_buffer_size` was raised to 16k on `/oauth2/auth`. The gateway also has to hand the new cookie to the browser, with `auth_request_set` on `Set-Cookie` and `add_header Set-Cookie $auth_cookie always`; without the first, oauth2-proxy renews the session on every request, and without `always`, nginx drops the cookie from a 4xx or 5xx answer.
+
+The recipe forwards one renewed cookie of at most 4 KiB: `$upstream_http_set_cookie` holds a single `Set-Cookie` header. A session that oauth2-proxy splits into several cookies past 4 KiB was not proven.
 
 An import that is running when its token expires still finishes: the token is checked when a request arrives, not while the import runs.
 
