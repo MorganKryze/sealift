@@ -11,7 +11,7 @@ docker compose up -d
 ./setup.sh
 ```
 
-The air-gapped sealift services, `import-server` and `import`, run `sealift:dev` until a release carries the import. `SEALIFT_IMAGE` picks another image for them and for the connected sealift.
+Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.4.0`. `SEALIFT_IMAGE` picks another image, such as `sealift:dev` from `just image`.
 
 `setup.sh` waits for Nexus (about two minutes on a first start), sets its admin password, accepts its EULA, creates the `npm` and `pypi` hosted repositories, creates the MinIO buckets `user-alice` and `user-bob` with `packages/npm/` and `packages/pip/`, and creates the MinIO user `sealift-import` with `import/minio-policy.json`. Run it again at any time: it skips what exists.
 

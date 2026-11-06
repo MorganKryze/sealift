@@ -20,7 +20,7 @@ volumes:
 
 services:
   sealift:
-    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.3.0}
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.4.0}
     networks: [connected]
     ports:
       - 127.0.0.1:18450:8080
@@ -102,7 +102,7 @@ services:
   # Until a release carries the import, the default image is the local build
   # from `just image`.
   import-server:
-    image: ${SEALIFT_IMAGE:-sealift:dev}
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.4.0}
     command: [sealift, import-server, -settings, /import/settings.yaml]
     networks: [airgap]
     cap_drop: [ALL]
@@ -143,7 +143,7 @@ services:
   import:
     # The import as the air-gapped side runs it: settings read-only, the
     # archive from the transfer folder, Nexus on the internal network.
-    image: ${SEALIFT_IMAGE:-sealift:dev}
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.4.0}
     profiles: [tools]
     networks: [airgap]
     volumes:

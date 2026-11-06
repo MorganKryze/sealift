@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
 ### Added
 
 - The `sealift import` command, in the published image: it checks an archive against its manifest and signature key, then publishes its npm packages to a Nexus repository. It never overwrites a version Nexus holds with other bytes, and exits 1 when any package failed. `-report` writes the result as JSON.
@@ -125,7 +127,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MorganKryze/sealift/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MorganKryze/sealift/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/MorganKryze/sealift/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/MorganKryze/sealift/compare/v0.2.0...v0.2.1
