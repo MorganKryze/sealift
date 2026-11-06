@@ -32,19 +32,39 @@ func (h *Handlers) remove(ctx context.Context, bucket string, imp imports.Import
 		case errors.Is(err, s3.ErrNotFound):
 			return kept(o.what + " is no longer in MinIO; nothing was removed")
 		case err != nil:
-			h.log.Warn("could not check an object before removing it", "id", imp.ID, "error", cleanText(err.Error()))
-			return kept("could not check " + o.what + " before removing it; nothing was removed: " + err.Error())
+			why := minioText(err)
+			h.log.Warn("could not check an object before removing it", "id", imp.ID, "error", why)
+			return kept("could not check " + o.what + " before removing it; nothing was removed: " + why)
 		case got.ETag != o.obj.ETag:
 			return kept(o.what + " changed in MinIO after the import read it; nothing was removed")
 		}
 	}
 	if err := h.objects.Delete(ctx, bucket, imp.Archive.Key); err != nil {
-		h.log.Warn("could not remove an archive", "id", imp.ID, "error", cleanText(err.Error()))
-		return kept("could not remove the archive: " + err.Error())
+		why := minioText(err)
+		h.log.Warn("could not remove an archive", "id", imp.ID, "error", why)
+		return kept("could not remove the archive: " + why)
 	}
 	if err := h.objects.Delete(ctx, bucket, imp.Manifest.Key); err != nil {
-		h.log.Warn("could not remove a manifest", "id", imp.ID, "error", cleanText(err.Error()))
-		return &imports.Removal{Removed: true, Reason: cleanText("the archive was removed, but the manifest could not be and stays in the folder: " + err.Error())}
+		why := minioText(err)
+		h.log.Warn("could not remove a manifest", "id", imp.ID, "error", why)
+		return &imports.Removal{Removed: true, Reason: cleanText("the archive was removed, but the manifest could not be and stays in the folder: " + why)}
 	}
 	return &imports.Removal{Removed: true}
+}
+
+// minioText says why a MinIO call failed, for a stored reason or a log line.
+// The service holds no credential to mask, so it repeats only what the s3
+// client scrubbed at its source (an answer MinIO gave) and names the rest in
+// its own words.
+func minioText(err error) string {
+	var e *s3.Error
+	switch {
+	case errors.As(err, &e):
+		return cleanText(e.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return "MinIO did not answer in time"
+	case errors.Is(err, context.Canceled):
+		return "the request was cancelled"
+	}
+	return "MinIO could not be reached"
 }

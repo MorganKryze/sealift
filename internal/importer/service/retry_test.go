@@ -465,8 +465,13 @@ func TestRemovalFailureKeepsArchive(t *testing.T) {
 		r.minio.failDelete[archiveKey] = errors.New("denied for " + testMinioKey + "\x1b[31m")
 		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
 		a := waitEnded(t, r.store, id).Attempts[0]
-		if a.Removal == nil || strings.ContainsAny(a.Removal.Reason, "\x1b") {
-			t.Errorf("removal = %+v", a.Removal)
+		if a.Removal == nil || a.Removal.Removed || !strings.Contains(a.Removal.Reason, "could not remove the archive") {
+			t.Fatalf("removal = %+v", a.Removal)
+		}
+		for what, text := range map[string]string{"the reason": a.Removal.Reason, "the log": r.logs.String()} {
+			if strings.Contains(text, testMinioKey) || strings.ContainsAny(text, "\x1b") {
+				t.Errorf("%s repeats the credential or a control character: %q", what, text)
+			}
 		}
 	})
 }
