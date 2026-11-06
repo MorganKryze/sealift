@@ -244,3 +244,46 @@ func TestRunAttemptReportsUnencrypted(t *testing.T) {
 		t.Fatalf("got %+v", rep)
 	}
 }
+
+func TestRunAttemptCutsReasonsAtAThousandCharacters(t *testing.T) {
+	long := strings.Repeat("é", 5000)
+
+	t.Run("refusal", func(t *testing.T) {
+		r := newRunFixture(t)
+		a := r.attemptOf(t)
+		a.Source.Archive = func(context.Context) (io.ReadCloser, error) {
+			return nil, &archive.Refusal{Reason: long}
+		}
+		rep := r.runAttempt(t, a)
+		if rep.Outcome != OutcomeRefused {
+			t.Fatalf("outcome %q, want refused", rep.Outcome)
+		}
+		if got := len([]rune(rep.Reason)); got != 1000 {
+			t.Errorf("refusal reason has %d characters, want 1000", got)
+		}
+	})
+
+	t.Run("nexus failure", func(t *testing.T) {
+		r := newRunFixture(t)
+		a := r.attemptOf(t)
+		if err := os.MkdirAll(a.Dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		rep := runAttempt(context.Background(), a, func(Settings) (Publisher, error) { return r.f.client(t), nil },
+			func(_ context.Context, _ Publisher, pkgs []Package, _ string, _ func(int, Result)) []Result {
+				out := make([]Result, len(pkgs))
+				for i, p := range pkgs {
+					out[i] = failed(p, long)
+				}
+				return out
+			})
+		if len(rep.Packages) == 0 {
+			t.Fatal("no package in the report")
+		}
+		for _, p := range rep.Packages {
+			if got := len([]rune(p.Reason)); got != 1000 {
+				t.Errorf("%s: reason has %d characters, want 1000", p.Name, got)
+			}
+		}
+	})
+}
