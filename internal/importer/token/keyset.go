@@ -97,7 +97,9 @@ func (s *keySet) refresh(ctx context.Context, now time.Time) (bool, error) {
 
 // fetch reads the key set. Its reasons never carry the transport's error text.
 func (s *keySet) fetch(ctx context.Context) (map[string]publicKey, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
+	// The fetch is shared by every caller and counts as an attempt, so one
+	// caller hanging up must not fail it; the client's timeout bounds it.
+	req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodGet, s.url, nil)
 	if err != nil {
 		return nil, &Unavailable{Reason: "the request for the key set could not be built"}
 	}

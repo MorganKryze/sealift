@@ -74,6 +74,21 @@ func TestKeySetCache(t *testing.T) {
 		}
 	})
 
+	t.Run("a cancelled caller does not block the honest one", func(t *testing.T) {
+		e := newEnv(t)
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := e.ver.Verify(cancelled, e.mint.mint(signerFor("RS256"), "ghost", nil, nil))
+		wantKeyRejected(t, err)
+		e.clock.Advance(10 * time.Second)
+		if err := verifyKid(e, "rs"); err != nil {
+			t.Fatalf("honest token after a cancelled caller: %v", err)
+		}
+		if n := e.srv.fetches.Load(); n != 1 {
+			t.Fatalf("fetches = %d, want 1", n)
+		}
+	})
+
 	t.Run("a failed fetch keeps the old set for an hour", func(t *testing.T) {
 		e := newEnv(t)
 		if err := verifyKid(e, "rs"); err != nil {
