@@ -68,6 +68,13 @@ func (f *fakeMinio) change(key string) {
 	f.buckets[bucketAlice][key] = o
 }
 
+// vanish removes alice's object without a recorded call, as another client's delete would.
+func (f *fakeMinio) vanish(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.buckets[bucketAlice], key)
+}
+
 // etagOf returns the current ETag of alice's object.
 func (f *fakeMinio) etagOf(key string) string {
 	f.mu.Lock()

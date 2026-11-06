@@ -321,7 +321,7 @@ func TestCompleteRemovesBoth(t *testing.T) {
 	}
 }
 
-func TestRemovalChecksETags(t *testing.T) {
+func TestRemovalChecksObjects(t *testing.T) {
 	tests := []struct {
 		name   string
 		replay func(r *importRig, readArchive *atomic.Bool)
@@ -344,6 +344,23 @@ func TestRemovalChecksETags(t *testing.T) {
 				}
 			}
 		}, "the archive changed in MinIO"},
+		{"manifest gone during the attempt", func(r *importRig, _ *atomic.Bool) {
+			r.minio.hook = func(op, key string) {
+				if op == "get" && key == archiveKey {
+					r.minio.vanish(manifestKey)
+				}
+			}
+		}, "the manifest is no longer in MinIO"},
+		{"archive gone during the attempt", func(r *importRig, readArchive *atomic.Bool) {
+			r.minio.hook = func(op, key string) {
+				switch {
+				case op == "get" && key == archiveKey:
+					readArchive.Store(true)
+				case op == "head" && key == archiveKey && readArchive.Load():
+					r.minio.vanish(archiveKey)
+				}
+			}
+		}, "the archive is no longer in MinIO"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -362,6 +379,30 @@ func TestRemovalChecksETags(t *testing.T) {
 			}
 			if done.ArchiveRemoved() {
 				t.Error("archiveRemoved is true")
+			}
+		})
+	}
+}
+
+func TestEveryPackageIn(t *testing.T) {
+	pkg := func(s importer.State) importer.Result {
+		return importer.Result{Name: "left-pad", Version: "1.3.0", State: s}
+	}
+	tests := []struct {
+		name string
+		rep  importer.Report
+		want bool
+	}{
+		{"published and present", importer.Report{Outcome: importer.OutcomeComplete, Packages: []importer.Result{pkg(importer.Published), pkg(importer.Present)}}, true},
+		{"a pending package", importer.Report{Outcome: importer.OutcomeComplete, Packages: []importer.Result{pkg(importer.Published), pkg(importer.Pending)}}, false},
+		{"a failed package", importer.Report{Outcome: importer.OutcomeComplete, Packages: []importer.Result{pkg(importer.Published), pkg(importer.Failed)}}, false},
+		{"a failed count with every package published", importer.Report{Outcome: importer.OutcomeComplete, Counts: importer.Counts{Failed: 1}, Packages: []importer.Result{pkg(importer.Published)}}, false},
+		{"an incomplete outcome", importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{pkg(importer.Published)}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := everyPackageIn(tt.rep); got != tt.want {
+				t.Errorf("everyPackageIn = %v, want %v", got, tt.want)
 			}
 		})
 	}
