@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The `sealift import` command, in the published image: it checks an archive against its manifest and signature key, then publishes its npm packages to a Nexus repository. It never overwrites a version Nexus holds with other bytes, and exits 1 when any package failed. `-report` writes the result as JSON.
+
 ## [0.3.0] - 2026-11-05
 
 ### Added
