@@ -40,13 +40,13 @@ type Config struct {
 // Claims are the payload of a checked token.
 type Claims map[string]json.RawMessage
 
-// String returns a claim that is a JSON string. It reports false when the claim is absent or of another type.
+// String returns a claim that is a JSON string. It reports false when the claim is absent, null or of another type.
 func (c Claims) String(name string) (string, bool) {
-	var s string
-	if err := json.Unmarshal(c[name], &s); err != nil {
+	var s *string
+	if err := json.Unmarshal(c[name], &s); err != nil || s == nil {
 		return "", false
 	}
-	return s, true
+	return *s, true
 }
 
 // Rejected means the token failed a check; the caller answers 401. Check names it.

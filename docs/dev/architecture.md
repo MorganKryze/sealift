@@ -84,6 +84,22 @@ A failing step stops the job. Its id and message go into `status.json` as the fa
 
 The export refuses a selection that names a version the analysis did not resolve (`ErrInvalidSelection`) and one that packs nothing (`ErrNothingToExport`). A tarball that does not match its integrity stops the export: nothing is packed from a file sealift could not verify. [Archive format](archive-format.md) describes the output.
 
+## The import role
+
+The same binary runs a second role. `sealift import` publishes one archive from the command line. `sealift import-server -settings <file>` serves the import contract, [`api/import.yaml`](../../api/import.yaml), and reads the same settings file with a `token` section added. It listens on `0.0.0.0:8080` by default (`-addr`) and keeps its records under `<data>/imports` (`-data`, default `/data`). At start it opens that store and marks every attempt a restart cut short as interrupted, before the first request.
+
+| Package | Role |
+| --- | --- |
+| `cmd/sealift` | `import-server`: flags, settings, the sweep, the HTTP server with its header bounds, shutdown on SIGINT and SIGTERM |
+| `internal/importer` | The run and the settings file. It imports no HTTP server and no store. |
+| `internal/importer/token` | Checks a token against the realm's signing keys. It imports nothing from sealift. |
+| `internal/importer/service` | The handlers for the strict server generated from `api/import.yaml`, and the middleware that turns a checked token into a user |
+| `internal/store/imports` | The records of each import and its package states, one folder per user |
+
+A request reaches a handler only after the middleware has checked the token, read `preferred_username` and validated it as a folder name. The handler takes the user from the request's context and from nowhere else.
+
+The role adds a boundary to the threat model: other users on the air-gapped network. A valid token acts for its own user, and the service reads the token from one header only.
+
 ## The data volume
 
 ```

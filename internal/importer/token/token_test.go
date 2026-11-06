@@ -65,6 +65,15 @@ func TestVerifyRejects(t *testing.T) {
 			return m.hs256("rs", rsaKey().N.Bytes())
 		}, "algorithm"},
 		{"RS256 header on an EC key", nil, func(m minter) string { return m.mint(es, "es", nil, map[string]any{"alg": "RS256"}) }, "algorithm"},
+		{"ES384 header on a P-256 key", nil, func(m minter) string {
+			wrong := signerFor("ES384")
+			wrong.key, wrong.size = p256Key(), 32
+			return m.mint(wrong, "es", nil, nil)
+		}, "algorithm"},
+		{"ES256 signature of the wrong length", nil, func(m minter) string {
+			input := jsonB64(map[string]any{"alg": "ES256", "kid": "es"}) + "." + jsonB64(m.claims(nil))
+			return input + "." + b64(make([]byte, 63))
+		}, "signature"},
 		{"JWK alg RS384 for an RS256 token", []map[string]any{withField(rs.jwk("pinned"), "alg", "RS384")}, func(m minter) string {
 			return m.mint(rs, "pinned", nil, nil)
 		}, "algorithm"},
@@ -123,12 +132,12 @@ func withField(m map[string]any, k string, v any) map[string]any {
 }
 
 func TestClaimsString(t *testing.T) {
-	c := Claims{"s": []byte(`"alice"`), "n": []byte(`12`), "a": []byte(`["x"]`)}
+	c := Claims{"s": []byte(`"alice"`), "n": []byte(`12`), "a": []byte(`["x"]`), "null": []byte(`null`)}
 	tests := []struct {
 		name string
 		want string
 		ok   bool
-	}{{"s", "alice", true}, {"n", "", false}, {"a", "", false}, {"missing", "", false}}
+	}{{"s", "alice", true}, {"n", "", false}, {"a", "", false}, {"missing", "", false}, {"null", "", false}}
 	for _, tt := range tests {
 		got, ok := c.String(tt.name)
 		if got != tt.want || ok != tt.ok {

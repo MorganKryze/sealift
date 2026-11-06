@@ -11,6 +11,11 @@ import (
 
 const (
 	testKey      = "test-key"
+	tokenSection = `token:
+  keySetUrl: https://idp.example.internal/realms/lab/protocol/openid-connect/certs
+  issuer: https://idp.example.internal/realms/lab
+  audience: sealift
+`
 	validSetting = `nexus:
   url: https://nexus.example.internal
   repository: npm-hosted
@@ -91,6 +96,9 @@ func TestLoadSettings(t *testing.T) {
 func TestLoadSettingsRefuses(t *testing.T) {
 	without := func(line string) string { return strings.Replace(validSetting, line, "", 1) }
 	withURL := func(u string) string { return strings.Replace(validSetting, "https://nexus.example.internal", u, 1) }
+	withKeySet := func(u string) string {
+		return strings.Replace(tokenSection, "https://idp.example.internal/realms/lab/protocol/openid-connect/certs", u, 1)
+	}
 	cases := []struct {
 		name  string
 		body  string
@@ -123,6 +131,18 @@ func TestLoadSettingsRefuses(t *testing.T) {
 		{"url without host", withURL("https:///path"), nil, "nexus.url", "host"},
 		{"url not a url", withURL("https://nexus.example.internal:port"), nil, "nexus.url", "not a valid URL"},
 		{"repository name", strings.Replace(validSetting, "npm-hosted", "npm/hosted", 1), nil, "nexus.repository", "letters"},
+		{"token key set url absent", validSetting + strings.Replace(tokenSection, "  keySetUrl: https://idp.example.internal/realms/lab/protocol/openid-connect/certs\n", "", 1), nil, "token.keySetUrl", "required"},
+		{"token issuer absent", validSetting + strings.Replace(tokenSection, "  issuer: https://idp.example.internal/realms/lab\n", "", 1), nil, "token.issuer", "required"},
+		{"token audience absent", validSetting + strings.Replace(tokenSection, "  audience: sealift\n", "", 1), nil, "token.audience", "required"},
+		{"token unknown field", validSetting + tokenSection + "  insecure: true\n", nil, "insecure", "unknown"},
+		{"token key set url with user", validSetting + withKeySet("https://operator@idp.example.internal/certs"), nil, "token.keySetUrl", "user name"},
+		{"token key set url with password", validSetting + withKeySet("https://operator:hunter2@idp.example.internal/certs"), nil, "token.keySetUrl", "user name"},
+		{"token key set url with query", validSetting + withKeySet("https://idp.example.internal/certs?a=b"), nil, "token.keySetUrl", "query"},
+		{"token key set url with fragment", validSetting + withKeySet("https://idp.example.internal/certs#x"), nil, "token.keySetUrl", "fragment"},
+		{"token key set url scheme", validSetting + withKeySet("ftp://idp.example.internal/certs"), nil, "token.keySetUrl", "http or https"},
+		{"token key set url without host", validSetting + withKeySet("https:///certs"), nil, "token.keySetUrl", "host"},
+		{"token key set url not a url", validSetting + withKeySet("https://idp.example.internal:port/certs"), nil, "token.keySetUrl", "not a valid URL"},
+		{"token ca file unreadable", validSetting + tokenSection + "  caFile: missing.pem\n", nil, "token.caFile", "cannot be read"},
 		{"ca file unreadable", strings.Replace(validSetting, "passwordFile: nexus-password\n", "passwordFile: nexus-password\n  caFile: missing.pem\n", 1), nil, "nexus.caFile", "cannot be read"},
 	}
 	for _, tc := range cases {
@@ -139,7 +159,7 @@ func TestLoadSettingsRefuses(t *testing.T) {
 			if se.Field != tc.field || !strings.Contains(se.Reason, tc.want) {
 				t.Errorf("got field %q reason %q, want %q containing %q", se.Field, se.Reason, tc.field, tc.want)
 			}
-			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", testPassword, testKey} {
+			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", "idp.example.internal", testPassword, testKey} {
 				if strings.Contains(err.Error(), leak) {
 					t.Errorf("error %q repeats %q", err, leak)
 				}
@@ -182,4 +202,47 @@ func TestSecretIsRedacted(t *testing.T) {
 	if err != nil || strings.Contains(b, "test-password") || !strings.Contains(b, "[redacted]") {
 		t.Errorf("json = %s, %v", b, err)
 	}
+}
+
+func TestLoadSettingsServiceSections(t *testing.T) {
+	t.Run("token section", func(t *testing.T) {
+		path := writeSettings(t, validSetting+tokenSection+"  caFile: ca.pem\n")
+		s, err := LoadSettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Token == nil {
+			t.Fatal("Token = nil")
+		}
+		want := "https://idp.example.internal/realms/lab/protocol/openid-connect/certs"
+		if s.Token.KeySetURL.String() != want || s.Token.Issuer != "https://idp.example.internal/realms/lab" || s.Token.Audience != "sealift" {
+			t.Errorf("got %+v", s.Token)
+		}
+		if s.Token.CAFile != filepath.Join(filepath.Dir(path), "ca.pem") {
+			t.Errorf("CAFile = %q", s.Token.CAFile)
+		}
+		if err := s.CheckService(); err != nil {
+			t.Errorf("CheckService = %v", err)
+		}
+	})
+	t.Run("http key set is accepted", func(t *testing.T) {
+		body := validSetting + strings.Replace(tokenSection, "https://idp", "http://idp", 1)
+		s, err := LoadSettings(writeSettings(t, body))
+		if err != nil || s.Token.KeySetURL.Scheme != "http" {
+			t.Fatalf("got %+v, %v", s.Token, err)
+		}
+	})
+	t.Run("no token section", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, validSetting))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Token != nil {
+			t.Errorf("Token = %+v, want nil", s.Token)
+		}
+		var se *SettingsError
+		if err := s.CheckService(); !errors.As(err, &se) || se.Field != "token" || !strings.Contains(se.Reason, "required") {
+			t.Fatalf("CheckService = %v, want a SettingsError naming token", err)
+		}
+	})
 }

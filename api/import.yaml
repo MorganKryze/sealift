@@ -1,0 +1,69 @@
+openapi: 3.1.0
+info:
+  title: sealift import service
+  version: "1"
+  description: >
+    Tells a signed-in user who the service acts for. Every operation needs the
+    access token the gateway forwards in the X-Access-Token header.
+servers:
+  - url: /api
+tags:
+  - name: session
+    description: The signed-in user
+paths:
+  /me:
+    get:
+      operationId: getMe
+      tags:
+        - session
+      summary: Name the user the checked token stands for
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        default:
+          $ref: "#/components/responses/Problem"
+components:
+  responses:
+    Problem:
+      description: >
+        Error. 401 when the token fails a check (the detail names the check),
+        403 when its preferred_username cannot name a user folder, 413 for a
+        body over 64 KiB, 503 when the realm's keys cannot be had.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Me:
+      type: object
+      properties:
+        user:
+          type: string
+          description: The checked token's preferred_username, which names the user's bucket and folder
+      required:
+        - user
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details for HTTP APIs
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A URI identifying the problem type
+          default: about:blank
+        title:
+          type: string
+          description: A short, human-readable summary of the problem type
+        status:
+          type: integer
+          description: The HTTP status code repeated for clients that read the body only
+        detail:
+          type: string
+          description: A human-readable explanation specific to this occurrence
+      required:
+        - title
+        - status

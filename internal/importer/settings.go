@@ -54,6 +54,24 @@ type Settings struct {
 	Password     Secret
 	CAFile       string
 	SignatureKey Secret
+	// Token is the realm the import service checks tokens against; nil when the file has no token section.
+	Token *TokenSettings
+}
+
+// TokenSettings name the realm whose tokens the import service accepts.
+type TokenSettings struct {
+	KeySetURL        *url.URL
+	Issuer, Audience string
+	CAFile           string
+}
+
+// CheckService returns a *SettingsError naming what the import service needs
+// and the file lacks.
+func (s Settings) CheckService() error {
+	if s.Token == nil {
+		return settingsErr("token", "is required for the import service")
+	}
+	return nil
 }
 
 // SettingsError names the field or file that is wrong, never a value.
@@ -74,6 +92,12 @@ type rawSettings struct {
 		CAFile       string `yaml:"caFile"`
 	} `yaml:"nexus"`
 	SignatureKeyFile string `yaml:"signatureKeyFile"`
+	Token            *struct {
+		KeySetURL string `yaml:"keySetUrl"`
+		Issuer    string `yaml:"issuer"`
+		Audience  string `yaml:"audience"`
+		CAFile    string `yaml:"caFile"`
+	} `yaml:"token"`
 }
 
 // LoadSettings reads a settings file. Relative paths in it resolve from the
@@ -101,7 +125,7 @@ func LoadSettings(path string) (Settings, error) {
 			return Settings{}, settingsErr(r.field, "is required")
 		}
 	}
-	u, err := parseNexusURL(raw.Nexus.URL)
+	u, err := parseURL("nexus.url", raw.Nexus.URL)
 	if err != nil {
 		return Settings{}, err
 	}
@@ -119,33 +143,67 @@ func LoadSettings(path string) (Settings, error) {
 	}
 	s := Settings{NexusURL: u, Repository: raw.Nexus.Repository, User: raw.Nexus.User, Password: password, SignatureKey: key}
 	if raw.Nexus.CAFile != "" {
-		s.CAFile = resolve(dir, raw.Nexus.CAFile)
-		f, err := os.Open(s.CAFile)
-		if err != nil {
-			return Settings{}, settingsErr("nexus.caFile", "cannot be read")
+		if s.CAFile, err = certFile("nexus.caFile", dir, raw.Nexus.CAFile); err != nil {
+			return Settings{}, err
 		}
-		f.Close()
+	}
+	if raw.Token != nil {
+		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile); err != nil {
+			return Settings{}, err
+		}
 	}
 	return s, nil
 }
 
-func parseNexusURL(raw string) (*url.URL, error) {
+func loadToken(dir, keySetURL, issuer, audience, caFile string) (*TokenSettings, error) {
+	for _, r := range []struct{ field, value string }{
+		{"token.keySetUrl", keySetURL}, {"token.issuer", issuer}, {"token.audience", audience},
+	} {
+		if r.value == "" {
+			return nil, settingsErr(r.field, "is required")
+		}
+	}
+	u, err := parseURL("token.keySetUrl", keySetURL)
+	if err != nil {
+		return nil, err
+	}
+	t := &TokenSettings{KeySetURL: u, Issuer: issuer, Audience: audience}
+	if caFile != "" {
+		if t.CAFile, err = certFile("token.caFile", dir, caFile); err != nil {
+			return nil, err
+		}
+	}
+	return t, nil
+}
+
+// certFile resolves a CA file path and checks that it opens.
+func certFile(field, dir, p string) (string, error) {
+	p = resolve(dir, p)
+	f, err := os.Open(p)
+	if err != nil {
+		return "", settingsErr(field, "cannot be read")
+	}
+	f.Close()
+	return p, nil
+}
+
+func parseURL(field, raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		// The parser's error quotes the URL, which may carry a password.
-		return nil, settingsErr("nexus.url", "is not a valid URL")
+		return nil, settingsErr(field, "is not a valid URL")
 	}
 	switch {
 	case u.User != nil:
-		return nil, settingsErr("nexus.url", "must not carry a user name or password")
+		return nil, settingsErr(field, "must not carry a user name or password")
 	case u.Scheme != "http" && u.Scheme != "https":
-		return nil, settingsErr("nexus.url", "must start with http or https")
+		return nil, settingsErr(field, "must start with http or https")
 	case u.Host == "":
-		return nil, settingsErr("nexus.url", "must name a host")
+		return nil, settingsErr(field, "must name a host")
 	case u.RawQuery != "" || u.ForceQuery:
-		return nil, settingsErr("nexus.url", "must not carry a query")
+		return nil, settingsErr(field, "must not carry a query")
 	case u.Fragment != "" || u.RawFragment != "" || strings.Contains(raw, "#"):
-		return nil, settingsErr("nexus.url", "must not carry a fragment")
+		return nil, settingsErr(field, "must not carry a fragment")
 	}
 	return u, nil
 }

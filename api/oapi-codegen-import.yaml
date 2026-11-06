@@ -1,0 +1,7 @@
+package: service
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: false
+output: internal/importer/service/api.gen.go

@@ -24,9 +24,10 @@ test:
 bench:
     go test -run '^$' -bench . -benchmem ./...
 
-# Regenerate the Go server and the web client from api/openapi.yaml.
+# Regenerate the Go servers and the web client from api/openapi.yaml and api/import.yaml.
 generate:
     go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config api/oapi-codegen.yaml api/openapi.yaml
+    go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config api/oapi-codegen-import.yaml api/import.yaml
     pnpm -C web run generate
 
 # Run tests behind the integration tag: skip cleanly where pnpm or Trivy is absent.
