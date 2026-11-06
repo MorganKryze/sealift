@@ -133,8 +133,11 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if raw == "" {
 		return nil, reject("absent")
 	}
-	parts := strings.Split(raw, ".")
-	if len(raw) > MaxTokenBytes || len(parts) != 3 {
+	if len(raw) > MaxTokenBytes {
+		return nil, reject("malformed")
+	}
+	parts := strings.SplitN(raw, ".", 4)
+	if len(parts) != 3 {
 		return nil, reject("malformed")
 	}
 	headBytes, err1 := base64.RawURLEncoding.DecodeString(parts[0])

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,7 @@ func TestVerifyRejects(t *testing.T) {
 		{"nbf 61 s ahead", nil, func(m minter) string {
 			return m.mint(rs, "rs", map[string]any{"nbf": now.Add(61 * time.Second).Unix()}, nil)
 		}, "not before"},
+		{"a long string of dots", nil, func(minter) string { return strings.Repeat(".", MaxTokenBytes+1) }, "malformed"},
 		{"over 16 KiB", nil, func(m minter) string {
 			return m.mint(rs, "rs", map[string]any{"pad": strings.Repeat("x", MaxTokenBytes)}, nil)
 		}, "malformed"},
@@ -209,5 +211,21 @@ func TestErrorsCarryNoToken(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestVerifyBoundsWhatItAllocates(t *testing.T) {
+	e := newEnv(t)
+	dots := strings.Repeat(".", 1<<20)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := e.ver.Verify(context.Background(), dots)
+	runtime.ReadMemStats(&after)
+	var rej *Rejected
+	if !errors.As(err, &rej) || rej.Check != "malformed" {
+		t.Fatalf("err = %v, want a rejection on malformed", err)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > MaxTokenBytes {
+		t.Fatalf("a 1 MiB token of dots allocated %d bytes, want at most %d", got, MaxTokenBytes)
 	}
 }
