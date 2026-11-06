@@ -30,7 +30,8 @@ var idleReadTimeout = 60 * time.Second
 // minioSource reads an import's manifest and archive from the user's bucket,
 // each once and each on condition that its ETag is still the recorded one. A
 // failure of the read marks importer.ErrSource, so the attempt ends
-// incomplete; an object that changed is a refusal with the reason of A29.
+// incomplete; an object that changed is a refusal that says it changed in
+// MinIO and asks for a new import.
 func minioSource(o Objects, bucket string, imp imports.Import) importer.Source {
 	return importer.Source{
 		Name: cleanText(path.Base(imp.Archive.Key)),
