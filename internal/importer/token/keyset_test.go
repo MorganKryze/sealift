@@ -23,6 +23,14 @@ func wantKeyRejected(t *testing.T, err error) {
 	}
 }
 
+func wantUnavailable(t *testing.T, err error, reason string) {
+	t.Helper()
+	var un *Unavailable
+	if !errors.As(err, &un) || un.Reason != reason {
+		t.Fatalf("err = %v, want *Unavailable with reason %q", err, reason)
+	}
+}
+
 func TestKeySetCache(t *testing.T) {
 	t.Run("fetch on first use and every 5 minutes", func(t *testing.T) {
 		e := newEnv(t)
@@ -109,10 +117,7 @@ func TestKeySetCache(t *testing.T) {
 			t.Fatalf("set dropped before the hour: %v", err)
 		}
 		e.clock.Advance(time.Second)
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable after the hour", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set answered HTTP 500")
 	})
 }
 
@@ -121,31 +126,25 @@ func TestKeySetUnavailable(t *testing.T) {
 		e := newEnv(t)
 		e.srv.set(http.StatusServiceUnavailable, []byte("down"))
 		err := verifyKid(e, "rs")
-		var un *Unavailable
-		if !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
-		if !strings.Contains(un.Error(), "key set") {
-			t.Fatalf("message %q does not name the key set", un.Error())
+		wantUnavailable(t, err, "the key set answered HTTP 503")
+		if !strings.Contains(err.Error(), "key set") {
+			t.Fatalf("message %q does not name the key set", err.Error())
 		}
 	})
 	t.Run("server gone", func(t *testing.T) {
 		e := newEnv(t)
 		e.srv.Close()
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set could not be reached")
 	})
 	t.Run("recovers once the server answers", func(t *testing.T) {
 		e := newEnv(t)
 		e.srv.set(http.StatusServiceUnavailable, nil)
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set answered HTTP 503")
+		e.clock.Advance(10 * time.Second)
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set answered HTTP 503")
+		e.clock.Advance(10 * time.Second)
 		e.srv.publish(signerFor("RS256").jwk("rs"))
-		e.clock.Advance(30 * time.Second)
+		e.clock.Advance(10 * time.Second)
 		if err := verifyKid(e, "rs"); err != nil {
 			t.Fatalf("after recovery: %v", err)
 		}
@@ -159,10 +158,7 @@ func TestKeySetBounds(t *testing.T) {
 		e.srv.publish(good)
 		body := e.srv.snapshot()
 		e.srv.set(http.StatusOK, padTo(MaxKeySetBytes+1, append([]byte(nil), body...)))
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), fmt.Sprintf("the key set is larger than %d bytes", MaxKeySetBytes))
 		e2 := newEnv(t)
 		e2.srv.set(http.StatusOK, padTo(MaxKeySetBytes, append([]byte(nil), body...)))
 		if err := verifyKid(e2, "rs"); err != nil {
@@ -172,18 +168,12 @@ func TestKeySetBounds(t *testing.T) {
 	t.Run("non-200", func(t *testing.T) {
 		e := newEnv(t)
 		e.srv.set(http.StatusNotFound, e.srv.snapshot())
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set answered HTTP 404")
 	})
 	t.Run("redirect", func(t *testing.T) {
 		e := newEnv(t)
 		e.ver = e.verifier(t, "/moved", "")
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
-		}
+		wantUnavailable(t, verifyKid(e, "rs"), "the key set answered HTTP 302")
 		if n := e.srv.strays.Load(); n != 0 {
 			t.Fatalf("the redirect was followed %d times", n)
 		}
@@ -238,9 +228,13 @@ func TestKeySetTLS(t *testing.T) {
 
 	t.Run("fails without the CA", func(t *testing.T) {
 		e.ver = e.verifier(t, "/certs", "")
-		var un *Unavailable
-		if err := verifyKid(e, "rs"); !errors.As(err, &un) {
-			t.Fatalf("err = %v, want *Unavailable", err)
+		const reason = "the key set server's certificate failed verification"
+		wantUnavailable(t, verifyKid(e, "rs"), reason)
+		e.clock.Advance(10 * time.Second)
+		err := verifyKid(e, "rs")
+		wantUnavailable(t, err, reason)
+		if strings.Contains(err.Error(), e.srv.URL) || strings.Contains(err.Error(), "127.0.0.1") {
+			t.Fatalf("message %q names the key set URL", err.Error())
 		}
 	})
 	t.Run("passes with the certificate as CAFile", func(t *testing.T) {

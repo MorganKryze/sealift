@@ -5,8 +5,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -48,6 +51,7 @@ type keySet struct {
 	have      bool
 	fetchedAt time.Time // when the held set arrived
 	attemptAt time.Time // when the last fetch started, successful or not
+	lastFail  error     // why the last fetch failed, nil when it succeeded
 }
 
 // lookup returns the key for kid. It fetches the set on first use and every
@@ -81,13 +85,18 @@ func (s *keySet) lookup(ctx context.Context, kid string) (publicKey, bool, error
 }
 
 // refresh fetches the set unless an attempt started less than refetchEvery ago.
-// A failure leaves the held set, if any, untouched.
+// A failure leaves the held set, if any, untouched, and inside the window
+// the reason of the last failure is the answer, so the cause stays visible.
 func (s *keySet) refresh(ctx context.Context, now time.Time) (bool, error) {
 	if !s.attemptAt.IsZero() && now.Sub(s.attemptAt) < refetchEvery {
+		if s.lastFail != nil {
+			return false, s.lastFail
+		}
 		return false, &Unavailable{Reason: "the last fetch of the key set was under 30 seconds ago"}
 	}
 	s.attemptAt = now
 	keys, err := s.fetch(ctx)
+	s.lastFail = err
 	if err != nil {
 		return true, err
 	}
@@ -106,7 +115,7 @@ func (s *keySet) fetch(ctx context.Context) (map[string]publicKey, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, &Unavailable{Reason: "the key set could not be reached"}
+		return nil, &Unavailable{Reason: unreachable(err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -133,6 +142,19 @@ func (s *keySet) fetch(ctx context.Context) (map[string]publicKey, error) {
 		}
 	}
 	return keys, nil
+}
+
+// unreachable names why a request failed without quoting the transport's
+// text, which can hold the URL.
+func unreachable(err error) string {
+	var verify *tls.CertificateVerificationError
+	var unknown x509.UnknownAuthorityError
+	var invalid x509.CertificateInvalidError
+	var host x509.HostnameError
+	if errors.As(err, &verify) || errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &host) {
+		return "the key set server's certificate failed verification"
+	}
+	return "the key set could not be reached"
 }
 
 type jwk struct {
