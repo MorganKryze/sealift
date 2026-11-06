@@ -121,6 +121,49 @@ paths:
                 $ref: "#/components/schemas/Import"
         default:
           $ref: "#/components/responses/Problem"
+  /imports/{importId}/retry:
+    post:
+      operationId: retryImport
+      tags:
+        - imports
+      summary: Add an attempt to an import
+      description: >
+        Queues a new attempt that reads the archive and the manifest again,
+        checks them again and reads every package from Nexus again; nothing
+        carries over from an earlier attempt. Accepted whatever the last
+        outcome was, while no attempt is queued or running and the archive is
+        still in MinIO. 409 otherwise. The attempt ends refused, publishing
+        nothing, when the archive or the manifest changed in MinIO since the
+        import was created. Another user's id answers 404 like a missing one.
+        The guard against cross-site requests is the one of startImport.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: An empty object
+      responses:
+        "202":
+          description: The import, with its new attempt queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        "409":
+          description: An attempt is queued or running, the archive is no longer in MinIO, or MinIO is not configured
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ImportConflict"
+        default:
+          $ref: "#/components/responses/Problem"
 components:
   responses:
     Problem:
@@ -129,7 +172,7 @@ components:
         403 when its preferred_username cannot name a user folder or a start
         looks cross-site, 404 for an unknown import or an archive outside the
         user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503
-        when the realm's keys cannot be had.
+        when the realm's keys cannot be had or the service is stopping.
       content:
         application/problem+json:
           schema:
@@ -274,7 +317,10 @@ components:
           description: The latest attempt's outcome, or queued or running while it has none
         archiveRemoved:
           type: boolean
-          description: Whether an attempt removed the archive from MinIO
+          description: >
+            Whether an attempt removed the archive from MinIO. A complete
+            attempt removes the archive and its manifest only after checking
+            that both still carry the ETags it read; its removal says why not.
         attempts:
           type: array
           items:

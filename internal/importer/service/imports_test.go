@@ -80,7 +80,7 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 	r.store = st
 	r.rig = newRigConfig(t, Config{
 		Verifier: r.verifier, MinIO: r.minio, UnencryptedLinks: o.links,
-		Store: st, Submit: func(user, id string) { r.queue.Submit(user, id) },
+		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
 		Settings: nx.settings(t, ca), NewPublisher: newPublisher, ImportVersion: "0.3.0",
 	})
 	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, *imports.Removal) {
@@ -384,6 +384,8 @@ func TestStartConflicts409(t *testing.T) {
 	if done.Outcome() != importer.OutcomeComplete {
 		t.Fatalf("second outcome %q (%s), want complete", done.Outcome(), done.Attempts[0].Report.Reason)
 	}
+	// The complete import removed its archive; a user uploads it again.
+	r.seed(otherKey, otherMan, b)
 	again := importOf(t, r.start("t", otherKey), http.StatusAccepted)
 	if again.Id == queued.Id {
 		t.Error("the new start reused the finished import's id")
@@ -424,8 +426,9 @@ func TestImportOutcomes(t *testing.T) {
 			waitEnded(t, r.store, start.Id)
 
 			got := importOf(t, r.get("/api/imports/"+start.Id, "t"), http.StatusOK)
-			if got.Outcome != tt.outcome || got.ArchiveRemoved {
-				t.Fatalf("outcome %q removed %v, want %q kept", got.Outcome, got.ArchiveRemoved, tt.outcome)
+			wantRemoved := tt.outcome == importer.OutcomeComplete
+			if got.Outcome != tt.outcome || got.ArchiveRemoved != wantRemoved {
+				t.Fatalf("outcome %q removed %v, want %q and removed %v", got.Outcome, got.ArchiveRemoved, tt.outcome, wantRemoved)
 			}
 			a := got.Attempts[0]
 			if a.Status != "ended" || a.Outcome != tt.outcome || a.Report.Outcome != tt.outcome || a.EndedAt == nil {
@@ -450,13 +453,12 @@ func TestImportOutcomes(t *testing.T) {
 					}
 				}
 			}
-			if _, ok := r.minio.buckets["user-alice"][archiveKey]; !ok {
-				t.Error("the archive left MinIO")
+			_, inMinio := r.minio.buckets["user-alice"][archiveKey]
+			if inMinio == wantRemoved {
+				t.Errorf("the archive is in MinIO: %v, removed: %v", inMinio, wantRemoved)
 			}
-			for _, c := range r.minio.recorded() {
-				if c.Op == "delete" {
-					t.Errorf("a delete reached MinIO: %+v", c)
-				}
+			if d := r.deletes(); !wantRemoved && len(d) != 0 {
+				t.Errorf("deletes reached MinIO: %v", d)
 			}
 		})
 	}
@@ -552,6 +554,7 @@ func TestListShowsLatestImport(t *testing.T) {
 	// seconds, so two imports made within one second may come in either order.
 	delete(r.minio.cut, dataKey("user-alice", archiveKey))
 	r.minio.change(archiveKey)
+	r.minio.failDelete[archiveKey] = errors.New("kept for the listing")
 	second := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
 	waitEnded(t, r.store, second)
 	want := map[string]string{first: importer.OutcomeIncomplete, second: importer.OutcomeComplete}
@@ -574,6 +577,7 @@ func TestListLatestImportNeedsTheSameObjects(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newImportRig(t, rigOptions{})
 			r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+			r.minio.failDelete[archiveKey] = errors.New("kept for the listing")
 			first := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
 			if done := waitEnded(t, r.store, first); done.Outcome() != importer.OutcomeComplete {
 				t.Fatalf("outcome %q, want complete", done.Outcome())

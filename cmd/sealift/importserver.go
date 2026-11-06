@@ -135,7 +135,7 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 	var queue *imports.Queue
 	cfg := service.Config{
 		Verifier: verifier, Log: log, Store: store, Settings: settings, NewPublisher: nexusPublisher, ImportVersion: jobs.ToolVersion,
-		Submit: func(user, id string) { queue.Submit(user, id) },
+		Submit: func(user, id string) bool { return queue.Submit(user, id) },
 	}
 	// A link over plain http is named for the archive list and warned about at start.
 	for _, link := range []struct {

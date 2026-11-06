@@ -113,12 +113,13 @@ type fakeNexus struct {
 	byFile   map[string]string // upload file name to the path it is served at
 	tarballs map[string][]byte
 	uploads  int
+	reads    map[string]int // tarball path to the reads it served or refused
 }
 
 // newFakeNexus serves the packages over TLS; the returned file is the CA that trusts it.
 func newFakeNexus(t *testing.T, pkgs ...testPkg) (*fakeNexus, string) {
 	t.Helper()
-	f := &fakeNexus{byFile: map[string]string{}, tarballs: map[string][]byte{}}
+	f := &fakeNexus{byFile: map[string]string{}, tarballs: map[string][]byte{}, reads: map[string]int{}}
 	for _, p := range pkgs {
 		f.byFile[npm.PackFileName(p.name, p.version)] = npm.TarballURL("/repository/"+testRepo, p.name, p.version)
 	}
@@ -159,6 +160,7 @@ func (f *fakeNexus) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet:
 		f.mu.Lock()
 		body, ok := f.tarballs[r.URL.Path]
+		f.reads[r.URL.Path]++
 		f.mu.Unlock()
 		if !ok {
 			http.NotFound(w, r)
@@ -196,4 +198,18 @@ func newPublisher(s importer.Settings) (importer.Publisher, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// readCount is how many times Nexus was asked for the package's tarball.
+func (f *fakeNexus) readCount(p testPkg) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[npm.TarballURL("/repository/"+testRepo, p.name, p.version)]
+}
+
+// lose makes Nexus forget a package, as a repository cleanup would.
+func (f *fakeNexus) lose(p testPkg) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.tarballs, npm.TarballURL("/repository/"+testRepo, p.name, p.version))
 }

@@ -34,6 +34,10 @@ type fakeMinio struct {
 	readErr map[string]error
 	// serveETag, when set for a key, is the ETag a Get answers whatever the request asked.
 	serveETag map[string]string
+	// failDelete makes a delete of the keyed object fail, whatever the bucket.
+	failDelete map[string]error
+	// hook, when set, runs at the start of every Head and Get, before the fake looks at its objects.
+	hook func(op, key string)
 	// stalled receives a value each time a read starts to block.
 	stalled chan struct{}
 }
@@ -41,7 +45,7 @@ type fakeMinio struct {
 func newFakeMinio() *fakeMinio {
 	return &fakeMinio{
 		buckets: map[string]map[string]s3.Object{}, data: map[string][]byte{}, cut: map[string]int{},
-		stall: map[string]int{}, stalled: make(chan struct{}, 8), readErr: map[string]error{}, serveETag: map[string]string{},
+		stall: map[string]int{}, stalled: make(chan struct{}, 8), readErr: map[string]error{}, serveETag: map[string]string{}, failDelete: map[string]error{},
 	}
 }
 
@@ -125,6 +129,12 @@ func (f *fakeMinio) List(_ context.Context, bucket, prefix string, limit int) (s
 }
 
 func (f *fakeMinio) Head(_ context.Context, bucket, key string) (s3.Object, error) {
+	f.mu.Lock()
+	hook := f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook("head", key)
+	}
 	if err := f.record(call{Op: "head", Bucket: bucket, Key: key}); err != nil {
 		return s3.Object{}, err
 	}
@@ -137,6 +147,12 @@ func (f *fakeMinio) Head(_ context.Context, bucket, key string) (s3.Object, erro
 }
 
 func (f *fakeMinio) Get(ctx context.Context, bucket, key, etag string) (io.ReadCloser, s3.Object, error) {
+	f.mu.Lock()
+	hook := f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook("get", key)
+	}
 	if err := f.record(call{Op: "get", Bucket: bucket, Key: key, ETag: etag}); err != nil {
 		return nil, s3.Object{}, err
 	}
@@ -207,6 +223,9 @@ func (f *fakeMinio) Delete(_ context.Context, bucket, key string) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.failDelete[key]; ok {
+		return err
+	}
 	delete(f.buckets[bucket], key)
 	return nil
 }

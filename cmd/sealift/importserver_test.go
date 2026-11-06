@@ -185,7 +185,7 @@ func TestImportServerSweepsAtStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Begin("alice", imp.ID); err != nil {
+	if _, _, err := st.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Get("alice", imp.ID); got.Outcome() != "running" {

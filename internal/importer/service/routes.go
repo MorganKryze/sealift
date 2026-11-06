@@ -24,7 +24,7 @@ type Verifier interface {
 // without TLS; New warns about each once. UnencryptedLinks names the same
 // links (keySet, minio, nexus) for the archive list. A nil MinIO means the
 // settings have no minio section. A nil Log discards. Submit queues an
-// import's latest attempt; Settings and NewPublisher are what an attempt
+// import's latest attempt and says whether it was taken, which it is not once the queue is closed; Settings and NewPublisher are what an attempt
 // publishes with, and ImportVersion is what its report names.
 type Config struct {
 	Verifier         Verifier
@@ -33,7 +33,7 @@ type Config struct {
 	UnencryptedLinks []string
 	Log              *slog.Logger
 	Store            *imports.Store
-	Submit           func(user, id string)
+	Submit           func(user, id string) bool
 	Settings         importer.Settings
 	NewPublisher     func(importer.Settings) (importer.Publisher, error)
 	ImportVersion    string
@@ -46,7 +46,7 @@ type Handlers struct {
 	links         []string
 	log           *slog.Logger
 	store         *imports.Store
-	submit        func(user, id string)
+	submit        func(user, id string) bool
 	settings      importer.Settings
 	newPublisher  func(importer.Settings) (importer.Publisher, error)
 	importVersion string

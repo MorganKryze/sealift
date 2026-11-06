@@ -56,13 +56,12 @@ func TestAttemptReadsEachObjectOnce(t *testing.T) {
 	if rep.Outcome != importer.OutcomeComplete || rep.Counts.Published != 1 {
 		t.Fatalf("report = %+v", rep)
 	}
-	if rem != nil {
-		t.Errorf("removal = %+v, want none yet", rem)
+	if rem == nil || !rem.Removed {
+		t.Errorf("removal = %+v, want both objects removed", rem)
 	}
 	gets := map[string]string{}
 	for _, c := range a.minio.recorded() {
 		if c.Op != "get" {
-			t.Errorf("unexpected MinIO call %+v", c)
 			continue
 		}
 		if _, dup := gets[c.Key]; dup {

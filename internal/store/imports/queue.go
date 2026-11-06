@@ -2,6 +2,7 @@ package imports
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -38,10 +39,12 @@ func NewQueue(s *Store, run RunFunc, log *slog.Logger) *Queue {
 	return q
 }
 
-// Submit queues the latest attempt of an import. After Close it does nothing.
-func (q *Queue) Submit(user, id string) {
+// Submit queues the latest attempt of an import. After Close it queues
+// nothing and returns false, so the caller can say the work will not run.
+func (q *Queue) Submit(user, id string) bool {
 	q.mu.Lock()
-	if q.ctx.Err() == nil {
+	open := q.ctx.Err() == nil
+	if open {
 		q.items = append(q.items, queued{user, id})
 	}
 	q.mu.Unlock()
@@ -49,6 +52,7 @@ func (q *Queue) Submit(user, id string) {
 	case q.wake <- struct{}{}:
 	default:
 	}
+	return open
 }
 
 // Close cancels the running attempt, which ends interrupted, and waits for
@@ -92,33 +96,46 @@ func (q *Queue) next() (queued, bool) {
 	}
 }
 
+// reasonPanic is the reason of an attempt whose run panicked; the panic's own
+// text stays out of the record because it may quote a path.
+const reasonPanic = "the import stopped on an internal error; see the service log"
+
 func (q *Queue) process(it queued) {
 	logf := func(what string, err error) {
 		q.log.Error(what, "user", it.user, "id", it.id, "error", err)
 	}
-	dir, err := q.s.Begin(it.user, it.id)
+	// abandon ends an attempt the queue cannot run, so no record stays queued
+	// or running with nothing behind it.
+	abandon := func(why string) {
+		if err := q.s.Abandon(it.user, it.id, why); err != nil {
+			logf("could not end an attempt", err)
+		}
+	}
+	dir, n, err := q.s.Begin(it.user, it.id)
 	if err != nil {
 		logf("could not start an attempt", err)
+		abandon("the import could not be started; see the service log")
 		return
 	}
 	imp, err := q.s.Get(it.user, it.id)
 	if err != nil {
 		logf("could not read an import to run", err)
+		abandon("the import could not be read; see the service log")
 		return
 	}
 	progress := importer.Progress{
 		Listed: func(pkgs []importer.Result) {
-			if err := q.s.Listed(it.user, it.id, pkgs); err != nil {
+			if err := q.s.Listed(it.user, it.id, n, pkgs); err != nil {
 				logf("could not store the package list", err)
 			}
 		},
 		Ended: func(i int, r importer.Result) {
-			if err := q.s.Ended(it.user, it.id, i, r); err != nil {
+			if err := q.s.Ended(it.user, it.id, n, i, r); err != nil {
 				logf("could not store a package state", err)
 			}
 		},
 	}
-	rep, rem := q.run(q.ctx, imp, dir, progress)
+	rep, rem := q.guarded(it, imp, dir, progress)
 	// A run that was cut short reports incomplete; a report that finished
 	// every package stays what it says, even when Close came last.
 	if q.ctx.Err() != nil && rep.Outcome == importer.OutcomeIncomplete {
@@ -130,9 +147,22 @@ func (q *Queue) process(it queued) {
 	if rep.Packages == nil {
 		rep.Packages = []importer.Result{}
 	}
-	if err := q.s.Finish(it.user, it.id, rep, rem); err != nil {
+	if err := q.s.Finish(it.user, it.id, n, rep, rem); err != nil {
 		logf("could not store the end of an attempt", err)
+		abandon("the end of the import could not be stored; see the service log")
 		return
 	}
 	q.log.Info("import attempt ended", "user", it.user, "id", it.id, "outcome", rep.Outcome)
+}
+
+// guarded runs one attempt. A panic in the run, in archive parsing for one,
+// ends that attempt incomplete and leaves the worker alive for every user.
+func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, rem *Removal) {
+	defer func() {
+		if r := recover(); r != nil {
+			q.log.Error("an import attempt panicked", "user", it.user, "id", it.id, "panic", fmt.Sprint(r))
+			rep, rem = importer.Report{Outcome: importer.OutcomeIncomplete, Reason: reasonPanic, Packages: []importer.Result{}}, nil
+		}
+	}()
+	return q.run(q.ctx, imp, dir, p)
 }

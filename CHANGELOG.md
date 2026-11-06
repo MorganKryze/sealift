@@ -11,6 +11,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The `sealift import` command, in the published image: it checks an archive against its manifest and signature key, then publishes its npm packages to a Nexus repository. It never overwrites a version Nexus holds with other bytes, and exits 1 when any package failed. `-report` writes the result as JSON.
 - The `sealift import-server` command, a service that checks each request's token against the realm's signing keys and names the signed-in user at `GET /api/me` and lists the archives in the user's MinIO folder at `GET /api/archives`. It needs a `token` section in the settings file; a `minio` section turns the archive list on.
 - `POST /api/imports` on the import service queues an import of an archive in the user's MinIO folder, and `GET /api/imports` and `GET /api/imports/{importId}` follow it. Imports run one at a time. Each package's state is stored as soon as it ends, and stopping the service ends the running import as `interrupted`. An archive that stops downloading partway ends `incomplete`, never `refused`.
+- `POST /api/imports/{importId}/retry` adds an attempt to an import. A retry reads every package from Nexus again and uploads only what Nexus no longer serves. When an attempt ends `complete`, the service removes the archive and its manifest from MinIO after checking that both are unchanged; a failed removal keeps the archive and shows the reason, and `archiveRemoved` tells whether it went. An attempt that ends any other way removes nothing.
 
 ### Changed
 

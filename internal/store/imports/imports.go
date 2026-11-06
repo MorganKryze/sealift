@@ -234,13 +234,15 @@ func (s *Store) list(user string) ([]Import, error) {
 	return out, nil
 }
 
-// Begin marks the latest attempt running and makes its working directory.
-func (s *Store) Begin(user, id string) (dir string, err error) {
-	return s.update(user, id, func(imp *Import) (string, error) {
+// Begin marks the latest attempt running and makes its working directory. It
+// returns the attempt's number, which the later calls must name.
+func (s *Store) Begin(user, id string) (dir string, n int, err error) {
+	dir, err = s.update(user, id, func(imp *Import) (string, error) {
 		a := &imp.Attempts[len(imp.Attempts)-1]
 		if a.Status != StatusQueued {
 			return "", fmt.Errorf("imports: attempt %d is %s, not queued", a.N, a.Status)
 		}
+		n = a.N
 		now := s.clock()
 		a.Status, a.StartedAt = StatusRunning, &now
 		work := filepath.Join(s.dir(user, id), workPrefix+strconv.Itoa(a.N))
@@ -252,12 +254,13 @@ func (s *Store) Begin(user, id string) (dir string, err error) {
 		}
 		return work, nil
 	})
+	return dir, n, err
 }
 
-// Listed stores the packages of the running attempt, as the run listed them.
-func (s *Store) Listed(user, id string, pkgs []importer.Result) error {
+// Listed stores the packages of running attempt n, as the run listed them.
+func (s *Store) Listed(user, id string, n int, pkgs []importer.Result) error {
 	_, err := s.update(user, id, func(imp *Import) (string, error) {
-		a, err := running(imp)
+		a, err := running(imp, n)
 		if err != nil {
 			return "", err
 		}
@@ -268,10 +271,10 @@ func (s *Store) Listed(user, id string, pkgs []importer.Result) error {
 	return err
 }
 
-// Ended stores the result of package i of the running attempt.
-func (s *Store) Ended(user, id string, i int, r importer.Result) error {
+// Ended stores the result of package i of running attempt n.
+func (s *Store) Ended(user, id string, n, i int, r importer.Result) error {
 	_, err := s.update(user, id, func(imp *Import) (string, error) {
-		a, err := running(imp)
+		a, err := running(imp, n)
 		if err != nil {
 			return "", err
 		}
@@ -285,11 +288,14 @@ func (s *Store) Ended(user, id string, i int, r importer.Result) error {
 	return err
 }
 
-// Finish ends the latest attempt with its report and removes its working
-// directory. The queue owns the end; the run only reports package states.
-func (s *Store) Finish(user, id string, rep importer.Report, rem *Removal) error {
+// Finish ends attempt n, which must be the latest, with its report and removes
+// its working directory. The queue owns the end; the run only reports package states.
+func (s *Store) Finish(user, id string, n int, rep importer.Report, rem *Removal) error {
 	work, err := s.update(user, id, func(imp *Import) (string, error) {
 		a := &imp.Attempts[len(imp.Attempts)-1]
+		if a.N != n {
+			return "", fmt.Errorf("imports: attempt %d is not the latest, %d is", n, a.N)
+		}
 		if a.Status == StatusEnded {
 			return "", fmt.Errorf("imports: attempt %d already ended", a.N)
 		}
@@ -308,8 +314,11 @@ func (s *Store) Finish(user, id string, rep importer.Report, rem *Removal) error
 	return nil
 }
 
-func running(imp *Import) (*Attempt, error) {
+func running(imp *Import, n int) (*Attempt, error) {
 	a := &imp.Attempts[len(imp.Attempts)-1]
+	if a.N != n {
+		return nil, fmt.Errorf("imports: attempt %d is not the latest, %d is", n, a.N)
+	}
 	if a.Status != StatusRunning {
 		return nil, fmt.Errorf("imports: attempt %d is %s, not running", a.N, a.Status)
 	}

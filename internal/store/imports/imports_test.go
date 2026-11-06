@@ -138,7 +138,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("outcome %q, want queued", imp.Outcome())
 	}
 
-	dir, err := s.Begin("alice", imp.ID)
+	dir, _, err := s.Begin("alice", imp.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +155,12 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("running attempt %+v", got.Attempts[0])
 	}
 
-	if err := s.Listed("alice", imp.ID, pendingResults()); err != nil {
+	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err != nil {
 		t.Fatal(err)
 	}
 	ended := pendingResults()[0]
 	ended.State = importer.Published
-	if err := s.Ended("alice", imp.ID, 0, ended); err != nil {
+	if err := s.Ended("alice", imp.ID, 1, 0, ended); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.Get("alice", imp.ID)
@@ -176,7 +176,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		{Name: "left-pad", Version: "1.3.0", File: "left-pad-1.3.0.tgz", State: importer.Published},
 		{Name: "zeta", Version: "2.0.0", File: "zeta-2.0.0.tgz", State: importer.Failed, Reason: "upload failed"},
 	}, Counts: importer.Counts{Published: 1, Failed: 1}}
-	if err := s.Finish("alice", imp.ID, rep, &Removal{Removed: true}); err != nil {
+	if err := s.Finish("alice", imp.ID, 1, rep, &Removal{Removed: true}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.Get("alice", imp.ID)
@@ -218,7 +218,7 @@ func TestSlicesAreNeverWrittenNull(t *testing.T) {
 	if bytes.Contains(b, []byte("null")) {
 		t.Errorf("queued record holds null:\n%s", b)
 	}
-	if err := s.Listed("alice", imp.ID, nil); err == nil {
+	if err := s.Listed("alice", imp.ID, 1, nil); err == nil {
 		// A listing of no package is stored as an empty list.
 		b, _ = os.ReadFile(filepath.Join(root, "alice", imp.ID, "import.json"))
 		if bytes.Contains(b, []byte("null")) {
@@ -348,7 +348,7 @@ func TestImportOfAnotherUser(t *testing.T) {
 			t.Errorf("Get(%q, %q): %v, want ErrNotFound", bad.user, bad.id, err)
 		}
 	}
-	if _, err := s.Begin("bob", imp.ID); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.Begin("bob", imp.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Begin by another user: %v, want ErrNotFound", err)
 	}
 	if _, err := s.Create("../x", testArchiveObject, testManifestObject, ""); err == nil {
@@ -360,10 +360,10 @@ func TestEndedWritesEachPackage(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
 	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
-	if _, err := s.Begin("alice", imp.ID); err != nil {
+	if _, _, err := s.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Listed("alice", imp.ID, pendingResults()); err != nil {
+	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, "alice", imp.ID)
@@ -385,7 +385,7 @@ func TestEndedWritesEachPackage(t *testing.T) {
 		if state == importer.Failed {
 			r.Reason = "upload failed"
 		}
-		if err := s.Ended("alice", imp.ID, i, r); err != nil {
+		if err := s.Ended("alice", imp.ID, 1, i, r); err != nil {
 			t.Fatal(err)
 		}
 		pkgs := onDisk()
@@ -406,7 +406,7 @@ func TestEndedWritesEachPackage(t *testing.T) {
 	if c := got.Attempts[0].Report.Counts; c.Published != 1 || c.Failed != 1 {
 		t.Errorf("counts %+v", c)
 	}
-	if err := s.Ended("alice", imp.ID, 5, importer.Result{}); err == nil {
+	if err := s.Ended("alice", imp.ID, 1, 5, importer.Result{}); err == nil {
 		t.Error("Ended accepted an index past the list")
 	}
 }
@@ -414,22 +414,22 @@ func TestEndedWritesEachPackage(t *testing.T) {
 func TestStateChangesAreChecked(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
 	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
-	if err := s.Listed("alice", imp.ID, pendingResults()); err == nil {
+	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err == nil {
 		t.Error("Listed on a queued attempt succeeded")
 	}
-	if _, err := s.Begin("alice", imp.ID); err != nil {
+	if _, _, err := s.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Begin("alice", imp.ID); err == nil {
+	if _, _, err := s.Begin("alice", imp.ID); err == nil {
 		t.Error("Begin on a running attempt succeeded")
 	}
-	if err := s.Finish("alice", imp.ID, importer.Report{Outcome: importer.OutcomeRefused}, nil); err != nil {
+	if err := s.Finish("alice", imp.ID, 1, importer.Report{Outcome: importer.OutcomeRefused}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Finish("alice", imp.ID, importer.Report{Outcome: importer.OutcomeComplete}, nil); err == nil {
+	if err := s.Finish("alice", imp.ID, 1, importer.Report{Outcome: importer.OutcomeComplete}, nil); err == nil {
 		t.Error("Finish on an ended attempt succeeded")
 	}
-	if err := s.Ended("alice", imp.ID, 0, importer.Result{}); err == nil {
+	if err := s.Ended("alice", imp.ID, 1, 0, importer.Result{}); err == nil {
 		t.Error("Ended on an ended attempt succeeded")
 	}
 	got, _ := s.Get("alice", imp.ID)

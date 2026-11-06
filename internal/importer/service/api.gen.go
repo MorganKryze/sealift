@@ -81,7 +81,7 @@ type Import struct {
 	// Archive A MinIO object as it was when the import was created
 	Archive Object `json:"archive"`
 
-	// ArchiveRemoved Whether an attempt removed the archive from MinIO
+	// ArchiveRemoved Whether an attempt removed the archive from MinIO. A complete attempt removes the archive and its manifest only after checking that both still carry the ETags it read; its removal says why not.
 	ArchiveRemoved bool      `json:"archiveRemoved"`
 	Attempts       []Attempt `json:"attempts"`
 	CreatedAt      time.Time `json:"createdAt"`
@@ -223,8 +223,14 @@ type StartImport struct {
 	ExpectedSha256 *string `json:"expectedSha256,omitempty"`
 }
 
+// RetryImportJSONBody defines parameters for RetryImport.
+type RetryImportJSONBody = map[string]interface{}
+
 // StartImportJSONRequestBody defines body for StartImport for application/json ContentType.
 type StartImportJSONRequestBody = StartImport
+
+// RetryImportJSONRequestBody defines body for RetryImport for application/json ContentType.
+type RetryImportJSONRequestBody = RetryImportJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -240,6 +246,9 @@ type ServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(w http.ResponseWriter, r *http.Request, importId string)
+	// RetryImport Add an attempt to an import
+	// (POST /imports/{importId}/retry)
+	RetryImport(w http.ResponseWriter, r *http.Request, importId string)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -313,6 +322,32 @@ func (siw *ServerInterfaceWrapper) GetImport(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetImport(w, r, importId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RetryImport operation middleware
+func (siw *ServerInterfaceWrapper) RetryImport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "importId" -------------
+	var importId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "importId", r.PathValue("importId"), &importId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "importId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RetryImport(w, r, importId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -461,6 +496,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports", wrapper.ListImports)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports", wrapper.StartImport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports/{importId}", wrapper.GetImport)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports/{importId}/retry", wrapper.RetryImport)
 
 	return m
 }
@@ -635,6 +671,60 @@ func (response GetImportdefaultApplicationProblemPlusJSONResponse) VisitGetImpor
 	return err
 }
 
+type RetryImportRequestObject struct {
+	ImportId string `json:"importId"`
+	Body     *RetryImportJSONRequestBody
+}
+
+type RetryImportResponseObject interface {
+	VisitRetryImportResponse(w http.ResponseWriter) error
+}
+
+type RetryImport202JSONResponse Import
+
+func (response RetryImport202JSONResponse) VisitRetryImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryImport409ApplicationProblemPlusJSONResponse ImportConflict
+
+func (response RetryImport409ApplicationProblemPlusJSONResponse) VisitRetryImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryImportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response RetryImportdefaultApplicationProblemPlusJSONResponse) VisitRetryImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -687,6 +777,9 @@ type StrictServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(ctx context.Context, request GetImportRequestObject) (GetImportResponseObject, error)
+	// RetryImport Add an attempt to an import
+	// (POST /imports/{importId}/retry)
+	RetryImport(ctx context.Context, request RetryImportRequestObject) (RetryImportResponseObject, error)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -829,6 +922,39 @@ func (sh *strictHandler) GetImport(w http.ResponseWriter, r *http.Request, impor
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetImportResponseObject); ok {
 		if err := validResponse.VisitGetImportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RetryImport operation middleware
+func (sh *strictHandler) RetryImport(w http.ResponseWriter, r *http.Request, importId string) {
+	var request RetryImportRequestObject
+
+	request.ImportId = importId
+
+	var body RetryImportJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RetryImport(ctx, request.(RetryImportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RetryImport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RetryImportResponseObject); ok {
+		if err := validResponse.VisitRetryImportResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

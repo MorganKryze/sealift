@@ -150,6 +150,7 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 | `POST /api/imports` | Queue an import of one of those archives. |
 | `GET /api/imports` | The user's imports, newest first. |
 | `GET /api/imports/{importId}` | One import with its attempts. |
+| `POST /api/imports/{importId}/retry` | Add an attempt to an import. |
 
 The service checks each token against the keys of the realm named in the settings file before it acts for anyone. The user is the token's `preferred_username` claim and nothing else: a header such as `X-Auth-Request-Preferred-Username` is ignored. Failures use the problem body described under [Errors](#errors).
 
@@ -158,7 +159,7 @@ The service checks each token against the keys of the realm named in the setting
 | 401 | The token is absent or fails a check. `detail` names the check: `absent`, `malformed`, `algorithm`, `key`, `signature`, `issuer`, `audience`, `expiry` or `not before`. It never repeats the token. |
 | 403 | The claim is absent, is not a string, or cannot name a folder: lower case letters, digits, dots and hyphens, 1 to 58 characters, no `..`. A `POST` that looks cross-site also answers 403 (see [Starting an import](#starting-an-import)). |
 | 413 | A request body over 64 KiB. |
-| 503 | The realm's keys cannot be had. |
+| 503 | The realm's keys cannot be had, or the service is stopping and takes no new work. |
 | 500 | Anything else; the server log has the cause. |
 
 Request headers get 10 seconds to arrive and are capped at 64 KiB.
@@ -206,7 +207,7 @@ A `POST` is refused with 403, and nothing changes, when its `Origin` is not the 
 
 Imports run one at a time across all users, the first started first. The queue owns an attempt's start and its end. The run writes only the state of each package, as soon as that package ends, so a reader of `GET /api/imports/{importId}` sees the packages move from `pending` to `published`, `present` or `failed` while the attempt is `running`. Another user's id, a missing id and a malformed id all answer 404 with the same body.
 
-An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, `etag`, `size`), `expectedSha256`, `outcome`, `archiveRemoved` and its `attempts`. `outcome` is the latest attempt's: `queued`, `running`, `complete`, `incomplete`, `refused` or `interrupted`. Each attempt has its `status` (`queued`, `running` or `ended`), its times, its `outcome` and the same `report` that `sealift import -report` writes. `archiveRemoved` stays false: this version never removes an archive from MinIO.
+An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, `etag`, `size`), `expectedSha256`, `outcome`, `archiveRemoved` and its `attempts`. `outcome` is the latest attempt's: `queued`, `running`, `complete`, `incomplete`, `refused` or `interrupted`. Each attempt has its `status` (`queued`, `running` or `ended`), its times, its `outcome` and the same `report` that `sealift import -report` writes. `archiveRemoved` is true once an attempt has removed the archive from MinIO (see [Removing the archive](#removing-the-archive)).
 
 | Outcome | Meaning |
 | --- | --- |
@@ -217,6 +218,41 @@ An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, 
 
 An attempt reads the manifest and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.
 
+Before it reads anything, each attempt, the first included, heads the archive and the manifest and compares their ETags with the ones recorded. A difference ends the attempt `refused` with the reason above and publishes nothing; an object that is gone or cannot be described ends it `incomplete`.
+
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
+
+### Retrying an import
+
+`POST /api/imports/{importId}/retry` takes the body `{}` and adds a queued attempt numbered one past the latest. It is accepted whatever the last outcome was, a `complete` import whose archive was kept included, while no attempt is queued or running and the archive is still in MinIO. The earlier attempts and their reports stay as they are. The cross-site rules of [Starting an import](#starting-an-import) apply.
+
+A retry carries nothing over. It reads the manifest and the archive again, repeats every check, and reads every package from Nexus again, the ones an earlier attempt published or found included. It uploads only the packages that Nexus no longer serves with the shipped bytes, and it ends `complete` only when each package was read back in that attempt.
+
+| Status | When |
+| --- | --- |
+| 202 | The attempt is queued. The answer is the import with its new attempt. |
+| 404 | The id is malformed, missing or another user's. |
+| 409 | An attempt is queued or running (`an attempt of this import is queued or running`), the archive is no longer in MinIO (`the archive is no longer in MinIO`), or the settings file has no `minio` section. `importId` names the import. |
+| 502 | MinIO failed to describe the archive. |
+| 503 | The service is stopping. The attempt is recorded as `interrupted`. |
+
+An archive or manifest replaced since the import was created is not a 409: the attempt runs and ends `refused`, so the change stays on record.
+
+### Removing the archive
+
+When an attempt ends `complete`, the service removes the archive and then its manifest from the user's folder. It does so only if every package of that attempt was published or read back from Nexus, and only after it heads both objects again and finds the ETags recorded at the start. The import and every report stay on the data volume.
+
+The attempt's `removal` holds `removed` and a `reason`, and `archiveRemoved` on the import is true when any attempt removed the archive.
+
+| Case | `removed` | `reason` |
+| --- | --- | --- |
+| Both objects went | true | empty |
+| An object has another ETag, is gone, or could not be described | false | names the object and says nothing was removed |
+| The archive could not be deleted | false | `could not remove the archive: ...`; the manifest is kept too |
+| The archive went, the manifest could not be deleted | true | says the manifest stays in the folder |
+
+An `incomplete`, `refused` or `interrupted` attempt deletes nothing, and a failed removal leaves the import `complete`. A retry after a failed removal checks every package again before it tries to remove anything.
+
+The ETag check and the delete are two requests, so an object replaced in the few milliseconds between them is still deleted. The check closes the wider window of an upload that lands while the attempt runs.
 
 Stopping the service cancels the running attempt, which ends `interrupted`, and starts none of the attempts still queued. The next start marks those `interrupted` as well and starts nothing by itself.

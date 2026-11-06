@@ -16,27 +16,27 @@ func TestSweep(t *testing.T) {
 	queued, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
 
 	running, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
-	work, err := s.Begin("alice", running.ID)
+	work, _, err := s.Begin("alice", running.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(work, "left-pad-1.3.0.tgz"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Listed("alice", running.ID, pendingResults()); err != nil {
+	if err := s.Listed("alice", running.ID, 1, pendingResults()); err != nil {
 		t.Fatal(err)
 	}
 	done := pendingResults()[0]
 	done.State = importer.Published
-	if err := s.Ended("alice", running.ID, 0, done); err != nil {
+	if err := s.Ended("alice", running.ID, 1, 0, done); err != nil {
 		t.Fatal(err)
 	}
 
 	finished, _ := s.Create("bob", testArchiveObject, testManifestObject, "")
-	if _, err := s.Begin("bob", finished.ID); err != nil {
+	if _, _, err := s.Begin("bob", finished.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Finish("bob", finished.ID, importer.Report{Outcome: importer.OutcomeComplete}, nil); err != nil {
+	if err := s.Finish("bob", finished.ID, 1, importer.Report{Outcome: importer.OutcomeComplete}, nil); err != nil {
 		t.Fatal(err)
 	}
 	staleWork := filepath.Join(root, "bob", finished.ID, "work-1")

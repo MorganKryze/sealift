@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"regexp"
 	"strings"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/s3"
 	"github.com/MorganKryze/sealift/internal/store/imports"
@@ -113,7 +115,9 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if err != nil {
 		return nil, err
 	}
-	h.submit(user, imp.ID)
+	if !h.submit(user, imp.ID) {
+		return fail(h.stopping(user, imp.ID))
+	}
 	out, err := toImport(imp)
 	if err != nil {
 		return nil, err
@@ -216,30 +220,154 @@ func toImport(imp imports.Import) (Import, error) {
 	return out, nil
 }
 
-// RunAttempt runs one attempt of imp: it reads both objects from the user's
-// bucket and imports them as `sealift import` does. It keeps its files in a
-// directory of its own below dir and removes it. It removes nothing from MinIO yet.
+// stopping answers 503 for work the closed queue will not run, after ending
+// its attempt so no record waits for a restart's sweep.
+func (h *Handlers) stopping(user, id string) problem {
+	if err := h.store.Abandon(user, id, "the service was stopping and did not run this attempt"); err != nil {
+		h.log.Error("could not end an attempt that will not run", "id", id, "error", cleanText(err.Error()))
+	}
+	return problem{status: 503, body: newProblem(503, "Service stopping", "the service is stopping and takes no new work")}
+}
+
+// RetryImport adds an attempt to one of the user's imports.
+func (h *Handlers) RetryImport(ctx context.Context, req RetryImportRequestObject) (RetryImportResponseObject, error) {
+	user := userFrom(ctx)
+	fail := func(p problem) (RetryImportResponseObject, error) {
+		return RetryImportdefaultApplicationProblemPlusJSONResponse{StatusCode: p.status, Body: p.body}, nil
+	}
+	refuse := func(detail, id string) (RetryImportResponseObject, error) {
+		return RetryImport409ApplicationProblemPlusJSONResponse(ImportConflict{
+			Type: ptr("about:blank"), Title: "Cannot retry this import", Status: 409, Detail: &detail, ImportId: &id,
+		}), nil
+	}
+	h.startMu.Lock()
+	defer h.startMu.Unlock()
+	// The store checks the id's shape before it joins any path.
+	imp, err := h.store.Get(user, req.ImportId)
+	if errors.Is(err, imports.ErrNotFound) {
+		return fail(problem{status: 404, body: newProblem(404, "Not found", "no such import")})
+	}
+	if err != nil {
+		return nil, err
+	}
+	if h.objects == nil {
+		return refuse("MinIO is not configured: the settings file has no minio section", imp.ID)
+	}
+	if imp.Attempts[len(imp.Attempts)-1].Status != imports.StatusEnded {
+		return refuse("an attempt of this import is queued or running", imp.ID)
+	}
+	// Only the archive's presence is checked here; the attempt compares both ETags.
+	hctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
+	defer cancel()
+	switch _, err := h.objects.Head(hctx, bucketOf(user), imp.Archive.Key); {
+	case errors.Is(err, s3.ErrNotFound):
+		return refuse("the archive is no longer in MinIO", imp.ID)
+	case err != nil:
+		return fail(h.minioProblem("check that the archive is still there", err))
+	}
+	imp, err = h.store.Retry(user, imp.ID)
+	if errors.Is(err, imports.ErrBusy) {
+		return refuse("an attempt of this import is queued or running", imp.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !h.submit(user, imp.ID) {
+		return fail(h.stopping(user, imp.ID))
+	}
+	out, err := toImport(imp)
+	if err != nil {
+		return nil, err
+	}
+	return RetryImport202JSONResponse(out), nil
+}
+
+// stopped is the report of an attempt that ended before it read the archive.
+func (h *Handlers) stopped(imp imports.Import, outcome, reason string) importer.Report {
+	return importer.Report{
+		Outcome: outcome, Reason: reason,
+		Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
+		Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
+		Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
+		Packages: []importer.Result{},
+	}
+}
+
+// unchanged heads both objects and compares their ETags with those recorded.
+// It returns the report of an attempt that must not go on, or nil.
+func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Import) *importer.Report {
+	ctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
+	defer cancel()
+	for _, o := range []struct {
+		what string
+		obj  imports.Object
+	}{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}} {
+		got, err := h.objects.Head(ctx, bucket, o.obj.Key)
+		if err == nil && got.ETag == o.obj.ETag {
+			continue
+		}
+		// A head that fails is a failure of MinIO, not of the archive.
+		outcome, reason := importer.OutcomeIncomplete, ""
+		var ref *archive.Refusal
+		switch {
+		case err == nil:
+			err = changed(o.what)
+		case errors.Is(err, s3.ErrNotFound):
+			err = fmt.Errorf("%s is no longer in MinIO", o.what)
+		}
+		if errors.As(err, &ref) {
+			outcome, reason = importer.OutcomeRefused, ref.Reason
+		} else {
+			reason = cleanText("could not check " + o.what + " in MinIO: " + err.Error())
+		}
+		rep := h.stopped(imp, outcome, reason)
+		return &rep
+	}
+	return nil
+}
+
+// RunAttempt runs one attempt of imp: it checks both objects against the
+// recorded ETags, reads them from the user's bucket and imports them as
+// `sealift import` does. A complete attempt then removes the archive and its
+// manifest from MinIO, when both are unchanged. It keeps its files in a
+// directory of its own below dir and removes it.
 func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, *imports.Removal) {
+	bucket := bucketOf(imp.User)
+	if rep := h.unchanged(ctx, bucket, imp); rep != nil {
+		return *rep, nil
+	}
 	work, err := os.MkdirTemp(dir, "run-")
 	if err != nil {
 		h.log.Error("could not make a working directory", "id", imp.ID, "error", cleanText(err.Error()))
-		return importer.Report{
-			Outcome: importer.OutcomeRefused, Reason: "could not check the archive: no working directory",
-			Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
-			Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
-			Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
-			Packages: []importer.Result{},
-		}, nil
+		return h.stopped(imp, importer.OutcomeRefused, "could not check the archive: no working directory"), nil
 	}
 	defer os.RemoveAll(work)
 	rep := importer.RunAttempt(ctx, importer.Attempt{
 		Settings:       h.settings,
-		Source:         minioSource(h.objects, bucketOf(imp.User), imp),
+		Source:         minioSource(h.objects, bucket, imp),
 		ExpectedSHA256: imp.ExpectedSHA256,
 		ImportVersion:  h.importVersion,
 		Dir:            work,
 		Unencrypted:    len(h.links) > 0,
 		Progress:       p,
 	}, h.newPublisher)
-	return rep, nil
+	if !everyPackageIn(rep) {
+		return rep, nil
+	}
+	return rep, h.remove(ctx, bucket, imp)
+}
+
+// everyPackageIn reports whether the report is complete and each of its
+// packages was published or found in Nexus with the shipped bytes. A report
+// with a package unaccounted for never allows a removal.
+func everyPackageIn(rep importer.Report) bool {
+	if rep.Outcome != importer.OutcomeComplete || rep.Counts.Failed != 0 {
+		return false
+	}
+	for _, r := range rep.Packages {
+		if r.State != importer.Published && r.State != importer.Present {
+			return false
+		}
+	}
+	return true
 }
