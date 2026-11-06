@@ -426,3 +426,20 @@ func TestPublishStrippedSwappedShippedFile(t *testing.T) {
 		t.Errorf("%d uploads", n)
 	}
 }
+
+func TestCleanStripsControlCharactersAndCuts(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain text", "left-pad@1.0.0", "left-pad@1.0.0"},
+		{"escape and line breaks", "a\x1b[2Jb\r\nc", "a[2Jbc"},
+		{"nul, tab and delete", "a\x00b\tc\x7fd", "abcd"},
+		{"invalid utf-8", "a\xffb", "ab"},
+		{"multibyte text kept", "paquet-été", "paquet-été"},
+		{"cut at 300 characters", strings.Repeat("é", 400), strings.Repeat("é", 300)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clean(tc.in); got != tc.want {
+				t.Fatalf("clean(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
