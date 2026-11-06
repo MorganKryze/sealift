@@ -1,7 +1,8 @@
 #!/bin/sh
 # The import roles read no HOME and write only under /tmp or their own data
 # volume, so they skip the setup below. They run from the copy of the binary
-# that carries no capability, and also start under --cap-drop ALL. A bare
+# that carries no capability, and are built to run under --cap-drop ALL, which
+# only the operator can set (compose file or docker run). A bare
 # `sealift` or its full path both select them.
 case "${1:-}" in
 sealift | /usr/local/bin/sealift)

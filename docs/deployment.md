@@ -125,7 +125,7 @@ Everything sealift keeps lives under `/data`:
 
 `sealift import-server` runs on the air-gapped side. It lets each signed-in user import the archives in their own MinIO folder into Nexus. It serves the contract of [`api/import.yaml`](../api/import.yaml), described in [API](dev/api.md#the-import-service), and runs behind a gateway that signs users in. The lab in `lab/` runs it that way, and the statements below were checked against that lab.
 
-The image carries two copies of the binary. `sealift-import` holds no capability, and `docker-entrypoint.sh` starts `sealift import` and `sealift import-server` from it. Both start and run under `--cap-drop ALL` as user 10000, with an empty `CapPrm`, `CapEff` and `CapAmb`. The collection role keeps its own copy, which holds `SETUID`, `SETGID` and `KILL`.
+The image carries two copies of the binary. `sealift-import` holds no capability, and `docker-entrypoint.sh` starts `sealift import` and `sealift import-server` from it. Both start and run under `--cap-drop ALL` as user 10000, with an empty `CapPrm`, `CapEff` and `CapAmb`. An image cannot set `--cap-drop`: set it yourself, as the compose example below does. Without it, the container keeps Docker's default capability bounding set, which the setuid binaries of the base image can use. The collection role keeps its own copy, which holds `SETUID`, `SETGID` and `KILL`.
 
 <!-- illustrative -->
 ```yaml

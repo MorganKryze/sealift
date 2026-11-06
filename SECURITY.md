@@ -23,7 +23,7 @@ Include the version, what an attacker needs, and the steps that show the problem
 - The import never turns TLS off, refuses redirects and warns when the Nexus URL is plain HTTP. Its credentials stay in memory: the password and the key are not written to the output, the report or an error.
 - `sealift import-server` acts for a user only after the access token passes every check against the realm's keys: signature, algorithm, issuer, audience and expiry. A token signed by another key and a token with `alg` none each answered 401 in the lab. The user is the token's `preferred_username` claim alone; no forwarded header names one.
 - The service reads and deletes only under `packages/npm/` in the bucket of the checked user, and never writes to MinIO. It removes an archive only after the import ended `complete` and both objects are unchanged.
-- The import binary holds no Linux capability, and the image starts it under `--cap-drop ALL`.
+- The import binary holds no Linux capability and is built to run under `--cap-drop ALL`. The image cannot set that flag: you set it in the compose file or on the `docker run` line, as [Deployment](docs/deployment.md#the-import-service) shows. Without it, the container keeps Docker's default capability bounding set, and the setuid binaries of the base image can use it.
 - Tokens, the MinIO secret key, the Nexus password and the signature key stay out of logs, responses and stored records.
 
 ## What it does not
