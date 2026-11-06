@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/importer"
+	"github.com/MorganKryze/sealift/internal/importer/s3"
 	"github.com/MorganKryze/sealift/internal/importer/service"
 	"github.com/MorganKryze/sealift/internal/importer/token"
 	"github.com/MorganKryze/sealift/internal/store/imports"
@@ -43,6 +45,13 @@ func subcommand(args []string) (name string, rest []string) {
 		return args[0], args[1:]
 	}
 	return "", args
+}
+
+func minioURL(s importer.Settings) *url.URL {
+	if s.MinIO == nil {
+		return nil
+	}
+	return s.MinIO.URL
 }
 
 // newImportHTTPServer bounds what a client can make the server hold open.
@@ -110,11 +119,25 @@ func runImportServer(ctx context.Context, args []string, stderr io.Writer) int {
 	if err != nil {
 		return usage("token: %v", err)
 	}
-	var unencrypted []string
-	if ts.KeySetURL.Scheme == "http" {
-		unencrypted = append(unencrypted, ts.KeySetURL.String())
+	cfg := service.Config{Verifier: verifier, Log: log}
+	// A link over plain http is named for the archive list and warned about at start.
+	for _, link := range []struct {
+		name string
+		u    *url.URL
+	}{{"keySet", ts.KeySetURL}, {"minio", minioURL(settings)}, {"nexus", settings.NexusURL}} {
+		if link.u != nil && link.u.Scheme == "http" {
+			cfg.Unencrypted = append(cfg.Unencrypted, link.u.String())
+			cfg.UnencryptedLinks = append(cfg.UnencryptedLinks, link.name)
+		}
 	}
-	handlers := service.New(service.Config{Verifier: verifier, Unencrypted: unencrypted, Log: log})
+	if m := settings.MinIO; m != nil {
+		client, err := s3.New(s3.Config{URL: m.URL, Region: m.Region, AccessKey: m.AccessKey, SecretKey: m.SecretKey, CAFile: m.CAFile})
+		if err != nil {
+			return usage("minio: %v", err)
+		}
+		cfg.MinIO = client
+	}
+	handlers := service.New(cfg)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -263,3 +263,75 @@ func TestImportHTTPServerBounds(t *testing.T) {
 		t.Errorf("IdleTimeout = %v, want 60s", srv.IdleTimeout)
 	}
 }
+
+// withMinIO appends a minio section and its key files to the settings file at path.
+func withMinIO(t *testing.T, path, minioURL string) {
+	t.Helper()
+	dir := filepath.Dir(path)
+	for name, content := range map[string]string{"minio-access-key": "test-access-id\n", "minio-secret-key": "test-minio-secret\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := "minio:\n  url: " + minioURL + "\n  accessKeyFile: minio-access-key\n  secretKeyFile: minio-secret-key\n"
+	if err := os.WriteFile(path, append(body, section...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImportServerStartsWithoutMinIO(t *testing.T) {
+	s := startServer(t, "-settings", serverSettings(t, tokenSection(serverKeySet)), "-data", t.TempDir(), "-addr", "127.0.0.1:0")
+	if code, body := get(t, "http://"+s.addr+"/api/archives"); code != http.StatusUnauthorized || !strings.Contains(body, "absent") {
+		t.Errorf("GET /api/archives without a token = %d %q, want 401 naming the check", code, body)
+	}
+	if code := s.stop(t); code != 0 {
+		t.Errorf("exit %d, stderr %s", code, s.stderr.String())
+	}
+	if strings.Contains(s.stderr.String(), "unencrypted") {
+		t.Errorf("a warning without any http link: %s", s.stderr.String())
+	}
+}
+
+func TestImportServerWiresMinIO(t *testing.T) {
+	tests := []struct {
+		name, url string
+		warns     int
+	}{
+		{"http", "http://minio.example.internal:9000", 1},
+		{"https", "https://minio.example.internal:9000", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := serverSettings(t, tokenSection(serverKeySet))
+			withMinIO(t, path, tt.url)
+			s := startServer(t, "-settings", path, "-data", t.TempDir(), "-addr", "127.0.0.1:0")
+			s.stop(t)
+			n := strings.Count(s.stderr.String(), "unencrypted")
+			if n != tt.warns {
+				t.Errorf("%d unencrypted warnings, want %d; stderr %s", n, tt.warns, s.stderr.String())
+			}
+			if tt.warns == 1 && !strings.Contains(s.stderr.String(), tt.url) {
+				t.Errorf("the warning does not name %s: %s", tt.url, s.stderr.String())
+			}
+			for _, secret := range []string{"test-minio-secret", "test-access-id"} {
+				if strings.Contains(s.stderr.String(), secret) {
+					t.Errorf("stderr holds %q", secret)
+				}
+			}
+		})
+	}
+}
+
+func TestImportServerRefusesBadMinIO(t *testing.T) {
+	path := serverSettings(t, tokenSection(serverKeySet))
+	withMinIO(t, path, "ftp://minio.example.internal")
+	var stderr bytes.Buffer
+	code := runImportServer(context.Background(), []string{"-settings", path, "-data", t.TempDir(), "-addr", "127.0.0.1:0"}, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "minio.url") || strings.Contains(stderr.String(), "minio.example.internal") {
+		t.Errorf("exit %d, stderr %q; want 2 naming minio.url without the URL", code, stderr.String())
+	}
+}

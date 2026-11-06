@@ -11,10 +11,51 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
+
+// Archive defines model for Archive.
+type Archive struct {
+	Importable bool `json:"importable"`
+
+	// Key The object key, under packages/npm/
+	Key      string    `json:"key"`
+	Modified time.Time `json:"modified"`
+
+	// Reason Why the archive cannot be imported; absent when it can
+	Reason *string `json:"reason,omitempty"`
+	Size   int64   `json:"size"`
+}
+
+// ArchiveList defines model for ArchiveList.
+type ArchiveList struct {
+	Archives []Archive `json:"archives"`
+
+	// Bucket The user's bucket, user-<name>
+	Bucket string `json:"bucket"`
+
+	// BucketMissing True when MinIO has no bucket for the user
+	BucketMissing bool `json:"bucketMissing"`
+
+	// Folder The folder the list covers, packages/npm/
+	Folder string `json:"folder"`
+
+	// Message Says what an empty list means when the bucket is missing
+	Message         *string `json:"message,omitempty"`
+	MinioConfigured bool    `json:"minioConfigured"`
+
+	// Truncated True when the folder holds more objects than the list read
+	Truncated bool `json:"truncated"`
+
+	// Unencrypted The links that run over plain http, among keySet, minio and nexus
+	Unencrypted []string `json:"unencrypted"`
+}
 
 // Me defines model for Me.
 type Me struct {
+	// MinioConfigured Whether the settings file has a minio section
+	MinioConfigured bool `json:"minioConfigured"`
+
 	// User The checked token's preferred_username, which names the user's bucket and folder
 	User string `json:"user"`
 }
@@ -36,6 +77,9 @@ type Problem struct {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListArchives List the archives in the user's folder
+	// (GET /archives)
+	ListArchives(w http.ResponseWriter, r *http.Request)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -49,6 +93,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListArchives operation middleware
+func (siw *ServerInterfaceWrapper) ListArchives(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListArchives(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // GetMe operation middleware
 func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
@@ -185,11 +243,50 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/archives", wrapper.ListArchives)
 
 	return m
 }
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type ListArchivesRequestObject struct {
+}
+
+type ListArchivesResponseObject interface {
+	VisitListArchivesResponse(w http.ResponseWriter) error
+}
+
+type ListArchives200JSONResponse ArchiveList
+
+func (response ListArchives200JSONResponse) VisitListArchivesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListArchivesdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response ListArchivesdefaultApplicationProblemPlusJSONResponse) VisitListArchivesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type GetMeRequestObject struct {
 }
@@ -231,6 +328,9 @@ func (response GetMedefaultApplicationProblemPlusJSONResponse) VisitGetMeRespons
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// ListArchives List the archives in the user's folder
+	// (GET /archives)
+	ListArchives(ctx context.Context, request ListArchivesRequestObject) (ListArchivesResponseObject, error)
 	// GetMe Name the user the checked token stands for
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -273,6 +373,30 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListArchives operation middleware
+func (sh *strictHandler) ListArchives(w http.ResponseWriter, r *http.Request) {
+	var request ListArchivesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListArchives(ctx, request.(ListArchivesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListArchives")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListArchivesResponseObject); ok {
+		if err := validResponse.VisitListArchivesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // GetMe operation middleware

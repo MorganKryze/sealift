@@ -9,7 +9,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - The `sealift import` command, in the published image: it checks an archive against its manifest and signature key, then publishes its npm packages to a Nexus repository. It never overwrites a version Nexus holds with other bytes, and exits 1 when any package failed. `-report` writes the result as JSON.
-- The `sealift import-server` command, a service that checks each request's token against the realm's signing keys and names the signed-in user at `GET /api/me`. It needs a `token` section in the settings file.
+- The `sealift import-server` command, a service that checks each request's token against the realm's signing keys and names the signed-in user at `GET /api/me` and lists the archives in the user's MinIO folder at `GET /api/archives`. It needs a `token` section in the settings file; a `minio` section turns the archive list on.
 
 ### Changed
 

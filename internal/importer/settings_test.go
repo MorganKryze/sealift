@@ -10,7 +10,16 @@ import (
 )
 
 const (
-	testKey      = "test-key"
+	testKey = "test-key"
+	// testAccessKey and testMinIOSecret are the MinIO credentials the settings files hold.
+	testAccessKey   = "test-access-id"
+	testMinIOSecret = "test-minio-secret"
+	minioSection    = `minio:
+  url: https://minio.example.internal:9000
+  region: eu-west-1
+  accessKeyFile: minio-access-key
+  secretKeyFile: minio-secret-key
+`
 	tokenSection = `token:
   keySetUrl: https://idp.example.internal/realms/lab/protocol/openid-connect/certs
   issuer: https://idp.example.internal/realms/lab
@@ -38,6 +47,8 @@ func writeSettings(t *testing.T, body string) string {
 	write("nexus-password", testPassword+"\n")
 	write("signature-key", testKey+"\n")
 	write("ca.pem", "pem")
+	write("minio-access-key", testAccessKey+"\n")
+	write("minio-secret-key", testMinIOSecret+"\n")
 	write("settings.yaml", body)
 	return filepath.Join(dir, "settings.yaml")
 }
@@ -96,6 +107,10 @@ func TestLoadSettings(t *testing.T) {
 func TestLoadSettingsRefuses(t *testing.T) {
 	without := func(line string) string { return strings.Replace(validSetting, line, "", 1) }
 	withURL := func(u string) string { return strings.Replace(validSetting, "https://nexus.example.internal", u, 1) }
+	withoutLine := func(section, line string) string { return strings.Replace(section, line, "", 1) }
+	withMinIOURL := func(u string) string {
+		return strings.Replace(minioSection, "https://minio.example.internal:9000", u, 1)
+	}
 	withKeySet := func(u string) string {
 		return strings.Replace(tokenSection, "https://idp.example.internal/realms/lab/protocol/openid-connect/certs", u, 1)
 	}
@@ -144,6 +159,24 @@ func TestLoadSettingsRefuses(t *testing.T) {
 		{"token key set url not a url", validSetting + withKeySet("https://idp.example.internal:port/certs"), nil, "token.keySetUrl", "not a valid URL"},
 		{"token ca file unreadable", validSetting + tokenSection + "  caFile: missing.pem\n", nil, "token.caFile", "cannot be read"},
 		{"ca file unreadable", strings.Replace(validSetting, "passwordFile: nexus-password\n", "passwordFile: nexus-password\n  caFile: missing.pem\n", 1), nil, "nexus.caFile", "cannot be read"},
+		{"minio url absent", validSetting + withoutLine(minioSection, "  url: https://minio.example.internal:9000\n"), nil, "minio.url", "required"},
+		{"minio access key file absent", validSetting + withoutLine(minioSection, "  accessKeyFile: minio-access-key\n"), nil, "minio.accessKeyFile", "required"},
+		{"minio secret key file absent", validSetting + withoutLine(minioSection, "  secretKeyFile: minio-secret-key\n"), nil, "minio.secretKeyFile", "required"},
+		{"minio unknown field", validSetting + minioSection + "  insecure: true\n", nil, "insecure", "unknown"},
+		{"minio url with user", validSetting + withMinIOURL("https://operator@minio.example.internal"), nil, "minio.url", "user name"},
+		{"minio url with password", validSetting + withMinIOURL("https://operator:hunter2@minio.example.internal"), nil, "minio.url", "user name"},
+		{"minio url with query", validSetting + withMinIOURL("https://minio.example.internal/?a=b"), nil, "minio.url", "query"},
+		{"minio url with fragment", validSetting + withMinIOURL("https://minio.example.internal/#x"), nil, "minio.url", "fragment"},
+		{"minio url scheme", validSetting + withMinIOURL("ftp://minio.example.internal"), nil, "minio.url", "http or https"},
+		{"minio url without host", validSetting + withMinIOURL("https:///bucket"), nil, "minio.url", "host"},
+		{"minio url not a url", validSetting + withMinIOURL("https://minio.example.internal:port"), nil, "minio.url", "not a valid URL"},
+		{"minio access key file unreadable", validSetting + minioSection, func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "minio-access-key")) }, "minio.accessKeyFile", "cannot be read"},
+		{"minio secret key file unreadable", validSetting + minioSection, func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "minio-secret-key")) }, "minio.secretKeyFile", "cannot be read"},
+		{"minio access key file empty", validSetting + minioSection, func(_ *testing.T, dir string) { _ = os.WriteFile(filepath.Join(dir, "minio-access-key"), nil, 0o600) }, "minio.accessKeyFile", "empty"},
+		{"minio secret key file empty", validSetting + minioSection, func(_ *testing.T, dir string) {
+			_ = os.WriteFile(filepath.Join(dir, "minio-secret-key"), []byte("\n"), 0o600)
+		}, "minio.secretKeyFile", "empty"},
+		{"minio ca file unreadable", validSetting + minioSection + "  caFile: missing.pem\n", nil, "minio.caFile", "cannot be read"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +192,7 @@ func TestLoadSettingsRefuses(t *testing.T) {
 			if se.Field != tc.field || !strings.Contains(se.Reason, tc.want) {
 				t.Errorf("got field %q reason %q, want %q containing %q", se.Field, se.Reason, tc.field, tc.want)
 			}
-			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", "idp.example.internal", testPassword, testKey} {
+			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", "idp.example.internal", "minio.example.internal", testPassword, testKey, testAccessKey, testMinIOSecret} {
 				if strings.Contains(err.Error(), leak) {
 					t.Errorf("error %q repeats %q", err, leak)
 				}
@@ -243,6 +276,48 @@ func TestLoadSettingsServiceSections(t *testing.T) {
 		var se *SettingsError
 		if err := s.CheckService(); !errors.As(err, &se) || se.Field != "token" || !strings.Contains(se.Reason, "required") {
 			t.Fatalf("CheckService = %v, want a SettingsError naming token", err)
+		}
+	})
+}
+
+func TestLoadSettingsMinIOSection(t *testing.T) {
+	t.Run("minio section", func(t *testing.T) {
+		path := writeSettings(t, validSetting+minioSection+"  caFile: ca.pem\n")
+		s, err := LoadSettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := s.MinIO
+		if m == nil {
+			t.Fatal("MinIO = nil")
+		}
+		if m.URL.String() != "https://minio.example.internal:9000" || m.Region != "eu-west-1" {
+			t.Errorf("got %+v", m)
+		}
+		if string(m.AccessKey) != testAccessKey || string(m.SecretKey) != testMinIOSecret {
+			t.Error("one trailing newline must come off each key file")
+		}
+		if m.CAFile != filepath.Join(filepath.Dir(path), "ca.pem") {
+			t.Errorf("CAFile = %q", m.CAFile)
+		}
+		if strings.Contains(fmt.Sprintf("%v %+v %#v", s, s, s), testMinIOSecret) {
+			t.Error("the settings print the MinIO secret key")
+		}
+	})
+	t.Run("region is optional", func(t *testing.T) {
+		body := validSetting + strings.Replace(minioSection, "  region: eu-west-1\n", "", 1)
+		s, err := LoadSettings(writeSettings(t, body))
+		if err != nil || s.MinIO == nil || s.MinIO.Region != "" {
+			t.Fatalf("got %+v, %v", s.MinIO, err)
+		}
+	})
+	t.Run("no minio section", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, validSetting+tokenSection))
+		if err != nil || s.MinIO != nil {
+			t.Fatalf("got %+v, %v", s.MinIO, err)
+		}
+		if err := s.CheckService(); err != nil {
+			t.Errorf("CheckService = %v: MinIO is optional", err)
 		}
 	})
 }

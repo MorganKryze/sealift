@@ -18,16 +18,22 @@ type Verifier interface {
 }
 
 // Config holds what New needs. Unencrypted lists the URLs the service reaches
-// without TLS; New warns about each once. A nil Log discards.
+// without TLS; New warns about each once. UnencryptedLinks names the same
+// links (keySet, minio, nexus) for the archive list. A nil MinIO means the
+// settings have no minio section. A nil Log discards.
 type Config struct {
-	Verifier    Verifier
-	Unencrypted []string
-	Log         *slog.Logger
+	Verifier         Verifier
+	MinIO            Objects
+	Unencrypted      []string
+	UnencryptedLinks []string
+	Log              *slog.Logger
 }
 
 // Handlers implement the import contract.
 type Handlers struct {
 	verifier Verifier
+	objects  Objects
+	links    []string
 	log      *slog.Logger
 }
 
@@ -40,7 +46,7 @@ func New(cfg Config) *Handlers {
 	for _, u := range cfg.Unencrypted {
 		log.Warn("reaching a service over unencrypted http", "url", u)
 	}
-	return &Handlers{verifier: cfg.Verifier, log: log}
+	return &Handlers{verifier: cfg.Verifier, objects: cfg.MinIO, links: cfg.UnencryptedLinks, log: log}
 }
 
 // Routes serves GET /healthz, the contract under /api behind the token check,
@@ -65,7 +71,14 @@ func Routes(h *Handlers) http.Handler {
 	// The last middleware is the outermost: the body cap runs before the token check.
 	HandlerWithOptions(strict, StdHTTPServerOptions{
 		BaseRouter: mux, BaseURL: "/api",
-		Middlewares: []MiddlewareFunc{h.authenticate, limitBody},
+		Middlewares:      []MiddlewareFunc{h.authenticate, limitBody},
+		ErrorHandlerFunc: badParameter,
 	})
 	return mux
+}
+
+// badParameter answers a malformed parameter with a Problem that repeats none
+// of the input; the generated default would echo it as plain text.
+func badParameter(w http.ResponseWriter, _ *http.Request, _ error) {
+	writeProblem(w, http.StatusBadRequest, "Bad request", "a parameter could not be read")
 }

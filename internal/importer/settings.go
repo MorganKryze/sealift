@@ -56,6 +56,16 @@ type Settings struct {
 	SignatureKey Secret
 	// Token is the realm the import service checks tokens against; nil when the file has no token section.
 	Token *TokenSettings
+	// MinIO is the store the import service lists; nil when the file has no minio section.
+	MinIO *MinIOSettings
+}
+
+// MinIOSettings name the MinIO endpoint the import service reads and the service key it signs with.
+type MinIOSettings struct {
+	URL                  *url.URL
+	Region               string
+	AccessKey, SecretKey Secret
+	CAFile               string
 }
 
 // TokenSettings name the realm whose tokens the import service accepts.
@@ -98,6 +108,13 @@ type rawSettings struct {
 		Audience  string `yaml:"audience"`
 		CAFile    string `yaml:"caFile"`
 	} `yaml:"token"`
+	MinIO *struct {
+		URL           string `yaml:"url"`
+		Region        string `yaml:"region"`
+		AccessKeyFile string `yaml:"accessKeyFile"`
+		SecretKeyFile string `yaml:"secretKeyFile"`
+		CAFile        string `yaml:"caFile"`
+	} `yaml:"minio"`
 }
 
 // LoadSettings reads a settings file. Relative paths in it resolve from the
@@ -152,7 +169,40 @@ func LoadSettings(path string) (Settings, error) {
 			return Settings{}, err
 		}
 	}
+	if raw.MinIO != nil {
+		m := raw.MinIO
+		if s.MinIO, err = loadMinIO(dir, m.URL, m.Region, m.AccessKeyFile, m.SecretKeyFile, m.CAFile); err != nil {
+			return Settings{}, err
+		}
+	}
 	return s, nil
+}
+
+func loadMinIO(dir, rawURL, region, accessKeyFile, secretKeyFile, caFile string) (*MinIOSettings, error) {
+	for _, r := range []struct{ field, value string }{
+		{"minio.url", rawURL}, {"minio.accessKeyFile", accessKeyFile}, {"minio.secretKeyFile", secretKeyFile},
+	} {
+		if r.value == "" {
+			return nil, settingsErr(r.field, "is required")
+		}
+	}
+	u, err := parseURL("minio.url", rawURL)
+	if err != nil {
+		return nil, err
+	}
+	m := &MinIOSettings{URL: u, Region: region}
+	if m.AccessKey, err = readSecret("minio.accessKeyFile", resolve(dir, accessKeyFile)); err != nil {
+		return nil, err
+	}
+	if m.SecretKey, err = readSecret("minio.secretKeyFile", resolve(dir, secretKeyFile)); err != nil {
+		return nil, err
+	}
+	if caFile != "" {
+		if m.CAFile, err = certFile("minio.caFile", dir, caFile); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 func loadToken(dir, keySetURL, issuer, audience, caFile string) (*TokenSettings, error) {

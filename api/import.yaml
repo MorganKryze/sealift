@@ -3,13 +3,16 @@ info:
   title: sealift import service
   version: "1"
   description: >
-    Tells a signed-in user who the service acts for. Every operation needs the
+    Tells a signed-in user who the service acts for and lists the archives in
+    the user's MinIO folder. Every operation needs the
     access token the gateway forwards in the X-Access-Token header.
 servers:
   - url: /api
 tags:
   - name: session
     description: The signed-in user
+  - name: archives
+    description: The archives in the user's MinIO folder
 paths:
   /me:
     get:
@@ -26,13 +29,33 @@ paths:
                 $ref: "#/components/schemas/Me"
         default:
           $ref: "#/components/responses/Problem"
+  /archives:
+    get:
+      operationId: listArchives
+      tags:
+        - archives
+      summary: List the archives in the user's folder
+      description: >
+        Lists the objects under packages/npm/ in the bucket user-<name> and
+        pairs each archive with the manifest.json of its own folder. Reads no
+        manifest. 502 when MinIO cannot be reached or refuses the call.
+      responses:
+        "200":
+          description: The archives, none when MinIO is not configured or the bucket does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArchiveList"
+        default:
+          $ref: "#/components/responses/Problem"
 components:
   responses:
     Problem:
       description: >
         Error. 401 when the token fails a check (the detail names the check),
         403 when its preferred_username cannot name a user folder, 413 for a
-        body over 64 KiB, 503 when the realm's keys cannot be had.
+        body over 64 KiB, 502 when MinIO fails, 503 when the realm's keys
+        cannot be had.
       content:
         application/problem+json:
           schema:
@@ -44,8 +67,71 @@ components:
         user:
           type: string
           description: The checked token's preferred_username, which names the user's bucket and folder
+        minioConfigured:
+          type: boolean
+          description: Whether the settings file has a minio section
       required:
         - user
+        - minioConfigured
+    ArchiveList:
+      type: object
+      properties:
+        minioConfigured:
+          type: boolean
+        bucket:
+          type: string
+          description: The user's bucket, user-<name>
+        folder:
+          type: string
+          description: The folder the list covers, packages/npm/
+        bucketMissing:
+          type: boolean
+          description: True when MinIO has no bucket for the user
+        message:
+          type: string
+          description: Says what an empty list means when the bucket is missing
+        truncated:
+          type: boolean
+          description: True when the folder holds more objects than the list read
+        unencrypted:
+          type: array
+          description: The links that run over plain http, among keySet, minio and nexus
+          items:
+            type: string
+        archives:
+          type: array
+          items:
+            $ref: "#/components/schemas/Archive"
+      required:
+        - minioConfigured
+        - bucket
+        - folder
+        - bucketMissing
+        - truncated
+        - unencrypted
+        - archives
+    Archive:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The object key, under packages/npm/
+        size:
+          type: integer
+          format: int64
+        modified:
+          type: string
+          format: date-time
+        importable:
+          type: boolean
+        reason:
+          type: string
+          description: Why the archive cannot be imported; absent when it can
+      required:
+        - key
+        - size
+        - modified
+        - importable
     Problem:
       type: object
       description: RFC 9457 Problem Details for HTTP APIs

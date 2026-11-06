@@ -145,7 +145,8 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/me` | The user the checked token stands for: `{"user":"alice"}`. |
+| `GET /api/me` | The user the checked token stands for, and whether the settings file has a `minio` section: `{"user":"alice","minioConfigured":true}`. |
+| `GET /api/archives` | The archives in the user's MinIO folder. |
 
 The service checks each token against the keys of the realm named in the settings file before it acts for anyone. The user is the token's `preferred_username` claim and nothing else: a header such as `X-Auth-Request-Preferred-Username` is ignored. Failures use the problem body described under [Errors](#errors).
 
@@ -158,3 +159,26 @@ The service checks each token against the keys of the realm named in the setting
 | 500 | Anything else; the server log has the cause. |
 
 Request headers get 10 seconds to arrive and are capped at 64 KiB.
+
+### Listing archives
+
+`GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest.
+
+The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`.
+
+An archive pairs with the `manifest.json` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive nor a `manifest.json`.
+
+| Reason | When |
+| --- | --- |
+| `its name cannot be imported` | The key is not under `packages/npm/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment, holds a control character, is not UTF-8 or is over 1,024 bytes. |
+| `the folder holds more than one archive` | Its folder holds two or more archives. Each one is listed with this reason. |
+| `no manifest.json in its folder` | Its folder holds no `manifest.json`. |
+
+| Case | Answer |
+| --- | --- |
+| No `minio` section in the settings file | 200, `minioConfigured` false, no archive. The service calls no MinIO. |
+| MinIO has no bucket for the user | 200, `bucketMissing` true, no archive, and a `message` that names the bucket. |
+| More than 1,000 objects under the folder | 200, `truncated` true, with the archives found in the first 1,000. |
+| MinIO is unreachable or refuses the call | 502. `detail` holds MinIO's reason with control characters removed, cut to 300 characters. |
+
+`unencrypted` names each link that runs over plain `http`: `keySet`, `minio`, `nexus`.

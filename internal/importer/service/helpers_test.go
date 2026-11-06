@@ -47,9 +47,15 @@ type rig struct {
 
 func newRig(t *testing.T, v Verifier, unencrypted ...string) rig {
 	t.Helper()
+	return newRigConfig(t, Config{Verifier: v, Unencrypted: unencrypted})
+}
+
+// newRigConfig is newRig for a full Config; its Log is the rig's buffer.
+func newRigConfig(t *testing.T, cfg Config) rig {
+	t.Helper()
 	logs := &bytes.Buffer{}
-	h := New(Config{Verifier: v, Unencrypted: unencrypted, Log: slog.New(slog.NewJSONHandler(logs, nil))})
-	return rig{h: Routes(h), logs: logs}
+	cfg.Log = slog.New(slog.NewJSONHandler(logs, nil))
+	return rig{h: Routes(New(cfg)), logs: logs}
 }
 
 // get sends GET path with the token header set when tok is not empty.
