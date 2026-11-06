@@ -4,7 +4,7 @@ This page covers what crosses from the connected side to the air-gapped side: th
 
 ## What crosses
 
-One export produces six files. Only the archive is needed for the import; the reports tell the import side what it receives.
+One export produces six files. The import needs two of them, the archive and `manifest.json`, and refuses to start without the manifest. The four reports tell the import side what it receives.
 
 The archive holds the new versions and the packages they pull in, nothing else. A dependency kept at its current version is not packed, and neither is the rest of the current project: the import side must already hold those packages in Nexus, from earlier imports.
 
