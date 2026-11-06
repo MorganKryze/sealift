@@ -239,3 +239,33 @@ func TestQueueRemovesNothingWhenTheEndIsNotStored(t *testing.T) {
 		t.Error("archiveRemoved is true for a removal that never ran")
 	}
 }
+
+func TestQueuePanicKeepsTheStoredPackages(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp := newImport(t, s, "alice")
+	ran := make(chan struct{})
+	q := NewQueue(s, func(_ context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+		defer close(ran)
+		p.Listed([]importer.Result{
+			{Name: "a", Version: "1.0.0", State: importer.Pending},
+			{Name: "b", Version: "1.0.0", State: importer.Pending},
+		})
+		p.Ended(0, importer.Result{Name: "a", Version: "1.0.0", State: importer.Published})
+		panic("boom")
+	}, quietLog())
+	q.Submit(imp.User, imp.ID)
+	waitFor(t, ran, "the run")
+	q.Close()
+
+	a, _ := s.Get(imp.User, imp.ID)
+	r := a.Attempts[0].Report
+	if a.Attempts[0].Outcome != importer.OutcomeIncomplete || r.Reason != reasonPanic || a.Attempts[0].Removal != nil {
+		t.Fatalf("attempt = %+v", a.Attempts[0])
+	}
+	if len(r.Packages) != 2 || r.Packages[0].State != importer.Published || r.Packages[1].State != importer.Failed || r.Packages[1].Reason == "" {
+		t.Errorf("packages = %+v, want a published and b failed", r.Packages)
+	}
+	if r.Counts.Published != 1 || r.Counts.Failed != 1 {
+		t.Errorf("counts = %+v, want 1 published and 1 failed", r.Counts)
+	}
+}

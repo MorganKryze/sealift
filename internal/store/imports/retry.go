@@ -37,17 +37,31 @@ func (s *Store) Retry(user, id string) (Import, error) {
 // queued or running, and does nothing to one that has ended. The queue calls
 // it for an attempt it can neither run nor finish.
 func (s *Store) Abandon(user, id, reason string) error {
+	return s.endUnfinished(user, id, OutcomeInterrupted, reason, OutcomeInterrupted)
+}
+
+// Break ends the latest attempt as incomplete with reason when it is still
+// running, like Abandon, for a run that panicked. The package states the run
+// stored stay; the ones still pending are marked failed.
+func (s *Store) Break(user, id, reason string) error {
+	return s.endUnfinished(user, id, importer.OutcomeIncomplete, reason, "not reached")
+}
+
+// endUnfinished ends a queued or running attempt with outcome and reason,
+// keeps its stored packages and fails the pending ones with the reason
+// pending, and removes its working directory. An attempt that has ended is left alone.
+func (s *Store) endUnfinished(user, id, outcome, reason, pending string) error {
 	work, err := s.update(user, id, func(imp *Import) (string, error) {
 		a := &imp.Attempts[len(imp.Attempts)-1]
 		if a.Status == StatusEnded {
 			return "", nil
 		}
 		now := s.clock()
-		a.Status, a.EndedAt, a.Outcome, a.Removal = StatusEnded, &now, OutcomeInterrupted, nil
-		a.Report.Outcome, a.Report.Reason = OutcomeInterrupted, reason
+		a.Status, a.EndedAt, a.Outcome, a.Removal = StatusEnded, &now, outcome, nil
+		a.Report.Outcome, a.Report.Reason = outcome, reason
 		for i, p := range a.Report.Packages {
 			if p.State == importer.Pending {
-				a.Report.Packages[i].State, a.Report.Packages[i].Reason = importer.Failed, OutcomeInterrupted
+				a.Report.Packages[i].State, a.Report.Packages[i].Reason = importer.Failed, pending
 			}
 		}
 		recount(&a.Report)

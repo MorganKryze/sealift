@@ -141,7 +141,15 @@ func (q *Queue) process(it queued) {
 			}
 		},
 	}
-	rep, remove := q.guarded(it, imp, dir, progress)
+	rep, remove, panicked := q.guarded(it, imp, dir, progress)
+	if panicked {
+		// The states the run stored stay; only the outcome and the reason are set.
+		if err := q.s.Break(it.user, it.id, reasonPanic); err != nil {
+			logf("could not end a panicked attempt", err)
+			abandon("the end of the import could not be stored; see the service log")
+		}
+		return
+	}
 	// A run that was cut short reports incomplete; a report that finished
 	// every package stays what it says, even when Close came last.
 	if q.ctx.Err() != nil && rep.Outcome == importer.OutcomeIncomplete {
@@ -169,13 +177,14 @@ func (q *Queue) process(it queued) {
 }
 
 // guarded runs one attempt. A panic in the run, in archive parsing for one,
-// ends that attempt incomplete and leaves the worker alive for every user.
-func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, remove Remover) {
+// is reported through panicked and leaves the worker alive for every user.
+func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, remove Remover, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			q.log.Error("an import attempt panicked", "user", it.user, "id", it.id, "panic", fmt.Sprint(r))
-			rep, remove = importer.Report{Outcome: importer.OutcomeIncomplete, Reason: reasonPanic, Packages: []importer.Result{}}, nil
+			rep, remove, panicked = importer.Report{}, nil, true
 		}
 	}()
-	return q.run(q.ctx, imp, dir, p)
+	rep, remove = q.run(q.ctx, imp, dir, p)
+	return rep, remove, false
 }
