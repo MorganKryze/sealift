@@ -23,7 +23,7 @@ Nexus needs about 2 GB of memory. Give Docker at least 6 GB.
 | http://localhost:18443 | MinIO S3 API | same |
 | http://localhost:18444 | Keycloak, realm `lab` | `admin` / `admin` |
 
-Until the import tool exists, the app at 18440 is `traefik/whoami`: it echoes each request, so the page shows the `X-Access-Token` header and the user oauth2-proxy forwards, as the air-gapped gateway does.
+Until the import web app exists, the app at 18440 is `traefik/whoami`: it echoes each request, so the page shows the `X-Access-Token` header and the user oauth2-proxy forwards, as the air-gapped gateway does.
 
 `SEALIFT_IMAGE` picks another sealift image, such as `sealift:dev` from `just image`.
 
@@ -40,7 +40,7 @@ The air-gapped shell must reach nexus, minio and keycloak, and neither registry.
 
 The protocol follows the real crossing. The `transfer/` folder plays the USB key and the kiosk: it is the only path between the two sides, and only a person moves files through it.
 
-1. Connected side: in sealift at http://localhost:18450, set a signature key in the settings, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz` and `manifest.json` into `lab/transfer/`.
+1. Connected side: in sealift at http://localhost:18450, set the signature key to `lab-signature-key` in the settings, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz` and `manifest.json` into `lab/transfer/`.
 2. Check the archive before it crosses: `shasum -a 256 transfer/packages_npm.tar.gz` must print the `archive.sha256` of `manifest.json`.
 3. Air-gapped side: upload it into the user's bucket, as users do through the MinIO browser:
 
@@ -48,15 +48,22 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
    docker compose run --rm mc cp /transfer/packages_npm.tar.gz lab/user-alice/packages/npm/
    ```
 
-4. Import. Until the import tool exists, `scripts/publish-npm.sh` does what the current one does, and fails when any package fails:
+4. Import with `sealift import`, run from the sealift image on the air-gapped network. `import/settings.yaml` points it at Nexus as the `sealift-import` user, which `setup.sh` creates with the privileges to read, browse, add and edit in the `npm` repository and to upload components, and no others. The signature key is `lab-signature-key`, the value step 1 sets in the settings.
 
    ```sh
-   mkdir -p transfer/inbox
-   docker compose run --rm mc cp lab/user-alice/packages/npm/packages_npm.tar.gz /transfer/inbox/
-   docker compose run --rm airgap-shell sh /scripts/publish-npm.sh /transfer/inbox/packages_npm.tar.gz
+   docker compose run --rm mc cp lab/user-alice/packages/npm/packages_npm.tar.gz /transfer/
+   docker compose run --rm import sealift import -settings /import/settings.yaml -report /transfer/report.json /transfer/packages_npm.tar.gz
    ```
 
-   Each package prints `published`, `present` when Nexus already holds it, or `failed` with npm's reason.
+   The import checks the archive against `manifest.json` and the key before it uploads anything. Each package prints `published`, `present` when Nexus already holds the same bytes, or `failed` with the reason. The exit code is 0 when every package is published or present, and 1 otherwise. `transfer/report.json` holds the same result as JSON.
+
+   To see a conflict, upload one of the archive's name and version with other bytes before the import. Repack it with one byte changed and upload it as admin:
+
+   ```sh
+   curl -u admin:lab-admin-password -F npm.asset=@planted.tgz "http://127.0.0.1:18441/service/rest/v1/components?repository=npm"
+   ```
+
+   The import then fails that package with both digests, publishes the others, and exits 1. A second run reports the others as `present` and fails the same package again: the import never overwrites. Delete the component in Nexus, or empty the repository with `docker compose down -v`, to clear it.
 
 5. Install from Nexus on the air-gapped side, with the versions the export selected:
 
@@ -66,7 +73,7 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
 
    `airgap-shell` runs as linux x64, the platform sealift exports for. An arm64 shell would ask Nexus for platform packages the archive leaves out, such as `@esbuild/linux-arm64`.
 
-A crossing passes when step 2 matches, step 4 reports no `failed`, and step 5 installs every selected version.
+A crossing passes when step 2 matches, step 4 reports no `failed`, and step 5 installs every selected version. With a planted conflict, step 4 fails that one package and step 5 installs the rest.
 
 ## Stop
 
@@ -77,6 +84,6 @@ docker compose down -v   # deletes Nexus, MinIO and sealift data
 
 ## Not here yet
 
-- The import tool, which replaces `app` behind the gateway.
+- The import web app, which replaces `app` behind the gateway: the command exists, the page that runs it for a user does not.
 - pip: the `pypi` repository and the `packages/pip/` folders exist, but no step publishes to them.
 - Harbor, for container images.

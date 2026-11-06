@@ -153,9 +153,9 @@ func TestParseIntegrityPicksTheStrongestHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			newHash, sum, err := parseIntegrity(tt.sri)
+			newHash, sum, err := ParseIntegrity(tt.sri)
 			if err != nil {
-				t.Fatalf("parseIntegrity: %v", err)
+				t.Fatalf("ParseIntegrity: %v", err)
 			}
 			if newHash().Size() != tt.size || len(sum) != tt.size {
 				t.Errorf("hash size = %d, digest = %d bytes, want %d", newHash().Size(), len(sum), tt.size)
@@ -174,8 +174,8 @@ func TestParseIntegrityRejects(t *testing.T) {
 		"sha384-AAAA sha1-" + sha1Sum,
 		"SHA512-AAAA sha1-" + sha1Sum,
 	} {
-		if _, _, err := parseIntegrity(sri); err == nil {
-			t.Errorf("parseIntegrity(%q): want an error", sri)
+		if _, _, err := ParseIntegrity(sri); err == nil {
+			t.Errorf("ParseIntegrity(%q): want an error", sri)
 		}
 	}
 }

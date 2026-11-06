@@ -7,7 +7,7 @@ This page takes you from nothing to a first archive in about ten minutes. It use
 - Docker on a machine with outbound HTTPS to GitHub (Trivy), `mirror.gcr.io` (its vulnerability database) and `registry.npmjs.org` (pnpm and packages). [Deployment](deployment.md#outbound-access) lists the hosts.
 - About 2 GB of free disk for Trivy, its database and the package cache.
 
-sealift runs on the connected side of your network. Only the archive it builds crosses to the air-gapped side.
+sealift runs on the connected side of your network. Only the archive it builds and its `manifest.json` need to cross to the air-gapped side.
 
 ## 1. Run it
 

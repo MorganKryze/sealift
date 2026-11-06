@@ -1,0 +1,7 @@
+# Lab values for `sealift import`: the lab's Nexus, reached on the air-gapped network.
+nexus:
+  url: http://nexus:8081
+  repository: npm
+  user: sealift-import
+  passwordFile: nexus-password
+signatureKeyFile: signature-key

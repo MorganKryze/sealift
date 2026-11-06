@@ -64,15 +64,68 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 `manifest.json` travels next to the archive, not inside it: the archive's sha256 cannot be part of its own content.
 
-## What an import tool should check
+## What `sealift import` checks
 
-1. The sha256 of `packages_npm.tar.gz` matches `archive.sha256`, and the value received through a separate channel.
-2. `out/signature.key` holds the expected value.
-3. Every entry under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
-4. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`.
-5. Entry paths stay under `out/`: no `..`, no absolute path, no link.
+`sealift import` reads the archive once and publishes nothing unless every check passes. The first problem found ends the run with its reason, except that a wrong size or sha256 is named before any other problem. The archive and the manifest are opened read-only.
 
-Only then publish each tarball to the npm hosted repository.
+The manifest:
+
+1. It is at most 16 MiB, and valid JSON with nothing after the document.
+2. `formatVersion` is 1. Every field in the table above is present: a missing field refuses the manifest. `target.libc` must be present but may be empty, as older versions let a project save it empty. `packages` is not empty.
+3. Each `file` is a plain file name of at most 255 bytes that starts with a letter, a digit or `_`, holds only letters, digits and `._~+-`, and ends in `.tgz`. No two packages share a `file` or a name and version.
+4. Each `name` is a valid npm package name and each `version` an exact version of at most 256 bytes, as sealift's own checks read them. `shippedSha512` is 128 lowercase hex digits and `originalIntegrity` a usable integrity string of at most 4 KiB.
+5. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters. A control character, a bidirectional override or any other format character refuses the manifest, so a report that prints these values cannot be made to write escape sequences. The refusal does not repeat the value.
+6. Fields this version does not know are ignored. A change that alters what the import must check bumps `formatVersion`, so an older import refuses it.
+
+The archive:
+
+1. Its size and sha256 match `archive.size` and `archive.sha256`. With `-sha256`, it also matches the value received through a separate channel.
+2. Entry names are exactly `out/` and `out/<file>`. An absolute path, a `..`, a `./out/` prefix, a path outside `out/`, a subdirectory, a directory other than `out/`, a link, a sparse file, anything but a regular file and a name that appears twice are refused.
+3. The archive holds at most 10,000 entries and 10 GiB of unpacked content, counted from each entry's declared size before the entry is read, and no entry name passes 255 bytes. The inflated tar data is capped as well: the content bound, plus 4 KiB and the name bound for each entry, plus the 1 KiB end marker. Repeated extended or long-name headers before an entry count against that cap.
+4. After the tar end marker, the archive holds at most 16 KiB of zero bytes. The gzip checksum is verified, and anything appended, a second entry or a second gzip member included, is refused without being inflated further.
+5. Every file under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
+6. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`. When it is `true`, sealift rewrote the file, so `originalIntegrity` no longer describes it and is not compared.
+7. `out/signature.key` is present, at most 64 KiB, and equals the expected value byte for byte. The comparison takes constant time, and a refusal prints neither value.
+
+Only then does the import publish each tarball to the npm hosted repository.
+
+## The import report
+
+`sealift import` prints a text report on stdout and, with `-report <file>`, writes the same account as JSON. The file is written once, at the end, with mode 0644. If that write fails, stderr says so and an exit code 0 becomes 1.
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `complete` when every package is `published` or `present`, `incomplete` when at least one failed, `refused` when a check failed and nothing was published |
+| `reason` | Why the archive was refused; empty otherwise |
+| `unencrypted` | `true` when the Nexus URL starts with `http:` |
+| `importVersion` | The sealift release that ran the import |
+| `archive.file`, `.sha256`, `.size` | The archive's file name, and the sha256 and size its manifest declares. A refusal for a wrong digest or size names the measured value in `reason` |
+| `toolVersion`, `analysisId`, `target` | Copied from the manifest |
+| `nexus.url`, `nexus.repository` | Where the import published to |
+| `counts.published`, `.present`, `.failed` | Packages by state |
+| `packages[].name`, `.version`, `.file` | The package, as the manifest lists it |
+| `packages[].state` | `published`, `present` or `failed` |
+| `packages[].reason` | Why a package failed; empty otherwise |
+| `packages[].note` | Empty for a failed package. For a package whose manifest entry has `publishConfigStripped`, the note the publish step set, or `sealift removed publishConfig at export` when it set none |
+
+A refused report lists no package and holds zero counts.
+
+Before it looks at Nexus, the import reads each tarball: its `package.json` must name the manifest entry's name and version, hold no unsafe path and no second first-level `package.json`, stay under 100,000 entries, 10 GiB unpacked and 16 MiB for `package.json`, and no entry name or link target passes 4,096 bytes. A tarball that fails is `failed` with that reason and the others go on. Entry names in a reason are quoted, and text read from a tarball, the Nexus copy included, is cut to 300 characters with control characters removed.
+
+A package is `present` when Nexus already serves the same bytes. For a package with `publishConfigStripped`, it is also `present` when Nexus serves other bytes with the same content, noted `same content, packed differently`. Same content means the same entry names, types, modes, link targets and file bytes, as written. Owners, times and entry order do not count. The `package.json` compares as decoded JSON once `publishConfig` is removed from both. A tarball that holds a name twice never matches, nor does one with data after its end-of-archive marker other than zero padding, which pnpm refuses. Any other difference is `failed`, naming both sha512 digests; a copy that cannot be read for the comparison is `failed` with the reason instead.
+
+A package is `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
+
+The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive line, `import version: <importVersion>`, the manifest and Nexus lines, and one line per package: `<name>@<version> <state> <file>[: <reason>][ (<note>)]`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Complete |
+| 1 | Incomplete: at least one package failed, or the JSON report could not be written |
+| 2 | Usage or settings error: one line on stderr, no report |
+| 3 | Refused: nothing was published |
+
+The archive and the manifest are opened read-only. The command writes the JSON report and one private temporary directory, which it removes on every exit.
 
 ## The reports
 

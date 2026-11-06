@@ -18,6 +18,9 @@ Include the version, what an attacker needs, and the steps that show the problem
 - sealift downloads nothing before you press Install, Analyse or Confirm and build the archive.
 - In the published image, pnpm and Trivy run as a separate user that cannot read the settings file, which holds the signature key.
 - The archive is reproducible: the same selection built by the same sealift gives the same sha256.
+- `sealift import` publishes nothing until the archive passes every check: its sha256 and size match `manifest.json` (and the sha256 you pass with `-sha256`, when you give one), `signature.key` holds the configured key, every tarball matches its `shippedSha512`, and the listing has no extra, missing or oversized entry.
+- The import never overwrites. A version Nexus already holds with other bytes fails with both digests, and the only exception is a copy that differs from the shipped one by the `publishConfig` that sealift removed.
+- The import never turns TLS off, refuses redirects and warns when the Nexus URL is plain HTTP. Its credentials stay in memory: the password and the key are not written to the output, the report or an error.
 
 ## What it does not
 
@@ -25,4 +28,5 @@ Include the version, what an attacker needs, and the steps that show the problem
 - The minimum release age relies on pnpm's `minimumReleaseAge`, which the default pnpm 10.34.5 honours. An older pnpm set through the API can ignore it for transitive packages.
 - A malicious package with no published CVE passes: Trivy knows only disclosed vulnerabilities. The minimum release age and the signals on each candidate reduce that risk; they do not remove it.
 - sealift has no login. Anyone who reaches its port can run sessions, download archives and change the key. [Deployment](docs/deployment.md#access) shows how to keep it private.
+- The import checks `signature.key` and nothing more: it adds no signature of its own. A Nexus repository that allows redeploy can be overwritten by another tool between the check and the upload.
 - The sha256 of an archive is only as trustworthy as the channel that carries it to the import side.
