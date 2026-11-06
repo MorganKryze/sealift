@@ -69,12 +69,28 @@ pnpm -C web run test
 
 ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may import only each other and `@/components/ui/*`, `@/components/brand/*`, `@/components/theme-toggle`, `@/hooks/use-return-focus` and `@/lib/utils`. An import of the collection's API client, routes, session, settings or project components, or of `use-job-events`, fails the lint. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
 
-`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It starts its own server on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run it. Install the browser once, then run it:
+`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It builds the web and one `sealift` binary, then starts both roles from that binary. The collection listens on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run the gate. Install the browser once, then run it:
 
 ```sh
 pnpm -C web exec playwright install chromium
 pnpm -C web exec playwright test tests/ui-gate.spec.mjs
 ```
+
+The import role listens on port 18090 and always runs its own server: the gate stops with an error when something already answers there. The server is the shipped `sealift import-server` with its token check on, and no flag or setting turns the check off. `web/tests/import-fixtures.mjs` gives it what a real deployment has. It generates an RSA key, serves the key set on port 18091 and a fake MinIO on port 18092, and writes a settings file with its key files. The gate mints one token per user, with `kid`, `iss`, `aud`, an `exp` one hour ahead and `preferred_username`, and sends it in `X-Access-Token` as the gateway does. Once the server answers `/healthz`, the fixtures write the import records. They do it then because the server's start ends every queued or running attempt as interrupted.
+
+Each user stands for one state of the screens:
+
+| User | MinIO | Import records |
+| --- | --- | --- |
+| `alice` | a listing of her archives | one of every state: queued, running (attempt 2, 37 of 101 done, with an earlier attempt), complete with the archive removed, kept and with no removal recorded, incomplete with three failures of three kinds, refused with both digests, interrupted with 45 packages not finished, a refusal with a 1,000-character reason, a record written by v0.4.0 and an archive with a 1,024-byte key |
+| `bob` | an empty folder | none |
+| `carol` | no bucket | none |
+| `dave` | answers 500 | none |
+| `frank` | an empty folder | a folder that cannot be read, so the list answers 500 |
+
+`IMPORT.routes` in the spec names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings`, `/api/tools` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
+
+Playwright's `-g` filter matches the file name before the title, so `-g "import "` selects the import role and `-g "^import "` selects nothing.
 
 ## Checking a screen in a browser
 
