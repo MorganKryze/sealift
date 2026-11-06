@@ -69,8 +69,9 @@ func (r Report) ExitCode() int {
 	}
 }
 
-// WriteText prints the report for a person: a summary line, the archive and
-// the Nexus repository, then one line per package.
+// WriteText prints the report for a person: a summary line, the archive, the
+// import's own version, the manifest and the Nexus repository, then one line
+// per package with its file.
 func (r Report) WriteText(w io.Writer) error {
 	mark := ""
 	if r.Unencrypted {
@@ -89,13 +90,14 @@ func (r Report) WriteText(w io.Writer) error {
 		archive += fmt.Sprintf(", sha256 %s, %d bytes", r.Archive.SHA256, r.Archive.Size)
 	}
 	p.linef("%s", archive)
+	p.linef("import version: %s", r.ImportVersion)
 	if r.ToolVersion != "" || r.AnalysisID != "" {
 		t := r.Target
 		p.linef("manifest: sealift %s, analysis %s, target %s %s %s, node %s, pnpm %s", r.ToolVersion, r.AnalysisID, t.OS, t.CPU, t.Libc, t.Node, t.PnpmVer)
 	}
 	p.linef("nexus: %s, repository %s", r.Nexus.URL, r.Nexus.Repository)
 	for _, pkg := range r.Packages {
-		line := fmt.Sprintf("%s@%s %s", pkg.Name, pkg.Version, pkg.State)
+		line := fmt.Sprintf("%s@%s %s %s", pkg.Name, pkg.Version, pkg.State, pkg.File)
 		if pkg.Reason != "" {
 			line += ": " + pkg.Reason
 		}

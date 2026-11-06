@@ -70,6 +70,16 @@ func TestReportFields(t *testing.T) {
 			t.Errorf("text lacks %q:\n%s", want, text.String())
 		}
 	}
+	if !strings.Contains("\n"+text.String(), "\nimport version: "+doc["importVersion"].(string)+"\n") {
+		t.Errorf("text has no import version line:\n%s", text.String())
+	}
+	for _, e := range pk {
+		pkg := e.(map[string]any)
+		line := pkg["name"].(string) + "@" + pkg["version"].(string) + " " + pkg["state"].(string) + " " + pkg["file"].(string)
+		if !strings.Contains("\n"+text.String(), "\n"+line) {
+			t.Errorf("text has no line starting %q:\n%s", line, text.String())
+		}
+	}
 }
 
 func TestReportMarksUnencrypted(t *testing.T) {

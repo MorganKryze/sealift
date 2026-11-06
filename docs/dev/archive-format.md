@@ -116,7 +116,7 @@ A package is `present` when Nexus already serves the same bytes. For a package w
 
 A package is `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
 
-The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive, manifest and Nexus lines, and one line per package: `<name>@<version> <state>[: <reason>][ (<note>)]`.
+The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive line, `import version: <importVersion>`, the manifest and Nexus lines, and one line per package: `<name>@<version> <state> <file>[: <reason>][ (<note>)]`.
 
 | Exit code | Meaning |
 | --- | --- |
