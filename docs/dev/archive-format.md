@@ -110,7 +110,7 @@ Only then does the import publish each tarball to the npm hosted repository.
 
 A refused report lists no package and holds zero counts.
 
-Before it looks at Nexus, the import reads each tarball: its `package.json` must name the manifest entry's name and version, hold no unsafe path and no second first-level `package.json`, stay under 100,000 entries, 10 GiB unpacked and 16 MiB for `package.json`. A tarball that fails is `failed` with that reason and the others go on.
+Before it looks at Nexus, the import reads each tarball: its `package.json` must name the manifest entry's name and version, hold no unsafe path and no second first-level `package.json`, stay under 100,000 entries, 10 GiB unpacked and 16 MiB for `package.json`, and no entry name or link target passes 4,096 bytes. A tarball that fails is `failed` with that reason and the others go on.
 
 A package is `present` when Nexus already serves the same bytes. For a package with `publishConfigStripped`, it is also `present` when Nexus serves other bytes with the same content, noted `same content, packed differently`. Same content means the same entry names, types, modes, link targets and file bytes, as written. Owners, times and entry order do not count. The `package.json` compares as decoded JSON once `publishConfig` is removed from both. A tarball that holds a name twice never matches. Any other difference is `failed`, naming both sha512 digests.
 

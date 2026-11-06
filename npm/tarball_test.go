@@ -296,3 +296,29 @@ func TestSameContent(t *testing.T) {
 		}
 	})
 }
+
+func TestTarballEntryNameBound(t *testing.T) {
+	long := func(n int) string { return "package/" + strings.Repeat("n", n-len("package/")) }
+	manifest := reg("package/package.json", `{"name":"a","version":"1.0.0"}`)
+	for _, tc := range []struct {
+		name    string
+		entry   packedEntry
+		wantErr string
+	}{
+		{"name at the bound", reg(long(maxEntryNameBytes), "x"), ""},
+		{"name over the bound", reg(long(maxEntryNameBytes+1), "x"), "longer than 4096 bytes"},
+		{"link target at the bound", packedEntry{hdr: tar.Header{Name: "package/l", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("l", maxEntryNameBytes)}}, ""},
+		{"link target over the bound", packedEntry{hdr: tar.Header{Name: "package/l", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("l", maxEntryNameBytes+1)}}, "longer than 4096 bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := pack(t, manifest, tc.entry)
+			_, errInspect := InspectTarball(bytes.NewReader(data))
+			_, errSame := SameContent(bytes.NewReader(data), bytes.NewReader(data))
+			for _, err := range []error{errInspect, errSame} {
+				if (tc.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+					t.Errorf("err = %v, want %q", err, tc.wantErr)
+				}
+			}
+		})
+	}
+}

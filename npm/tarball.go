@@ -22,6 +22,7 @@ const (
 	maxTarballEntries = 100_000  // entries in one tarball
 	maxTarballBytes   = 10 << 30 // decompressed bytes in one tarball
 	maxManifestBytes  = 16 << 20 // bytes in one package.json
+	maxEntryNameBytes = 4096     // bytes in an entry name or link target, the usual PATH_MAX
 )
 
 // ErrUnsafePath reports a tarball entry with an absolute path or a ".." segment.
@@ -174,6 +175,9 @@ func walkTarball(r io.Reader, fn func(*tar.Header, io.Reader) error) error {
 		if entries >= maxTarballEntries {
 			return fmt.Errorf("tarball has more than %d entries", maxTarballEntries)
 		}
+		if len(h.Name) > maxEntryNameBytes || len(h.Linkname) > maxEntryNameBytes {
+			return fmt.Errorf("tarball has an entry name or link target longer than %d bytes", maxEntryNameBytes)
+		}
 		if strings.HasPrefix(h.Name, "/") || slices.Contains(strings.Split(h.Name, "/"), "..") {
 			return fmt.Errorf("%w: %q", ErrUnsafePath, h.Name)
 		}
@@ -214,11 +218,13 @@ func boundedManifest(r io.Reader) io.Reader {
 	return &boundedReader{r: r, left: maxManifestBytes, what: "package.json", unit: "16 MiB"}
 }
 
-// entryDigest is what SameContent compares for one tarball entry.
+// entryDigest is what SameContent compares for one tarball entry. Link
+// targets and names are kept as hashes, so memory grows with the entry count
+// and not with the length of the text.
 type entryDigest struct {
 	typeflag byte
 	mode     int64
-	linkname string
+	linkname [sha256.Size]byte
 	sum      [sha256.Size]byte
 }
 
@@ -247,11 +253,11 @@ func SameContent(a, b io.Reader) (bool, error) {
 	return true, nil
 }
 
-func digestTarball(r io.Reader) (map[string]entryDigest, bool, error) {
-	digests := map[string]entryDigest{}
+func digestTarball(r io.Reader) (map[[sha256.Size]byte]entryDigest, bool, error) {
+	digests := map[[sha256.Size]byte]entryDigest{}
 	duplicate := false
 	err := walkTarball(r, func(h *tar.Header, body io.Reader) error {
-		d := entryDigest{typeflag: h.Typeflag, mode: h.Mode & 0o7777, linkname: h.Linkname}
+		d := entryDigest{typeflag: h.Typeflag, mode: h.Mode & 0o7777, linkname: sha256.Sum256([]byte(h.Linkname))}
 		hash := sha256.New()
 		if isManifest(h) {
 			data, err := withoutPublishConfig(body)
@@ -263,10 +269,11 @@ func digestTarball(r io.Reader) (map[string]entryDigest, bool, error) {
 			return fmt.Errorf("read tarball: %w", err)
 		}
 		hash.Sum(d.sum[:0])
-		if _, seen := digests[h.Name]; seen {
+		key := sha256.Sum256([]byte(h.Name))
+		if _, seen := digests[key]; seen {
 			duplicate = true
 		}
-		digests[h.Name] = d
+		digests[key] = d
 		return nil
 	})
 	return digests, duplicate, err
