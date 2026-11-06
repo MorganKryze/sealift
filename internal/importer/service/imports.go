@@ -102,13 +102,18 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if err != nil {
 		return nil, err
 	}
-	for _, imp := range existing { // newest first
+	// Every match is read, newest first: records made in one second have no
+	// reliable order, so a refused import must not hide an unfinished one.
+	for _, imp := range existing {
 		// A replaced manifest makes another import: a refusal for it must not block the objects now in MinIO.
-		if imp.Archive.Key == archive.Key && imp.Archive.ETag == archive.ETag && imp.Manifest.ETag == manifest.ETag {
-			if imp.Outcome() != importer.OutcomeComplete {
-				return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
-			}
-			break
+		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag {
+			continue
+		}
+		switch imp.Outcome() {
+		case importer.OutcomeComplete, importer.OutcomeRefused:
+			// A complete import did its work and a refused one published and removed nothing.
+		default:
+			return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 		}
 	}
 	imp, err := h.store.Create(user, archive, manifest, expected)

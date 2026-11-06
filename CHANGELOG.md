@@ -10,6 +10,11 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
 
+### Changed
+
+- A refused import no longer blocks a new import of the same archive, so a mistyped sha256 can be corrected by starting again. An import that is queued, running, incomplete or interrupted still does, whatever refused imports of that archive come after it.
+- `GET /api/me` on the import service also names the user's `bucket` and `folder`.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

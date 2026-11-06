@@ -151,6 +151,12 @@ type LatestImport struct {
 
 // Me defines model for Me.
 type Me struct {
+	// Bucket The user's MinIO bucket, user-<name>, named whether or not the settings file has a minio section
+	Bucket string `json:"bucket"`
+
+	// Folder The folder of the bucket the service lists, reads and deletes in
+	Folder string `json:"folder"`
+
 	// MinioConfigured Whether the settings file has a minio section
 	MinioConfigured bool `json:"minioConfigured"`
 

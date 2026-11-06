@@ -48,6 +48,15 @@ func TestMeNamesTheUser(t *testing.T) {
 	}
 }
 
+func TestMeNamesBucketAndFolder(t *testing.T) {
+	r := newRig(t, fakeVerifier{claims: map[string]token.Claims{"t": named("alice")}})
+	rec := r.get("/api/me", "t")
+	var me Me
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || me.Bucket != "user-alice" || me.Folder != "packages/npm/" {
+		t.Fatalf("body %q: %+v, %v", rec.Body.String(), me, err)
+	}
+}
+
 func TestBodyAndHeaderBounds(t *testing.T) {
 	r := newRig(t, fakeVerifier{claims: map[string]token.Claims{"t": named("alice")}})
 

@@ -709,3 +709,136 @@ func TestImportFlowNeverLeaksCredentials(t *testing.T) {
 		t.Error("nothing was scanned")
 	}
 }
+
+// seedImport records an import of the objects now in MinIO and ends its only
+// attempt with outcome, as an earlier run would have.
+func seedImport(t *testing.T, r *importRig, outcome string) imports.Import {
+	t.Helper()
+	imp, err := r.store.Create("alice",
+		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey)},
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey)}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.store.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	if outcome == imports.OutcomeInterrupted {
+		err = r.store.Abandon("alice", imp.ID, "the service stopped")
+	} else {
+		err = r.store.Finish("alice", imp.ID, 1, importer.Report{Outcome: outcome, Packages: []importer.Result{}}, nil)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return imp
+}
+
+func TestStartAfterARefusal(t *testing.T) {
+	wrong := strings.Repeat("0", 64)
+	for name, expected := range map[string]func(b testBundle) string{
+		"with the right sha256":    func(b testBundle) string { return `,"expectedSha256":"` + b.sha256 + `"` },
+		"without any sha256":       func(testBundle) string { return "" },
+		"with another wrong value": func(testBundle) string { return `,"expectedSha256":"` + strings.Repeat("1", 64) + `"` },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newImportRig(t, rigOptions{})
+			b := buildBundle(t, leftPad)
+			r.seed(archiveKey, manifestKey, b)
+
+			first := importOf(t, r.post("t", `{"archive":"`+archiveKey+`","expectedSha256":"`+wrong+`"}`), http.StatusAccepted)
+			refused := waitEnded(t, r.store, first.Id)
+			if refused.Outcome() != importer.OutcomeRefused {
+				t.Fatalf("first outcome %q, want refused", refused.Outcome())
+			}
+
+			second := importOf(t, r.post("t", `{"archive":"`+archiveKey+`"`+expected(b)+`}`), http.StatusAccepted)
+			if second.Id == first.Id {
+				t.Fatal("the new start reused the refused import")
+			}
+			done := waitEnded(t, r.store, second.Id)
+			wantOutcome := importer.OutcomeComplete
+			if name == "with another wrong value" {
+				wantOutcome = importer.OutcomeRefused
+			}
+			if done.Outcome() != wantOutcome {
+				t.Errorf("second outcome %q (%s), want %s", done.Outcome(), done.Attempts[0].Report.Reason, wantOutcome)
+			}
+
+			kept, err := r.store.Get("alice", first.Id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(kept.Attempts) != 1 || kept.Outcome() != importer.OutcomeRefused || !strings.Contains(kept.Attempts[0].Report.Reason, wrong) {
+				t.Errorf("the refused import changed: %d attempts, outcome %q, reason %q", len(kept.Attempts), kept.Outcome(), kept.Attempts[0].Report.Reason)
+			}
+		})
+	}
+}
+
+func TestStartBlocksBehindAnyUnfinishedMatch(t *testing.T) {
+	for _, unfinished := range []string{importer.OutcomeIncomplete, imports.OutcomeInterrupted} {
+		t.Run(unfinished, func(t *testing.T) {
+			r := newImportRig(t, rigOptions{})
+			r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+			blocking := seedImport(t, r, unfinished)
+			// Records made in one second sort by their random ids, so add
+			// refused ones until a refused import is the newest match.
+			for range 64 {
+				if list, err := r.store.List("alice"); err != nil {
+					t.Fatal(err)
+				} else if list[0].Outcome() == importer.OutcomeRefused {
+					break
+				}
+				seedImport(t, r, importer.OutcomeRefused)
+			}
+			if list, _ := r.store.List("alice"); list[0].Outcome() != importer.OutcomeRefused || list[0].ID == blocking.ID {
+				t.Fatalf("no refused import came first: %v", list[0].Outcome())
+			}
+
+			rec := r.start("t", archiveKey)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409; body %s", rec.Code, rec.Body)
+			}
+			var c ImportConflict
+			if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || c.ImportId == nil || *c.ImportId != blocking.ID {
+				t.Errorf("409 names %v (%v), want %s", c.ImportId, err, blocking.ID)
+			}
+			if got := detailOf(Problem{Detail: c.Detail}); !strings.Contains(got, "has not completed") {
+				t.Errorf("detail %q", got)
+			}
+		})
+	}
+}
+
+func TestImportReportKindsReachTheAPI(t *testing.T) {
+	good := buildBundle(t, leftPad)
+	for name, tc := range map[string]struct {
+		cut     int
+		checked bool
+		kind    ReportPackageKind
+	}{
+		"complete":    {0, true, ""},
+		"cut archive": {len(good.archive) / 2, false, Source},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newImportRig(t, rigOptions{})
+			r.seed(archiveKey, manifestKey, good)
+			if tc.cut > 0 {
+				r.minio.cut[dataKey("user-alice", archiveKey)] = tc.cut
+			}
+			start := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+			waitEnded(t, r.store, start.Id)
+			rep := importOf(t, r.get("/api/imports/"+start.Id, "t"), http.StatusOK).Attempts[0].Report
+			if rep.ArchiveChecked == nil || *rep.ArchiveChecked != tc.checked {
+				t.Errorf("archiveChecked %v, want %v", rep.ArchiveChecked, tc.checked)
+			}
+			if len(rep.Packages) != 1 {
+				t.Fatalf("packages %+v", rep.Packages)
+			}
+			if got := rep.Packages[0].Kind; got == nil && tc.kind != "" || got != nil && *got != tc.kind {
+				t.Errorf("kind %v, want %q", got, tc.kind)
+			}
+		})
+	}
+}

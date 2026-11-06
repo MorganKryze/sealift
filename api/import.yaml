@@ -76,8 +76,11 @@ paths:
         folder; any other key answers 404 without a MinIO request. A request
         with a foreign Origin, Sec-Fetch-Site cross-site or a body that is not
         application/json answers 403 and changes nothing. 409 when the same
-        archive (key and ETag) already has an import that is queued, running or
-        not complete; the body names that import.
+        objects (key and ETag of the archive and of its manifest) already have an
+        import that is queued, running, incomplete or interrupted; the body
+        names that import. A complete or a refused import does not block a new
+        start: a refusal published and removed nothing, so a mistyped
+        expectedSha256 is corrected by starting again.
       requestBody:
         required: true
         content:
@@ -92,7 +95,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Import"
         "409":
-          description: The archive already has an import, or MinIO is not configured
+          description: The archive already has an import that is queued, running, incomplete or interrupted, or MinIO is not configured
           content:
             application/problem+json:
               schema:
@@ -187,9 +190,17 @@ components:
         minioConfigured:
           type: boolean
           description: Whether the settings file has a minio section
+        bucket:
+          type: string
+          description: The user's MinIO bucket, user-<name>, named whether or not the settings file has a minio section
+        folder:
+          type: string
+          description: The folder of the bucket the service lists, reads and deletes in
       required:
         - user
         - minioConfigured
+        - bucket
+        - folder
     ArchiveList:
       type: object
       properties:

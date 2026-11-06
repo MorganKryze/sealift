@@ -145,7 +145,7 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/me` | The user the checked token stands for, and whether the settings file has a `minio` section: `{"user":"alice","minioConfigured":true}`. |
+| `GET /api/me` | The user the checked token stands for, whether the settings file has a `minio` section, and the user's `bucket` and `folder`: `{"user":"alice","minioConfigured":true,"bucket":"user-alice","folder":"packages/npm/"}`. The bucket and the folder are named whether or not the settings file has a `minio` section. |
 | `GET /api/archives` | The archives in the user's MinIO folder. |
 | `POST /api/imports` | Queue an import of one of those archives. |
 | `GET /api/imports` | The user's imports, newest first. |
@@ -193,6 +193,8 @@ An archive pairs with the `manifest.json` in its own folder, at the root of `pac
 
 The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive and its manifest, and records both ETags and sizes. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
 
+The service reads every earlier import of the same objects, not only the newest, and answers 409 for the first one it finds that is queued, running, `incomplete` or `interrupted`. A `complete` import and a `refused` one do not block a new start. A refusal published nothing and removed nothing, so starting again, with a corrected `expectedSha256` or none, is the way out of a mistyped digest. The refused import keeps its one attempt and its outcome, and the list then holds both.
+
 A `POST` is refused with 403, and nothing changes, when its `Origin` is not the request's own host (port included), when `Origin` is `null`, when `Sec-Fetch-Site` is `cross-site`, or when `Content-Type` is not `application/json`. A client that sends no `Origin` and sends JSON passes, as `curl` does. Behind a gateway, the gateway must pass the original host for an `Origin` from a browser to match.
 
 | Status | When |
@@ -200,7 +202,7 @@ A `POST` is refused with 403, and nothing changes, when its `Origin` is not the 
 | 202 | The import is recorded and queued. |
 | 400 | The body cannot be read, or `expectedSha256` is not 64 hex digits. |
 | 404 | The key is not an archive in the user's folder. |
-| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running or has not ended `complete`: `importId` names it. Also when the settings file has no `minio` section. |
+| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running, `incomplete` or `interrupted`: `importId` names it. Also when the settings file has no `minio` section. |
 | 502 | MinIO failed to list or describe the archive. |
 
 ### Following an import
