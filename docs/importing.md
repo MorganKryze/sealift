@@ -65,7 +65,7 @@ While it runs, one panel shows the stage and stays in place: `Waiting its turn`,
 | `Archive removed from MinIO, manifest kept` | `Complete`, the manifest could not go | The reason follows. |
 | `Archive kept in MinIO` | `Complete`, the removal failed or was refused | The reason, and a `Retry import` button. |
 | `Checking the archive's removal` | `Complete`, no removal recorded yet | The page updates until the service records it. |
-| `Refused before the first package` | `Refused` | The reason, such as both digests when the expected sha256 differs. `Nothing was published. No package was read.` and `Go to archives`. Starting the archive again is allowed. |
+| `Refused before the first package` | `Refused` | The reason, such as both digests when the expected sha256 differs. `This attempt published nothing and read no package.` and `Go to archives`. Starting the archive again is allowed. |
 | `Stopped before it ended` | `Interrupted` | `The service stopped or restarted before this attempt ended.`, how many packages were finished and how many were not. |
 
 The words `complete` and `removed` appear only when the record says so. A record written by 0.4.0 has no check result: the page says `Not recorded: this attempt was written by a sealift that did not record the archive's checks.` where a newer record says `The archive matched: it passed its checks against the manifest and the signature key.` A package of such a record has no kind, and its next action is the general one: `Read the reason: it names what failed. Fix that, then retry.`

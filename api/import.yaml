@@ -79,8 +79,9 @@ paths:
         objects (key and ETag of the archive and of its manifest) already have an
         import that is queued, running, incomplete or interrupted; the body
         names that import. A complete or a refused import does not block a new
-        start: a refusal published and removed nothing, so a mistyped
-        expectedSha256 is corrected by starting again.
+        start: a refused latest attempt published and removed nothing, so a
+        mistyped expectedSha256 is corrected by starting again. An earlier
+        attempt of the same import may have published packages.
       requestBody:
         required: true
         content:

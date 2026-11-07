@@ -134,12 +134,13 @@ describe("ImportsList", () => {
     expect(row.getByText("0", { selector: "b" })).toBeInTheDocument()
   })
 
-  it("shows a refused import's reason cut to two lines and says nothing was published", async () => {
+  it("shows a refused import's reason cut to two lines and says the attempt published nothing", async () => {
     renderList(() => json({ imports: [refused] }))
     const row = within(await screen.findByRole("listitem"))
     const reason = row.getByText(/the archive's sha256 is aaaa/)
     expect(reason.className).toContain("line-clamp-2")
-    expect(row.getByText("Nothing was published. Start a new import from Archives.")).toBeInTheDocument()
+    expect(row.getByText("This attempt published nothing. Start a new import from Archives.")).toBeInTheDocument()
+    expect(row.queryByText(/Nothing was published/)).toBeNull()
     expect(row.queryByText(/published$/)).not.toBeInTheDocument()
   })
 

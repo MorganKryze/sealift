@@ -53,7 +53,7 @@ export interface paths {
         put?: never;
         /**
          * Queue an import of one archive in the user's folder
-         * @description Imports run one at a time across all users, in the order they were started. The key must name an importable archive in the user's own folder; any other key answers 404 without a MinIO request. A request with a foreign Origin, Sec-Fetch-Site cross-site or a body that is not application/json answers 403 and changes nothing. 409 when the same objects (key and ETag of the archive and of its manifest) already have an import that is queued, running, incomplete or interrupted; the body names that import. A complete or a refused import does not block a new start: a refusal published and removed nothing, so a mistyped expectedSha256 is corrected by starting again.
+         * @description Imports run one at a time across all users, in the order they were started. The key must name an importable archive in the user's own folder; any other key answers 404 without a MinIO request. A request with a foreign Origin, Sec-Fetch-Site cross-site or a body that is not application/json answers 403 and changes nothing. 409 when the same objects (key and ETag of the archive and of its manifest) already have an import that is queued, running, incomplete or interrupted; the body names that import. A complete or a refused import does not block a new start: a refused latest attempt published and removed nothing, so a mistyped expectedSha256 is corrected by starting again. An earlier attempt of the same import may have published packages.
          */
         post: operations["startImport"];
         delete?: never;

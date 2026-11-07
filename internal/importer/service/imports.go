@@ -111,7 +111,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 		}
 		switch imp.Outcome() {
 		case importer.OutcomeComplete, importer.OutcomeRefused:
-			// A complete import did its work and a refused one published and removed nothing.
+			// A complete import did its work and a refused latest attempt published and removed nothing.
 		default:
 			return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 		}

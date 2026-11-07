@@ -94,7 +94,7 @@ function Summary({ imp, attempt, file }: { imp: Import; attempt: Attempt; file: 
       return (
         <div>
           <p className={`text-[13px] ${clamp}`}>{reason}</p>
-          <p className="mt-1 text-xs text-muted">Nothing was published. Start a new import from Archives.</p>
+          <p className="mt-1 text-xs text-muted">This attempt published nothing. Start a new import from Archives.</p>
         </div>
       )
     case "incomplete":
