@@ -63,6 +63,8 @@ describe("ArchivesList", () => {
     expect(await screen.findByRole("heading", { name: "Your session has ended" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Sign in again" })).toBeInTheDocument()
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+    expect(screen.queryByText(/as it was/)).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument()
   })
 
   it("reads the folder again when the screen opens, so a row shows the import started since", async () => {

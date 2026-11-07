@@ -21,6 +21,7 @@ export function ImportsList() {
   const imports = query.data
     ? [...query.data.imports].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id))
     : undefined
+  const ended = query.error instanceof SessionEnded
   const running = imports?.filter((i) => i.outcome === "running").length ?? 0
   const queued = imports?.filter((i) => i.outcome === "queued").length ?? 0
 
@@ -29,7 +30,7 @@ export function ImportsList() {
       <div role="status" className="mt-7 mb-3 flex min-h-5 flex-wrap items-center gap-x-2 text-sm">
         {query.isPending ? (
           <span className="text-muted">Loading your imports</span>
-        ) : imports && imports.length > 0 ? (
+        ) : imports && imports.length > 0 && !ended ? (
           <>
             <span>
               <b className="font-mono font-semibold">{imports.length}</b> {plural(imports.length, "import", "imports")}
@@ -65,7 +66,7 @@ export function ImportsList() {
             </div>
           ))}
         </div>
-      ) : imports === undefined || query.error instanceof SessionEnded ? (
+      ) : imports === undefined || ended ? (
         <ApiFailure error={query.error} onRetry={() => void query.refetch()} untouched="Your archives in MinIO are untouched." />
       ) : imports.length === 0 ? (
         <div className="mt-8 flex flex-col items-center rounded-xl border border-dashed border-line px-8 py-12 text-center">

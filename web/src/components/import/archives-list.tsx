@@ -25,6 +25,7 @@ export function ArchivesList() {
   const me = useMe()
   const [filter, setFilter] = useState<"all" | "importable">("all")
   const list = query.data
+  const ended = query.error instanceof SessionEnded
   const where = me.data ? `${me.data.bucket}/${me.data.folder}` : "packages/npm/"
   const refresh = () => void Promise.all([query.refetch(), imports.refetch()])
 
@@ -39,7 +40,7 @@ export function ArchivesList() {
         <span>
           {query.isPending ? (
             <span className="text-muted">Reading your folder in MinIO: {where}</span>
-          ) : list && list.archives.length > 0 ? (
+          ) : list && list.archives.length > 0 && !ended ? (
             <>
               <b className="font-mono font-semibold">{all.length}</b> {all.length === 1 ? "archive" : "archives"}
               <span aria-hidden className="text-muted"> · </span>
@@ -49,7 +50,7 @@ export function ArchivesList() {
             </>
           ) : null}
         </span>
-        {list && list.archives.length > 0 ? (
+        {list && list.archives.length > 0 && !ended ? (
           <span className="flex items-center gap-3">
             <ListFilter value={filter} onChange={setFilter} counts={{ all: all.length, importable: importable.length }} />
             <Button variant="outline" size="sm" onClick={refresh}>
@@ -72,7 +73,7 @@ export function ArchivesList() {
             </div>
           ))}
         </div>
-      ) : list === undefined || query.error instanceof SessionEnded ? (
+      ) : list === undefined || ended ? (
         query.error instanceof ImportApiError && query.error.status === 502 ? (
           <ImportFailure
             title="The archives could not be listed"
