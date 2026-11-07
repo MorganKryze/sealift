@@ -145,7 +145,7 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/me` | The user the checked token stands for, and whether the settings file has a `minio` section: `{"user":"alice","minioConfigured":true}`. |
+| `GET /api/me` | The user the checked token stands for, whether the settings file has a `minio` section, and the user's `bucket` and `folder`: `{"user":"alice","minioConfigured":true,"bucket":"user-alice","folder":"packages/npm/"}`. The bucket and the folder are named whether or not the settings file has a `minio` section. |
 | `GET /api/archives` | The archives in the user's MinIO folder. |
 | `POST /api/imports` | Queue an import of one of those archives. |
 | `GET /api/imports` | The user's imports, newest first. |
@@ -193,6 +193,8 @@ An archive pairs with the `manifest.json` in its own folder, at the root of `pac
 
 The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive and its manifest, and records both ETags and sizes. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
 
+The service reads every earlier import of the same objects, not only the newest, and answers 409 for the first one it finds that is queued, running, `incomplete` or `interrupted`. A `complete` import and a `refused` one do not block a new start. A refused latest attempt published nothing and removed nothing, so starting again, with a corrected `expectedSha256` or none, is the way out of a mistyped digest. An earlier attempt of the same import may have published packages: the new import finds them present. The refused import keeps its attempts and its outcome, and the list then holds both.
+
 A `POST` is refused with 403, and nothing changes, when its `Origin` is not the request's own host (port included), when `Origin` is `null`, when `Sec-Fetch-Site` is `cross-site`, or when `Content-Type` is not `application/json`. A client that sends no `Origin` and sends JSON passes, as `curl` does. Behind a gateway, the gateway must pass the original host for an `Origin` from a browser to match.
 
 | Status | When |
@@ -200,7 +202,7 @@ A `POST` is refused with 403, and nothing changes, when its `Origin` is not the 
 | 202 | The import is recorded and queued. |
 | 400 | The body cannot be read, or `expectedSha256` is not 64 hex digits. |
 | 404 | The key is not an archive in the user's folder. |
-| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running or has not ended `complete`: `importId` names it. Also when the settings file has no `minio` section. |
+| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running, `incomplete` or `interrupted`: `importId` names it. Also when the settings file has no `minio` section. |
 | 502 | MinIO failed to list or describe the archive. |
 
 ### Following an import
@@ -213,7 +215,7 @@ An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, 
 | --- | --- |
 | `complete` | Every package was published or read back from Nexus with the shipped bytes. |
 | `incomplete` | At least one package failed, or the service could not finish reading the archive from MinIO. A read that stops partway fails every package of the manifest with that reason and is never a refusal. |
-| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`, reading `the manifest` for `the archive` when the manifest moved). Nothing was published. |
+| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`, reading `the manifest` for `the archive` when the manifest moved). This attempt published nothing. |
 | `interrupted` | The service stopped, or restarted, before the attempt ended. |
 
 An attempt reads the manifest and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.
@@ -221,6 +223,10 @@ An attempt reads the manifest and the archive from MinIO once each, on condition
 Before it reads anything, each attempt, the first included, heads the archive and the manifest and compares their ETags with the ones recorded. A difference ends the attempt `refused` with the reason above and publishes nothing; an object that is gone or cannot be described ends it `incomplete`.
 
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
+
+The report carries two fields that `sealift import -report` writes too, described in [The import report](archive-format.md#the-import-report). `archiveChecked` is `true` once the archive passed its checks and `false` before, or when the attempt ended without passing them. Each failed package has a `kind`: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. A client reads the kind to tell what to do next and reads `reason` for the words. An attempt that ended before it read the archive because an object changed in MinIO has `archiveChecked` false and no package. An import recorded by sealift 0.4.0 or earlier has neither field, and the service serves it as it is, without a `kind` and without `archiveChecked`.
+
+While an attempt runs, its report grows in two steps. Before the manifest is read, the packages are empty and `archiveChecked` is absent. Once the manifest is read, the report holds the manifest's `target`, the `archive` and `nexus` objects and every package as `pending`, with `archiveChecked` false and no `outcome`. When the archive passes its checks, `archiveChecked` turns `true`, and each package then moves to its final state. The `outcome` and the `reason` are written with the end.
 
 ### Retrying an import
 

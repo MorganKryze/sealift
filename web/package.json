@@ -9,11 +9,11 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build -c vite.import.config.ts",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "generate": "openapi-typescript ../api/openapi.yaml -o src/api/schema.d.ts"
+    "generate": "openapi-typescript ../api/openapi.yaml -o src/api/schema.d.ts && openapi-typescript ../api/import.yaml -o src/import/api/schema.d.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

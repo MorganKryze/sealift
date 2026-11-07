@@ -10,7 +10,9 @@ The API types in `web/src/api/schema.d.ts` are generated from `api/openapi.yaml`
 
 ## Routes
 
-File-based, in `web/src/routes/`:
+`web/` holds two entries, built apart. The collection's is `web/index.html`, built to `web/dist/app` and served by `sealift`. The import role's is `web/import/index.html`, built to `web/dist/import` by `web/vite.import.config.ts` and served by `sealift import-server`. The import role serves nothing else, and its build holds no collection screen. `pnpm -C web run build` runs both builds.
+
+The collection's routes are file-based, in `web/src/routes/`:
 
 | Route | Screen |
 | --- | --- |
@@ -21,6 +23,16 @@ File-based, in `web/src/routes/`:
 | `/sessions/$sessionId/analysis` | The nine steps, the counter, the failure block |
 | `/sessions/$sessionId/review` | The proposal and the selection |
 | `/sessions/$sessionId/export` | The export progress and the archive |
+
+The import entry has its own tree in `web/src/import/routes/`, with its generated `routeTree.gen.ts` beside it. The server answers these paths with the shell, without a token, and 404 for any other path outside `/api` and `/healthz`:
+
+| Route | Screen |
+| --- | --- |
+| `/` | Archives |
+| `/imports` | Imports |
+| `/imports/$importId` | One import |
+
+The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and the settings sheet is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
 
 A dropped file has no route until the session exists: the drop preview is state on the home screen, and **Analyse** creates the project.
 
@@ -55,12 +67,30 @@ pnpm -C web run test
 
 `just web-check` runs all three. Tests sit next to the code they cover, as `*.test.ts` and `*.test.tsx`.
 
-`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It starts its own server on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run it. Install the browser once, then run it:
+ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may import only each other and `@/components/ui/*`, `@/components/brand/*`, `@/components/theme-toggle`, `@/hooks/use-return-focus` and `@/lib/utils`. An import of the collection's API client, routes, session, settings or project components, or of `use-job-events`, fails the lint. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
+
+`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It builds the web and one `sealift` binary, then starts both roles from that binary. The collection listens on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run the gate. Install the browser once, then run it:
 
 ```sh
 pnpm -C web exec playwright install chromium
 pnpm -C web exec playwright test tests/ui-gate.spec.mjs
 ```
+
+The import role listens on port 18090 and always runs its own server: the gate stops with an error when something already answers there. The server is the shipped `sealift import-server` with its token check on, and no flag or setting turns the check off. `web/tests/import-fixtures.mjs` gives it what a real deployment has. It generates an RSA key, serves the key set on port 18091 and a fake MinIO on port 18092, and writes a settings file with its key files. The gate mints one token per user, with `kid`, `iss`, `aud`, an `exp` one hour ahead and `preferred_username`, and sends it in `X-Access-Token` as the gateway does. Once the server answers `/healthz`, the fixtures write the import records. They do it then because the server's start ends every queued or running attempt as interrupted.
+
+Each user stands for one state of the screens:
+
+| User | MinIO | Import records |
+| --- | --- | --- |
+| `alice` | a listing of her archives | one of every state: queued, running (attempt 2, 37 of 101 done, with an earlier attempt), complete with the archive removed, kept and with no removal recorded, incomplete with three failures of three kinds, refused with both digests, interrupted with 45 packages not finished, a refusal with a 1,000-character reason, a record written by v0.4.0 and an archive with a 1,024-byte key |
+| `bob` | an empty folder | none |
+| `carol` | no bucket | none |
+| `dave` | answers 500 | none |
+| `frank` | an empty folder | a folder that cannot be read, so the list answers 500 |
+
+`IMPORT.routes` in the spec names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings`, `/api/tools` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
+
+Playwright's `-g` filter matches the file name before the title, so `-g "import "` selects the import role and `-g "^import "` selects nothing.
 
 ## Checking a screen in a browser
 
@@ -81,3 +111,17 @@ new MutationObserver((records) => {
 ```
 
 A screenshot alone proves only that something rendered.
+
+### The import screens
+
+The import screens (`web/src/import/` and `web/src/components/import/`) are served by `sealift import-server`, so a local server does not exercise them: the gateway, the signed-in user and MinIO are part of what they show. Check them on the lab (`lab/README.md`) with `SEALIFT_IMAGE=sealift:dev`, signed in through http://localhost:18440, and read the screen's words, not only its look:
+
+- Records written by an older release still read: the old `import-data` volume shows `Not recorded` and the general next action.
+- A wrong expected sha256 ends `Refused` with both digests, and starting again is allowed.
+- A planted conflict ends `Incomplete`, names the package and Nexus's reason, and the retry completes after the version is deleted in Nexus.
+- `docker compose pause nexus` during an import, then `docker compose restart import-server`, shows `Interrupted`; a retry after `unpause` completes.
+- Deleting the `_oauth2_proxy` cookie and pressing `Refresh` shows `Your session has ended`.
+- Another user sees none of these imports.
+- Tab through each screen in both themes: every stop shows a focus ring, no target is under 32 px and the page does not scroll sideways.
+
+Polling is by outcome: an import page refetches every 2 seconds while its latest attempt is queued or running, or is `complete` with no removal recorded, and Imports every 5 seconds while one import is queued or running. Archives reads the folder when the screen opens and on `Refresh` only.

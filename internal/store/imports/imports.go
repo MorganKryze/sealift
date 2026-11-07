@@ -257,15 +257,32 @@ func (s *Store) Begin(user, id string) (dir string, n int, err error) {
 	return dir, n, err
 }
 
-// Listed stores the packages of running attempt n, as the run listed them.
-func (s *Store) Listed(user, id string, n int, pkgs []importer.Result) error {
+// Listed stores the report of running attempt n as the run gave it when it
+// read the manifest: the target, the archive and Nexus, with every package
+// pending. The counts are recomputed from the packages.
+func (s *Store) Listed(user, id string, n int, rep importer.Report) error {
 	_, err := s.update(user, id, func(imp *Import) (string, error) {
 		a, err := running(imp, n)
 		if err != nil {
 			return "", err
 		}
-		a.Report.Packages = slices.Clone(pkgs)
+		rep.Packages = append([]importer.Result{}, rep.Packages...)
+		a.Report = rep
 		recount(&a.Report)
+		return "", nil
+	})
+	return err
+}
+
+// Checked records that the archive of running attempt n passed its checks.
+func (s *Store) Checked(user, id string, n int) error {
+	_, err := s.update(user, id, func(imp *Import) (string, error) {
+		a, err := running(imp, n)
+		if err != nil {
+			return "", err
+		}
+		checked := true
+		a.Report.ArchiveChecked = &checked
 		return "", nil
 	})
 	return err

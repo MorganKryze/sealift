@@ -51,13 +51,14 @@ func runFiles(ctx context.Context, opts Options, newPublisher func(Settings) (Pu
 	}
 	if err != nil {
 		return Report{
-			Outcome:       OutcomeRefused,
-			Reason:        cut("could not check the archive: " + err.Error()),
-			Unencrypted:   opts.Settings.NexusURL.Scheme == "http",
-			ImportVersion: opts.ImportVersion,
-			Archive:       ArchiveInfo{File: a.Source.Name},
-			Nexus:         NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
-			Packages:      []Result{},
+			Outcome:        OutcomeRefused,
+			Reason:         cut("could not check the archive: " + err.Error()),
+			Unencrypted:    opts.Settings.NexusURL.Scheme == "http",
+			ImportVersion:  opts.ImportVersion,
+			Archive:        ArchiveInfo{File: a.Source.Name},
+			Nexus:          NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
+			Packages:       []Result{},
+			ArchiveChecked: ptr(false),
 		}
 	}
 	defer os.RemoveAll(dir)

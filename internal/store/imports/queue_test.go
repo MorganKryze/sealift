@@ -88,7 +88,7 @@ func TestQueueOwnsTheEnd(t *testing.T) {
 	var dir string
 	q := NewQueue(s, func(_ context.Context, i Import, d string, p importer.Progress) (importer.Report, Remover) {
 		dir = d
-		p.Listed([]importer.Result{{Name: "left-pad", Version: "1.3.0", File: "left-pad-1.3.0.tgz", State: importer.Pending}})
+		p.Listed(importer.Report{Packages: []importer.Result{{Name: "left-pad", Version: "1.3.0", File: "left-pad-1.3.0.tgz", State: importer.Pending}}})
 		p.Ended(0, importer.Result{Name: "left-pad", Version: "1.3.0", File: "left-pad-1.3.0.tgz", State: importer.Published})
 		got, _ := s.Get(i.User, i.ID)
 		inRun <- got
@@ -246,10 +246,10 @@ func TestQueuePanicKeepsTheStoredPackages(t *testing.T) {
 	ran := make(chan struct{})
 	q := NewQueue(s, func(_ context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
 		defer close(ran)
-		p.Listed([]importer.Result{
+		p.Listed(importer.Report{Packages: []importer.Result{
 			{Name: "a", Version: "1.0.0", State: importer.Pending},
 			{Name: "b", Version: "1.0.0", State: importer.Pending},
-		})
+		}})
 		p.Ended(0, importer.Result{Name: "a", Version: "1.0.0", State: importer.Published})
 		panic("boom")
 	}, quietLog())
@@ -262,8 +262,8 @@ func TestQueuePanicKeepsTheStoredPackages(t *testing.T) {
 	if a.Attempts[0].Outcome != importer.OutcomeIncomplete || r.Reason != reasonPanic || a.Attempts[0].Removal != nil {
 		t.Fatalf("attempt = %+v", a.Attempts[0])
 	}
-	if len(r.Packages) != 2 || r.Packages[0].State != importer.Published || r.Packages[1].State != importer.Failed || r.Packages[1].Reason == "" {
-		t.Errorf("packages = %+v, want a published and b failed", r.Packages)
+	if len(r.Packages) != 2 || r.Packages[0].State != importer.Published || r.Packages[1].State != importer.Failed || r.Packages[1].Reason == "" || r.Packages[1].Kind != importer.KindInterrupted {
+		t.Errorf("packages = %+v, want a published and b failed as interrupted", r.Packages)
 	}
 	if r.Counts.Published != 1 || r.Counts.Failed != 1 {
 		t.Errorf("counts = %+v, want 1 published and 1 failed", r.Counts)

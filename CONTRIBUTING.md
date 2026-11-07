@@ -93,6 +93,9 @@ When a screen changes, re-read the pages that describe it, since they quote its 
 | Review | `docs/workflow.md`, `docs/how-sealift-chooses.md` |
 | Export | `docs/workflow.md`, `docs/air-gap.md` |
 | Settings | `docs/settings.md` |
+| Archives (import service) | `docs/importing.md`, `docs/air-gap.md` |
+| Imports (import service) | `docs/importing.md`, `docs/air-gap.md` |
+| Import (import service) | `docs/importing.md`, `docs/air-gap.md` |
 
 Retake the screenshots in `docs/assets/` from a fresh volume, analysing the project in [Getting started](docs/getting-started.md), so the numbers on them match the text.
 

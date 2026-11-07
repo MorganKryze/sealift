@@ -25,6 +25,10 @@ type Report struct {
 	Nexus         NexusInfo   `json:"nexus"`
 	Counts        Counts      `json:"counts"`
 	Packages      []Result    `json:"packages"`
+	// ArchiveChecked says whether the archive passed its checks against the
+	// manifest and the signature key. It is nil only in a record written by
+	// sealift 0.4.0 or earlier.
+	ArchiveChecked *bool `json:"archiveChecked,omitempty"`
 }
 
 // ArchiveInfo names the archive and holds the digest and size its manifest declares.

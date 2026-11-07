@@ -366,3 +366,32 @@ func TestImportStopsOnSignal(t *testing.T) {
 		t.Errorf("report %s, %v", b, err)
 	}
 }
+
+func TestImportReportCarriesKinds(t *testing.T) {
+	f := newImportFixture(t)
+	f.nexus.files[npm.TarballURL("/repository/npm-hosted", "left-pad", "1.3.0")] = []byte("other bytes")
+	code, out, errs := runCmd(t, "-settings", f.settings, "-report", f.report, f.archive)
+	if code != 1 || errs != "" {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+	b, err := os.ReadFile(f.report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"kind": "conflict"`, `"archiveChecked": true`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("report lacks %s:\n%s", want, b)
+		}
+	}
+	// The text output names the reason and does not print the kind.
+	if !strings.Contains(out, "left-pad@1.3.0 failed left-pad-1.3.0.tgz: nexus holds this version with other bytes") || strings.Contains(out, "conflict") || strings.Contains(out, "archiveChecked") {
+		t.Errorf("text output changed:\n%s", out)
+	}
+
+	// A refused archive is reported as not checked, with no kind.
+	code, _, _ = runCmd(t, "-settings", f.settings, "-report", f.report, "-sha256", strings.Repeat("0", 64), f.archive)
+	b, _ = os.ReadFile(f.report)
+	if code != 3 || !strings.Contains(string(b), `"archiveChecked": false`) || strings.Contains(string(b), `"kind"`) {
+		t.Errorf("exit %d, refused report:\n%s", code, b)
+	}
+}

@@ -99,7 +99,7 @@ func TestRunAttemptSourceFailure(t *testing.T) {
 			var listed int
 			var ended []Result
 			a.Progress = Progress{
-				Listed: func([]Result) { listed++ },
+				Listed: func(Report) { listed++ },
 				Ended:  func(_ int, res Result) { ended = append(ended, res) },
 			}
 			rep := r.runAttempt(t, a)
@@ -204,10 +204,10 @@ func TestRunAttemptProgress(t *testing.T) {
 	var events []string
 	var listed []Result
 	a.Progress = Progress{
-		Listed: func(pkgs []Result) {
+		Listed: func(rep Report) {
 			mu.Lock()
 			defer mu.Unlock()
-			listed = slices.Clone(pkgs)
+			listed = slices.Clone(rep.Packages)
 			events = append(events, "listed")
 		},
 		Ended: func(i int, res Result) {
@@ -273,7 +273,7 @@ func TestRunAttemptCutsReasonsAtAThousandCharacters(t *testing.T) {
 			func(_ context.Context, _ Publisher, pkgs []Package, _ string, _ func(int, Result)) []Result {
 				out := make([]Result, len(pkgs))
 				for i, p := range pkgs {
-					out[i] = failed(p, long)
+					out[i] = failed(p, KindNexus, long)
 				}
 				return out
 			})

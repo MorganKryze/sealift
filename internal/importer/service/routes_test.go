@@ -21,7 +21,7 @@ func TestRoutesServeOnlyTheImportContract(t *testing.T) {
 	}{
 		{"/healthz", "", http.StatusOK},
 		{"/api/me", "t", http.StatusOK},
-		{"/", "t", http.StatusNotFound},
+		{"/", "t", http.StatusOK},
 		{"/settings", "t", http.StatusNotFound},
 		{"/sessions/x", "t", http.StatusNotFound},
 		{"/api/projects", "t", http.StatusNotFound},
@@ -44,6 +44,15 @@ func TestMeNamesTheUser(t *testing.T) {
 	rec := r.get("/api/me", "t")
 	var me Me
 	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || me.User != "alice" {
+		t.Fatalf("body %q: %+v, %v", rec.Body.String(), me, err)
+	}
+}
+
+func TestMeNamesBucketAndFolder(t *testing.T) {
+	r := newRig(t, fakeVerifier{claims: map[string]token.Claims{"t": named("alice")}})
+	rec := r.get("/api/me", "t")
+	var me Me
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || me.Bucket != "user-alice" || me.Folder != "packages/npm/" {
 		t.Fatalf("body %q: %+v, %v", rec.Body.String(), me, err)
 	}
 }

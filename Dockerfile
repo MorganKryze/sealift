@@ -23,6 +23,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/dist/app ./web/dist/app
+COPY --from=web /src/web/dist/import ./web/dist/import
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X github.com/MorganKryze/sealift/internal/jobs.ToolVersion=$VERSION" -o /out/sealift ./cmd/sealift
 

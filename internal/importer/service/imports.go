@@ -102,13 +102,18 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if err != nil {
 		return nil, err
 	}
-	for _, imp := range existing { // newest first
+	// Every match is read, newest first: records made in one second have no
+	// reliable order, so a refused import must not hide an unfinished one.
+	for _, imp := range existing {
 		// A replaced manifest makes another import: a refusal for it must not block the objects now in MinIO.
-		if imp.Archive.Key == archive.Key && imp.Archive.ETag == archive.ETag && imp.Manifest.ETag == manifest.ETag {
-			if imp.Outcome() != importer.OutcomeComplete {
-				return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
-			}
-			break
+		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag {
+			continue
+		}
+		switch imp.Outcome() {
+		case importer.OutcomeComplete, importer.OutcomeRefused:
+			// A complete import did its work and a refused latest attempt published and removed nothing.
+		default:
+			return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 		}
 	}
 	imp, err := h.store.Create(user, archive, manifest, expected)
@@ -284,12 +289,15 @@ func (h *Handlers) RetryImport(ctx context.Context, req RetryImportRequestObject
 
 // stopped is the report of an attempt that ended before it read the archive.
 func (h *Handlers) stopped(imp imports.Import, outcome, reason string) importer.Report {
+	unchecked := false
 	return importer.Report{
 		Outcome: outcome, Reason: reason,
 		Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
 		Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
 		Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
 		Packages: []importer.Result{},
+		// No object was read, so no check ran.
+		ArchiveChecked: &unchecked,
 	}
 }
 

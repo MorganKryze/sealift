@@ -92,7 +92,7 @@ func TestStoreRefusesALateAttempt(t *testing.T) {
 	if err := s.Finish("alice", imp.ID, 1, late, nil); err == nil {
 		t.Error("a late Finish of attempt 1 was accepted")
 	}
-	if err := s.Listed("alice", imp.ID, 1, pendingResults()); err == nil {
+	if err := s.Listed("alice", imp.ID, 1, listedReport()); err == nil {
 		t.Error("a late Listed of attempt 1 was accepted")
 	}
 	if err := s.Ended("alice", imp.ID, 1, 0, importer.Result{}); err == nil {
@@ -216,6 +216,47 @@ func TestStoreRecordsARemovalOnce(t *testing.T) {
 			got, _ := s.Get("alice", imp.ID)
 			if rem := got.Attempts[0].Removal; tc.wantErr == (rem != nil && rem.Removed) {
 				t.Errorf("stored removal = %+v", rem)
+			}
+		})
+	}
+}
+
+func TestEndedAttemptsFailPendingPackagesAsInterrupted(t *testing.T) {
+	for name, tc := range map[string]struct {
+		end     func(s *Store, imp Import) error
+		outcome string
+		reason  string
+	}{
+		"abandon": {func(s *Store, imp Import) error { return s.Abandon(imp.User, imp.ID, "stopped") }, OutcomeInterrupted, "interrupted"},
+		"break":   {func(s *Store, imp Import) error { return s.Break(imp.User, imp.ID, "panic") }, importer.OutcomeIncomplete, "not reached"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := openStore(t, testRoot(t))
+			imp := newImport(t, s, "alice")
+			if _, _, err := s.Begin(imp.User, imp.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Listed(imp.User, imp.ID, 1, listedReport()); err != nil {
+				t.Fatal(err)
+			}
+			done := pendingResults()[0]
+			done.State = importer.Published
+			if err := s.Ended(imp.User, imp.ID, 1, 0, done); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.end(s, imp); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := s.Get(imp.User, imp.ID)
+			a := got.Attempts[0]
+			if a.Outcome != tc.outcome || len(a.Report.Packages) != 2 {
+				t.Fatalf("attempt %+v", a)
+			}
+			if p := a.Report.Packages[0]; p.State != importer.Published || p.Kind != "" {
+				t.Errorf("the published package became %+v", p)
+			}
+			if p := a.Report.Packages[1]; p.State != importer.Failed || p.Reason != tc.reason || p.Kind != importer.KindInterrupted {
+				t.Errorf("the pending package became %+v, want failed %q with kind interrupted", p, tc.reason)
 			}
 		})
 	}

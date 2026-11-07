@@ -3,3 +3,4 @@ dist/app/
 .vite/
 test-results/
 *.tsbuildinfo
+dist/import/

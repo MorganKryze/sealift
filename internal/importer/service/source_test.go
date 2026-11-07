@@ -153,7 +153,28 @@ func TestAttemptChangedObjectIsRefused(t *testing.T) {
 			if a.nexus.uploadCount() != 0 {
 				t.Error("a changed archive was uploaded")
 			}
+			if rep.ArchiveChecked == nil || *rep.ArchiveChecked {
+				t.Errorf("archiveChecked %v, want false: no object was read", rep.ArchiveChecked)
+			}
 		})
+	}
+}
+
+func TestAttemptWithoutWorkingDirectoryIsUnchecked(t *testing.T) {
+	a := newAttemptRig(t)
+	dir := t.TempDir() + "/missing"
+	rep, remove := a.h.RunAttempt(context.Background(), a.imp, dir, importer.Progress{})
+	if remove != nil {
+		t.Error("an attempt with no working directory returned a removal")
+	}
+	if rep.Outcome != importer.OutcomeRefused || !strings.Contains(rep.Reason, "no working directory") {
+		t.Errorf("outcome %q, reason %q; want refused for the working directory", rep.Outcome, rep.Reason)
+	}
+	if rep.ArchiveChecked == nil || *rep.ArchiveChecked {
+		t.Errorf("archiveChecked %v, want false: no object was read", rep.ArchiveChecked)
+	}
+	if a.nexus.uploadCount() != 0 {
+		t.Error("an unchecked archive was uploaded")
 	}
 }
 
