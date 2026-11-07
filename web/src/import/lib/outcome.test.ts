@@ -89,6 +89,12 @@ describe("archiveName", () => {
     })
   })
 
+  it("splits at the last slash when folders nest", () => {
+    expect(archiveName("packages/npm/2026/11/hr-forms/packages_npm.tar.gz")).toEqual({
+      folder: "2026/11/hr-forms/", file: "packages_npm.tar.gz",
+    })
+  })
+
   it("names packages/npm/ as the folder of an archive at the root", () => {
     expect(archiveName("packages/npm/packages_npm.tar.gz")).toEqual({ folder: "packages/npm/", file: "packages_npm.tar.gz" })
   })
