@@ -48,7 +48,7 @@ export function ImportRow({ imp }: { imp: Import }) {
   )
 }
 
-function Figures({ attempt }: { attempt: Attempt }) {
+export function Figures({ attempt }: { attempt: Attempt }) {
   const c = counts(attempt)
   return (
     <div className="flex gap-3.5 whitespace-nowrap text-[13px]">

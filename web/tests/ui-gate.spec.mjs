@@ -40,12 +40,17 @@ import { IDS, startImportFixtures } from "./import-fixtures.mjs"
 
 // The import role: the shipped import-server behind a real token check. A route names the user whose
 // token the page sends as the gateway does, an optional control to press once the page has its
-// content (`open`), an optional API path to hold until the checks are done so the loading state
+// content (`open`; a `pressed` control is waited on pressed, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
 // shows (`hold`), and the text that proves the data arrived (`ready`).
 export const IMPORT = {
   baseURL: "http://127.0.0.1:18090",
   routes: [
-    { path: "/", user: "alice", ready: "Archives" },
+    { path: "/", user: "alice", ready: "Not imported yet" },
+    { path: "/", user: "alice", open: { role: "button", name: "Importable", exact: false, pressed: true }, ready: "Not imported yet" },
+    { path: "/", user: "bob", ready: "No archive in your folder" },
+    { path: "/", user: "carol", ready: "MinIO has no bucket user-carol yet: nothing to list" },
+    { path: "/", user: "dave", ready: "The archives could not be listed" },
+    { path: "/", user: "alice", hold: "/api/archives", ready: "Reading your folder in MinIO: user-alice/packages/npm/" },
     { path: "/imports", user: "alice", ready: "Waiting its turn" },
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Import" },
     { path: "/imports", user: "bob", ready: "No import yet" },
@@ -290,8 +295,12 @@ for (const route of IMPORT.routes) {
             if (route.hold) await arrived
             await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
             if (route.open) {
-              await p.getByRole(route.open.role, { name: route.open.name, exact: true }).click()
-              await p.getByRole("dialog").waitFor()
+              await p.getByRole(route.open.role, { name: route.open.name, exact: route.open.exact ?? true }).click()
+              if (route.open.pressed) {
+                await p.getByRole(route.open.role, { name: route.open.name, exact: route.open.exact ?? true, pressed: true }).waitFor()
+              } else {
+                await p.getByRole("dialog").waitFor()
+              }
             }
           },
           extra: async (p) => {

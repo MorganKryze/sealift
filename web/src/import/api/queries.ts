@@ -37,3 +37,17 @@ export function useImports(): UseQueryResult<ImportList, Error> {
     refetchInterval: (query) => importsPollInterval(query.state.data),
   })
 }
+
+export type ArchiveList = components["schemas"]["ArchiveList"]
+export type Archive = components["schemas"]["Archive"]
+
+/** The folder is read on load and on refetch() only: an upload at the gateway's side is not worth a poll. */
+export function useArchives(): UseQueryResult<ArchiveList, Error> {
+  return useQuery({
+    queryKey: ["archives"],
+    queryFn: () => importFetch<ArchiveList>("/archives"),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+}

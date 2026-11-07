@@ -138,11 +138,11 @@ function aliceRecords() {
 
 const xml = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-function listing(bucket, objects) {
+function listing(bucket, objects, truncated = false) {
   const items = objects
-    .map((o) => `<Contents><Key>${xml(o.key)}</Key><LastModified>2026-11-06T08:00:00.000Z</LastModified><ETag>${xml(o.etag)}</ETag><Size>${o.size}</Size></Contents>`)
+    .map((o) => `<Contents><Key>${xml(o.key)}</Key><LastModified>${o.modified ?? "2026-11-06T08:00:00.000Z"}</LastModified><ETag>${xml(o.etag)}</ETag><Size>${o.size}</Size></Contents>`)
     .join("")
-  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${FOLDER}</Prefix><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>${items}</ListBucketResult>`
+  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${FOLDER}</Prefix><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>${truncated}</IsTruncated>${items}</ListBucketResult>`
 }
 
 const s3Error = (code, message) => `<?xml version="1.0" encoding="UTF-8"?><Error><Code>${code}</Code><Message>${message}</Message></Error>`
@@ -154,10 +154,20 @@ function minioAnswer(bucket) {
     case "user-alice": {
       const objects = aliceRecords()
         .filter((r) => r.id !== IDS.completeRemoved)
-        .flatMap((r) => [r.archive, r.manifest])
-      const fresh = `${FOLDER}2026-11-06-new-export/`
-      objects.push({ key: `${fresh}${ARCHIVE}`, etag: '"f1"', size: 4_200_000 }, { key: `${fresh}manifest.json`, etag: '"f2"', size: 1_100 })
-      return [200, listing(bucket, objects)]
+        .flatMap((r) => [{ ...r.archive, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.manifest, modified: `${iso(r.id).slice(0, -1)}.000Z` }])
+      const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
+      // Archives the service cannot import, one for each rule, and a 200-character folder.
+      upload("2026-11-06-new-export/", ARCHIVE, 4_200_000)
+      upload("2026-11-06-new-export/", "manifest.json", 1_100)
+      upload("2026-10-28-two-archives/", "first.tar.gz", 3_000_000, "2026-10-28T08:00:00.000Z")
+      upload("2026-10-28-two-archives/", "second.tar.gz", 3_100_000, "2026-10-28T08:01:00.000Z")
+      upload("2026-10-28-two-archives/", "manifest.json", 900, "2026-10-28T08:02:00.000Z")
+      upload("2026-10-27-no-manifest/", ARCHIVE, 2_900_000, "2026-10-27T08:00:00.000Z")
+      upload("2026-10-26/too/deep/", ARCHIVE, 2_800_000, "2026-10-26T08:00:00.000Z")
+      const wide = `${"w".repeat(200)}/`
+      upload(wide, ARCHIVE, 2_700_000, "2026-10-25T08:00:00.000Z")
+      upload(wide, "manifest.json", 800, "2026-10-25T08:00:00.000Z")
+      return [200, listing(bucket, objects, true)]
     }
     case "user-bob":
     case "user-frank":
