@@ -111,3 +111,17 @@ new MutationObserver((records) => {
 ```
 
 A screenshot alone proves only that something rendered.
+
+### The import screens
+
+The import screens (`web/src/import/` and `web/src/components/import/`) are served by `sealift import-server`, so a local server does not exercise them: the gateway, the signed-in user and MinIO are part of what they show. Check them on the lab (`lab/README.md`) with `SEALIFT_IMAGE=sealift:dev`, signed in through http://localhost:18440, and read the screen's words, not only its look:
+
+- Records written by an older release still read: the old `import-data` volume shows `Not recorded` and the general next action.
+- A wrong expected sha256 ends `Refused` with both digests, and starting again is allowed.
+- A planted conflict ends `Incomplete`, names the package and Nexus's reason, and the retry completes after the version is deleted in Nexus.
+- `docker compose pause nexus` during an import, then `docker compose restart import-server`, shows `Interrupted`; a retry after `unpause` completes.
+- Deleting the `_oauth2_proxy` cookie and pressing `Refresh` shows `Your session has ended`.
+- Another user sees none of these imports.
+- Tab through each screen in both themes: every stop shows a focus ring, no target is under 32 px and the page does not scroll sideways.
+
+Polling is by outcome: an import page refetches every 2 seconds while its latest attempt is queued or running, or is `complete` with no removal recorded, and Imports every 5 seconds while one import is queued or running. Archives reads the folder when the screen opens and on `Refresh` only.

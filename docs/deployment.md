@@ -195,6 +195,8 @@ The renewal needs two things from the gateway. oauth2-proxy answers the first re
 
 The recipe forwards one renewed cookie of at most 4 KiB: `$upstream_http_set_cookie` holds a single `Set-Cookie` header. A session that oauth2-proxy splits into several cookies past 4 KiB was not proven.
 
+The screens add nothing to what the gateway must do, with two limits. The service answers its own pages and its `/api` with a `Content-Security-Policy` that allows scripts, styles, images, fonts and connections from the page's own origin only, `frame-ancestors 'none'`, `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff`; through the lab gateway, `/` and `/api/imports` carried those headers unchanged. A gateway must not add framing or inline scripts, or a header that overrides these. A browser that finds its session ended gets a redirect to Keycloak from a script request, which it cannot follow across origins: the screen then says `Your session has ended` and offers `Sign in again`, which reloads the page and lets the gateway send the user to sign in.
+
 An import that is running when its token expires still finishes: the token is checked when a request arrives, not while the import runs.
 
 ## Upgrading

@@ -13,6 +13,7 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 - [How sealift chooses](docs/how-sealift-chooses.md): CVE vectors by severity, tie-breaks, the eight signals, the minimum release age, the review groups
 - [Settings](docs/settings.md): target platform, Node version, signature key, limits, Trivy updates, the settings API
 - [The air gap](docs/air-gap.md): the archive, the reports, sha256 checks, the import, lockfile drift
+- [Importing](docs/importing.md): the import service screens: Archives, Imports and one import, every state and the retry card
 - [Deployment](docs/deployment.md): hardened Compose, capabilities, reverse proxy with SSE, outbound hosts, the /data volume, upgrades, backups
 - [Troubleshooting](docs/troubleshooting.md): each message with its cause and fix
 - [FAQ](docs/faq.md): lockfiles, transitive dependencies, other ecosystems, data, reset

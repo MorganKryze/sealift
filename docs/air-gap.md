@@ -126,6 +126,8 @@ An import takes the archive through the same checks as `sealift import`, then pu
 
 In the lab, an archive whose `bytes@3.1.2` already existed in Nexus with other bytes ended `incomplete` with 100 packages `present` and that one `failed`, and both objects stayed in MinIO. After the planted component was deleted in Nexus, a retry ended `complete`, uploaded that one package and removed the archive. Restarting the service during an import ended it `interrupted`, and a retry ended `complete`.
 
+The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Archives lists the folder and starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
+
 A retry reads every package from Nexus again and uploads only what Nexus no longer serves. It needs the archive to be in MinIO still and unchanged. Delete or replace nothing in the user's folder while an import is queued or running.
 
 [Deployment](deployment.md#the-import-service) covers running the service.
