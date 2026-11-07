@@ -26,7 +26,7 @@ const own = (outcome: string): Import =>
   ({ id: "20261106T093000Z-a1000001", outcome, createdAt: "2026-11-06T09:30:00Z", expectedSha256: "", archiveRemoved: false, attempts: [], archive: { key: "packages/npm/2026-11-06-other/packages_npm.tar.gz", etag: "\"a\"", size: 1 }, manifest: { key: "m", etag: "\"b\"", size: 1 } }) as Import
 
 function renderPanel(answer: (url: string, init?: RequestInit) => Response | Promise<Response> = () => json({}), ownActive?: Import, onClose: () => void = () => {}) {
-  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => (url === "/api/archives" || url === "/api/imports") && !init ? json(url === "/api/imports" ? { imports: [] } : { archives: [] }) : answer(url, init))
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => (url === "/api/archives" || url === "/api/imports") && !init?.method ? json(url === "/api/imports" ? { imports: [] } : { archives: [] }) : answer(url, init))
   vi.stubGlobal("fetch", fetchMock)
   const root = createRootRoute({ component: () => <><ConfirmPanel archive={archive} ownActive={ownActive} onClose={onClose} /><Outlet /></> })
   const page = createRoute({ getParentRoute: () => root, path: "/imports/$importId", component: () => <p>import page</p> })

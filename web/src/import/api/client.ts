@@ -39,11 +39,16 @@ export async function importFetch<T>(path: "/me" | "/archives" | "/imports" | `/
   }
   let response: Response
   try {
-    response = await fetch(`/api${path}`, init)
+    // The gateway answers an ended session with a redirect to its identity provider, on another origin:
+    // followed, the browser fails the request with no status. Not followed, it reports an opaque redirect.
+    response = await fetch(`/api${path}`, { ...init, redirect: "manual" })
   } catch {
     throw new ImportApiError(0, UNREACHABLE)
   }
-  // A gateway whose session ended answers with its sign-in page, often with a 200.
+  if (response.type === "opaqueredirect") {
+    throw new SessionEnded()
+  }
+  // A gateway whose session ended may also answer with its sign-in page, often with a 200.
   const type = (response.headers.get("Content-Type") ?? "").split(";")[0].trim().toLowerCase()
   if (response.status === 401 || !JSON_TYPES.includes(type)) {
     throw new SessionEnded()

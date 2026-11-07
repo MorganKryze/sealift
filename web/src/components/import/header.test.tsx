@@ -41,7 +41,7 @@ describe("ImportHeader", () => {
     expect(screen.getByRole("link", { name: "Archives" })).toHaveAttribute("href", "/")
     expect(screen.getByRole("link", { name: "Imports" })).toHaveAttribute("href", "/imports")
     expect(await screen.findByText("alice")).toBeInTheDocument()
-    expect(fetch).toHaveBeenCalledWith("/api/me", undefined)
+    expect(fetch).toHaveBeenCalledWith("/api/me", { redirect: "manual" })
   })
 
   it.each([

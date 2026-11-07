@@ -33,6 +33,13 @@ describe("the import client", () => {
     await expect(importFetch("/me")).rejects.toBeInstanceOf(SessionEnded)
   })
 
+  it("a redirect to the gateway's sign-in ends the session", async () => {
+    // A browser withholds the answer of a redirect it was told not to follow: type "opaqueredirect", status 0.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ type: "opaqueredirect", status: 0, ok: false, headers: new Headers() } as Response)
+    await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: "manual" })
+  })
+
   it("an HTML 200 ends the session", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html><title>Sign in</title></html>", { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }))
     await expect(importFetch("/me")).rejects.toBeInstanceOf(SessionEnded)
