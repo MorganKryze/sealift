@@ -8,6 +8,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The import screens, served by `sealift import-server` behind the gateway: Archives lists the archives in your MinIO folder and starts an import, Imports lists the imports you started, and an import shows its stages, its report per package, how it ended and a retry card that says what each failure needs. [Importing](docs/importing.md) describes them.
 - `sealift import-server` serves its own screens: Archives at `/`, Imports at `/imports` and an import at `/imports/<id>`, with the header and the Settings sheet. The files need no token, every other path outside `/api` and `/healthz` answers 404, and every answer carries a Content-Security-Policy and framing headers.
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
 
