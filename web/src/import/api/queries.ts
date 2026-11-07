@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseMutationResult, type Use
 
 import { ImportApiError, importFetch, SessionEnded } from "./client"
 import type { components } from "./schema"
+import { latestAttempt } from "../lib/outcome"
 
 /** A session that ended or a 4xx answers the same on a retry; a network failure or a 5xx may not. */
 export function retryOnlyTransient(failureCount: number, error: Error): boolean {
@@ -52,7 +53,25 @@ export function useArchives(): UseQueryResult<ArchiveList, Error> {
   })
 }
 
-type Import = components["schemas"]["Import"]
+export type Import = components["schemas"]["Import"]
+
+/** How often the import page reads again: every 2 s while its latest attempt is queued, running, or complete with no removal recorded. */
+export function importPollInterval(imp: Import | undefined): number | false {
+  if (!imp) {
+    return false
+  }
+  const a = latestAttempt(imp)
+  const inFlight = a.status === "queued" || a.status === "running" || (a.status === "ended" && a.outcome === "complete" && !a.removal)
+  return inFlight ? 2000 : false
+}
+
+export function useImport(id: string): UseQueryResult<Import, Error> {
+  return useQuery({
+    queryKey: ["imports", id],
+    queryFn: () => importFetch<Import>(`/imports/${encodeURIComponent(id)}`),
+    refetchInterval: (query) => importPollInterval(query.state.data),
+  })
+}
 
 /** An expected sha256 is empty or 64 hex digits once trimmed. */
 export function validSha256(s: string): boolean {
