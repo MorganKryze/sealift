@@ -8,7 +8,7 @@ import { AttemptProgress } from "@/components/import/progress"
 import { ReportList } from "@/components/import/report-list"
 import { RetryCard } from "@/components/import/retry-card"
 import { ShaBlock } from "@/components/import/sha-block"
-import { ImportApiError } from "@/import/api/client"
+import { ImportApiError, SessionEnded } from "@/import/api/client"
 import { useImport } from "@/import/api/queries"
 import { latestAttempt } from "@/import/lib/outcome"
 
@@ -31,7 +31,7 @@ function ImportRoute() {
       </div>
     )
   }
-  if (!imp) {
+  if (!imp || query.error instanceof SessionEnded) {
     if (query.error instanceof ImportApiError && query.error.status === 404) {
       return (
         <>

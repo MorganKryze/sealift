@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router"
 import { Inbox } from "lucide-react"
 
 import { ApiFailure } from "@/components/import/api-failure"
+import { SessionEnded } from "@/import/api/client"
 import { useImports, useMe } from "@/import/api/queries"
 
 import { ImportRow } from "./import-row"
@@ -64,7 +65,7 @@ export function ImportsList() {
             </div>
           ))}
         </div>
-      ) : imports === undefined ? (
+      ) : imports === undefined || query.error instanceof SessionEnded ? (
         <ApiFailure error={query.error} onRetry={() => void query.refetch()} untouched="Your archives in MinIO are untouched." />
       ) : imports.length === 0 ? (
         <div className="mt-8 flex flex-col items-center rounded-xl border border-dashed border-line px-8 py-12 text-center">

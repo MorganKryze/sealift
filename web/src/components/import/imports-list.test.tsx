@@ -90,6 +90,17 @@ const json = (body: unknown, status = 200) =>
 const rowOf = (name: string) => screen.getAllByRole("listitem").find((li) => li.textContent?.includes(name)) as HTMLElement
 
 describe("ImportsList", () => {
+  it("says the session has ended when a refresh meets the sign-in page", async () => {
+    let ended = false
+    const client = renderList(() => (ended ? new Response("<html>Sign in</html>", { status: 200, headers: { "Content-Type": "text/html" } }) : json({ imports: [complete] })))
+    await screen.findAllByRole("listitem")
+    ended = true
+    await act(() => client.refetchQueries({ queryKey: ["imports"] }))
+    expect(await screen.findByRole("heading", { name: "Your session has ended" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Sign in again" })).toBeInTheDocument()
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+  })
+
   it("shows one row per import, newest first, with its words and counts", async () => {
     renderList(() => json({ imports: [complete, incomplete, queued, refused, running(37), interrupted] }))
     const rows = await screen.findAllByRole("listitem")

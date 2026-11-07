@@ -3,7 +3,7 @@ import { useState } from "react"
 
 import { ApiFailure } from "@/components/import/api-failure"
 import { Button } from "@/components/ui/button"
-import { ImportApiError } from "@/import/api/client"
+import { ImportApiError, SessionEnded } from "@/import/api/client"
 import { useArchives, useImports, useMe, type Archive } from "@/import/api/queries"
 
 import { ArchiveRow } from "./archive-row"
@@ -72,7 +72,7 @@ export function ArchivesList() {
             </div>
           ))}
         </div>
-      ) : list === undefined ? (
+      ) : list === undefined || query.error instanceof SessionEnded ? (
         query.error instanceof ImportApiError && query.error.status === 502 ? (
           <ImportFailure
             title="The archives could not be listed"

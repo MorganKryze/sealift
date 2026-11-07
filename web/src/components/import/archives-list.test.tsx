@@ -54,6 +54,17 @@ const three = [
 ]
 
 describe("ArchivesList", () => {
+  it("says the session has ended when Refresh meets the sign-in page, whatever the list held", async () => {
+    let ended = false
+    renderList(() => (ended ? new Response("<html>Sign in</html>", { status: 200, headers: { "Content-Type": "text/html" } }) : json(folderList(three))))
+    await screen.findAllByRole("listitem")
+    ended = true
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    expect(await screen.findByRole("heading", { name: "Your session has ended" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Sign in again" })).toBeInTheDocument()
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+  })
+
   it("reads the folder again when the screen opens, so a row shows the import started since", async () => {
     const before = folderList([archive("lab/", "2026-11-06T09:00:00Z")])
     const after = folderList([archive("lab/", "2026-11-06T09:00:00Z", { latestImport: { id: "i1", outcome: "refused" } })])
