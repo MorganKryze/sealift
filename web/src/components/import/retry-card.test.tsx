@@ -83,12 +83,12 @@ describe("RetryCard", () => {
   it("states how many packages are not in Nexus, what a retry does and the split", async () => {
     renderPage(() => json({}, 500), incomplete())
     expect(await screen.findByRole("heading", { name: "3 of 101 packages are not in Nexus" })).toBeInTheDocument()
-    expect(screen.getByText(/reads the archive and its manifest from MinIO again, checks the sha256 again, reads every package from Nexus again/)).toBeInTheDocument()
-    expect(screen.getByText(/uploads only what Nexus lacks/)).toBeInTheDocument()
-    expect(screen.getByText(/removes the archive only once every package is in Nexus/)).toBeInTheDocument()
-    const clears = screen.getByRole("group", { name: "Clears as is" })
+    expect(screen.getByText(/Retry adds attempt 2 to this import/)).toBeInTheDocument()
+    expect(screen.getByText("Reads the archive and its manifest from MinIO again and checks the sha256 again.")).toBeInTheDocument()
+    expect(screen.getByText("Removes the archive from MinIO only once every package is in Nexus.")).toBeInTheDocument()
+    const clears = screen.getByRole("group", { name: "Can succeed on retry" })
     expect(clears).toHaveTextContent("1 package")
-    const change = screen.getByRole("group", { name: "Needs a change first" })
+    const change = screen.getByRole("group", { name: "Fails again until fixed outside sealift" })
     expect(within(change).getByText(/1 conflict/)).toBeInTheDocument()
     expect(within(change).getByText(/delete it in Nexus, then retry/)).toBeInTheDocument()
     expect(within(change).getByText(/1 nexus/)).toBeInTheDocument()
@@ -96,20 +96,25 @@ describe("RetryCard", () => {
     expect(screen.getAllByRole("button", { name: "Retry import" })).toHaveLength(1)
   })
 
+  it("says how many packages are in Nexus already, which a retry leaves untouched", async () => {
+    renderPage(() => json({}, 500), incomplete())
+    expect(await screen.findByText("Reads all 101 packages from Nexus again. 98 are there already and stay untouched; it uploads only what Nexus does not have.")).toBeInTheDocument()
+  })
+
   it("says the general words for a failure with no kind", async () => {
     const legacy = make([attempt(1, "ended", "incomplete", [...many(10, "published"), pkg("failed", { reason: "Nexus answered 500" })])])
     renderPage(() => json({}, 500), legacy)
     expect(await screen.findByRole("heading", { name: "1 of 11 packages are not in Nexus" })).toBeInTheDocument()
     expect(screen.getByText(/Read the reason: it names what failed\. Fix that, then retry\./)).toBeInTheDocument()
-    expect(screen.queryByRole("group", { name: "Needs a change first" })).toBeNull()
+    expect(screen.queryByRole("group", { name: "Fails again until fixed outside sealift" })).toBeNull()
   })
 
   it("puts an interrupted import's packages in the group that clears as is", async () => {
     const imp = make([attempt(1, "ended", "interrupted", [...many(56, "published"), ...many(45, "failed", { kind: "interrupted", reason: "interrupted" })])])
     renderPage(() => json({}, 500), imp)
     expect(await screen.findByRole("heading", { name: "45 of 101 packages are not in Nexus" })).toBeInTheDocument()
-    expect(screen.getByRole("group", { name: "Clears as is" })).toHaveTextContent("45 packages")
-    expect(screen.queryByRole("group", { name: "Needs a change first" })).toBeNull()
+    expect(screen.getByRole("group", { name: "Can succeed on retry" })).toHaveTextContent("45 packages")
+    expect(screen.queryByRole("group", { name: "Fails again until fixed outside sealift" })).toBeNull()
   })
 
   it("keeps the one primary button right after the text", async () => {

@@ -88,22 +88,26 @@ function PackageRow({ p }: { p: ReportPackage }) {
   const id = `${p.name}@${p.version}`
   const failed = kind === "failed" || kind === "not-finished"
   return (
-    <li className="grid grid-cols-[132px_minmax(0,1fr)] gap-x-4 border-t border-line px-5 py-3 first:border-t-0">
-      <span className="inline-flex h-6 items-center gap-1.5 text-[13px] font-medium">
-        <Icon aria-hidden className={cn("size-4 shrink-0", tone)} />
-        {label}
-      </span>
-      <div className="min-w-0">
-        <p className="font-mono text-[13px] [overflow-wrap:anywhere]">{id}</p>
-        {kind === "present" && p.note ? <p className="mt-1 text-[13px] text-muted [overflow-wrap:anywhere]">{p.note}</p> : null}
+    <tr className={cn("border-t border-line align-top", kind === "failed" && "bg-severity-critical/10", kind === "not-finished" && "bg-severity-high/10")}>
+      <td className="px-3.5 py-2.5 font-mono text-[13px] [overflow-wrap:anywhere]">{id}</td>
+      <td className="px-3.5 py-2.5">
+        <span className="inline-flex h-6 items-center gap-1.5 text-[13px] font-semibold">
+          <Icon aria-hidden className={cn("size-4 shrink-0", tone)} />
+          {label}
+        </span>
+      </td>
+      <td className="min-w-0 px-3.5 py-2.5">
+        {kind === "present" && p.note ? <p className="text-[13px] text-muted [overflow-wrap:anywhere]">{p.note}</p> : null}
         {failed ? (
           <>
             <Reason id={id} reason={p.reason || "Reason not recorded"} />
-            <p className="mt-1 text-[13px] text-muted">{nextAction(kind === "not-finished" ? "interrupted" : p.kind).words}</p>
+            <p className="mt-1 text-[13px]">
+              <b className="font-semibold">Next:</b> {nextAction(kind === "not-finished" ? "interrupted" : p.kind).words}
+            </p>
           </>
         ) : null}
-      </div>
-    </li>
+      </td>
+    </tr>
   )
 }
 
@@ -153,11 +157,33 @@ function Packages({ attempt }: { attempt: Attempt }) {
         </div>
         {c.notFinished > 0 ? <span className="text-sm text-muted">{`${c.notFinished} not finished`}</span> : null}
       </div>
-      <ul aria-label="Packages" className="overflow-hidden rounded-xl border border-line">
-        {visible.map((p, i) => (
-          <PackageRow key={`${i}-${p.name}@${p.version}`} p={p} />
-        ))}
-      </ul>
+      <div className="overflow-hidden rounded-xl border border-line">
+        <table aria-label="Packages" className="w-full table-fixed border-collapse text-left">
+          <colgroup>
+            <col className="w-[30%]" />
+            <col className="w-[148px]" />
+            <col />
+          </colgroup>
+          <thead className="bg-card text-xs font-semibold text-muted">
+            <tr>
+              <th scope="col" className="px-3.5 py-2 font-semibold">
+                Package
+              </th>
+              <th scope="col" className="px-3.5 py-2 font-semibold">
+                State
+              </th>
+              <th scope="col" className="px-3.5 py-2 font-semibold">
+                Detail
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((p, i) => (
+              <PackageRow key={`${i}-${p.name}@${p.version}`} p={p} />
+            ))}
+          </tbody>
+        </table>
+      </div>
       {visible.length < shown.length ? (
         <button
           type="button"

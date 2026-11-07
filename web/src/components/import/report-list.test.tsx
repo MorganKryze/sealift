@@ -24,7 +24,8 @@ function attempt(packages: ReportPackage[], n = 1): Attempt {
   }
 }
 
-const rows = () => within(screen.getByRole("list", { name: "Packages" })).queryAllByRole("listitem")
+const table = () => screen.getByRole("table", { name: "Packages" })
+const rows = () => within(table()).queryAllByRole("row").filter((r) => r.closest("tbody"))
 
 describe("report list", () => {
   it("opens on Failed when an attempt followed live ends with a failed package", () => {
@@ -48,6 +49,32 @@ describe("report list", () => {
     expect(text[2]).toContain("Pending")
     expect(text[3]).toContain("Failed")
     for (const r of rows()) expect(r.querySelector("svg")).not.toBeNull()
+  })
+
+  it("lays the packages out as a Package, State and Detail table", () => {
+    render(<ReportList attempt={attempt([pkg("a", "published")])} />)
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }))
+    expect(within(table()).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Package", "State", "Detail"])
+    const cells = within(rows()[0]).getAllByRole("cell")
+    expect(cells[0]).toHaveTextContent("a@1.0.0")
+    expect(cells[1]).toHaveTextContent("Published")
+  })
+
+  it("tints a failed row red and a not finished row amber, and leaves the others plain", () => {
+    const list = [pkg("a", "published"), pkg("b", "failed", { kind: "nexus", reason: "x" }), pkg("c", "failed", { kind: "interrupted", reason: "interrupted" })]
+    render(<ReportList attempt={attempt(list)} />)
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }))
+    const [plain, failed, unfinished] = rows()
+    expect(plain.className).not.toContain("bg-severity")
+    expect(failed.className).toContain("bg-severity-critical/")
+    expect(unfinished.className).toContain("bg-severity-high/")
+  })
+
+  it("says the next action after a bold Next label", () => {
+    render(<ReportList attempt={attempt([pkg("d", "failed", { kind: "conflict", reason: "Nexus holds d@1.0.0 with other bytes" })])} />)
+    const label = screen.getByText("Next:")
+    expect(label.tagName).toBe("B")
+    expect(label.parentElement).toHaveTextContent(/^Next: Nexus holds this version with other bytes/)
   })
 
   it("shows a present package's note", () => {

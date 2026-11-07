@@ -47,19 +47,22 @@ export function RetryCard({ imp }: { imp: Import }) {
       <h2 id="retry-heading" className="text-lg font-semibold tracking-tight">
         {`${g.notInNexus} of ${total} ${total === 1 ? "package is" : "packages are"} not in Nexus`}
       </h2>
-      <p className="mt-2 max-w-[62ch]">
-        {`Retry adds attempt ${attempt.n + 1} to this import. It reads the archive and its manifest from MinIO again, checks the sha256 again, reads every package from Nexus again, uploads only what Nexus lacks, and removes the archive only once every package is in Nexus.`}
-      </p>
+      <p className="mt-2 max-w-[62ch]">{`Retry adds attempt ${attempt.n + 1} to this import. It starts from the beginning and trusts nothing from the earlier attempt:`}</p>
+      <ul className="mt-2 grid max-w-[62ch] list-disc gap-1 pl-5">
+        <li>Reads the archive and its manifest from MinIO again and checks the sha256 again.</li>
+        <li>{`Reads all ${total} ${total === 1 ? "package" : "packages"} from Nexus again. ${total - g.notInNexus} ${total - g.notInNexus === 1 ? "is" : "are"} there already and stay untouched; it uploads only what Nexus does not have.`}</li>
+        <li>Removes the archive from MinIO only once every package is in Nexus.</li>
+      </ul>
       <div className="mt-4 grid max-w-[72ch] gap-3 text-sm">
         {g.asIs > 0 ? (
-          <div role="group" aria-label="Clears as is">
-            <p className="font-medium">Clears as is</p>
-            <p className="mt-1 text-muted">{`${plural(g.asIs, "package", "packages")}: a retry checks them in Nexus and uploads the ones it lacks. Nothing needs a change first.`}</p>
+          <div role="group" aria-label="Can succeed on retry">
+            <p className="font-medium">Can succeed on retry</p>
+            <p className="mt-1 text-muted">{`${plural(g.asIs, "package", "packages")}: a retry checks them in Nexus and uploads the ones it lacks. Nothing outside sealift needs to change first.`}</p>
           </div>
         ) : null}
         {g.changeFirst.length > 0 ? (
-          <div role="group" aria-label="Needs a change first">
-            <p className="font-medium">Needs a change first</p>
+          <div role="group" aria-label="Fails again until fixed outside sealift">
+            <p className="font-medium">Fails again until fixed outside sealift</p>
             <ul className="mt-1 grid gap-1.5 text-muted">
               {g.changeFirst.map((c) => (
                 <li key={c.kind}>

@@ -74,12 +74,12 @@ The `Archive sha256 check` block shows `Expected sha256` (`No expected sha256 wa
 
 ### The retry card
 
-An `Incomplete` import shows a card titled `1 of 101 packages are not in Nexus`. It says what a retry does: it adds an attempt, reads the archive and its manifest from MinIO again, checks the sha256 again, reads every package from Nexus again, uploads only what Nexus lacks and removes the archive only once every package is in Nexus. The card sorts the failures by what they need:
+An `Incomplete` import shows a card titled `1 of 101 packages are not in Nexus`. It says what a retry does: it adds an attempt, reads the archive and its manifest from MinIO again and checks the sha256 again, reads every package from Nexus again, says how many are there already and stay untouched, uploads only what Nexus lacks and removes the archive only once every package is in Nexus. The card sorts the failures by what they need:
 
 | Group | Kinds |
 | --- | --- |
-| `Clears as is` | `interrupted`, `source`: retry as it is. |
-| `Needs a change first` | `conflict`, `mismatch`, `nexus`, `local`, each with its count and its words. |
+| `Can succeed on retry` | `interrupted`, `source`: retry as it is. |
+| `Fails again until fixed outside sealift` | `conflict`, `mismatch`, `nexus`, `local`, each with its count and its words. |
 | `Cause not recorded` | A package with no kind, or one this version does not know. |
 
 For a `conflict`, the card says `Nexus holds this version with other bytes, and sealift never overwrites it. If that copy is the wrong one, delete it in Nexus, then retry.` The retry button is `Retry import`. If the service refuses it, the card says `The retry was refused` and why. Earlier attempts stay listed under `Earlier attempts`.
@@ -88,7 +88,7 @@ For a `conflict`, the card says `Nexus holds this version with other bytes, and 
 
 ### Packages
 
-`Packages` lists each package of the attempt with its state, `Published`, `Present` (Nexus already held the same bytes), `Failed`, `Not finished`, `Pending` or `Not recorded`, and its reason. `All` and `Failed` filter the list. A long reason is cut: `Show full reason` opens it. An import that ends with failures opens on `Failed`.
+`Packages` is a table with the columns `Package`, `State` and `Detail`. It lists each package of the attempt with its state, `Published`, `Present` (Nexus already held the same bytes), `Failed`, `Not finished`, `Pending` or `Not recorded`. A failed row is tinted and its detail gives the reason, then `Next:` and what to do. `All` and `Failed` filter the list. A long reason is cut: `Show full reason` opens it. An import that ends with failures opens on `Failed`.
 
 ## When your session ends
 
