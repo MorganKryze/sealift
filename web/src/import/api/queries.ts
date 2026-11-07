@@ -43,12 +43,16 @@ export function useImports(): UseQueryResult<ImportList, Error> {
 export type ArchiveList = components["schemas"]["ArchiveList"]
 export type Archive = components["schemas"]["Archive"]
 
-/** The folder is read on load and on refetch() only: an upload at the gateway's side is not worth a poll. */
-export function useArchives(): UseQueryResult<ArchiveList, Error> {
+/**
+ * The folder is read when the list screen opens and on refetch(): an upload at the gateway's side is
+ * not worth a poll. A reader that only needs the cached list (the confirm panel) passes onOpen false.
+ */
+export function useArchives(onOpen = false): UseQueryResult<ArchiveList, Error> {
   return useQuery({
     queryKey: ["archives"],
     queryFn: () => importFetch<ArchiveList>("/archives"),
     staleTime: Infinity,
+    refetchOnMount: onOpen ? "always" : true,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })

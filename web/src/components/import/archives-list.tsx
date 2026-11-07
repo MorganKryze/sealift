@@ -20,7 +20,7 @@ function newestFirst(archives: Archive[]): Archive[] {
 
 /** The archives of the user's folder, with one status region that stays mounted from load to list. */
 export function ArchivesList() {
-  const query = useArchives()
+  const query = useArchives(true)
   const imports = useImports()
   const me = useMe()
   const [filter, setFilter] = useState<"all" | "importable">("all")

@@ -24,7 +24,7 @@ const folderList = (archives: Archive[], over: Partial<ArchiveList> = {}): Archi
   minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", bucketMissing: false, truncated: false, unencrypted: [], archives, ...over,
 })
 
-function renderList(answer: () => Response | Promise<Response>) {
+function renderList(answer: () => Response | Promise<Response>, seed?: (client: QueryClient) => void) {
   const fetchMock = vi.fn(async (url: string) => {
     if (url === "/api/me") return json(me)
     if (url === "/api/imports") return json({ imports: [] })
@@ -38,6 +38,7 @@ function renderList(answer: () => Response | Promise<Response>) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  seed?.(client)
   render(
     <QueryClientProvider client={client}>
       <RouterProvider router={router} />
@@ -53,6 +54,17 @@ const three = [
 ]
 
 describe("ArchivesList", () => {
+  it("reads the folder again when the screen opens, so a row shows the import started since", async () => {
+    const before = folderList([archive("lab/", "2026-11-06T09:00:00Z")])
+    const after = folderList([archive("lab/", "2026-11-06T09:00:00Z", { latestImport: { id: "i1", outcome: "refused" } })])
+    renderList(
+      () => json(after),
+      (client) => client.setQueryData(["archives"], before),
+    )
+    expect(await screen.findByText("Refused")).toBeInTheDocument()
+    expect(screen.queryByText("Not imported yet")).not.toBeInTheDocument()
+  })
+
   it("lists every archive newest first", async () => {
     renderList(() => json(folderList([...three].sort((a, b) => a.key.localeCompare(b.key)))))
     const rows = await screen.findAllByRole("listitem")
