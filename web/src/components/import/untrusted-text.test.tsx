@@ -11,8 +11,8 @@ describe("text from an archive renders as text", () => {
     const root = createRootRoute({
       component: () => (
         <ul>
-          <ArchiveRow archive={{ key: `packages/npm/${HOSTILE}/packages_npm.tar.gz`, size: 1, modified: "2026-11-05T08:00:00Z", importable: true }} onStart={() => {}} />
-          <ArchiveRow archive={{ key: "packages/npm/b/packages_npm.tar.gz", size: 1, modified: "2026-11-05T08:00:00Z", importable: false, reason: HOSTILE }} onStart={() => {}} />
+          <ArchiveRow archive={{ key: `packages/npm/${HOSTILE}/packages_npm.tar.gz`, size: 1, modified: "2026-11-05T08:00:00Z", importable: true }} />
+          <ArchiveRow archive={{ key: "packages/npm/b/packages_npm.tar.gz", size: 1, modified: "2026-11-05T08:00:00Z", importable: false, reason: HOSTILE }} />
         </ul>
       ),
     })

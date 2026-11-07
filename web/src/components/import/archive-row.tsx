@@ -1,10 +1,12 @@
 import { Link } from "@tanstack/react-router"
+import { useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import type { Archive } from "@/import/api/queries"
 import { archiveName, counts, latestAttempt, type Import } from "@/import/lib/outcome"
 import { formatBytes, formatWhen } from "@/lib/utils"
 
+import { ConfirmPanel } from "./confirm-panel"
 import { Figures } from "./import-row"
 import { OutcomeBadge } from "./outcome-badge"
 
@@ -16,16 +18,19 @@ interface ArchiveRowProps {
   archive: Archive
   /** The full record of the archive's latest import, when the imports list has it. */
   latest?: Import
-  onStart: (a: Archive) => void
+  /** The user's own queued or running import, which the new one would wait for. */
+  ownActive?: Import
 }
 
 /** One archive of the folder: its name, whether it can be imported, what its latest import did and the one action that follows. */
-export function ArchiveRow({ archive, latest, onStart }: ArchiveRowProps) {
+export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
+  const [confirming, setConfirming] = useState(false)
+  const actions = useRef<HTMLDivElement>(null)
   const { folder, file } = archiveName(archive.key)
   const known = archive.latestImport
   const outcome = known ? (latest?.outcome ?? known.outcome) : undefined
   const start = (
-    <Button size="sm" aria-label={`Start import of ${folder}${file}`} onClick={() => onStart(archive)}>
+    <Button size="sm" aria-label={`Start import of ${folder}${file}`} aria-expanded={confirming} onClick={() => setConfirming(true)}>
       Start
     </Button>
   )
@@ -51,9 +56,19 @@ export function ArchiveRow({ archive, latest, onStart }: ArchiveRowProps) {
             <p className="mb-1 text-xs text-muted">Can be imported</p>
             {known && outcome ? <Latest outcome={outcome} latest={latest} /> : <p className="text-[13px]">Not imported yet</p>}
           </div>
-          <div className="justify-self-end">
+          <div ref={actions} className="justify-self-end">
             {known && outcome ? <Next id={known.id} outcome={outcome} label={`${folder}${file}`} start={start} /> : start}
           </div>
+          {confirming ? (
+            <ConfirmPanel
+              archive={archive}
+              ownActive={ownActive}
+              onClose={() => {
+                setConfirming(false)
+                actions.current?.querySelector("button")?.focus()
+              }}
+            />
+          ) : null}
         </>
       ) : (
         <div className="col-span-2 min-w-0">

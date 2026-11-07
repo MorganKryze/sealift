@@ -28,6 +28,7 @@ export function ArchivesList() {
   const where = me.data ? `${me.data.bucket}/${me.data.folder}` : "packages/npm/"
   const refresh = () => void Promise.all([query.refetch(), imports.refetch()])
 
+  const ownActive = imports.data?.imports.find((i) => i.outcome === "queued" || i.outcome === "running")
   const all = list ? newestFirst(list.archives) : []
   const importable = all.filter((a) => a.importable)
   const shown = filter === "importable" ? importable : all
@@ -104,7 +105,7 @@ export function ArchivesList() {
           ) : (
             <ul className="overflow-hidden rounded-xl border border-line">
               {shown.map((a) => (
-                <ArchiveRow key={a.key} archive={a} latest={imports.data?.imports.find((i) => i.id === a.latestImport?.id)} onStart={() => {}} />
+                <ArchiveRow key={a.key} archive={a} latest={imports.data?.imports.find((i) => i.id === a.latestImport?.id)} ownActive={ownActive} />
               ))}
             </ul>
           )}

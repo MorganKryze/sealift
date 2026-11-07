@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query"
 
 import { ImportApiError, importFetch, SessionEnded } from "./client"
 import type { components } from "./schema"
@@ -49,5 +49,23 @@ export function useArchives(): UseQueryResult<ArchiveList, Error> {
     staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  })
+}
+
+type Import = components["schemas"]["Import"]
+
+/** An expected sha256 is empty or 64 hex digits once trimmed. */
+export function validSha256(s: string): boolean {
+  const t = s.trim()
+  return t === "" || /^[0-9a-fA-F]{64}$/.test(t)
+}
+
+/** Starts an import. The JSON content type is required: the service refuses a cross-site start without it. */
+export function useStartImport(): UseMutationResult<Import, Error, { archive: string; expectedSha256?: string }> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { archive: string; expectedSha256?: string }) =>
+      importFetch<Import>("/imports", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["imports"] }),
   })
 }

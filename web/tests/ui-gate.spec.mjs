@@ -40,13 +40,14 @@ import { IDS, startImportFixtures } from "./import-fixtures.mjs"
 
 // The import role: the shipped import-server behind a real token check. A route names the user whose
 // token the page sends as the gateway does, an optional control to press once the page has its
-// content (`open`; a `pressed` control is waited on pressed, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
+// content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
 // shows (`hold`), and the text that proves the data arrived (`ready`).
 export const IMPORT = {
   baseURL: "http://127.0.0.1:18090",
   routes: [
     { path: "/", user: "alice", ready: "Not imported yet" },
     { path: "/", user: "alice", open: { role: "button", name: "Importable", exact: false, pressed: true }, ready: "Not imported yet" },
+    { path: "/", user: "alice", open: { role: "button", name: "Start import of 2026-11-06-new-export/packages_npm.tar.gz", opens: { role: "region", name: "Start the import of 2026-11-06-new-export/packages_npm.tar.gz" } }, ready: "Not imported yet" },
     { path: "/", user: "bob", ready: "No archive in your folder" },
     { path: "/", user: "carol", ready: "MinIO has no bucket user-carol yet: nothing to list" },
     { path: "/", user: "dave", ready: "The archives could not be listed" },
@@ -298,6 +299,8 @@ for (const route of IMPORT.routes) {
               await p.getByRole(route.open.role, { name: route.open.name, exact: route.open.exact ?? true }).click()
               if (route.open.pressed) {
                 await p.getByRole(route.open.role, { name: route.open.name, exact: route.open.exact ?? true, pressed: true }).waitFor()
+              } else if (route.open.opens) {
+                await p.getByRole(route.open.opens.role, { name: route.open.opens.name }).waitFor()
               } else {
                 await p.getByRole("dialog").waitFor()
               }

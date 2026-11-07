@@ -1,6 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 
 import type { Archive } from "@/import/api/queries"
 import type { Attempt, Import, ReportPackage } from "@/import/lib/outcome"
@@ -32,11 +33,11 @@ const imp = (outcome: string, attempts: Attempt[]): Import => ({
 const archive = (over: Partial<Archive> = {}): Archive => ({ key: KEY, size: 5_500_000, modified: "2026-11-05T08:00:00Z", importable: true, ...over })
 const withLatest = (outcome: string): Archive => archive({ latestImport: { id: "20261105T090000Z-0000a001", outcome } })
 
-function renderRow(a: Archive, latest?: Import, onStart: (a: Archive) => void = () => {}) {
-  const root = createRootRoute({ component: () => <ul><ArchiveRow archive={a} latest={latest} onStart={onStart} /></ul> })
+function renderRow(a: Archive, latest?: Import) {
+  const root = createRootRoute({ component: () => <ul><ArchiveRow archive={a} latest={latest} /></ul> })
   const page = createRoute({ getParentRoute: () => root, path: "/imports/$importId", component: () => <p>page</p> })
   const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ["/"] }) })
-  render(<RouterProvider router={router} />)
+  render(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>)
 }
 
 describe("ArchiveRow", () => {
@@ -51,12 +52,12 @@ describe("ArchiveRow", () => {
   })
 
   it("offers Start and says Not imported yet without a latest import", async () => {
-    const onStart = vi.fn()
-    const a = archive()
-    renderRow(a, undefined, onStart)
+    renderRow(archive())
     expect(await screen.findByText("Not imported yet")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Start import of 2026-11-05-reports/packages_npm.tar.gz" }))
-    expect(onStart).toHaveBeenCalledWith(a)
+    const start = screen.getByRole("button", { name: "Start import of 2026-11-05-reports/packages_npm.tar.gz" })
+    expect(start).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(start)
+    expect(start).toHaveAttribute("aria-expanded", "true")
   })
 
   it.each([
