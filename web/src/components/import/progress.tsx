@@ -33,7 +33,7 @@ function Region({ attempt }: { attempt: Attempt }) {
   const stage = stageOf(attempt)
   const c = counts(attempt)
   return (
-    <div role="status" className="rounded-xl border border-line bg-card p-5">
+    <div role="status" tabIndex={-1} className="rounded-xl border border-line bg-card p-5 outline-none focus-visible:ring-2 focus-visible:ring-accent">
       {stage === "waiting" ? (
         <>
           <p className="font-medium">Waiting its turn</p>

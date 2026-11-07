@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient, type UseMutationResult, type Use
 
 import { ImportApiError, importFetch, SessionEnded } from "./client"
 import type { components } from "./schema"
-import { latestAttempt } from "../lib/outcome"
+import { nextAction } from "../lib/kinds"
+import { latestAttempt, notFinished, type ReportPackage } from "../lib/outcome"
 
 /** A session that ended or a 4xx answers the same on a retry; a network failure or a 5xx may not. */
 export function retryOnlyTransient(failureCount: number, error: Error): boolean {
@@ -88,3 +89,51 @@ export function useStartImport(): UseMutationResult<Import, Error, { archive: st
     onSuccess: () => client.invalidateQueries({ queryKey: ["imports"] }),
   })
 }
+
+/** Where a retry's answer goes: the new attempt shows in place, and its status region takes focus once drawn. */
+export function useRetryImport(id: string): UseMutationResult<Import, Error, void> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      importFetch<Import>(`/imports/${encodeURIComponent(id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    onSuccess: (imp) => {
+      client.setQueryData(["imports", id], imp)
+      void client.invalidateQueries({ queryKey: ["imports"], exact: true })
+      requestAnimationFrame(() => document.querySelector<HTMLElement>("[role=status]")?.focus())
+    },
+    onError: (error) => {
+      if (error instanceof ImportApiError && error.status === 409) {
+        void client.invalidateQueries({ queryKey: ["imports", id] })
+      }
+    },
+  })
+}
+
+/**
+ * The packages a retry has to deal with, split by what it takes: a package pending or not finished
+ * clears as is, a failure whose kind needs a change outside sealift lists that change, and a failure
+ * with no known kind gets the general words.
+ */
+export function retryGroups(pkgs: ReportPackage[]): { notInNexus: number; asIs: number; changeFirst: { kind: string; count: number; words: string }[]; unknown: number } {
+  const out = { notInNexus: 0, asIs: 0, unknown: 0 }
+  const byKind = new Map<string, number>()
+  for (const p of pkgs) {
+    if (p.state !== "failed" && p.state !== "pending") {
+      continue
+    }
+    out.notInNexus++
+    const action = p.state === "failed" ? nextAction(p.kind) : { group: "as-is" }
+    if (action.group === "as-is" || notFinished(p)) {
+      out.asIs++
+    } else if (action.group === "change-first" && p.kind) {
+      byKind.set(p.kind, (byKind.get(p.kind) ?? 0) + 1)
+    } else {
+      out.unknown++
+    }
+  }
+  const changeFirst = [...byKind].map(([kind, count]) => ({ kind, count, words: nextAction(kind).words }))
+  changeFirst.sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind))
+  return { ...out, changeFirst }
+}
+
+const ORDER = ["conflict", "mismatch", "nexus", "local"]

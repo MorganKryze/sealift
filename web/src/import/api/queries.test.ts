@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { importPollInterval, importsPollInterval } from "./queries"
+import type { ReportPackage } from "../lib/outcome"
+import { importPollInterval, importsPollInterval, retryGroups } from "./queries"
 import type { Import, ImportList } from "./queries"
 
 const imp = (outcome: string) => ({ id: outcome, outcome }) as unknown as ImportList["imports"][number]
@@ -47,3 +48,32 @@ describe("import poll interval", () => {
     expect(importPollInterval(undefined)).toBe(false)
   })
 })
+
+const pkg = (state: string, over: Partial<ReportPackage> = {}): ReportPackage => ({ name: "left-pad", version: "1.3.0", file: "x", state, reason: "", note: "", ...over })
+const many = (n: number, state: string, over: Partial<ReportPackage> = {}) => Array.from({ length: n }, () => pkg(state, over))
+
+describe("retryGroups", () => {
+  it("splits what a retry clears as is from what needs a change first", () => {
+    const g = retryGroups([
+      ...many(40, "published"),
+      ...many(2, "failed", { kind: "interrupted", reason: "interrupted" }),
+      pkg("failed", { kind: "source", reason: "x" }),
+      pkg("failed", { kind: "nexus", reason: "x" }),
+      pkg("failed", { kind: "nexus", reason: "x" }),
+      pkg("failed", { kind: "conflict", reason: "x" }),
+      pkg("failed", { reason: "Nexus answered 500" }),
+      pkg("pending"),
+    ])
+    expect(g.notInNexus).toBe(8)
+    expect(g.asIs).toBe(4)
+    expect(g.unknown).toBe(1)
+    expect(g.changeFirst.map((c) => [c.kind, c.count])).toEqual([["conflict", 1], ["nexus", 2]])
+    expect(g.changeFirst[0].words).toMatch(/delete it in Nexus/)
+  })
+
+  it("counts a v0.4.0 package that was not reached as clearing as is", () => {
+    const g = retryGroups([pkg("failed", { reason: "not reached" }), pkg("failed", { reason: "interrupted" })])
+    expect(g).toMatchObject({ notInNexus: 2, asIs: 2, unknown: 0, changeFirst: [] })
+  })
+})
+
