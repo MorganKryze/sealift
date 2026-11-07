@@ -111,6 +111,14 @@ describe("EndState", () => {
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
   })
 
+  it("refused: tints the panel red, as the refusal is the one end state that stops everything", async () => {
+    const a = attempt("refused", [], { report: { ...attempt("refused", [], {}, "the archive's sha256 is x but the expected sha256 is y").report, archiveChecked: false } })
+    renderEnd(make(a, { expectedSha256: "y" }))
+    const panel = (await screen.findByRole("heading", { name: "Refused before the first package" })).closest("section") as HTMLElement
+    expect(panel.className).toContain("bg-severity-critical/")
+    expect(panel.className).toContain("border-severity-critical/")
+  })
+
   it("interrupted: says the service stopped, when, how many it finished and how many it did not, and names no package in flight", async () => {
     const packages = [...many(52, "published"), ...many(4, "present"), ...many(45, "failed", { kind: "interrupted", reason: "interrupted" })]
     const a = attempt("interrupted", packages, {}, "interrupted")

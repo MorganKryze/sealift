@@ -8,9 +8,9 @@ import { formatWhen } from "@/lib/utils"
 import { CopyControl } from "./copy-control"
 import { RetryAction } from "./retry-card"
 
-function Card({ icon: Icon, tone, title, children }: { icon: LucideIcon; tone: string; title: ReactNode; children: ReactNode }) {
+function Card({ icon: Icon, tone, title, children, panel = "border-line bg-card" }: { icon: LucideIcon; tone: string; title: ReactNode; children: ReactNode; panel?: string }) {
   return (
-    <section aria-labelledby="end-heading" className="mt-6 rounded-xl border border-line bg-card p-5">
+    <section aria-labelledby="end-heading" className={`mt-6 rounded-xl border p-5 ${panel}`}>
       <div className="flex items-start gap-2">
         <Icon aria-hidden className={`mt-1 size-[18px] shrink-0 ${tone}`} />
         <h2 id="end-heading" className="text-lg font-semibold tracking-tight">
@@ -89,7 +89,7 @@ export function EndState({ imp }: { imp: Import }) {
   if (a.outcome === "refused") {
     const reason = a.report.reason
     return (
-      <Card icon={ShieldX} tone="text-severity-critical-fg" title="Refused before the first package">
+      <Card icon={ShieldX} tone="text-severity-critical-fg" panel="border-severity-critical/40 bg-severity-critical/10" title="Refused before the first package">
         <p className="[overflow-wrap:anywhere]">{reason || "Not recorded"}</p>
         <p>Nothing was published. No package was read.</p>
         <div className="mt-2">
