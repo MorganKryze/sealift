@@ -46,8 +46,12 @@ export const IMPORT = {
   baseURL: "http://127.0.0.1:18090",
   routes: [
     { path: "/", user: "alice", ready: "Archives" },
-    { path: "/imports", user: "alice", ready: "Imports" },
+    { path: "/imports", user: "alice", ready: "Waiting its turn" },
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Import" },
+    { path: "/imports", user: "bob", ready: "No import yet" },
+    { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
+    { path: "/imports", user: "alice", hold: "/api/imports", ready: "Loading your imports" },
+    { path: "/imports", user: "alice", open: { role: "button", name: "Settings" }, ready: "Waiting its turn" },
   ],
 }
 

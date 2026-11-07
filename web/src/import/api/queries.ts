@@ -21,3 +21,19 @@ export function useMe(): UseQueryResult<components["schemas"]["Me"], Error> {
     staleTime: 5 * 60_000,
   })
 }
+
+export type ImportList = components["schemas"]["ImportList"]
+
+/** How often Imports reads again: every 5 s while one of the user's imports is queued or running. */
+export function importsPollInterval(list: ImportList | undefined): number | false {
+  const inFlight = list?.imports.some((i) => i.outcome === "queued" || i.outcome === "running")
+  return inFlight ? 5000 : false
+}
+
+export function useImports(): UseQueryResult<ImportList, Error> {
+  return useQuery({
+    queryKey: ["imports"],
+    queryFn: () => importFetch<ImportList>("/imports"),
+    refetchInterval: (query) => importsPollInterval(query.state.data),
+  })
+}

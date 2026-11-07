@@ -56,7 +56,7 @@ export function ApiFailure({ error, onRetry, untouched }: ApiFailureProps) {
 
 function Frame({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div role="alert" className="rounded-xl border border-severity-critical/40 bg-severity-critical/5 p-6">
+    <div role="alert" className="rounded-xl border border-severity-critical bg-card p-6">
       <h2 className="text-lg font-semibold tracking-tight text-ink">{title}</h2>
       {children}
     </div>
