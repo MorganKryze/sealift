@@ -60,13 +60,29 @@ describe("the import client", () => {
     expect((error as ImportApiError).problem?.detail).toMatch(/could not reach the import service/)
   })
 
-  it("a redirect that the browser did report, and a non-JSON answer below 500, still end the session", async () => {
+  it.each([
+    [403, "<html>forbidden</html>", "text/html"],
+    [404, "<html>missing</html>", "text/html"],
+    [413, "<html>too large</html>", "text/html; charset=utf-8"],
+    [429, "Too Many Requests", "text/plain"],
+    [400, "", ""],
+  ])("a %i answer that is not JSON is an API failure that names the gateway, with no sign-in hint", async (status, body, type) => {
+    const headers = type ? { "Content-Type": type } : undefined
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status, headers }))
+    const error = await importFetch("/archives").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ImportApiError)
+    expect(error).not.toBeInstanceOf(SessionEnded)
+    expect((error as ImportApiError).status).toBe(status)
+    const detail = (error as ImportApiError).problem?.detail ?? ""
+    expect(detail).toContain(`refused the request`)
+    expect(detail).toContain(String(status))
+    expect(detail).not.toMatch(/restarting|sign in|signed out|session/i)
+    expect((error as ImportApiError).problem?.title).not.toMatch(/restarting|sign in|signed out|session/i)
+  })
+
+  it("a redirect that the browser did report still ends the session", async () => {
     const redirect = { type: "basic", status: 302, ok: false, headers: new Headers({ Location: "/oauth2/sign_in" }) } as Response
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(redirect)
-    await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
-    fetchMock.mockResolvedValue(new Response("<html>forbidden</html>", { status: 403, headers: { "Content-Type": "text/html" } }))
-    await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
-    fetchMock.mockResolvedValue(new Response("<html>missing</html>", { status: 404, headers: { "Content-Type": "text/html" } }))
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(redirect)
     await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
   })
 
