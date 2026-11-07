@@ -111,9 +111,14 @@ const choice = "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-sm out
 
 /**
  * Every package of one attempt. The filter opens on Failed when a package failed and keeps the
- * user's choice across refetches: mount it once per attempt shown.
+ * user's choice across refetches: mount it once per attempt shown. An attempt followed live remounts
+ * once when it ends, so the filter opens on what the finished report holds.
  */
 export function ReportList({ attempt }: { attempt: Attempt }) {
+  return <Packages key={attempt.status === "ended" ? "ended" : "live"} attempt={attempt} />
+}
+
+function Packages({ attempt }: { attempt: Attempt }) {
   const c = counts(attempt)
   const failures = c.failed + c.notFinished
   const [filter, setFilter] = useState<Filter>(failures > 0 ? "failed" : "all")

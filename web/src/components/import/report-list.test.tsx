@@ -27,6 +27,15 @@ function attempt(packages: ReportPackage[], n = 1): Attempt {
 const rows = () => within(screen.getByRole("list", { name: "Packages" })).queryAllByRole("listitem")
 
 describe("report list", () => {
+  it("opens on Failed when an attempt followed live ends with a failed package", () => {
+    const live = { ...attempt([pkg("a", "pending"), pkg("d", "pending")]), status: "running", outcome: "" }
+    const { rerender } = render(<ReportList attempt={live} />)
+    expect(screen.getByRole("button", { name: /^All/ })).toHaveAttribute("aria-pressed", "true")
+    rerender(<ReportList attempt={attempt([pkg("a", "published"), pkg("d", "failed", { kind: "nexus", reason: "Nexus answered 500" })])} />)
+    expect(screen.getByRole("button", { name: /^Failed/ })).toHaveAttribute("aria-pressed", "true")
+    expect(rows()).toHaveLength(1)
+  })
+
   it("lists every package as name@version with its state word and an icon", () => {
     const list = [pkg("a", "published"), pkg("b", "present", { note: "Nexus already holds these bytes" }), pkg("c", "pending"), pkg("d", "failed", { kind: "nexus", reason: "Nexus answered 500" })]
     render(<ReportList attempt={attempt(list)} />)
