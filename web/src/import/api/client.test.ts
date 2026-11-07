@@ -45,8 +45,28 @@ describe("the import client", () => {
     await expect(importFetch("/me")).rejects.toBeInstanceOf(SessionEnded)
   })
 
-  it("an HTML error page ends the session whatever its status", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>bad gateway</html>", { status: 502, headers: { "Content-Type": "text/html" } }))
+  it.each([
+    [502, "<html>bad gateway</html>", "text/html"],
+    [503, "Service Unavailable", "text/plain"],
+    [504, "", ""],
+    [500, "<html>oops</html>", "text/html; charset=utf-8"],
+  ])("a %i answer that is not JSON is an API failure, not the end of the session", async (status, body, type) => {
+    const headers = type ? { "Content-Type": type } : undefined
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status, headers }))
+    const error = await importFetch("/imports").catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ImportApiError)
+    expect(error).not.toBeInstanceOf(SessionEnded)
+    expect((error as ImportApiError).status).toBe(status)
+    expect((error as ImportApiError).problem?.detail).toMatch(/could not reach the import service/)
+  })
+
+  it("a redirect that the browser did report, and a non-JSON answer below 500, still end the session", async () => {
+    const redirect = { type: "basic", status: 302, ok: false, headers: new Headers({ Location: "/oauth2/sign_in" }) } as Response
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(redirect)
+    await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
+    fetchMock.mockResolvedValue(new Response("<html>forbidden</html>", { status: 403, headers: { "Content-Type": "text/html" } }))
+    await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
+    fetchMock.mockResolvedValue(new Response("<html>missing</html>", { status: 404, headers: { "Content-Type": "text/html" } }))
     await expect(importFetch("/archives")).rejects.toBeInstanceOf(SessionEnded)
   })
 
