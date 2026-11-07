@@ -67,6 +67,14 @@ function report(outcome, list, over = {}) {
   }
 }
 
+// The report the store writes for an attempt that waits: every field at its zero value, no archiveChecked.
+const queuedReport = () => ({
+  outcome: "", reason: "", unencrypted: false, importVersion: "",
+  archive: { file: "", sha256: "", size: 0 }, toolVersion: "", analysisId: "",
+  target: { os: "", cpu: "", libc: "", node: "", pnpmVer: "" },
+  nexus: { url: "", repository: "" }, counts: { published: 0, present: 0, failed: 0 }, packages: [],
+})
+
 function ended(n, createdAt, outcome, list, over = {}, removal) {
   const queuedAt = later(createdAt, n === 1 ? 0 : 60)
   const attempt = {
@@ -107,7 +115,7 @@ function aliceRecords() {
   ]
   return [
     record(IDS.queued, "2026-11-06-intranet-portal/", [
-      { n: 1, status: "queued", queuedAt, outcome: "", report: report("", []) },
+      { n: 1, status: "queued", queuedAt, outcome: "", report: queuedReport() },
     ]),
     record(IDS.running, "2026-11-06-billing-api/", [
       ended(1, runningAt, "incomplete", packages(101, 60, 30, [{ kind: "nexus", reason: "Nexus answered 503" }])),

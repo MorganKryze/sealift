@@ -7,8 +7,10 @@ interface ShaBlockProps {
   expected: string
   /** The sha256 the manifest names, or empty before the manifest is read. */
   manifest: string
-  /** The attempt's record of the archive's checks; absent in a report written by sealift 0.4.0 or earlier. */
+  /** The attempt's record of the archive's checks; absent before they run and in a report that never recorded them. */
   checked: boolean | undefined
+  /** The attempt's status: an absent mark means "not run yet" while it waits or runs, "not recorded" once it ended. */
+  status: string
 }
 
 function Digest({ title, value, label }: { title: string; value: string; label: string }) {
@@ -27,7 +29,7 @@ function Digest({ title, value, label }: { title: string; value: string; label: 
  * Both digests in full and what the attempt recorded about the archive's checks. The word
  * "matched" appears only when the record says the checks passed: an outcome or a count proves nothing.
  */
-export function ShaBlock({ expected, manifest, checked }: ShaBlockProps) {
+export function ShaBlock({ expected, manifest, checked, status }: ShaBlockProps) {
   return (
     <div>
       <dl className="grid gap-4">
@@ -62,7 +64,11 @@ export function ShaBlock({ expected, manifest, checked }: ShaBlockProps) {
         ) : (
           <>
             <CircleQuestionMark aria-hidden className="mt-0.5 size-4 shrink-0 text-muted" />
-            <span>Not recorded: this attempt was written by a sealift that did not record the archive's checks.</span>
+            <span>
+              {status === "queued" || status === "running"
+                ? "The archive's checks have not run yet."
+                : "Not recorded: this attempt did not record the archive's checks."}
+            </span>
           </>
         )}
       </p>

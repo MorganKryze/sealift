@@ -61,7 +61,7 @@ export const IMPORT = {
     { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
     { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
     { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
-    { path: `/imports/${IDS.queued}`, user: "alice", ready: "Waiting its turn" },
+    { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
     {
       path: `/imports/${IDS.incomplete}`, user: "alice", ready: "Archive sha256 check",
       open: { role: "button", name: "Show full reason of package-099@1.0.0", opens: { role: "region", name: "Full reason of package-099@1.0.0" } },

@@ -60,7 +60,7 @@ function ImportRoute() {
       <EndState imp={imp} />
       {attempt.status === "ended" && (attempt.outcome === "incomplete" || attempt.outcome === "interrupted") ? <RetryCard imp={imp} /> : null}
       <h2 className="mt-8 mb-3 text-lg font-semibold tracking-tight">Archive sha256 check</h2>
-      <ShaBlock expected={imp.expectedSha256} manifest={attempt.report.archive.sha256} checked={attempt.report.archiveChecked} />
+      <ShaBlock expected={imp.expectedSha256} manifest={attempt.report.archive.sha256} checked={attempt.report.archiveChecked} status={attempt.status} />
       <h2 className="mt-8 mb-3 text-lg font-semibold tracking-tight">Packages</h2>
       <ReportList key={attempt.n} attempt={attempt} />
       <div className="mt-8">
