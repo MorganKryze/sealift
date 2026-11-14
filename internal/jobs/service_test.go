@@ -655,3 +655,51 @@ func TestServiceKeepsAnExportCancelledWhileQueued(t *testing.T) {
 		t.Errorf("ExportInfo = %+v, want state cancelled for analysis %s", info, analysisID)
 	}
 }
+
+// An export cancelled while running has already written its own
+// status.json, with the steps it got through. The queued-cancel record must
+// not overwrite it: the run's steps and failure cause would be lost.
+func TestServiceKeepsTheStepsOfAnExportCancelledWhileRunning(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	pending, err := st.NewDir("exports", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	const analysisID = "20260917T101502Z"
+	steps := []stepRecord{{Name: "download", State: string(store.Failed), DurationMs: 12, Error: "registry unreachable"}}
+	started := make(chan struct{})
+	run := func(ctx context.Context, _ func(Event)) error {
+		close(started)
+		<-ctx.Done()
+		status := exportStatusFile{State: store.Cancelled, AnalysisID: analysisID, Steps: steps}
+		if err := st.WriteJSON(filepath.Join(pending.Path(), "status.json"), status); err != nil {
+			t.Errorf("WriteJSON: %v", err)
+		}
+		return ctx.Err()
+	}
+	job := storeIDJob{fakeJob: &fakeJob{kind: "export", run: run}, id: pending.ID()}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "export", project.ID, analysisID, pending)
+	}); err != nil {
+		t.Fatalf("Submit(export): %v", err)
+	}
+	<-started
+
+	if _, err := svc.Cancel(project.ID, "export", pending.ID()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "export", pending.ID())
+
+	info, err := st.ExportInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("ExportInfo: %v", err)
+	}
+	if info.State != store.Cancelled || info.AnalysisID != analysisID {
+		t.Errorf("ExportInfo = %+v, want state cancelled for analysis %s", info, analysisID)
+	}
+	if info.Failure == nil || info.Failure.Step != "download" || info.Failure.Message != "registry unreachable" {
+		t.Errorf("ExportInfo.Failure = %+v, want the download step's failure kept", info.Failure)
+	}
+}
