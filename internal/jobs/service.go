@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -410,12 +411,7 @@ func (s *Service) finalize(info FinalizeInfo) error {
 		return nil
 	}
 
-	err := finalizePending(tj.pending)
-	if tj.kind == "analysis" || tj.kind == "export" {
-		// A no-op for a done export: it writes no status.json of its own,
-		// so reconcileAnalysisStatus finds nothing to overwrite.
-		reconcileAnalysisStatus(s.store, tj.pending, info.State)
-	}
+	err := s.finalizeDir(tj, info.State)
 
 	s.mu.Lock()
 	delete(s.byQueueID, info.ID)
@@ -430,24 +426,53 @@ func (s *Service) finalize(info FinalizeInfo) error {
 	return err
 }
 
-// reconcileAnalysisStatus overwrites a committed analysis' or export's
-// status.json "state" field with the queue's own authoritative outcome,
-// leaving every other field untouched. It is a no-op when the job never
-// started (the queue dropped it while still queued, so nothing was ever
-// committed), when a done export left no status.json to begin with, or
-// when status.json is otherwise unreadable.
-func reconcileAnalysisStatus(st *store.Store, pending *store.Pending, state store.State) {
-	path := filepath.Join(pending.Final(), "status.json")
+// finalizeDir publishes the job's directory with its final state. A
+// directory still pending (the queue dropped the job before it ran, or an
+// export left its files for this hook) gets its status.json rewritten
+// before the rename, so the record is published in one step and a crash
+// or a failed write cannot leave it published with a stale state. An
+// analysis that ran has already committed itself, so its published
+// status.json is rewritten in place. An analysis whose state cannot be
+// rewritten before publishing is discarded: it never ran, so nothing
+// would move a published "queued" record on.
+func (s *Service) finalizeDir(tj *trackedJob, state store.State) error {
+	reconcile := tj.kind == "analysis" || tj.kind == "export"
+	if _, err := os.Stat(tj.pending.Path()); err != nil {
+		if !reconcile {
+			return nil
+		}
+		return reconcileStatus(s.store, tj.pending.Final(), state)
+	}
+	if reconcile {
+		if err := reconcileStatus(s.store, tj.pending.Path(), state); err != nil {
+			if tj.kind == "analysis" {
+				return errors.Join(err, tj.pending.Discard())
+			}
+			return errors.Join(err, finalizePending(tj.pending))
+		}
+	}
+	return finalizePending(tj.pending)
+}
+
+// reconcileStatus overwrites the status.json in dir with the queue's own
+// authoritative outcome in its "state" field, leaving every other field
+// untouched. It does nothing when dir holds no status.json (a done export
+// writes none, and a job that never started leaves an empty directory).
+func reconcileStatus(st *store.Store, dir string, state store.State) error {
+	path := filepath.Join(dir, "status.json")
 	var fields map[string]json.RawMessage
 	if err := st.ReadJSON(path, &fields); err != nil {
-		return
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
 	}
 	encoded, err := json.Marshal(state)
 	if err != nil {
-		return
+		return err
 	}
 	fields["state"] = encoded
-	_ = st.WriteJSON(path, fields)
+	return st.WriteJSON(path, fields)
 }
 
 // finalizePending decides what a job leaves behind once it has ended,
