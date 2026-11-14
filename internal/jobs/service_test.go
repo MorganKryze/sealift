@@ -1052,3 +1052,50 @@ func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) 
 		})
 	}
 }
+
+// TestServiceKeepsAnExportCancelledWhileQueued proves an export dropped
+// before it ever ran is committed as a cancelled export, not discarded: the
+// export screen and the export list both need the record.
+func TestServiceKeepsAnExportCancelledWhileQueued(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocker := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit(blocker): %v", err)
+	}
+	<-blocker.started
+
+	pending, err := st.NewDir("exports", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	const analysisID = "20260917T101502Z"
+	queued := storeIDJob{fakeJob: &fakeJob{kind: "export", run: func(context.Context, func(Event)) error { return nil }}, id: pending.ID()}
+	if _, err := svc.queue.SubmitWith(queued, func(queueID string) {
+		svc.track(queueID, "export", project.ID, analysisID, pending)
+	}); err != nil {
+		t.Fatalf("Submit(export): %v", err)
+	}
+
+	if _, err := svc.Cancel(project.ID, "export", pending.ID()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "export", pending.ID())
+
+	info, err := st.ExportInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("ExportInfo after a queued cancel = %v, want the cancelled record", err)
+	}
+	if info.State != store.Cancelled || info.AnalysisID != analysisID {
+		t.Errorf("ExportInfo = %+v, want state cancelled for analysis %s", info, analysisID)
+	}
+}

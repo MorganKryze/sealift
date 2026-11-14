@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,9 +79,11 @@ type jobKey struct {
 // its caller to commit, and neither job ever runs when the queue drops it
 // before it starts (cancelled while still queued). Service's background
 // goroutine is what finalizes that directory once the queue reports the
-// job done: an empty one (never started) gets discarded, a non-empty one
-// Export left ready gets committed, and a directory a job already
-// committed or discarded itself is simply gone by the time this looks.
+// job done: an analysis that never started holds the queued record
+// QueueAnalysis seeded, an export that never started gets a cancelled
+// record, and both are committed so the cancel stays on screen; a
+// non-empty directory Export left ready gets committed too, and a
+// directory a job already committed itself is gone by the time this looks.
 // The same step reconciles an analysis' status.json to the queue's own
 // account of how the job ended: the queue, not the job, has the last
 // word, since the job derives its own guess from ctx.Err() alone and can
@@ -508,6 +511,9 @@ func (s *Service) finalize(info FinalizeInfo) error {
 		return nil
 	}
 
+	if tj.kind == "export" && info.State == store.Cancelled {
+		s.recordQueuedExportCancel(tj)
+	}
 	err := s.finalizeDir(tj, info.State)
 
 	s.mu.Lock()
@@ -521,6 +527,22 @@ func (s *Service) finalize(info FinalizeInfo) error {
 	}
 	s.mu.Unlock()
 	return err
+}
+
+// recordQueuedExportCancel writes the cancelled status.json of an export
+// the queue dropped before it ran, so finalizePending commits it instead of
+// discarding an empty directory. A directory that already holds files was
+// written by a run, which left its own status.json. A failed write keeps
+// today's discard.
+func (s *Service) recordQueuedExportCancel(tj *trackedJob) {
+	entries, err := os.ReadDir(tj.pending.Path())
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	status := exportStatusFile{State: store.Cancelled, AnalysisID: tj.analysisID, Steps: []stepRecord{}}
+	if err := s.store.WriteJSON(filepath.Join(tj.pending.Path(), "status.json"), status); err != nil {
+		slog.Warn("jobs: write cancelled export status.json", "error", err)
+	}
 }
 
 // finalizeDir publishes the job's directory with its final state. A
