@@ -608,3 +608,62 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 		}
 	}
 }
+
+// TestCancellingAQueuedAnalysisKeepsACancelledRecord proves an analysis
+// the queue drops before it ever starts still leaves a directory the
+// store lists as cancelled, with a log to open, instead of vanishing.
+func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	release := make(chan struct{})
+	blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	<-blocker.started
+
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	analyses, err := st.Analyses(project.ID)
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	var found *store.AnalysisInfo
+	for i := range analyses {
+		if analyses[i].ID == info.ID {
+			found = &analyses[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Analyses holds no record for the cancelled queued analysis %s", info.ID)
+	}
+	if found.State != store.Cancelled {
+		t.Errorf("State = %q, want %q", found.State, store.Cancelled)
+	}
+	f, err := st.AnalysisLog(project.ID, info.ID)
+	if err != nil {
+		t.Fatalf("AnalysisLog: %v", err)
+	}
+	f.Close()
+}
