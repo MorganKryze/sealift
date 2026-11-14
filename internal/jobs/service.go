@@ -153,6 +153,17 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		return store.AnalysisInfo{}, err
 	}
 
+	// A job the queue drops while still queued never runs, so nothing else
+	// writes into the directory. Leaving it empty would have finalizePending
+	// discard it and the analysis vanish; a queued status.json and an empty
+	// log.txt make it a record the reconciler turns into "cancelled". A
+	// running job overwrites status.json and appends to log.txt itself.
+	createdAt, _ := time.Parse(idLayout, pending.ID())
+	if err := s.seedPending(pending, createdAt, project); err != nil {
+		_ = pending.Discard()
+		return store.AnalysisInfo{}, err
+	}
+
 	var job Job = &Analysis{
 		Store:    s.store,
 		Tools:    s.tools,
@@ -188,8 +199,24 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		return store.AnalysisInfo{}, err
 	}
 
-	createdAt, _ := time.Parse(idLayout, pending.ID())
 	return store.AnalysisInfo{ID: pending.ID(), ProjectID: projectID, State: store.Queued, CreatedAt: createdAt}, nil
+}
+
+// seedPending writes the queued status.json and an empty log.txt into a
+// pending analysis directory.
+func (s *Service) seedPending(pending *store.Pending, createdAt time.Time, project store.Project) error {
+	status := statusFile{State: store.Queued, CreatedAt: createdAt, Target: project.Target}
+	if project.Ecosystem == store.Pip {
+		target := project.PipTarget
+		status.Target, status.PipTarget = store.Target{}, &target
+	}
+	if err := s.store.WriteJSON(filepath.Join(pending.Path(), "status.json"), status); err != nil {
+		return fmt.Errorf("jobs: write queued status.json: %w", err)
+	}
+	if err := s.store.WriteFile(filepath.Join(pending.Path(), "log.txt"), nil); err != nil {
+		return fmt.Errorf("jobs: create log.txt: %w", err)
+	}
+	return nil
 }
 
 // QueueExport reserves a directory for a new export of analysisID and

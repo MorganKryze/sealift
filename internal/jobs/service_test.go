@@ -848,3 +848,90 @@ func TestServiceRunsTheNextJobAfterAnExportLeftAFIFOAtStatusJSON(t *testing.T) {
 		t.Fatalf("status.json = %v, %v, want the FIFO left as it was", st, err)
 	}
 }
+
+// TestCancellingAQueuedAnalysisKeepsACancelledRecord proves an analysis
+// the queue drops before it ever starts still leaves a directory the
+// store lists as cancelled, with a log to open and the project's target,
+// instead of vanishing, for an npm project and a pip one alike.
+func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
+	pipFiles := []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("requests==2.32.3\n")}}
+	tests := []struct {
+		name      string
+		create    func(t *testing.T, st *store.Store) store.Project
+		targetKey string
+	}{
+		{"npm", mustCreateProject, "target"},
+		{"pip", func(t *testing.T, st *store.Store) store.Project {
+			project, err := st.CreatePipProject("Data tools", pipFiles, store.DefaultPipTarget)
+			if err != nil {
+				t.Fatalf("CreatePipProject: %v", err)
+			}
+			return project
+		}, "pipTarget"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			svc.SetPip(&fakeUv{}, &pip.Client{Index: "http://127.0.0.1:1"})
+			project := tc.create(t, st)
+
+			release := make(chan struct{})
+			blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return nil
+			}}
+			if _, err := svc.queue.Submit(blocker); err != nil {
+				t.Fatalf("Submit blocker: %v", err)
+			}
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			<-blocker.started
+
+			info, err := svc.QueueAnalysis(project.ID)
+			if err != nil {
+				t.Fatalf("QueueAnalysis: %v", err)
+			}
+			if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+			analyses, err := st.Analyses(project.ID)
+			if err != nil {
+				t.Fatalf("Analyses: %v", err)
+			}
+			var found *store.AnalysisInfo
+			for i := range analyses {
+				if analyses[i].ID == info.ID {
+					found = &analyses[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("Analyses holds no record for the cancelled queued analysis %s", info.ID)
+			}
+			if found.State != store.Cancelled {
+				t.Errorf("State = %q, want %q", found.State, store.Cancelled)
+			}
+			var status map[string]json.RawMessage
+			if err := st.ReadJSON(filepath.Join(project.Dir, "analyses", info.ID, "status.json"), &status); err != nil {
+				t.Fatalf("read status.json: %v", err)
+			}
+			if status[tc.targetKey] == nil {
+				t.Errorf("status.json = %v, want the project's %s", status, tc.targetKey)
+			}
+			f, err := st.AnalysisLog(project.ID, info.ID)
+			if err != nil {
+				t.Fatalf("AnalysisLog: %v", err)
+			}
+			f.Close()
+		})
+	}
+}
