@@ -935,3 +935,62 @@ func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
 		})
 	}
 }
+
+// TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord proves a
+// queued analysis whose state cannot be rewritten is not published as
+// "queued": nothing runs it, so nothing would ever move it on.
+func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	release := make(chan struct{})
+	blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	<-blocker.started
+
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	pendingDir := filepath.Join(project.Dir, "analyses", info.ID+".tmp")
+	if err := os.Chmod(pendingDir, 0o555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(pendingDir, 0o755)
+		_ = os.Chmod(strings.TrimSuffix(pendingDir, ".tmp"), 0o755)
+	})
+
+	if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	analyses, err := st.Analyses(project.ID)
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	for _, a := range analyses {
+		if a.ID == info.ID && a.State == store.Queued {
+			t.Errorf("analysis %s was published as %q with no job behind it", info.ID, a.State)
+		}
+	}
+}
