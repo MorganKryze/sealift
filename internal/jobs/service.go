@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,6 +388,9 @@ func (s *Service) finalize(info FinalizeInfo) error {
 		return nil
 	}
 
+	if tj.kind == "export" && info.State == store.Cancelled {
+		s.recordQueuedExportCancel(tj)
+	}
 	err := finalizePending(tj.pending)
 	if tj.kind == "analysis" || tj.kind == "export" {
 		// A no-op for a done export: it writes no status.json of its own,
@@ -405,6 +409,22 @@ func (s *Service) finalize(info FinalizeInfo) error {
 	}
 	s.mu.Unlock()
 	return err
+}
+
+// recordQueuedExportCancel writes the cancelled status.json of an export
+// the queue dropped before it ran, so finalizePending commits it instead of
+// discarding an empty directory. A directory that already holds files was
+// written by a run, which left its own status.json. A failed write keeps
+// today's discard.
+func (s *Service) recordQueuedExportCancel(tj *trackedJob) {
+	entries, err := os.ReadDir(tj.pending.Path())
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	status := exportStatusFile{State: store.Cancelled, AnalysisID: tj.analysisID, Steps: []stepRecord{}}
+	if err := s.store.WriteJSON(filepath.Join(tj.pending.Path(), "status.json"), status); err != nil {
+		slog.Warn("jobs: write cancelled export status.json", "error", err)
+	}
 }
 
 // reconcileAnalysisStatus overwrites a committed analysis' or export's
