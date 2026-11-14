@@ -994,3 +994,61 @@ func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T)
 		}
 	}
 }
+
+// TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled proves the
+// finalizer never discards an analysis that wrote something. Its own
+// commit can fail (a full volume fails the status write there and again
+// in the reconcile), leaving the pending directory with the log and the
+// ranking: that run explains the failure, so it is published, not removed.
+func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	for name, unreadable := range map[string]bool{
+		"unreadable status.json": true,
+		"running status.json":    false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			project := mustCreateProject(t, st)
+			pending, err := st.NewDir("analyses", project.ID)
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+
+			job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+				statusPath := filepath.Join(pending.Path(), "status.json")
+				files := map[string]string{
+					"log.txt":      "resolving\n",
+					"ranking.json": "{}",
+					"status.json":  `{"state":"running"}`,
+				}
+				for file, body := range files {
+					if err := os.WriteFile(filepath.Join(pending.Path(), file), []byte(body), 0o664); err != nil {
+						return err
+					}
+				}
+				if unreadable {
+					if err := os.Chmod(statusPath, 0); err != nil {
+						return err
+					}
+				}
+				// Returns without renaming, as Analysis.Run does when its
+				// own commit fails.
+				return errors.New("jobs: write status.json: no space left on device")
+			}}
+			if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+				svc.track(queueID, "analysis", project.ID, "", pending)
+			}); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+			for _, file := range []string{"log.txt", "ranking.json"} {
+				if _, err := os.Stat(filepath.Join(pending.Final(), file)); err != nil {
+					t.Errorf("the analysis that ran lost %s: %v", file, err)
+				}
+			}
+		})
+	}
+}
