@@ -427,14 +427,18 @@ func (s *Service) finalize(info FinalizeInfo) error {
 }
 
 // finalizeDir publishes the job's directory with its final state. A
-// directory still pending (the queue dropped the job before it ran, or an
-// export left its files for this hook) gets its status.json rewritten
-// before the rename, so the record is published in one step and a crash
-// or a failed write cannot leave it published with a stale state. An
-// analysis that ran has already committed itself, so its published
-// status.json is rewritten in place. An analysis whose state cannot be
-// rewritten before publishing is discarded: it never ran, so nothing
-// would move a published "queued" record on.
+// directory still pending (the queue dropped the job before it ran, an
+// analysis whose own commit failed, or an export that left its files for
+// this hook) gets its status.json rewritten before the rename, so the
+// record is published in one step and a crash or a failed write cannot
+// leave it published with a stale state. An analysis that ran has already
+// committed itself, so its published status.json is rewritten in place.
+//
+// Only an analysis that never started is discarded when its state cannot
+// be rewritten: its directory holds a queued record and an empty log, and
+// published as "queued" it would stay there, since nothing runs it. Any
+// other directory holds a run's log and results, so it is published even
+// when the rewrite fails, and the startup sweep settles its state.
 func (s *Service) finalizeDir(tj *trackedJob, state store.State) error {
 	reconcile := tj.kind == "analysis" || tj.kind == "export"
 	if _, err := os.Stat(tj.pending.Path()); err != nil {
@@ -444,14 +448,30 @@ func (s *Service) finalizeDir(tj *trackedJob, state store.State) error {
 		return reconcileStatus(s.store, tj.pending.Final(), state)
 	}
 	if reconcile {
+		// Judged before the rewrite, which replaces the state it reads.
+		neverStarted := tj.kind == "analysis" && s.neverStarted(tj.pending.Path())
 		if err := reconcileStatus(s.store, tj.pending.Path(), state); err != nil {
-			if tj.kind == "analysis" {
+			if neverStarted {
 				return errors.Join(err, tj.pending.Discard())
 			}
 			return errors.Join(err, finalizePending(tj.pending))
 		}
 	}
 	return finalizePending(tj.pending)
+}
+
+// neverStarted reports whether the analysis directory dir still holds the
+// queued status.json QueueAnalysis seeded. A running job replaces it with
+// its own on its first write, so any other state, or a status.json that
+// cannot be read, means the job started and dir may hold its run.
+func (s *Service) neverStarted(dir string) bool {
+	var status struct {
+		State store.State `json:"state"`
+	}
+	if err := s.store.ReadJSON(filepath.Join(dir, "status.json"), &status); err != nil {
+		return false
+	}
+	return status.State == store.Queued
 }
 
 // reconcileStatus overwrites the status.json in dir with the queue's own
@@ -478,13 +498,14 @@ func reconcileStatus(st *store.Store, dir string, state store.State) error {
 // finalizePending decides what a job leaves behind once it has ended,
 // returning any error committing or discarding it hit so the caller can
 // log it: a failed commit here loses a finished export outright, so it
-// must not disappear silently. Analysis always commits itself, whatever
-// the outcome, so this only ever finds one of its directories when the
-// job never started (the queue dropped it while still queued): empty,
-// and discarded here. Export leaves its directory non-empty on every
-// outcome (a done run's files, or a failed or cancelled run's status.json,
-// see Export.Run), so this commits it; only a job that never started
-// leaves an export directory empty too.
+// must not disappear silently. A directory with any file in it is
+// committed, an empty one discarded. Analysis commits itself whatever the
+// outcome, so this finds one of its directories only when the job never
+// started (the queue dropped it while still queued) or its own commit
+// failed; both hold files, so both are committed. Export leaves its
+// directory non-empty on every outcome (a done run's files, or a failed or
+// cancelled run's status.json, see Export.Run), so this commits it; only a
+// job that never started leaves an export directory empty.
 func finalizePending(pending *store.Pending) error {
 	entries, err := os.ReadDir(pending.Path())
 	if err != nil {
