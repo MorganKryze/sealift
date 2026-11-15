@@ -701,3 +701,34 @@ func TestTrivyStateRefusesAFIFOOrALinkAtTheDBMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestTrivyStateBoundsTheGitHubLookup proves a GitHub that never answers
+// costs TrivyState only its lookup deadline: it returns the installed
+// versions with no error and no Latest, rather than waiting on the long
+// download timeout of the HTTP client.
+func TestTrivyStateBoundsTheGitHubLookup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	m, root := newTestManager(t, srv)
+	m.LookupTimeout = 50 * time.Millisecond
+	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", "0.55.0"), 0o770); err != nil {
+		t.Fatalf("mkdir trivy version: %v", err)
+	}
+
+	start := time.Now()
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("TrivyState took %v, want it bounded near the 50ms lookup timeout", elapsed)
+	}
+	if state.Latest != "" {
+		t.Fatalf("Latest = %q, want empty when GitHub does not answer", state.Latest)
+	}
+	if len(state.Installed) != 1 || state.Installed[0] != "0.55.0" {
+		t.Fatalf("Installed = %v, want [0.55.0]", state.Installed)
+	}
+}

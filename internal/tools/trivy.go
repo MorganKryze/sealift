@@ -95,6 +95,12 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 		Installed: installed,
 		DBDate:    m.trivyDBDate(),
 	}
+	timeout := m.LookupTimeout
+	if timeout <= 0 {
+		timeout = defaultLookupTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	rel, err := m.latestTrivyRelease(ctx)
 	if err != nil {
 		m.log.Warn("trivy latest release unavailable, reporting installed versions only", "error", err)
