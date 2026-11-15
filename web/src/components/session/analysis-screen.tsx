@@ -64,7 +64,8 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
 
-  const live = analysis.state === "queued" || analysis.state === "running"
+  const queued = analysis.state === "queued"
+  const live = queued || analysis.state === "running"
   const events = useJobEvents(analysis.id, live, onChanged)
   const failedState = TERMINAL_FAILED_STATES.has(analysis.state)
   const showSteps = live || events.steps.length > 0
@@ -108,7 +109,9 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
         : "Analysis interrupted"
     : analysis.state === "done"
       ? "Analysis finished"
-      : "Analysing"
+      : queued
+        ? "Waiting for another job"
+        : "Analysing"
 
   const cancelledState = analysis.state === "cancelled"
   const lead = cancelledState
@@ -117,7 +120,9 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
       ? "The cause and the next action are below."
       : analysis.state === "done"
         ? "sealift picked a version for each dependency."
-        : "Resolving each candidate against the whole project takes most of the time. You can leave this page; the session keeps running."
+        : queued
+          ? "sealift runs one job at a time. This analysis starts when the one before it ends. You can leave this page; it starts on its own."
+          : "Resolving each candidate against the whole project takes most of the time. You can leave this page; the session keeps running."
 
   const elapsedMs = events.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0)
 
@@ -136,8 +141,9 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
             {ANALYSIS_STEPS.map((step, index) => {
               const entry = eventsByName.get(step.id)
               // The server reports a step when it ends, so the one in progress is
-              // the first without a report while the analysis is live.
-              const state = entry?.state ?? (live && index === runningIndex ? "running" : "")
+              // the first without a report while the analysis runs; a queued one
+              // has started nothing yet.
+              const state = entry?.state ?? (analysis.state === "running" && index === runningIndex ? "running" : "")
               return (
                 <li
                   key={step.id}
