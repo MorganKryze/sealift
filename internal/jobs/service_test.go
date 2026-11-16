@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -606,5 +607,181 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 		if _, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: sel}); !errors.Is(err, ErrNothingToExport) {
 			t.Errorf("%s selection: QueueExport = %v, want ErrNothingToExport", name, err)
 		}
+	}
+}
+
+// TestCancellingAQueuedAnalysisKeepsACancelledRecord proves an analysis
+// the queue drops before it ever starts still leaves a directory the
+// store lists as cancelled, with a log to open, instead of vanishing.
+func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	release := make(chan struct{})
+	blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	<-blocker.started
+
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	analyses, err := st.Analyses(project.ID)
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	var found *store.AnalysisInfo
+	for i := range analyses {
+		if analyses[i].ID == info.ID {
+			found = &analyses[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Analyses holds no record for the cancelled queued analysis %s", info.ID)
+	}
+	if found.State != store.Cancelled {
+		t.Errorf("State = %q, want %q", found.State, store.Cancelled)
+	}
+	f, err := st.AnalysisLog(project.ID, info.ID)
+	if err != nil {
+		t.Fatalf("AnalysisLog: %v", err)
+	}
+	f.Close()
+}
+
+// TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord proves a
+// queued analysis whose state cannot be rewritten is not published as
+// "queued": nothing runs it, so nothing would ever move it on.
+func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	release := make(chan struct{})
+	blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit blocker: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	<-blocker.started
+
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	pendingDir := filepath.Join(project.Dir, "analyses", info.ID+".tmp")
+	if err := os.Chmod(pendingDir, 0o555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(pendingDir, 0o755)
+		_ = os.Chmod(strings.TrimSuffix(pendingDir, ".tmp"), 0o755)
+	})
+
+	if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	analyses, err := st.Analyses(project.ID)
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	for _, a := range analyses {
+		if a.ID == info.ID && a.State == store.Queued {
+			t.Errorf("analysis %s was published as %q with no job behind it", info.ID, a.State)
+		}
+	}
+}
+
+// TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled proves the
+// finalizer never discards an analysis that wrote something. Its own
+// commit can fail (a full volume fails the status write there and again
+// in the reconcile), leaving the pending directory with the log and the
+// ranking: that run explains the failure, so it is published, not removed.
+func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	for name, unreadable := range map[string]bool{
+		"unreadable status.json": true,
+		"running status.json":    false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			project := mustCreateProject(t, st)
+			pending, err := st.NewDir("analyses", project.ID)
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+
+			job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+				statusPath := filepath.Join(pending.Path(), "status.json")
+				files := map[string]string{
+					"log.txt":      "resolving\n",
+					"ranking.json": "{}",
+					"status.json":  `{"state":"running"}`,
+				}
+				for file, body := range files {
+					if err := os.WriteFile(filepath.Join(pending.Path(), file), []byte(body), 0o664); err != nil {
+						return err
+					}
+				}
+				if unreadable {
+					if err := os.Chmod(statusPath, 0); err != nil {
+						return err
+					}
+				}
+				// Returns without renaming, as Analysis.Run does when its
+				// own commit fails.
+				return errors.New("jobs: write status.json: no space left on device")
+			}}
+			if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+				svc.track(queueID, "analysis", project.ID, "", pending)
+			}); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+			for _, file := range []string{"log.txt", "ranking.json"} {
+				if _, err := os.Stat(filepath.Join(pending.Final(), file)); err != nil {
+					t.Errorf("the analysis that ran lost %s: %v", file, err)
+				}
+			}
+		})
 	}
 }
