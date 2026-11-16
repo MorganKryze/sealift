@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -23,6 +24,10 @@ import (
 // defaultGitHubAPI is the public GitHub API, overridden in tests through
 // Manager.GitHubAPI.
 const defaultGitHubAPI = "https://api.github.com"
+
+// defaultLookupTimeout is how long TrivyState waits on GitHub before it
+// reports the installed versions alone.
+const defaultLookupTimeout = 3 * time.Second
 
 // Volume is the narrow view of the data volume that Manager needs. The
 // store package builds it; a caller outside the container can supply any
@@ -54,6 +59,10 @@ type Manager struct {
 	// Arch overrides the host CPU architecture used to pick the Trivy
 	// release asset. Empty uses runtime.GOARCH.
 	Arch string
+	// LookupTimeout bounds the GitHub lookups TrivyState makes, together.
+	// Zero uses defaultLookupTimeout. Downloads and installs are not bound
+	// by it: they are explicit actions and keep the client's timeout.
+	LookupTimeout time.Duration
 }
 
 // NewManager returns a Manager that installs tools into vol's data volume,

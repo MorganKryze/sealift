@@ -482,3 +482,82 @@ func TestUpdateTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
 		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseSourceUnavailable", err)
 	}
 }
+
+// TestTrivyStateBoundsTheGitHubLookup proves a GitHub that never answers
+// costs TrivyState only its lookup deadline: it returns the installed
+// versions with no error and no Latest, rather than waiting on the long
+// download timeout of the HTTP client.
+func TestTrivyStateBoundsTheGitHubLookup(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	m, root := newTestManager(t, srv)
+	m.LookupTimeout = 50 * time.Millisecond
+	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", "0.55.0"), 0o770); err != nil {
+		t.Fatalf("mkdir trivy version: %v", err)
+	}
+
+	start := time.Now()
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("TrivyState took %v, want it bounded near the 50ms lookup timeout", elapsed)
+	}
+	if state.Latest != "" {
+		t.Fatalf("Latest = %q, want empty when GitHub does not answer", state.Latest)
+	}
+	if len(state.Installed) != 1 || state.Installed[0] != "0.55.0" {
+		t.Fatalf("Installed = %v, want [0.55.0]", state.Installed)
+	}
+}
+
+// TestTrivyStateBoundsTheRecommendedReleaseLookup proves the second GitHub
+// lookup shares the deadline of the first: the latest release answers at
+// once and is too recent, the release list never answers, and TrivyState
+// still returns within the lookup deadline, keeping the Latest it learned
+// and recommending nothing.
+func TestTrivyStateBoundsTheRecommendedReleaseLookup(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/aquasecurity/trivy/releases/latest" {
+			data, _ := json.Marshal(ghRelease{TagName: "v" + trivyTestVersion, PublishedAt: time.Now().Add(-time.Hour)})
+			_, _ = w.Write(data)
+			return
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	m, _ := newTestManager(t, srv)
+	m.LookupTimeout = 50 * time.Millisecond
+
+	type result struct {
+		state TrivyState
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		state, err := m.TrivyState(context.Background())
+		done <- result{state, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("TrivyState: %v", got.err)
+		}
+		if got.state.Latest != trivyTestVersion {
+			t.Fatalf("Latest = %q, want %q: the first lookup answered", got.state.Latest, trivyTestVersion)
+		}
+		if got.state.Recommended != "" {
+			t.Fatalf("Recommended = %q, want empty when the release list does not answer", got.state.Recommended)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("TrivyState still waiting on the release list after 2s, want it bounded near the 50ms lookup timeout")
+	}
+}
