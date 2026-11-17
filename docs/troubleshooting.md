@@ -103,9 +103,9 @@ pnpm could not install the project as dropped. The message carries pnpm's reason
 
 sealift could not start pnpm as its `tools` user. The container runs with `no-new-privileges`, or without the `SETUID` and `SETGID` capabilities. [Deployment](deployment.md#compose) has a setup that works.
 
-### A running analysis disappeared after a restart
+### An analysis shows Analysis interrupted after a restart
 
-The server restarted while the analysis ran, for example during an upgrade, and discarded the unfinished job. The session shows its previous state. Start the analysis again.
+The server restarted while the analysis ran, for example during an upgrade. The session keeps the analysis, marked interrupted, with the log of the steps it reached. Start the analysis again. An analysis still waiting in the queue is not kept: start it again too.
 
 ### A dependency with CVEs shows under Nothing to do
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // runningJSON and interruptedJSON are the State constants as they appear in
@@ -52,13 +53,20 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 	return changed, nil
 }
 
-// RemoveOrphanDirs removes every analyses/<id>.tmp or exports/<id>.tmp
+// RemoveOrphanDirs settles every analyses/<id>.tmp or exports/<id>.tmp
 // directory left under any project. A .tmp directory can only exist while
 // its job is running: Analysis commits its own on every path, including
 // failure and cancellation, before Run returns, and Export leaves one only
 // for the queue's finalize hook to commit while the server is still up. A
 // .tmp directory found at startup therefore belongs to a job the previous
-// process never got to finish. It returns how many it removed.
+// process never got to finish.
+//
+// An analysis .tmp that holds a status.json was started, so it is renamed
+// to analyses/<id>, the commit the dead process never did, and shows as
+// interrupted once MarkRunningInterrupted has run first. An analysis .tmp
+// with no status.json (queued, never started) and every export .tmp are
+// removed, as is a directory whose rename fails. It returns how many it
+// removed; a renamed directory is kept, so it does not count.
 func (s *Store) RemoveOrphanDirs() (int, error) {
 	pattern := filepath.Join(s.root, "projects", "*", "*", "*.tmp")
 	matches, err := filepath.Glob(pattern)
@@ -68,6 +76,14 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 
 	removed := 0
 	for _, dir := range matches {
+		if filepath.Base(filepath.Dir(dir)) == "analyses" && commitStarted(dir) {
+			final := strings.TrimSuffix(dir, ".tmp")
+			err := os.Rename(dir, final)
+			if err == nil {
+				continue
+			}
+			slog.Warn("store: could not keep an interrupted analysis, removing it", "path", dir, "error", err)
+		}
 		if err := os.RemoveAll(dir); err != nil {
 			// One directory this process cannot remove (permissions, a
 			// stray open file) must not stop the server from starting, or
@@ -78,6 +94,13 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 		removed++
 	}
 	return removed, nil
+}
+
+// commitStarted reports whether dir holds a status.json, the mark of an
+// analysis that started running.
+func commitStarted(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "status.json"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // markIfRunning flips one status.json's "state" field to interrupted,
