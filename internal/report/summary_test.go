@@ -102,7 +102,7 @@ func TestWriteSummaryNilAfterSaysCheckDidNotRun(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte(want)) {
 		t.Errorf("summary.md missing %q in:\n%s", want, buf.String())
 	}
-	if bytes.Contains(buf.Bytes(), []byte("| After | 0 | 0 | 0 | 0 | 0 |")) {
+	if bytes.Contains(buf.Bytes(), []byte("| After (exported set) | 0 | 0 | 0 | 0 | 0 |")) {
 		t.Error("summary.md printed a zero vector for After, want the did-not-run note instead")
 	}
 }
