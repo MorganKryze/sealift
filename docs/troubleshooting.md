@@ -105,7 +105,7 @@ sealift could not start pnpm as its `tools` user. The container runs with `no-ne
 
 ### An analysis shows Analysis interrupted after a restart
 
-The server restarted while the analysis ran, for example during an upgrade. The session keeps the analysis, marked interrupted, with the log of the steps it reached. Start the analysis again. An analysis still waiting in the queue is not kept: start it again too.
+The server restarted while the analysis ran, for example during an upgrade. The session keeps the analysis, marked interrupted, with the log of the steps it reached. Start the analysis again. Some are not kept: an analysis still waiting in the queue, one whose status file is damaged, and any analysis the server could not mark because `/data` was not writable at startup. Start those again too.
 
 ### A dependency with CVEs shows under Nothing to do
 
