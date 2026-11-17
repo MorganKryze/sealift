@@ -84,9 +84,9 @@ func WriteSummary(w io.Writer, s Summary) error {
 	fmt.Fprintln(ew)
 	fmt.Fprintln(ew, "| | Critical | High | Medium | Low | Unknown |")
 	fmt.Fprintln(ew, "| --- | --- | --- | --- | --- | --- |")
-	fmt.Fprintf(ew, "| Before | %d | %d | %d | %d | %d |\n", s.Before[0], s.Before[1], s.Before[2], s.Before[3], s.Before[4])
+	fmt.Fprintf(ew, "| Before (whole project) | %d | %d | %d | %d | %d |\n", s.Before[0], s.Before[1], s.Before[2], s.Before[3], s.Before[4])
 	if s.After != nil {
-		fmt.Fprintf(ew, "| After | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
+		fmt.Fprintf(ew, "| After (exported set) | %d | %d | %d | %d | %d |\n", s.After[0], s.After[1], s.After[2], s.After[3], s.After[4])
 	} else {
 		fmt.Fprintln(ew, "| After | the combined check did not run | | | | |")
 	}

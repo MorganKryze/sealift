@@ -273,15 +273,38 @@ func TestExportSummaryPrintsTheExportedScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(summary, []byte("| After | 1 | 1 | 0 | 1 | 0 |")) {
+	if !bytes.Contains(summary, []byte("| After (exported set) | 1 | 1 | 0 | 1 | 0 |")) {
 		t.Errorf("summary.md After row is not the exported scan's (1, 1, 0, 1, 0):\n%s", summary)
 	}
-	if bytes.Contains(summary, []byte("| After | 7 | 7 | 7 | 7 | 7 |")) {
+	if bytes.Contains(summary, []byte("| 7 | 7 | 7 | 7 | 7 |")) {
 		t.Errorf("summary.md prints the analysis' own After row:\n%s", summary)
 	}
 	for _, want := range []string{"CVE-TWICE", "CVE-MIXED"} {
 		if !bytes.Contains(summary, []byte(want)) {
 			t.Errorf("summary.md missing remaining %s:\n%s", want, summary)
+		}
+	}
+}
+
+// A delta export ships only the closures of the dependencies it changes,
+// while Before counts the whole project: the two rows say so, so a zero
+// After is not read as the whole project being clean.
+func TestExportSummaryLabelsBothRowsByScope(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| Before (whole project) |", "| After (exported set) |"} {
+		if !bytes.Contains(summary, []byte(want)) {
+			t.Errorf("summary.md missing the row %q:\n%s", want, summary)
 		}
 	}
 }

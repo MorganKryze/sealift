@@ -50,8 +50,8 @@ func TestWriteSummary(t *testing.T) {
 
 | | Critical | High | Medium | Low | Unknown |
 | --- | --- | --- | --- | --- | --- |
-| Before | 2 | 3 | 1 | 0 | 0 |
-| After | 0 | 1 | 1 | 0 | 0 |
+| Before (whole project) | 2 | 3 | 1 | 0 | 0 |
+| After (exported set) | 0 | 1 | 1 | 0 | 0 |
 
 ## Updated dependencies
 
