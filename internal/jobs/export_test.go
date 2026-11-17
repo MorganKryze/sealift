@@ -245,6 +245,47 @@ func (h *testHarness) newExport(t *testing.T, analysisDir, exportDir string, inc
 
 func noopEmit(Event) {}
 
+// The summary's After row and remaining list describe the scan of the set
+// exported, not the analysis' own picks, whatever the analysis measured.
+func TestExportSummaryPrintsTheExportedScan(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, true)
+	exp.Analysis.Result.After = &Vector{7, 7, 7, 7, 7}
+	// CVE-TWICE sits on two packages and counts once; CVE-MIXED is high on
+	// one package and medium on another, and the high one wins.
+	exp.Trivy = &exportFakeTrivy{scanJSON: `{
+  "SchemaVersion": 2,
+  "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-TWICE", "PkgName": "widgets", "InstalledVersion": "1.1.0", "Severity": "CRITICAL", "Title": "t"},
+    {"VulnerabilityID": "CVE-TWICE", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "CRITICAL", "Title": "t"},
+    {"VulnerabilityID": "CVE-MIXED", "PkgName": "widgets", "InstalledVersion": "1.1.0", "Severity": "MEDIUM", "Title": "m"},
+    {"VulnerabilityID": "CVE-MIXED", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "HIGH", "Title": "m"},
+    {"VulnerabilityID": "CVE-LOW", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "LOW", "Title": "l"}
+  ]}]
+}`}
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(summary, []byte("| After | 1 | 1 | 0 | 1 | 0 |")) {
+		t.Errorf("summary.md After row is not the exported scan's (1, 1, 0, 1, 0):\n%s", summary)
+	}
+	if bytes.Contains(summary, []byte("| After | 7 | 7 | 7 | 7 | 7 |")) {
+		t.Errorf("summary.md prints the analysis' own After row:\n%s", summary)
+	}
+	for _, want := range []string{"CVE-TWICE", "CVE-MIXED"} {
+		if !bytes.Contains(summary, []byte(want)) {
+			t.Errorf("summary.md missing remaining %s:\n%s", want, summary)
+		}
+	}
+}
+
 func TestExportRun(t *testing.T) {
 	h := newTestHarness(t)
 	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
