@@ -189,6 +189,71 @@ func TestRemoveOrphanDirsKeepsAnInterruptedAnalysis(t *testing.T) {
 	}
 }
 
+// TestRemoveOrphanDirsDoesNotKeepAnAnalysisStillRunning proves the sweep
+// never commits an analysis whose status.json still says running: no live
+// job backs it, so listing it would show a job that does not exist. The
+// directory is removed instead.
+func TestRemoveOrphanDirsDoesNotKeepAnAnalysisStillRunning(t *testing.T) {
+	s := openTestStore(t)
+	const id = "20260917T101502Z"
+	tmp := filepath.Join(s.Root(), "projects", "proj-1", "analyses", id+".tmp")
+	if err := os.MkdirAll(tmp, dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "status.json"), []byte(`{"state":"running"}`), fileMode); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := s.RemoveOrphanDirs(); err != nil {
+		t.Fatalf("RemoveOrphanDirs: %v", err)
+	}
+	assertNoRunningAnalysis(t, s, id)
+}
+
+// TestSweepDoesNotListARunningAnalysisItCouldNotMark covers a crash that
+// leaves the .tmp unwritable (a full disk, a read-only directory): the
+// status cannot be rewritten to interrupted, and the analysis must not be
+// committed still running.
+func TestSweepDoesNotListARunningAnalysisItCouldNotMark(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	s := openTestStore(t)
+	const id = "20260917T101502Z"
+	tmp := filepath.Join(s.Root(), "projects", "proj-1", "analyses", id+".tmp")
+	if err := os.MkdirAll(tmp, dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "status.json"), []byte(`{"state":"running"}`), fileMode); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chmod(tmp, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tmp, 0o755) })
+
+	if _, err := s.MarkRunningInterrupted(); err != nil {
+		t.Fatalf("MarkRunningInterrupted: %v", err)
+	}
+	if _, err := s.RemoveOrphanDirs(); err != nil {
+		t.Fatalf("RemoveOrphanDirs: %v", err)
+	}
+	assertNoRunningAnalysis(t, s, id)
+}
+
+func assertNoRunningAnalysis(t *testing.T, s *Store, id string) {
+	t.Helper()
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	for _, info := range infos {
+		if info.ID == id && info.State == Running {
+			t.Errorf("Analyses lists %s as running, but no job backs it", id)
+		}
+	}
+}
+
 func TestRemoveOrphanDirsOnEmptyStoreReturnsZero(t *testing.T) {
 	s := openTestStore(t)
 	n, err := s.RemoveOrphanDirs()

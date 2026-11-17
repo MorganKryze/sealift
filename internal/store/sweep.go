@@ -61,12 +61,16 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 // .tmp directory found at startup therefore belongs to a job the previous
 // process never got to finish.
 //
-// An analysis .tmp that holds a status.json was started, so it is renamed
-// to analyses/<id>, the commit the dead process never did, and shows as
-// interrupted once MarkRunningInterrupted has run first. An analysis .tmp
-// with no status.json (queued, never started) and every export .tmp are
-// removed, as is a directory whose rename fails. It returns how many it
-// removed; a renamed directory is kept, so it does not count.
+// An analysis .tmp whose status.json holds a state other than running was
+// started and marked, so it is renamed to analyses/<id>, the commit the
+// dead process never did, and shows as interrupted once
+// MarkRunningInterrupted has run first. A .tmp still in state running is
+// one MarkRunningInterrupted could not rewrite (a full disk, a directory it
+// cannot write to): committing it would list a job that does not exist, so
+// it is removed like an analysis .tmp with no status.json (queued, never
+// started), an unreadable status.json, every export .tmp and a directory
+// whose rename fails. It returns how many it removed; a renamed directory
+// is kept, so it does not count.
 func (s *Store) RemoveOrphanDirs() (int, error) {
 	pattern := filepath.Join(s.root, "projects", "*", "*", "*.tmp")
 	matches, err := filepath.Glob(pattern)
@@ -76,7 +80,7 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 
 	removed := 0
 	for _, dir := range matches {
-		if filepath.Base(filepath.Dir(dir)) == "analyses" && commitStarted(dir) {
+		if filepath.Base(filepath.Dir(dir)) == "analyses" && settledAnalysis(dir) {
 			final := strings.TrimSuffix(dir, ".tmp")
 			err := os.Rename(dir, final)
 			if err == nil {
@@ -96,11 +100,20 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 	return removed, nil
 }
 
-// commitStarted reports whether dir holds a status.json, the mark of an
-// analysis that started running.
-func commitStarted(dir string) bool {
-	info, err := os.Stat(filepath.Join(dir, "status.json"))
-	return err == nil && info.Mode().IsRegular()
+// settledAnalysis reports whether dir holds a readable status.json whose
+// state is no longer running: an analysis that started and was marked, safe
+// to commit under its final name.
+func settledAnalysis(dir string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, "status.json"))
+	if err != nil {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	state, ok := fields["state"]
+	return ok && string(state) != runningJSON
 }
 
 // markIfRunning flips one status.json's "state" field to interrupted,
