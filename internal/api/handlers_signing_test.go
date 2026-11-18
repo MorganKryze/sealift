@@ -172,35 +172,33 @@ func TestRegenerateAnswers500WhenTheKeyCannotBeWritten(t *testing.T) {
 
 func TestAnswersNeverHoldThePrivateKey(t *testing.T) {
 	srv, h := newTestServer(t)
-	answers := map[string]string{}
-	get := func(name, path string) {
-		resp, err := http.Get(srv.URL + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		answers[name] = readBody(t, resp)
-	}
-	get("GET signing key", "/api/signing-key")
-	get("GET settings", "/api/settings")
-	post := regenerate(t, srv, nil)
-	answers["POST regenerate"] = readBody(t, post)
-	// A refusal and a bad route answer too.
-	refused := regenerate(t, srv, func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") })
-	answers["403 Problem"] = readBody(t, refused)
-	get("GET signing key again", "/api/signing-key")
-
-	forms := privateKeyForms(t, h)
-	for name, body := range answers {
+	// Each answer is checked against the key in use when it was fetched.
+	check := func(name, body string) {
+		t.Helper()
 		if body == "" {
 			t.Errorf("%s answered nothing", name)
 		}
-		for _, bad := range forms {
+		for _, bad := range privateKeyForms(t, h) {
 			if strings.Contains(body, bad) {
 				t.Errorf("%s holds a form of the private key", name)
 			}
 		}
 	}
+	get := func(name, path string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		check(name, readBody(t, resp))
+	}
+	get("GET signing key", "/api/signing-key")
+	get("GET settings", "/api/settings")
+	check("POST regenerate", readBody(t, regenerate(t, srv, nil)))
+	get("GET settings after regenerate", "/api/settings")
+	get("GET signing key after regenerate", "/api/signing-key")
+	check("403 Problem", readBody(t, regenerate(t, srv, func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") })))
 }
 
 func TestRegenerateRefusesCrossSite(t *testing.T) {
