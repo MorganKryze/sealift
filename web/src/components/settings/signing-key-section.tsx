@@ -52,9 +52,11 @@ export function SigningKeySection() {
       setReplaced(true)
       close()
     },
+    // Taken at the start: a refetch during the request would move the key under the error handler.
+    onMutate: () => ({ before: queryClient.getQueryData<SigningKey>(["signing-key"])?.publicKeySha256 }),
     // The server may have swapped the key before the answer was lost: read it again.
-    onError: async () => {
-      const before = keyQuery.data?.publicKeySha256
+    onError: async (_error, _variables, context) => {
+      const before = context?.before
       close()
       await queryClient.invalidateQueries({ queryKey: ["signing-key"] })
       const after = queryClient.getQueryData<SigningKey>(["signing-key"])?.publicKeySha256

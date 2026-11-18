@@ -181,6 +181,27 @@ describe("SigningKeySection", () => {
     expect(screen.queryByText(/did not reach the server/)).toBeNull()
   })
 
+  it("says the new key is in use when a refetch lands while the regenerate is in flight", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <SigningKeySection />
+      </QueryClientProvider>,
+    )
+    await screen.findByText(SHA)
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate key" }))
+    let lose: (reason: unknown) => void = () => {}
+    vi.mocked(regenerateSigningKey).mockReturnValue(new Promise<SigningKey>((_, reject) => (lose = reject)))
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Regenerate" }))
+    vi.mocked(getSigningKey).mockResolvedValue(newKey)
+    await client.invalidateQueries({ queryKey: ["signing-key"] })
+    expect(await screen.findByText("b".repeat(64))).toBeInTheDocument()
+    lose(new ProblemError(0, UNREACHABLE))
+
+    expect(await screen.findByRole("status")).toHaveTextContent("New key in use")
+    expect(screen.queryByText(/did not reach the server/)).toBeNull()
+  })
+
   it("names a key that cannot be loaded", async () => {
     vi.mocked(getSigningKey).mockRejectedValue(new Error("boom"))
     renderSection()
