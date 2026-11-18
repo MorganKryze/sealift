@@ -60,6 +60,7 @@ func TestToolsCredential(t *testing.T) {
 // TestRunServesHealthAndStopsOnSignal starts the real wiring on a free port,
 // so a broken store, queue or route shows up here rather than in the image.
 func TestRunServesHealthAndStopsOnSignal(t *testing.T) {
+	localGitHub(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +131,7 @@ func (j *blockingJob) Run(ctx context.Context, emit func(jobs.Event)) error {
 // job before shutting the server down, so the connection goes idle quickly
 // and run returns well under the 10 second shutdown timeout.
 func TestRunCancelsRunningJobBeforeShuttingDownServer(t *testing.T) {
+	localGitHub(t)
 	started := make(chan struct{})
 	onQueueReady = func(q *jobs.Queue) {
 		if _, err := q.Submit(&blockingJob{started: started}); err != nil {
@@ -231,17 +233,29 @@ func TestSubcommand(t *testing.T) {
 	}
 }
 
+// localGitHub points SEALIFT_GITHUB_API at a local server that answers 404 and
+// reports the paths it is asked for. A test that starts run sets it first, so
+// no test reaches api.github.com.
+func localGitHub(t *testing.T) <-chan string {
+	t.Helper()
+	asked := make(chan string, 8)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case asked <- r.URL.Path:
+		default:
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(gh.Close)
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	return asked
+}
+
 // TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
 // manager: GET /api/tools looks up the latest Trivy release, and the server
 // named by the variable must be the one asked.
 func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
-	asked := make(chan string, 8)
-	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked <- r.URL.Path
-		http.NotFound(w, r)
-	}))
-	defer gh.Close()
-	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	asked := localGitHub(t)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
