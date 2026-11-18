@@ -64,7 +64,9 @@ type Store struct {
 
 	mu       sync.RWMutex
 	settings Settings
-	signing  SigningKey
+	// signing is a pointer: fmt prints a nested pointer as an address, so
+	// printing a Store never reaches the private key.
+	signing *SigningKey
 
 	// regenerating serializes key replacements, so the file and the key in
 	// use always come from the same call.
@@ -123,7 +125,7 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.signing = key
+	s.signing = &key
 	return s, nil
 }
 

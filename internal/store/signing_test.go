@@ -188,6 +188,14 @@ func TestSigningKeyNeverPrints(t *testing.T) {
 		outputs[verb] = fmt.Sprintf(verb, key)
 		outputs["ptr "+verb] = fmt.Sprintf(verb, &key)
 	}
+	type holder struct {
+		Name  string
+		Store *Store
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+		outputs["store "+verb] = fmt.Sprintf(verb, s)
+		outputs["holder "+verb] = fmt.Sprintf(verb, holder{Name: "h", Store: s})
+	}
 	outputs["Sprint"] = fmt.Sprint(key, []SigningKey{key}, map[string]SigningKey{"k": key})
 	blob, err := json.Marshal(key)
 	if err != nil {

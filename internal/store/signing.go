@@ -23,7 +23,9 @@ type SigningKey struct {
 	PublicPEM       string
 	PublicKeySHA256 string
 
-	private ed25519.PrivateKey
+	// private is a pointer to the key: fmt prints a nested pointer as an
+	// address, even when a bad verb makes it print the holder's fields.
+	private *ed25519.PrivateKey
 }
 
 // String names the key by its public key sha256.
@@ -42,7 +44,7 @@ func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 	return SigningKey{
 		PublicPEM:       archive.PublicKeyPEM(pub),
 		PublicKeySHA256: archive.PublicKeySHA256(pub),
-		private:         priv,
+		private:         &priv,
 	}
 }
 
@@ -50,7 +52,7 @@ func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 func (s *Store) SigningKey() SigningKey {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.signing
+	return *s.signing
 }
 
 // RegenerateSigningKey replaces the key pair with a new one, through a
@@ -65,7 +67,7 @@ func (s *Store) RegenerateSigningKey() (SigningKey, error) {
 		return SigningKey{}, err
 	}
 	s.mu.Lock()
-	s.signing = key
+	s.signing = &key
 	s.mu.Unlock()
 	return key, nil
 }
