@@ -75,7 +75,7 @@ The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupt
 | `GET /api/projects/{projectId}/exports/{exportId}` | The export: state, steps, failure, and once done its files. |
 | `DELETE /api/projects/{projectId}/exports/{exportId}` | Delete the export and its files. |
 | `POST /api/projects/{projectId}/exports/{exportId}/cancel` | Cancel the export, running or queued. |
-| `GET /api/projects/{projectId}/exports/{exportId}/files/{name}` | Download one file of a finished export: the archive or a report. |
+| `GET /api/projects/{projectId}/exports/{exportId}/files/{name}` | Download one file of a finished export: the archive, `manifest.json`, `manifest.json.sig` or a report. |
 
 A dependency left out of the selection, or given an empty list, stays at its current version.
 

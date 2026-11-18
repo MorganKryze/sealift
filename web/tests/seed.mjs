@@ -1,7 +1,7 @@
 // Writes a finished session into a data directory, so the browser gate can load the session routes
 // without pnpm, Trivy or a registry. The shapes follow what internal/store reads back.
-import { createHash } from "node:crypto"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { createHash, generateKeyPairSync, sign } from "node:crypto"
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const root = process.argv[2]
@@ -50,7 +50,26 @@ write(`analyses/${analysis}/ranking.json`, {
     },
   ],
 })
-write(`exports/${exported}/manifest.json`, {
-  analysisId: analysis, createdAt: "2026-09-21T10:20:00Z", archive: { sha256: "0".repeat(64), size: 5500000 }, packages: [],
-})
+// The key is made per run and written as the store writes it: PKCS#8 PEM, mode 0600, in private/ at 0700.
+const { publicKey, privateKey } = generateKeyPairSync("ed25519")
+mkdirSync(join(root, "private"), { recursive: true, mode: 0o700 })
+chmodSync(join(root, "private"), 0o700)
+writeFileSync(join(root, "private", "signing-key.pem"), privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 })
+const publicKeySha256 = createHash("sha256").update(publicKey.export({ type: "spki", format: "der" })).digest("hex")
+
+// The signature covers the manifest's exact bytes, indented as the store writes it.
+const exportManifest = JSON.stringify(
+  { analysisId: analysis, createdAt: "2026-09-21T10:20:00Z", archive: { sha256: "0".repeat(64), size: 5500000 }, packages: [] },
+  null,
+  2,
+)
+write(`exports/${exported}/manifest.json`, exportManifest)
+write(
+  `exports/${exported}/manifest.json.sig`,
+  JSON.stringify(
+    { algorithm: "ed25519", publicKeySha256, signature: sign(null, Buffer.from(exportManifest), privateKey).toString("base64") },
+    null,
+    2,
+  ) + "\n",
+)
 write(`exports/${exported}/packages_npm.tar.gz`, "")

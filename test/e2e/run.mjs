@@ -4,6 +4,7 @@
 // proves sealift's real analysis and export code, not a hand-built
 // stand-in archive.
 import { execFileSync } from "node:child_process";
+import { verify } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -204,12 +205,35 @@ async function main() {
   const work = mkdtempSync(path.join(tmpdir(), "sealift-e2e-"));
   execFileSync("tar", ["-xzf", "packages_npm.tar.gz", "-C", work]);
 
-  const sigPath = path.join(work, "out", "signature.key");
-  const sig = readFileSync(sigPath);
-  if (sig.length === 0 || sig[sig.length - 1] === 0x0a) {
-    throw new Error(`out/signature.key must hold the key with no trailing newline, got ${JSON.stringify(sig.toString())}`);
+  // The archive holds package tarballs and nothing else: the signature
+  // travels beside manifest.json, not inside the archive.
+  const unexpected = readdirSync(path.join(work, "out")).filter((name) => !name.endsWith(".tgz"));
+  if (unexpected.length > 0) {
+    throw new Error(`out/ must hold only .tgz files, found: ${unexpected.join(", ")}`);
   }
-  console.log(`out/signature.key OK: ${sig.length} bytes, no trailing newline`);
+  console.log("out/ holds only .tgz files");
+
+  // Check the signature with node:crypto, an Ed25519 implementation other
+  // than sealift's own, given only the public key, the manifest's bytes and
+  // the decoded signature.
+  const download = async (name) => {
+    const res = await fetch(`${api}/projects/${projectId}/exports/${exportJob.id}/files/${name}`);
+    if (!res.ok) throw new Error(`download ${name}: ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  };
+  const manifestBytes = await download("manifest.json");
+  const signatureFile = JSON.parse((await download("manifest.json.sig")).toString("utf8"));
+  const signingKey = await json(`${api}/signing-key`);
+  if (signatureFile.algorithm !== "ed25519") {
+    throw new Error(`manifest.json.sig algorithm = ${signatureFile.algorithm}, want ed25519`);
+  }
+  if (signatureFile.publicKeySha256 !== signingKey.publicKeySha256) {
+    throw new Error(`manifest.json.sig names ${signatureFile.publicKeySha256}, the server's key is ${signingKey.publicKeySha256}`);
+  }
+  if (!verify(null, manifestBytes, signingKey.publicKeyPem, Buffer.from(signatureFile.signature, "base64"))) {
+    throw new Error("manifest.json.sig does not verify over manifest.json with the server's public key");
+  }
+  console.log(`manifest.json.sig verifies over manifest.json with public key sha256 ${signingKey.publicKeySha256}`);
 
   if (multiVersion) {
     const files = readdirSync(path.join(work, "out"));

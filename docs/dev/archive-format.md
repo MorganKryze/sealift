@@ -10,7 +10,8 @@ A gzip-compressed tar with one top-level directory, `out/`:
 | --- | --- |
 | `out/` | Mode 0755 |
 | `out/<file>.tgz` | One npm package tarball per package, mode 0644 |
-| `out/signature.key` | The signature key from the settings, as plain text with no trailing newline, mode 0644 |
+
+`out/` holds the package tarballs and nothing else. The archive carries no key and no signature: both travel beside it (see below), so the archive depends on the selection and the build alone, whatever key signs the manifest.
 
 `archive.WriteTarGz` writes the entries sorted by name, with the Unix epoch as every timestamp and 0 as owner and group. The same entries give the same bytes, so the same selection exported twice by the same build of sealift has the same sha256.
 
@@ -63,6 +64,28 @@ A tarball's file name comes from the package name and version, with a scope fold
 | `packages[].publishConfigStripped` | `true` when sealift removed `publishConfig` from the tarball's `package.json`, and so rewrote it |
 
 `manifest.json` travels next to the archive, not inside it: the archive's sha256 cannot be part of its own content.
+
+## manifest.json.sig
+
+An export writes `manifest.json.sig` beside `manifest.json`. It holds an Ed25519 signature (RFC 8032, pure, no context and no prehash) over the exact bytes of `manifest.json` as written. Carry the archive, `manifest.json` and `manifest.json.sig` together.
+
+```json
+{
+  "algorithm": "ed25519",
+  "publicKeySha256": "6fefb059722cdef03cce92287e46148905131e1056bcf9a31e910ee0225f1c26",
+  "signature": "<standard base64 of the 64 signature bytes>"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `algorithm` | `ed25519` |
+| `publicKeySha256` | Lowercase hex sha256 of the DER SubjectPublicKeyInfo of the key that signed |
+| `signature` | Standard base64, with padding, of the 64-byte signature |
+
+The file is indented JSON with a trailing newline, at most 4 KiB, and a reader ignores fields it does not know. An export signs with the key in use when it starts running, so a regenerate during the run changes nothing in it, and `publicKeySha256` names that key. The key signs manifests and nothing else. The manifest binds the archive's sha256 and size and each package's digests, so one signature covers every byte of the export. The reports are not signed.
+
+The export step that writes `manifest.json` and its signature is named `reports` in the job's events. An export that cannot sign fails at that step and offers no file for download: a failed or cancelled export keeps only its `status.json`.
 
 ## What `sealift import` checks
 

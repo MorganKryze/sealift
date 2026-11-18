@@ -40,6 +40,16 @@ func (k SigningKey) GoString() string { return k.String() }
 // Format keeps every verb, %d and %x included, from reaching the private field.
 func (k SigningKey) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(k.String())) }
 
+// SignManifest returns the bytes of manifest.json.sig for manifest: a pure
+// Ed25519 signature naming this key's public key sha256. It signs nothing
+// else, so the key has one use.
+func (k SigningKey) SignManifest(manifest []byte) ([]byte, error) {
+	if k.private == nil || *k.private == nil {
+		return nil, errors.New("store: this signing key has no private half")
+	}
+	return archive.SignatureFor(k.PublicKeySHA256, ed25519.Sign(**k.private, manifest))
+}
+
 func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 	pub := priv.Public().(ed25519.PublicKey)
 	p := &priv

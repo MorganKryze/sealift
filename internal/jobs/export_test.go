@@ -5,9 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha512"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -120,7 +125,9 @@ type testHarness struct {
 	t        *testing.T
 	store    *store.Store
 	registry *httptest.Server
+	root     string
 	requests atomic.Int32 // every tarball request the registry served, across the harness's lifetime
+	onFetch  func()       // called on every tarball request, before it is served
 	widgets  []byte
 	gadget20 []byte
 	gadget21 []byte
@@ -139,6 +146,9 @@ func newTestHarness(t *testing.T) *testHarness {
 
 	h.registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.requests.Add(1)
+		if h.onFetch != nil {
+			h.onFetch()
+		}
 		switch r.URL.Path {
 		case "/widgets/-/widgets-1.1.0.tgz":
 			_, _ = w.Write(h.widgets)
@@ -160,6 +170,7 @@ func newTestHarness(t *testing.T) *testHarness {
 		t.Fatal(err)
 	}
 	h.store = st
+	h.root = root
 	return h
 }
 
@@ -286,14 +297,16 @@ func TestExportRun(t *testing.T) {
 	entries := readArchive(t, first)
 	for _, want := range []string{
 		"out/widgets-1.1.0.tgz", "out/scope-gadget-2.1.0.tgz", "out/scope-gadget-2.2.0.tgz",
-		"out/helper-3.0.0.tgz", "out/signature.key",
+		"out/helper-3.0.0.tgz",
 	} {
 		if _, ok := entries[want]; !ok {
 			t.Errorf("archive missing entry %q; have %v", want, exportArchiveKeys(entries))
 		}
 	}
-	if got := entries["out/signature.key"]; got != "top-secret" {
-		t.Errorf("signature.key = %q, want %q with no trailing newline", got, "top-secret")
+	for name := range entries {
+		if name != "out/" && !strings.HasSuffix(name, ".tgz") {
+			t.Errorf("archive holds %q, want package tarballs and nothing else", name)
+		}
 	}
 	for _, file := range []string{"out/scope-gadget-2.1.0.tgz", "out/scope-gadget-2.2.0.tgz"} {
 		gadgetManifest := readGadgetManifest(t, entries[file])
@@ -309,6 +322,10 @@ func TestExportRun(t *testing.T) {
 	requestsBeforeSecondRun := h.requests.Load()
 	exportDir2 := filepath.Join(t.TempDir(), "exports", "20260917T101503Z.tmp")
 	exp2 := h.newExport(t, analysisDir, exportDir2, true)
+	keyOfFirst := h.store.SigningKey()
+	if _, err := h.store.RegenerateSigningKey(); err != nil {
+		t.Fatal(err)
+	}
 	if err := exp2.Run(context.Background(), noopEmit); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -320,8 +337,10 @@ func TestExportRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, second) {
-		t.Error("two exports of the same selection gave different archive bytes")
+		t.Error("two exports of the same selection gave different archive bytes after a key regenerate")
 	}
+	assertSigned(t, exportDir, keyOfFirst)
+	assertSigned(t, exportDir2, h.store.SigningKey())
 
 	// Reports.
 	var manifest map[string]any
@@ -388,7 +407,7 @@ func TestExportRun(t *testing.T) {
 		}
 	}
 
-	// The committed export holds exactly the six files a client ever
+	// The committed export holds exactly the seven files a client ever
 	// downloads, nothing left over from downloading, stripping or
 	// scanning: @scope/gadget's publishConfig guarantees stripped/ would
 	// otherwise exist here.
@@ -402,7 +421,7 @@ func TestExportRun(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{
-		"findings.csv", "manifest.json", "packages_npm.tar.gz",
+		"findings.csv", "manifest.json", "manifest.json.sig", "packages_npm.tar.gz",
 		"report.cdx.json", "report.trivy.json", "summary.md",
 	}
 	if !slices.Equal(names, want) {
@@ -463,7 +482,10 @@ func assertExportFailedStatus(t *testing.T, exportDir, wantStep, wantMessageSubs
 	if _, statErr := os.Stat(exportDir); statErr != nil {
 		t.Fatalf("pending export directory did not survive a failed export: %v", statErr)
 	}
-	for _, name := range []string{"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz"} {
+	for _, name := range []string{
+		"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz", "manifest.json", "manifest.json.sig",
+		"report.trivy.json", "report.cdx.json", "findings.csv", "summary.md",
+	} {
 		if _, statErr := os.Stat(filepath.Join(exportDir, name)); !os.IsNotExist(statErr) {
 			t.Errorf("%s survived a failed export, want it removed", name)
 		}
@@ -557,6 +579,160 @@ func TestValidateSelectionListsEveryBadEntry(t *testing.T) {
 	if got := ValidateSelection(h.result(), map[string][]string{"widgets": {}}); got != nil {
 		t.Errorf("ValidateSelection(empty list) = %v, want nil: an empty list is the same as not selecting the dependency", got)
 	}
+}
+
+// assertSigned checks that manifest.json.sig verifies over the exact bytes of
+// manifest.json with key's public half, and names that key's sha256.
+func assertSigned(t *testing.T, dir string, key store.SigningKey) {
+	t.Helper()
+	manifest, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.ReadFile(filepath.Join(dir, archive.SignatureFile))
+	if err != nil {
+		t.Fatalf("manifest.json.sig: %v", err)
+	}
+	if err := archive.CheckSignature(manifest, file, publicKey(t, key)); err != nil {
+		t.Errorf("%s does not verify over manifest.json with the key: %v", archive.SignatureFile, err)
+	}
+	var doc struct {
+		PublicKeySha256 string `json:"publicKeySha256"`
+	}
+	if err := json.Unmarshal(file, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.PublicKeySha256 != key.PublicKeySHA256 {
+		t.Errorf("signature names %s, want %s", doc.PublicKeySha256, key.PublicKeySHA256)
+	}
+}
+
+func publicKey(t *testing.T, key store.SigningKey) ed25519.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode([]byte(key.PublicPEM))
+	if block == nil {
+		t.Fatal("the public PEM does not decode")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub.(ed25519.PublicKey)
+}
+
+// TestExportSignsWithTheKeyItStartedWith regenerates the key while the
+// downloads run: the export must still sign with the key it began with.
+func TestExportSignsWithTheKeyItStartedWith(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+
+	before := h.store.SigningKey()
+	var once sync.Once
+	h.onFetch = func() {
+		once.Do(func() {
+			if _, err := h.store.RegenerateSigningKey(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if h.store.SigningKey().PublicKeySHA256 == before.PublicKeySHA256 {
+		t.Fatal("the key was not regenerated during the export, the test proves nothing")
+	}
+	assertSigned(t, exportDir, before)
+}
+
+func TestExportFailsWhenTheManifestCannotBeSigned(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	// A directory where the signature belongs makes its write fail.
+	if err := os.MkdirAll(filepath.Join(exportDir, archive.SignatureFile, "blocker"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+
+	var steps []string
+	emit := func(e Event) {
+		if e.Kind == "step" {
+			steps = append(steps, string(e.Data))
+		}
+	}
+	if err := exp.Run(context.Background(), emit); err == nil {
+		t.Fatal("Run succeeded with no signature written")
+	}
+	assertExportFailedStatus(t, exportDir, "reports", "manifest.json.sig")
+	entries, err := os.ReadDir(exportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "status.json" {
+		t.Errorf("a failed export keeps %v, want status.json alone", entries)
+	}
+	if !strings.Contains(strings.Join(steps, "\n"), `"reports"`) {
+		t.Errorf("no step event named the reports step: %v", steps)
+	}
+}
+
+func TestExportFilesNeverHoldThePrivateKey(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, true)
+	var events []string
+	var mu sync.Mutex
+	emit := func(e Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, string(e.Data))
+	}
+	if err := exp.Run(context.Background(), emit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(h.root, "private", "signing-key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(data)
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := parsed.(ed25519.PrivateKey).Seed()
+	needles := [][]byte{seed, []byte(hex.EncodeToString(seed)), []byte(base64.StdEncoding.EncodeToString(seed)), block.Bytes, []byte("PRIVATE KEY")}
+
+	check := func(where string, content []byte) {
+		for _, n := range needles {
+			if bytes.Contains(content, n) {
+				t.Errorf("%s holds the private key (%d-byte form)", where, len(n))
+			}
+		}
+	}
+	files, err := os.ReadDir(exportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		content, err := os.ReadFile(filepath.Join(exportDir, f.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		check(f.Name(), content)
+		if f.Name() == "packages_npm.tar.gz" {
+			for name, body := range readArchive(t, content) {
+				check("archive entry "+name, []byte(body))
+			}
+		}
+	}
+	check("the events", []byte(strings.Join(events, "\n")))
 }
 
 func TestExportRunRefusesEmptySignatureKey(t *testing.T) {

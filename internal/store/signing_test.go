@@ -370,3 +370,85 @@ func mustECDSAPKCS8(t *testing.T) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
+
+func publicKeyOf(t *testing.T, k SigningKey) ed25519.PublicKey {
+	t.Helper()
+	block, _ := pem.Decode([]byte(k.PublicPEM))
+	if block == nil {
+		t.Fatal("the public PEM does not decode")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.(ed25519.PublicKey)
+}
+
+func TestSignManifest(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := s.SigningKey()
+	manifest := []byte("{\n  \"formatVersion\": 1\n}")
+	file, err := key.SignManifest(manifest)
+	if err != nil {
+		t.Fatalf("SignManifest: %v", err)
+	}
+	if err := archive.CheckSignature(manifest, file, publicKeyOf(t, key)); err != nil {
+		t.Errorf("the file does not verify with the key's public half: %v", err)
+	}
+	var doc struct {
+		Algorithm       string `json:"algorithm"`
+		PublicKeySha256 string `json:"publicKeySha256"`
+	}
+	if err := json.Unmarshal(file, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Algorithm != "ed25519" || doc.PublicKeySha256 != key.PublicKeySHA256 {
+		t.Errorf("file names %+v, want ed25519 and %s", doc, key.PublicKeySHA256)
+	}
+	for _, leak := range leaks(t, s.root) {
+		if bytes.Contains(file, []byte(leak)) {
+			t.Errorf("the signature file holds %q", leak)
+		}
+	}
+}
+
+func TestSignManifestRefusesAKeyWithNoPrivateHalf(t *testing.T) {
+	if _, err := (SigningKey{}).SignManifest([]byte("x")); err == nil {
+		t.Fatal("a zero SigningKey signed")
+	}
+}
+
+func TestWriteFile(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.json.sig")
+	for _, content := range []string{"first", "second"} {
+		if err := s.WriteFile(path, []byte(content)); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != content {
+			t.Fatalf("file = %q, %v, want %q", got, err, content)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o664 {
+		t.Errorf("mode = %v, want 0664", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d entries after the writes, want only the file", len(entries))
+	}
+}

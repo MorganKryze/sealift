@@ -130,6 +130,9 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	if e.Settings.SignatureKey == "" {
 		return ErrSignatureKeyMissing
 	}
+	// One key signs the whole export: a regenerate while it runs must not
+	// split the archive's manifest and the signature across two keys.
+	key := e.Store.SigningKey()
 
 	pkgs, err := e.packageList(record)
 	if err != nil {
@@ -147,7 +150,7 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := e.writeReports(ctx, record, shipped, arch); err != nil {
+	if err := e.writeReports(ctx, record, shipped, arch, key); err != nil {
 		return err
 	}
 	if err := e.pruneWorkingFiles(); err != nil {
@@ -163,7 +166,12 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 // and finalizePending already treats a directory this leaves empty (every
 // removal failed) as one to discard.
 func (e *Export) failed(ctx context.Context, steps []stepRecord) {
-	for _, name := range []string{"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz"} {
+	// Every deliverable goes, not only the archive: a failed export offers
+	// no file for download, whatever step it failed at.
+	for _, name := range []string{
+		"downloads", "stripped", "export.cdx-input.json", "packages_npm.tar.gz",
+		"manifest.json", archive.SignatureFile, "report.trivy.json", "report.cdx.json", "findings.csv", "summary.md",
+	} {
 		if rerr := os.RemoveAll(filepath.Join(e.Dir, name)); rerr != nil {
 			slog.Warn("jobs: export cleanup after failure", "path", name, "error", rerr)
 		}
@@ -549,9 +557,9 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 	}, nil
 }
 
-// writeArchive builds packages_npm.tar.gz, with out/signature.key holding
-// the configured key and no trailing newline. The same selection always
-// gives the same archive bytes.
+// writeArchive builds packages_npm.tar.gz from the package tarballs alone.
+// The same selection always gives the same archive bytes, whatever key signs
+// the manifest.
 // archive.WriteTarGz calls each Entry's Open exactly once, in order, so
 // checking ctx there is how this checks it between entries: WriteTarGz
 // itself takes no context.
@@ -559,7 +567,7 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	start := time.Now()
 	emitStep(emit, "archive", store.Running, 0)
 
-	entries := make([]archive.Entry, 0, len(shipped)+1)
+	entries := make([]archive.Entry, 0, len(shipped))
 	for _, s := range shipped {
 		path := s.Path
 		entries = append(entries, archive.Entry{
@@ -573,17 +581,6 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 			},
 		})
 	}
-	key := e.Settings.SignatureKey
-	entries = append(entries, archive.Entry{
-		Name: "signature.key",
-		Size: int64(len(key)),
-		Open: func() (io.ReadCloser, error) {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			return io.NopCloser(strings.NewReader(key)), nil
-		},
-	})
 
 	path := filepath.Join(e.Dir, "packages_npm.tar.gz")
 	f, err := os.Create(path)
@@ -612,13 +609,14 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	return report.ArchiveManifest{SHA256: hex.EncodeToString(sum.Sum(nil)), Size: st.Size()}, nil
 }
 
-// writeReports is step 5: manifest.json, report.trivy.json, report.cdx.json,
-// findings.csv and summary.md, all written next to the archive.
-func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []shippedPackage, arch report.ArchiveManifest) error {
+// writeReports is step 5: manifest.json and its signature, report.trivy.json,
+// report.cdx.json, findings.csv and summary.md, all written next to the
+// archive.
+func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey) error {
 	start := time.Now()
 	emitStep(emit, "reports", store.Running, 0)
 
-	if err := e.writeManifest(shipped, arch); err != nil {
+	if err := e.writeManifest(shipped, arch, key); err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
@@ -638,7 +636,9 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 	return nil
 }
 
-func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest) error {
+// writeManifest marshals the manifest once, signs those bytes and writes
+// the same bytes, so the signature covers exactly what a reader finds.
+func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey) error {
 	entries := make([]report.PackageEntry, len(shipped))
 	for i, s := range shipped {
 		entries[i] = report.PackageEntry{
@@ -655,7 +655,21 @@ func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveMani
 		Archive:       arch,
 		Packages:      entries,
 	}
-	return e.Store.WriteJSON(filepath.Join(e.Dir, "manifest.json"), m)
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("jobs: encode manifest.json: %w", err)
+	}
+	sig, err := key.SignManifest(data)
+	if err != nil {
+		return fmt.Errorf("jobs: sign manifest.json: %w", err)
+	}
+	if err := e.Store.WriteFile(filepath.Join(e.Dir, "manifest.json"), data); err != nil {
+		return fmt.Errorf("jobs: write manifest.json: %w", err)
+	}
+	if err := e.Store.WriteFile(filepath.Join(e.Dir, archive.SignatureFile), sig); err != nil {
+		return fmt.Errorf("jobs: write %s: %w", archive.SignatureFile, err)
+	}
+	return nil
 }
 
 // writeTrivyReports scans the exported set as its own CycloneDX document,
