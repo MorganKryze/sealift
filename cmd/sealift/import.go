@@ -69,16 +69,17 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	// A missing signature is a refusal of the archive, not a usage error, so
 	// it is not opened here.
-	if *reportPath != "" {
-		for _, in := range []struct{ what, path string }{{"archive", archivePath}, {"manifest", *manifestPath}, {"signature", *signaturePath}} {
-			if sameFile(*reportPath, in.path) {
-				return usage("-report names the %s: give the report its own file", in.what)
-			}
-		}
-	}
 	settings, err := importer.LoadSettings(*settingsPath)
 	if err != nil {
 		return usage("%v", err)
+	}
+	if *reportPath != "" {
+		guarded := []importer.NamedFile{{Field: "the archive", Path: archivePath}, {Field: "the manifest", Path: *manifestPath}, {Field: "the signature", Path: *signaturePath}}
+		for _, in := range append(guarded, settings.Files...) {
+			if sameFile(*reportPath, in.Path) {
+				return usage("-report names %s: give the report its own file", in.Field)
+			}
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)

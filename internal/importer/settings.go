@@ -64,7 +64,13 @@ type Settings struct {
 	Token *TokenSettings
 	// MinIO is the store the import service lists; nil when the file has no minio section.
 	MinIO *MinIOSettings
+	// Files names the settings file and every file it points to, as the
+	// field that names each: a command must not write over any of them.
+	Files []NamedFile
 }
+
+// NamedFile is a path and the settings field that names it.
+type NamedFile struct{ Field, Path string }
 
 // MinIOSettings name the MinIO endpoint the import service reads and the service key it signs with.
 type MinIOSettings struct {
@@ -165,6 +171,7 @@ func LoadSettings(path string) (Settings, error) {
 		return Settings{}, err
 	}
 	s := Settings{
+		Files:    []NamedFile{{"the settings file", path}, {"nexus.passwordFile", resolve(dir, raw.Nexus.PasswordFile)}, {"publicKeyFile", resolve(dir, raw.PublicKeyFile)}},
 		NexusURL: u, Repository: raw.Nexus.Repository, User: raw.Nexus.User, Password: password,
 		PublicKey: key, PublicKeySHA256: archive.PublicKeySHA256(key),
 	}
@@ -172,6 +179,7 @@ func LoadSettings(path string) (Settings, error) {
 		if s.CAFile, err = certFile("nexus.caFile", dir, raw.Nexus.CAFile); err != nil {
 			return Settings{}, err
 		}
+		s.Files = append(s.Files, NamedFile{"nexus.caFile", s.CAFile})
 	}
 	if raw.Token != nil {
 		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile); err != nil {
@@ -182,6 +190,15 @@ func LoadSettings(path string) (Settings, error) {
 		m := raw.MinIO
 		if s.MinIO, err = loadMinIO(dir, m.URL, m.Region, m.AccessKeyFile, m.SecretKeyFile, m.CAFile); err != nil {
 			return Settings{}, err
+		}
+	}
+	if s.Token != nil && s.Token.CAFile != "" {
+		s.Files = append(s.Files, NamedFile{"token.caFile", s.Token.CAFile})
+	}
+	if s.MinIO != nil {
+		s.Files = append(s.Files, NamedFile{"minio.accessKeyFile", resolve(dir, raw.MinIO.AccessKeyFile)}, NamedFile{"minio.secretKeyFile", resolve(dir, raw.MinIO.SecretKeyFile)})
+		if s.MinIO.CAFile != "" {
+			s.Files = append(s.Files, NamedFile{"minio.caFile", s.MinIO.CAFile})
 		}
 	}
 	return s, nil

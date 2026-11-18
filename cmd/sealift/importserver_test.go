@@ -259,7 +259,7 @@ func TestImportServerTakesNoAuthSwitch(t *testing.T) {
 		}
 	}
 	want := []string{
-		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.PublicKey", "Settings.PublicKeySHA256", "Settings.Token", "Settings.MinIO",
+		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.PublicKey", "Settings.PublicKeySHA256", "Settings.Token", "Settings.MinIO", "Settings.Files",
 		"TokenSettings.KeySetURL", "TokenSettings.Issuer", "TokenSettings.Audience", "TokenSettings.CAFile",
 	}
 	if !slices.Equal(fields, want) {

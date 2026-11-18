@@ -406,6 +406,23 @@ func TestImportExitCodes(t *testing.T) {
 		"report named like the signature": {func(f importFixture) []string {
 			return []string{"-settings", f.settings, "-report", f.signature, f.archive}
 		}, 2, false, "-report names the signature"},
+		"report named like the settings": {func(f importFixture) []string {
+			return []string{"-settings", f.settings, "-report", f.settings, f.archive}
+		}, 2, false, "-report names the settings file"},
+		"report named like the public key": {func(f importFixture) []string {
+			return []string{"-settings", f.settings, "-report", filepath.Join(f.dir, "public-key.pem"), f.archive}
+		}, 2, false, "-report names publicKeyFile"},
+		"report named like the password file": {func(f importFixture) []string {
+			return []string{"-settings", f.settings, "-report", filepath.Join(f.dir, "nexus-password"), f.archive}
+		}, 2, false, "-report names nexus.passwordFile"},
+		"report named like the CA file": {func(f importFixture) []string {
+			ca := filepath.Join(f.dir, "ca.pem")
+			_ = os.WriteFile(ca, []byte("ca"), 0o600)
+			b, _ := os.ReadFile(f.settings)
+			s := strings.Replace(string(b), "  passwordFile: nexus-password\n", "  passwordFile: nexus-password\n  caFile: ca.pem\n", 1)
+			_ = os.WriteFile(f.settings, []byte(s), 0o600)
+			return []string{"-settings", f.settings, "-report", ca, f.archive}
+		}, 2, false, "-report names nexus.caFile"},
 		"report reaching the archive through a link": {func(f importFixture) []string {
 			link := filepath.Join(f.dir, "link.json")
 			if err := os.Symlink(f.archive, link); err != nil {
