@@ -105,8 +105,8 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	// Every match is read, newest first: records made in one second have no
 	// reliable order, so a refused import must not hide an unfinished one.
 	for _, imp := range existing {
-		// A replaced manifest makes another import: a refusal for it must not block the objects now in MinIO.
-		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag {
+		// A replaced manifest or signature makes another import: a refusal for it must not block the objects now in MinIO.
+		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag || sigOf(imp).ETag != signature.ETag {
 			continue
 		}
 		switch imp.Outcome() {
@@ -234,6 +234,21 @@ func sigOf(imp imports.Import) imports.Object {
 	return *imp.Signature
 }
 
+type recordedObject struct {
+	what string
+	obj  imports.Object
+}
+
+// recorded lists an import's objects in the order they are checked and
+// removed. A record of sealift 0.4 has no signature to list.
+func recorded(imp imports.Import) []recordedObject {
+	out := []recordedObject{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}}
+	if sig := sigOf(imp); sig.Key != "" {
+		out = append(out, recordedObject{"the signature", sig})
+	}
+	return out
+}
+
 // stopping answers 503 for work the closed queue will not run, after ending
 // its attempt so no record waits for a restart's sweep.
 func (h *Handlers) stopping(user, id string) problem {
@@ -302,23 +317,22 @@ func (h *Handlers) stopped(imp imports.Import, outcome, reason string) importer.
 	return importer.Report{
 		Outcome: outcome, Reason: reason,
 		Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
-		Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
-		Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
-		Packages: []importer.Result{},
+		Archive: importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
+		// The trusted key's name, though no signature was checked.
+		PublicKeySHA256: h.settings.PublicKeySHA256,
+		Nexus:           importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
+		Packages:        []importer.Result{},
 		// No object was read, so no check ran.
 		ArchiveChecked: &unchecked,
 	}
 }
 
-// unchanged heads both objects and compares their ETags with those recorded.
+// unchanged heads the archive, the manifest and the signature and compares their ETags with those recorded.
 // It returns the report of an attempt that must not go on, or nil.
 func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Import) *importer.Report {
 	ctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
 	defer cancel()
-	for _, o := range []struct {
-		what string
-		obj  imports.Object
-	}{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}} {
+	for _, o := range recorded(imp) {
 		got, err := h.objects.Head(ctx, bucket, o.obj.Key)
 		if err == nil && got.ETag == o.obj.ETag {
 			continue
@@ -343,10 +357,10 @@ func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Imp
 	return nil
 }
 
-// RunAttempt runs one attempt of imp: it checks both objects against the
+// RunAttempt runs one attempt of imp: it checks the three objects against the
 // recorded ETags, reads them from the user's bucket and imports them as
-// `sealift import` does. A complete attempt then removes the archive and its
-// manifest from MinIO, when both are unchanged; it returns that removal as a
+// `sealift import` does. A complete attempt then removes the archive, its
+// manifest and its signature from MinIO, when all are unchanged; it returns that removal as a
 // function for the queue to call once the end is stored. It keeps its files in a
 // directory of its own below dir and removes it.
 func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {

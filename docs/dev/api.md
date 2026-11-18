@@ -185,17 +185,18 @@ Request headers get 10 seconds to arrive and are capped at 64 KiB.
 
 ### Listing archives
 
-`GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest.
+`GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest and no signature.
 
-The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key made from the archive and manifest now in MinIO. An import counts only when the ETags of both match, so an upload that replaces the archive or its manifest under the same name shows no `latestImport` until it is imported.
+The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key made from the archive, manifest and signature now in MinIO. An import counts only when the ETags of all three match, so an upload that replaces the archive, its manifest or its signature under the same name shows no `latestImport` until it is imported.
 
-An archive pairs with the `manifest.json` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive nor a `manifest.json`.
+An archive pairs with the `manifest.json` and the `manifest.json.sig` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive, a `manifest.json` nor a `manifest.json.sig`.
 
 | Reason | When |
 | --- | --- |
 | `its name cannot be imported` | The key is not under `packages/npm/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment (also once percent-decoded), holds a control character, is not UTF-8 or is over 1,024 bytes. |
 | `the folder holds more than one archive` | Its folder holds two or more archives. Each one is listed with this reason. |
 | `no manifest.json in its folder` | Its folder holds no `manifest.json`. |
+| `no manifest.json.sig in its folder` | Its folder holds a `manifest.json` and no `manifest.json.sig`. |
 
 | Case | Answer |
 | --- | --- |
@@ -210,7 +211,7 @@ An archive pairs with the `manifest.json` in its own folder, at the root of `pac
 
 `POST /api/imports` takes `{"archive": "<key>", "expectedSha256": "<hex>"}`. `expectedSha256` is optional: 64 hex digits received through another channel, and a different archive is refused. A malformed value answers 400 and creates nothing.
 
-The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive and its manifest, and records both ETags and sizes. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
+The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive, its manifest and its signature, and records the key, the ETag and the size of each. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
 
 The service reads every earlier import of the same objects, not only the newest, and answers 409 for the first one it finds that is queued, running, `incomplete` or `interrupted`. A `complete` import and a `refused` one do not block a new start. A refused latest attempt published nothing and removed nothing, so starting again, with a corrected `expectedSha256` or none, is the way out of a mistyped digest. An earlier attempt of the same import may have published packages: the new import finds them present. The refused import keeps its attempts and its outcome, and the list then holds both.
 
@@ -221,25 +222,25 @@ A `POST` is refused with 403, and nothing changes, when its `Origin` is not the 
 | 202 | The import is recorded and queued. |
 | 400 | The body cannot be read, or `expectedSha256` is not 64 hex digits. |
 | 404 | The key is not an archive in the user's folder. |
-| 409 | The archive and its manifest, with the same key and ETag each, already have an import that is queued, running, `incomplete` or `interrupted`: `importId` names it. Also when the settings file has no `minio` section. |
+| 409 | The archive, its manifest and its signature, with the same ETag each, already have an import that is queued, running, `incomplete` or `interrupted`: `importId` names it. Also when the settings file has no `minio` section. |
 | 502 | MinIO failed to list or describe the archive. |
 
 ### Following an import
 
 Imports run one at a time across all users, the first started first. The queue owns an attempt's start and its end. The run writes only the state of each package, as soon as that package ends, so a reader of `GET /api/imports/{importId}` sees the packages move from `pending` to `published`, `present` or `failed` while the attempt is `running`. Another user's id, a missing id and a malformed id all answer 404 with the same body.
 
-An import gives `id`, `createdAt`, the `archive` and `manifest` objects (`key`, `etag`, `size`), `expectedSha256`, `outcome`, `archiveRemoved` and its `attempts`. `outcome` is the latest attempt's: `queued`, `running`, `complete`, `incomplete`, `refused` or `interrupted`. Each attempt has its `status` (`queued`, `running` or `ended`), its times, its `outcome` and the same `report` that `sealift import -report` writes. `archiveRemoved` is true once an attempt has removed the archive from MinIO (see [Removing the archive](#removing-the-archive)).
+An import gives `id`, `createdAt`, the `archive`, `manifest` and `signature` objects (`key`, `etag`, `size`; `signature` is absent from an import recorded by sealift 0.4), `expectedSha256`, `outcome`, `archiveRemoved` and its `attempts`. `outcome` is the latest attempt's: `queued`, `running`, `complete`, `incomplete`, `refused` or `interrupted`. Each attempt has its `status` (`queued`, `running` or `ended`), its times, its `outcome` and the same `report` that `sealift import -report` writes. `archiveRemoved` is true once an attempt has removed the archive from MinIO (see [Removing the archive](#removing-the-archive)).
 
 | Outcome | Meaning |
 | --- | --- |
 | `complete` | Every package was published or read back from Nexus with the shipped bytes. |
 | `incomplete` | At least one package failed, or the service could not finish reading the archive from MinIO. A read that stops partway fails every package of the manifest with that reason and is never a refusal. |
-| `refused` | A check failed, or the archive or its manifest changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`, reading `the manifest` for `the archive` when the manifest moved). This attempt published nothing. |
+| `refused` | A check failed, or the archive, its manifest or its signature changed in MinIO since the import was created (`the archive changed in MinIO; start a new import`, reading `the manifest` or `the signature` for `the archive` when that object moved). This attempt published nothing. |
 | `interrupted` | The service stopped, or restarted, before the attempt ended. |
 
-An attempt reads the manifest and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.
+An attempt reads the manifest, the signature and the archive from MinIO once each, on condition that each still has the ETag recorded at the start. Its working files sit in a private directory below the import's own and are removed when the attempt ends, whatever the outcome. A read waits at most 60 seconds for the next bytes, and a list or a description at most 30 seconds. The token is checked when a request arrives and not again: an attempt that started goes on after the token's expiry.
 
-Before it reads anything, each attempt, the first included, heads the archive and the manifest and compares their ETags with the ones recorded. A difference ends the attempt `refused` with the reason above and publishes nothing; an object that is gone or cannot be described ends it `incomplete`.
+Before it reads anything, each attempt, the first included, heads the archive, the manifest and the signature and compares their ETags with the ones recorded. A difference ends the attempt `refused` with the reason above and publishes nothing; an object that is gone or cannot be described ends it `incomplete` (`the signature is no longer in MinIO` for the signature). An import recorded by sealift 0.4 holds no signature, so its attempt heads two objects and then ends `refused` as unsigned.
 
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
 
@@ -251,7 +252,7 @@ While an attempt runs, its report grows in two steps. Before the manifest is rea
 
 `POST /api/imports/{importId}/retry` takes the body `{}` and adds a queued attempt numbered one past the latest. It is accepted whatever the last outcome was, a `complete` import whose archive was kept included, while no attempt is queued or running and the archive is still in MinIO. The earlier attempts and their reports stay as they are. The cross-site rules of [Starting an import](#starting-an-import) apply.
 
-A retry carries nothing over. It reads the manifest and the archive again, repeats every check, and reads every package from Nexus again, the ones an earlier attempt published or found included. It uploads only the packages that Nexus no longer serves with the shipped bytes, and it ends `complete` only when each package was read back in that attempt.
+A retry carries nothing over. It reads the manifest, the signature and the archive again, repeats every check (the signature is verified again, with the key the service trusts at that moment), and reads every package from Nexus again, the ones an earlier attempt published or found included. It uploads only the packages that Nexus no longer serves with the shipped bytes, and it ends `complete` only when each package was read back in that attempt.
 
 | Status | When |
 | --- | --- |
@@ -261,20 +262,21 @@ A retry carries nothing over. It reads the manifest and the archive again, repea
 | 502 | MinIO failed to describe the archive. |
 | 503 | The service is stopping. The attempt is recorded as `interrupted`. |
 
-An archive or manifest replaced since the import was created is not a 409: the attempt runs and ends `refused`, so the change stays on record.
+An archive, manifest or signature replaced since the import was created is not a 409: the attempt runs and ends `refused`, so the change stays on record.
 
 ### Removing the archive
 
-When an attempt ends `complete`, the service removes the archive and then its manifest from the user's folder. It does so only if every package of that attempt was published or read back from Nexus, and only after it heads both objects again and finds the ETags recorded at the start. The import and every report stay on the data volume.
+When an attempt ends `complete`, the service removes the archive, then its manifest, then its signature from the user's folder. It does so only if every package of that attempt was published or read back from Nexus, and only after it heads all three objects again and finds the ETags recorded at the start. An import recorded by sealift 0.4 has no signature to remove. The import and every report stay on the data volume.
 
 The attempt's `removal` holds `removed` and a `reason`, and `archiveRemoved` on the import is true when any attempt removed the archive.
 
 | Case | `removed` | `reason` |
 | --- | --- | --- |
-| Both objects went | true | empty |
+| All three objects went | true | empty |
 | An object has another ETag, is gone, or could not be described | false | names the object and says nothing was removed |
-| The archive could not be deleted | false | `could not remove the archive: ...`; the manifest is kept too |
+| The archive could not be deleted | false | `could not remove the archive: ...`; the manifest and the signature are kept too |
 | The archive went, the manifest could not be deleted | true | says the manifest stays in the folder |
+| The archive and the manifest went, the signature could not be deleted | true | `the archive and the manifest were removed, but manifest.json.sig could not be and stays in the folder: ...` |
 
 An `incomplete`, `refused` or `interrupted` attempt deletes nothing, and a failed removal leaves the import `complete`. A retry after a failed removal checks every package again before it tries to remove anything.
 

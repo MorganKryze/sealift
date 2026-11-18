@@ -165,6 +165,31 @@ func TestAttemptChangedObjectIsRefused(t *testing.T) {
 	}
 }
 
+func TestAttemptRefusesAChangedSignature(t *testing.T) {
+	const want = "the signature changed in MinIO; start a new import"
+	for name, setup := range map[string]func(a *attemptRig){
+		"replaced after the start": func(a *attemptRig) { a.minio.change(signatureKey) },
+		"a 200 with another ETag on the read": func(a *attemptRig) {
+			a.minio.serveETag[dataKey(bucketAlice, signatureKey)] = `"another"`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newAttemptRig(t)
+			setup(a)
+			rep, rem, _ := a.run(t)
+			if rep.Outcome != importer.OutcomeRefused || rep.Reason != want {
+				t.Fatalf("outcome %q, reason %q; want refused with %q", rep.Outcome, rep.Reason, want)
+			}
+			if rep.PublicKeySHA256 != archive.PublicKeySHA256(testPub) {
+				t.Errorf("report key %q, want the trusted %q", rep.PublicKeySHA256, archive.PublicKeySHA256(testPub))
+			}
+			if a.nexus.uploadCount() != 0 || rem != nil {
+				t.Errorf("a changed signature let through %d uploads or a removal %+v", a.nexus.uploadCount(), rem)
+			}
+		})
+	}
+}
+
 func TestServiceSignatureRefusals(t *testing.T) {
 	other, otherPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

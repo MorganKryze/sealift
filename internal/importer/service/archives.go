@@ -210,9 +210,10 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest
-// import of the objects now in MinIO: the same archive and manifest keys with
-// the same ETags. Folders reuse their names from one export to the next, so an
-// import of an earlier upload must not stand for this one. A store that cannot
+// import of the objects now in MinIO: the same archive key with the same
+// archive, manifest and signature ETags. Folders reuse their names from one
+// export to the next, so an import of an earlier upload must not stand for
+// this one. A store that cannot
 // be read leaves the list as it is.
 func (h *Handlers) addLatestImports(user string, archives []Archive, listed []s3.Object) {
 	if h.store == nil {
@@ -227,16 +228,16 @@ func (h *Handlers) addLatestImports(user string, archives []Archive, listed []s3
 	for _, o := range listed {
 		etags[o.Key] = o.ETag
 	}
-	type objects struct{ archive, manifest, key string }
+	type objects struct{ archive, manifest, signature, key string }
 	latest := map[objects]LatestImport{}
 	for i := len(imps) - 1; i >= 0; i-- { // oldest first, so the newest wins
 		imp := imps[i]
-		at := objects{imp.Archive.ETag, imp.Manifest.ETag, imp.Archive.Key}
+		at := objects{imp.Archive.ETag, imp.Manifest.ETag, sigOf(imp).ETag, imp.Archive.Key}
 		latest[at] = LatestImport{Id: imp.ID, Outcome: imp.Outcome()}
 	}
 	for i := range archives {
 		key := archives[i].Key
-		at := objects{etags[key], etags[path.Dir(key)+"/"+manifestName], key}
+		at := objects{etags[key], etags[path.Dir(key)+"/"+manifestName], etags[path.Dir(key)+"/"+signatureName], key}
 		if li, ok := latest[at]; ok {
 			archives[i].LatestImport = &li
 		}

@@ -897,3 +897,49 @@ func TestImportReportKindsReachTheAPI(t *testing.T) {
 		})
 	}
 }
+
+func TestStartCountsTheSignatureETag(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	b := buildBundle(t, leftPad)
+	r.seed(archiveKey, manifestKey, b)
+	r.minio.cut[dataKey(bucketAlice, archiveKey)] = len(b.archive) / 2
+	first := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+	if done := waitEnded(t, r.store, first.Id); done.Outcome() != importer.OutcomeIncomplete {
+		t.Fatalf("setup: outcome %q", done.Outcome())
+	}
+
+	rec := r.start("t", archiveKey)
+	var c ImportConflict
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &c) != nil || c.ImportId == nil || *c.ImportId != first.Id {
+		t.Fatalf("the same three ETags answered %d %s, want 409 naming %s", rec.Code, rec.Body, first.Id)
+	}
+
+	r.minio.change(signatureKey)
+	second := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+	if second.Id == first.Id {
+		t.Error("the new start reused the first import")
+	}
+	waitEnded(t, r.store, second.Id)
+}
+
+func TestLatestImportFollowsTheSignature(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+	r.minio.failDelete[archiveKey] = errors.New("kept for the listing")
+	first := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+	waitEnded(t, r.store, first)
+	if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li == nil || li.Id != first {
+		t.Fatalf("latestImport = %+v, want %s", li, first)
+	}
+
+	r.minio.change(signatureKey)
+	if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li != nil {
+		t.Errorf("latestImport = %+v after the signature was replaced, want none", li)
+	}
+
+	second := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+	waitEnded(t, r.store, second)
+	if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li == nil || li.Id != second {
+		t.Errorf("latestImport = %+v, want the new import %s", li, second)
+	}
+}

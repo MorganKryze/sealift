@@ -1,14 +1,19 @@
 package service
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
@@ -282,10 +287,10 @@ func TestCompleteRemovesBoth(t *testing.T) {
 	if done.Outcome() != importer.OutcomeComplete {
 		t.Fatalf("outcome %q (%s)", done.Outcome(), done.Attempts[0].Report.Reason)
 	}
-	if d := r.deletes(); len(d) != 2 || d[0] != archiveKey || d[1] != manifestKey {
-		t.Fatalf("deletes = %v, want the archive then the manifest", d)
+	if d := r.deletes(); len(d) != 3 || d[0] != archiveKey || d[1] != manifestKey || d[2] != signatureKey {
+		t.Fatalf("deletes = %v, want the archive, the manifest, then the signature", d)
 	}
-	// Both objects are headed after the last read and before the first delete.
+	// All three objects are headed after the last read and before the first delete.
 	calls := r.minio.recorded()
 	firstDelete, heads := -1, map[string]bool{}
 	lastGet := -1
@@ -303,14 +308,17 @@ func TestCompleteRemovesBoth(t *testing.T) {
 			}
 		}
 	}
-	if !heads[archiveKey] || !heads[manifestKey] {
-		t.Errorf("the objects were not both headed between the read and the delete: %v", heads)
+	if !heads[archiveKey] || !heads[manifestKey] || !heads[signatureKey] {
+		t.Errorf("the objects were not all headed between the read and the delete: %v", heads)
 	}
 	if _, ok := r.minio.buckets[bucketAlice][archiveKey]; ok {
 		t.Error("the archive is still in MinIO")
 	}
 	if _, ok := r.minio.buckets[bucketAlice][manifestKey]; ok {
 		t.Error("the manifest is still in MinIO")
+	}
+	if _, ok := r.minio.buckets[bucketAlice][signatureKey]; ok {
+		t.Error("the signature is still in MinIO")
 	}
 	got := importOf(t, r.get("/api/imports/"+id, "t"), http.StatusOK)
 	a := got.Attempts[0]
@@ -567,5 +575,150 @@ func TestStartAndRetryAfterShutdown(t *testing.T) {
 	r.seed(otherKey, otherMan, buildBundle(t, leftPad))
 	if rec = r.start("t", otherKey); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("start: status = %d, want 503; body %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRemovalTakesThreeObjects(t *testing.T) {
+	t.Run("the order is archive, manifest, signature", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		done := waitEnded(t, r.store, importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id)
+		if rem := done.Attempts[0].Removal; rem == nil || !rem.Removed || rem.Reason != "" {
+			t.Fatalf("removal = %+v", rem)
+		}
+		if d := r.deletes(); strings.Join(d, " ") != strings.Join([]string{archiveKey, manifestKey, signatureKey}, " ") {
+			t.Errorf("deletes = %v", d)
+		}
+	})
+	for _, tt := range []struct {
+		name   string
+		act    func(r *importRig)
+		reason string
+	}{
+		{"the signature changed during the attempt", func(r *importRig) { r.minio.change(signatureKey) },
+			"the signature changed in MinIO after the import read it; nothing was removed"},
+		{"the signature went during the attempt", func(r *importRig) { r.minio.vanish(signatureKey) },
+			"the signature is no longer in MinIO; nothing was removed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newImportRig(t, rigOptions{})
+			r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+			r.minio.hook = func(op, key string) {
+				if op == "get" && key == archiveKey {
+					tt.act(r)
+				}
+			}
+			done := waitEnded(t, r.store, importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id)
+			a := done.Attempts[0]
+			if a.Outcome != importer.OutcomeComplete || a.Removal == nil || a.Removal.Removed || a.Removal.Reason != tt.reason {
+				t.Fatalf("outcome %q, removal %+v; want complete, kept, reason %q", a.Outcome, a.Removal, tt.reason)
+			}
+			if d := r.deletes(); len(d) != 0 {
+				t.Errorf("deletes %v on a changed signature", d)
+			}
+		})
+	}
+}
+
+func TestRemovalKeepsAStuckSignature(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+	r.minio.failDelete[signatureKey] = errors.New("storage busy")
+	id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+	done := waitEnded(t, r.store, id)
+	want := "the archive and the manifest were removed, but manifest.json.sig could not be and stays in the folder: MinIO could not be reached"
+	if rem := done.Attempts[0].Removal; rem == nil || !rem.Removed || rem.Reason != want {
+		t.Fatalf("removal = %+v, want removed with %q", rem, want)
+	}
+	if !done.ArchiveRemoved() {
+		t.Error("archiveRemoved is false though the archive went")
+	}
+	if _, ok := r.minio.buckets[bucketAlice][signatureKey]; !ok {
+		t.Error("the signature is gone although its delete failed")
+	}
+	for _, k := range []string{archiveKey, manifestKey} {
+		if _, ok := r.minio.buckets[bucketAlice][k]; ok {
+			t.Errorf("%s is still in MinIO", k)
+		}
+	}
+}
+
+func TestRetryChecksTheSignatureAgain(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	b := buildBundle(t, leftPad)
+	r.seed(archiveKey, manifestKey, b)
+	r.minio.cut[dataKey(bucketAlice, archiveKey)] = len(b.archive) / 2
+	id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+	if first := waitEnded(t, r.store, id); first.Outcome() != importer.OutcomeIncomplete {
+		t.Fatalf("setup: outcome %q (%s)", first.Outcome(), first.Attempts[0].Report.Reason)
+	}
+	delete(r.minio.cut, dataKey(bucketAlice, archiveKey))
+
+	other, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.handlers.settings.PublicKey, r.handlers.settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+	importOf(t, r.retry("t", id), http.StatusAccepted)
+	a := waitEnded(t, r.store, id).Attempts[1]
+	want := "the manifest is signed by another key, public key sha256 " + archive.PublicKeySHA256(testPub) + "; this import trusts " + archive.PublicKeySHA256(other) + "."
+	if a.Outcome != importer.OutcomeRefused || !strings.Contains(a.Report.Reason, want) {
+		t.Fatalf("attempt 2: outcome %q, reason %q; want refused containing %q", a.Outcome, a.Report.Reason, want)
+	}
+	if a.Report.PublicKeySHA256 != archive.PublicKeySHA256(other) {
+		t.Errorf("report key %q, want the trusted one", a.Report.PublicKeySHA256)
+	}
+	if n := r.nexus.uploadCount(); n != 0 {
+		t.Errorf("%d uploads after a refusal", n)
+	}
+	if d := r.deletes(); len(d) != 0 {
+		t.Errorf("deletes %v after a refusal", d)
+	}
+}
+
+// A record of sealift 0.4 holds no signature: it stays readable and its retry
+// is accepted, then refused as unsigned without a MinIO read or an upload.
+func TestOldImportRetryIsUnsigned(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	const fixtureID = "20261106T110000Z-7c2e55aa"
+	b := buildBundle(t, leftPad)
+	archiveAt, manifestAt := base+"b/packages_npm.tar.gz", base+"b/manifest.json"
+	r.minio.putData(archiveAt, b.archive)
+	r.minio.putData(manifestAt, b.manifest)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "store", "imports", "testdata", "import-v0.4.0-incomplete.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec["archive"].(map[string]any)["etag"] = r.minio.etagOf(archiveAt)
+	rec["manifest"].(map[string]any)["etag"] = r.minio.etagOf(manifestAt)
+	raw, _ = json.Marshal(rec)
+	dir := filepath.Join(r.data, "alice", fixtureID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "import.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := importOf(t, r.get("/api/imports/"+fixtureID, "t"), http.StatusOK)
+	if got.Outcome != importer.OutcomeIncomplete || len(got.Attempts) != 1 {
+		t.Fatalf("the old record reads as %+v", got)
+	}
+	if list := listOfImports(t, r.get("/api/imports", "t")).Imports; len(list) != 1 || list[0].Id != fixtureID {
+		t.Fatalf("the list holds %v, want the old record", ids(list))
+	}
+
+	importOf(t, r.retry("t", fixtureID), http.StatusAccepted)
+	a := waitEnded(t, r.store, fixtureID).Attempts[1]
+	want := archive.Unsigned("manifest.json.sig").Reason
+	if a.Outcome != importer.OutcomeRefused || a.Report.Reason != want {
+		t.Fatalf("attempt 2: outcome %q, reason %q; want refused with %q", a.Outcome, a.Report.Reason, want)
+	}
+	if r.nexus.uploadCount() != 0 || len(r.deletes()) != 0 {
+		t.Errorf("%d uploads, deletes %v: nothing may be published or removed", r.nexus.uploadCount(), r.deletes())
 	}
 }
