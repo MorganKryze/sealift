@@ -135,6 +135,7 @@ describe("SigningKeySection", () => {
 
   it("shows the new key and the notice in place after a regenerate", async () => {
     const dialog = await opened()
+    vi.mocked(getSigningKey).mockResolvedValue(newKey)
     fireEvent.click(within(dialog).getByRole("button", { name: "Regenerate" }))
 
     expect(await screen.findByText("b".repeat(64))).toBeInTheDocument()
@@ -155,6 +156,18 @@ describe("SigningKeySection", () => {
     expect(await screen.findByText("store: write signing key: permission denied")).toBeInTheDocument()
     expect(screen.getByText(SHA)).toBeInTheDocument()
     expect(screen.queryByText(/New key in use/)).toBeNull()
+  })
+
+  it("fetches the key again when the regenerate answer is lost", async () => {
+    vi.mocked(regenerateSigningKey).mockRejectedValue(new TypeError("Failed to fetch"))
+    const dialog = await opened()
+    expect(getSigningKey).toHaveBeenCalledTimes(1)
+    vi.mocked(getSigningKey).mockResolvedValue(newKey)
+    fireEvent.click(within(dialog).getByRole("button", { name: "Regenerate" }))
+
+    expect(await screen.findByText("b".repeat(64))).toBeInTheDocument()
+    expect(screen.queryByText(SHA)).toBeNull()
+    expect(getSigningKey).toHaveBeenCalledTimes(2)
   })
 
   it("names a key that cannot be loaded", async () => {

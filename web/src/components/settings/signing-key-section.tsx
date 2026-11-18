@@ -53,6 +53,8 @@ export function SigningKeySection() {
       close()
     },
     onError: () => close(),
+    // The server may have swapped the key before the answer was lost: read it again.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["signing-key"] }),
   })
 
   useEffect(() => {
