@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,5 +228,70 @@ func TestSubcommand(t *testing.T) {
 				t.Errorf("subcommand(%q) = %q, %q; want %q, %q", tt.args, name, rest, tt.wantName, tt.wantRest)
 			}
 		})
+	}
+}
+
+// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
+// manager: GET /api/tools looks up the latest Trivy release, and the server
+// named by the variable must be the one asked.
+func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
+	asked := make(chan string, 8)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked <- r.URL.Path
+		http.NotFound(w, r)
+	}))
+	defer gh.Close()
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	var resp *http.Response
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err = client.Get("http://" + addr + "/api/tools"); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GET /api/tools never answered: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case path := <-asked:
+		if want := "/repos/aquasecurity/trivy/releases/latest"; path != want {
+			t.Errorf("fake GitHub asked for %q, want %q", path, want)
+		}
+	default:
+		t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
+	}
+
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("run returned %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not return after SIGTERM")
 	}
 }

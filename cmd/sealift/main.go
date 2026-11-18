@@ -69,6 +69,9 @@ func run(addr, root string, log *slog.Logger) error {
 	// enough time without leaving the client unbounded.
 	toolsHTTP := &http.Client{Timeout: 5 * time.Minute}
 	toolsManager := tools.NewManager(st, toolsHTTP, log)
+	// Empty keeps the public GitHub API. The browser gate and mirrors point it
+	// at a local server so a Trivy lookup never leaves the machine.
+	toolsManager.GitHubAPI = os.Getenv("SEALIFT_GITHUB_API")
 	installed, err := toolsManager.InstalledTrivy()
 	if err != nil {
 		return err

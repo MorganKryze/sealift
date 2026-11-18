@@ -100,6 +100,8 @@ To resolve and download packages through an npm mirror, set both variables to it
 
 `SEALIFT_NPM_REGISTRY` is where sealift reads package metadata; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads. The first analysis still downloads pnpm itself from `registry.npmjs.org`, so keep that host open.
 
+`SEALIFT_GITHUB_API` replaces `https://api.github.com` as the place sealift looks up Trivy releases. Leave it unset unless you serve a mirror of that API.
+
 ## The data volume
 
 Everything sealift keeps lives under `/data`:
