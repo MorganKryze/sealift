@@ -2,6 +2,8 @@
 
 Bug reports and ideas are contributions too. The issue templates, [Bug report](https://github.com/MorganKryze/sealift/issues/new?template=bug_report.md) and [Feature idea](https://github.com/MorganKryze/sealift/issues/new?template=feature_idea.md), ask for what a maintainer needs to act on them. For a security problem, follow [SECURITY.md](SECURITY.md) instead.
 
+Before you change code, read the [contributor guide](docs/dev/contributing.md): the repository map, the checks, how a change is made, the design choices to keep and where each kind of change goes. This page is the short version.
+
 ## Requirements
 
 - Go 1.27
