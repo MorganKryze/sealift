@@ -24,7 +24,7 @@ func waitFor[T any](t *testing.T, ch <-chan T, what string) T {
 
 func newImport(t *testing.T, s *Store, user string) Import {
 	t.Helper()
-	imp, err := s.Create(user, testArchiveObject, testManifestObject, "")
+	imp, err := s.Create(user, testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if err != nil {
 		t.Fatal(err)
 	}

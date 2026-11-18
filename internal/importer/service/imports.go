@@ -88,7 +88,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	}
 
 	bucket := bucketOf(user)
-	archive, manifest, refusal := h.checkArchive(ctx, bucket, key)
+	archive, manifest, signature, refusal := h.checkArchive(ctx, bucket, key)
 	if refusal != nil {
 		if refusal.status == 409 {
 			return conflict(*refusal.body.Detail, nil), nil
@@ -116,7 +116,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 			return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 		}
 	}
-	imp, err := h.store.Create(user, archive, manifest, expected)
+	imp, err := h.store.Create(user, archive, manifest, &signature, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -131,10 +131,11 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 }
 
 // checkArchive confirms that the key is an importable archive in the user's
-// folder and returns it and its manifest as MinIO describes them now.
-func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archive, manifest imports.Object, refusal *problem) {
-	fail := func(p problem) (imports.Object, imports.Object, *problem) {
-		return imports.Object{}, imports.Object{}, &p
+// folder and returns it, its manifest and the manifest's signature as MinIO
+// describes them now.
+func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archive, manifest, signature imports.Object, refusal *problem) {
+	fail := func(p problem) (imports.Object, imports.Object, imports.Object, *problem) {
+		return imports.Object{}, imports.Object{}, imports.Object{}, &p
 	}
 	ctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
 	defer cancel()
@@ -159,9 +160,8 @@ func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archiv
 	case !found.Importable:
 		return fail(problem{status: 409, body: newProblem(409, "Cannot start this import", *found.Reason)})
 	}
-	manifestKey := folder + manifestName
-	var objs [2]imports.Object
-	for i, k := range []string{key, manifestKey} {
+	var objs [3]imports.Object
+	for i, k := range []string{key, folder + manifestName, folder + signatureName} {
 		o, err := h.objects.Head(ctx, bucket, k)
 		switch {
 		case errors.Is(err, s3.ErrNotFound):
@@ -173,7 +173,7 @@ func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archiv
 		}
 		objs[i] = imports.Object{Key: k, ETag: o.ETag, Size: o.Size}
 	}
-	return objs[0], objs[1], nil
+	return objs[0], objs[1], objs[2], nil
 }
 
 // ListImports lists the user's imports, newest first.
@@ -223,6 +223,15 @@ func toImport(imp imports.Import) (Import, error) {
 	}
 	out.Outcome, out.ArchiveRemoved = imp.Outcome(), imp.ArchiveRemoved()
 	return out, nil
+}
+
+// sigOf is the signature an import recorded: the zero Object for a record of
+// sealift 0.4, which signed nothing.
+func sigOf(imp imports.Import) imports.Object {
+	if imp.Signature == nil {
+		return imports.Object{}
+	}
+	return *imp.Signature
 }
 
 // stopping answers 503 for work the closed queue will not run, after ending

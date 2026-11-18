@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/service"
 	"github.com/MorganKryze/sealift/internal/store/imports"
@@ -48,12 +49,13 @@ func (l *lockedBuffer) String() string {
 func serverSettings(t *testing.T, tokenSection string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for name, content := range map[string]string{"nexus-password": importPassword + "\n", "signature-key": importKey + "\n"} {
+	pub, _ := newKeyPair(t)
+	for name, content := range map[string]string{"nexus-password": importPassword + "\n", "public-key.pem": archive.PublicKeyPEM(pub)} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	body := "nexus:\n  url: https://nexus.example.internal\n  repository: npm-hosted\n  user: sealift-import\n  passwordFile: nexus-password\nsignatureKeyFile: signature-key\n" + tokenSection
+	body := "nexus:\n  url: https://nexus.example.internal\n  repository: npm-hosted\n  user: sealift-import\n  passwordFile: nexus-password\npublicKeyFile: public-key.pem\n" + tokenSection
 	path := filepath.Join(dir, "settings.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -170,7 +172,7 @@ func TestImportServerExitCodes(t *testing.T) {
 			if code != tt.want || !strings.Contains(stderr.String(), tt.in) {
 				t.Errorf("exit %d, stderr %q; want %d naming %q", code, stderr.String(), tt.want, tt.in)
 			}
-			for _, secret := range []string{importPassword, importKey} {
+			for _, secret := range []string{importPassword} {
 				if strings.Contains(stderr.String(), secret) {
 					t.Errorf("stderr holds %q", secret)
 				}
@@ -187,7 +189,7 @@ func TestImportServerSweepsAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	obj := imports.Object{Key: "packages_npm.tar.gz", ETag: "etag", Size: 1}
-	imp, err := st.Create("alice", obj, imports.Object{Key: "manifest.json", ETag: "etag", Size: 1}, "")
+	imp, err := st.Create("alice", obj, imports.Object{Key: "manifest.json", ETag: "etag", Size: 1}, &imports.Object{Key: "manifest.json.sig", ETag: "etag", Size: 1}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +259,7 @@ func TestImportServerTakesNoAuthSwitch(t *testing.T) {
 		}
 	}
 	want := []string{
-		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.SignatureKey", "Settings.Token", "Settings.MinIO",
+		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.PublicKey", "Settings.PublicKeySHA256", "Settings.Token", "Settings.MinIO",
 		"TokenSettings.KeySetURL", "TokenSettings.Issuer", "TokenSettings.Audience", "TokenSettings.CAFile",
 	}
 	if !slices.Equal(fields, want) {
@@ -290,7 +292,7 @@ func TestImportServerWarnsUnencrypted(t *testing.T) {
 			if n != tt.want {
 				t.Errorf("%d unencrypted warnings, want %d; stderr %s", n, tt.want, s.stderr.String())
 			}
-			for _, secret := range []string{importPassword, importKey} {
+			for _, secret := range []string{importPassword} {
 				if strings.Contains(s.stderr.String(), secret) {
 					t.Errorf("stderr holds %q", secret)
 				}

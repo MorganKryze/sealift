@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -28,18 +30,30 @@ import (
 const (
 	testRepo     = "npm-hosted"
 	testPassword = "test-password"
-	testSigKey   = "test-signature-key"
 	testMinioKey = "test-minio-secret"
 )
+
+// testPub and testPriv are the key pair of this test run: every bundle is
+// signed with testPriv and the handlers trust testPub.
+var testPub, testPriv = func() (ed25519.PublicKey, ed25519.PrivateKey) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return pub, priv
+}()
+
+// testPrivSeed is the private key as hex: no answer, log or file may hold it.
+var testPrivSeed = hex.EncodeToString(testPriv.Seed())
 
 // testPkg is one package of a test archive.
 type testPkg struct{ name, version string }
 
-// testBundle is an archive and its manifest as they sit in MinIO.
+// testBundle is an archive, its manifest and the manifest's signature as they sit in MinIO.
 type testBundle struct {
-	archive, manifest []byte
-	sha256            string
-	pkgs              []testPkg
+	archive, manifest, signature []byte
+	sha256                       string
+	pkgs                         []testPkg
 }
 
 func tarballOf(t *testing.T, name, version string) []byte {
@@ -72,7 +86,7 @@ func opener(b []byte) func() (io.ReadCloser, error) {
 // buildBundle makes a signed archive of the packages and its manifest.json.
 func buildBundle(t *testing.T, pkgs ...testPkg) testBundle {
 	t.Helper()
-	entries := []archive.Entry{{Name: "signature.key", Size: int64(len(testSigKey)), Open: opener([]byte(testSigKey))}}
+	var entries []archive.Entry
 	var listed []map[string]any
 	for _, p := range pkgs {
 		body := tarballOf(t, p.name, p.version)
@@ -92,7 +106,7 @@ func buildBundle(t *testing.T, pkgs ...testPkg) testBundle {
 	}
 	digest := sha256.Sum256(buf.Bytes())
 	doc := map[string]any{
-		"formatVersion": 1, "toolVersion": "0.3.0", "analysisId": "20260923T120255Z", "createdAt": "2026-09-23T12:04:24Z",
+		"formatVersion": 2, "toolVersion": "0.3.0", "analysisId": "20260923T120255Z", "createdAt": "2026-09-23T12:04:24Z",
 		"target":   map[string]any{"os": "linux", "cpu": "x64", "libc": "glibc", "node": "22.17.1", "pnpmVer": "10.34.5"},
 		"archive":  map[string]any{"sha256": hex.EncodeToString(digest[:]), "size": buf.Len()},
 		"packages": listed,
@@ -101,7 +115,17 @@ func buildBundle(t *testing.T, pkgs ...testPkg) testBundle {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testBundle{archive: buf.Bytes(), manifest: mb, sha256: hex.EncodeToString(digest[:]), pkgs: pkgs}
+	return testBundle{archive: buf.Bytes(), manifest: mb, signature: signManifest(t, testPriv, mb), sha256: hex.EncodeToString(digest[:]), pkgs: pkgs}
+}
+
+// signManifest returns the signature file of manifest made by priv.
+func signManifest(t *testing.T, priv ed25519.PrivateKey, manifest []byte) []byte {
+	t.Helper()
+	sig, err := archive.SignatureFor(archive.PublicKeySHA256(priv.Public().(ed25519.PublicKey)), ed25519.Sign(priv, manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
 }
 
 // fakeNexus answers what the Nexus client asks: the repository check, a
@@ -187,7 +211,7 @@ func (f *fakeNexus) settings(t *testing.T, caFile string) importer.Settings {
 	}
 	return importer.Settings{
 		NexusURL: u, Repository: testRepo, User: "sealift-import", Password: importer.Secret(testPassword),
-		CAFile: caFile, SignatureKey: importer.Secret(testSigKey),
+		CAFile: caFile, PublicKey: testPub, PublicKeySHA256: archive.PublicKeySHA256(testPub),
 		MinIO: &importer.MinIOSettings{AccessKey: importer.Secret("test-access-id"), SecretKey: importer.Secret(testMinioKey)},
 	}
 }

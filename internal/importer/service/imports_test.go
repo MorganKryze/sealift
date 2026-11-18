@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	archiveKey  = base + "a/packages_npm.tar.gz"
-	manifestKey = base + "a/manifest.json"
-	otherKey    = base + "b/packages_npm.tar.gz"
-	otherMan    = base + "b/manifest.json"
+	archiveKey   = base + "a/packages_npm.tar.gz"
+	manifestKey  = base + "a/manifest.json"
+	signatureKey = base + "a/manifest.json.sig"
+	otherKey     = base + "b/packages_npm.tar.gz"
+	otherMan     = base + "b/manifest.json"
 )
 
 var leftPad = testPkg{"left-pad", "1.3.0"}
@@ -98,10 +99,12 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 	return r
 }
 
-// seed puts a bundle in alice's folder at the archive and manifest keys.
+// seed puts a bundle in alice's folder at the archive and manifest keys, and
+// its signature beside the manifest.
 func (r *importRig) seed(archiveAt, manifestAt string, b testBundle) {
 	r.minio.putData(archiveAt, b.archive)
 	r.minio.putData(manifestAt, b.manifest)
+	r.minio.putData(manifestAt+".sig", b.signature)
 }
 
 func (r *importRig) post(tok, body string, header ...string) *httptest.ResponseRecorder {
@@ -188,6 +191,57 @@ func TestStartAnswers202(t *testing.T) {
 	}
 	if list, _ := r.store.List("bob"); len(list) != 0 {
 		t.Errorf("bob has %d imports", len(list))
+	}
+}
+
+func TestStartRecordsTheSignature(t *testing.T) {
+	r := newImportRig(t, rigOptions{hold: true})
+	b := buildBundle(t, leftPad)
+	r.seed(archiveKey, manifestKey, b)
+	imp := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+	stored, err := r.store.Get("alice", imp.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey), Size: int64(len(b.signature))}
+	if stored.Signature == nil || *stored.Signature != want {
+		t.Errorf("recorded signature %+v, want %+v", stored.Signature, want)
+	}
+	raw, err := os.ReadFile(filepath.Join(r.data, "alice", imp.Id, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Signature struct {
+			Key, ETag string
+			Size      int64
+		}
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || doc.Signature.Key != signatureKey || doc.Signature.ETag != want.ETag || doc.Signature.Size != want.Size {
+		t.Errorf("import.json holds %+v (%v):\n%s", doc.Signature, err, raw)
+	}
+	headed := map[string]int{}
+	for _, c := range r.minio.recorded() {
+		if c.Op == "head" {
+			headed[c.Key]++
+		}
+	}
+	if headed[archiveKey] != 1 || headed[manifestKey] != 1 || headed[signatureKey] != 1 {
+		t.Errorf("start headed %v, want each of the three objects once", headed)
+	}
+}
+
+func TestStartRefusesAnUnsignedFolder(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	b := buildBundle(t, leftPad)
+	r.minio.putData(archiveKey, b.archive)
+	r.minio.putData(manifestKey, b.manifest)
+	rec := r.start("t", archiveKey)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no manifest.json.sig in its folder") {
+		t.Fatalf("status %d, body %s; want 409 naming the missing signature", rec.Code, rec.Body)
+	}
+	if list, _ := r.store.List("alice"); len(list) != 0 {
+		t.Errorf("an unsigned archive left %d imports", len(list))
 	}
 }
 
@@ -700,7 +754,7 @@ func TestImportFlowNeverLeaksCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{testMinioKey, testPassword, testSigKey, "test-access-id", "Bearer"} {
+	for _, secret := range []string{testMinioKey, testPassword, testPrivSeed, "test-access-id", "Bearer"} {
 		if strings.Contains(seen.String(), secret) {
 			t.Errorf("a response, the log or a file under -data holds %q", secret)
 		}
@@ -716,7 +770,8 @@ func seedImport(t *testing.T, r *importRig, outcome string) imports.Import {
 	t.Helper()
 	imp, err := r.store.Create("alice",
 		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey)},
-		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey)}, "")
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey)},
+		&imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey)}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

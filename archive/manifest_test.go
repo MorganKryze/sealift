@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 const (
@@ -18,7 +19,7 @@ const (
 // manifestDoc returns a valid manifest as a generic document a case can edit.
 func manifestDoc() map[string]any {
 	return map[string]any{
-		"formatVersion": 1,
+		"formatVersion": 2,
 		"toolVersion":   "0.3.0",
 		"analysisId":    "20260923T120255Z",
 		"createdAt":     "2026-09-23T12:04:24.410131126Z",
@@ -62,11 +63,11 @@ func TestParseManifestAccepts(t *testing.T) {
 	addPackage(doc, "@babel/code-frame", "7.29.7", "babel-code-frame-7.29.7.tgz")
 	pkgOf(doc, 1)["publishConfigStripped"] = true
 
-	m, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+	m, err := ParseManifest(encode(t, doc))
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
-	if m.FormatVersion != 1 || m.Target.PnpmVer != "10.34.5" || m.Archive.Size != 7031361 || m.Archive.SHA256 != testSHA256 {
+	if m.FormatVersion != 2 || m.Target.PnpmVer != "10.34.5" || m.Archive.Size != 7031361 || m.Archive.SHA256 != testSHA256 {
 		t.Errorf("manifest = %+v", m)
 	}
 	if len(m.Packages) != 2 || m.Packages[1].Name != "@babel/code-frame" || !m.Packages[1].PublishConfigStripped {
@@ -77,7 +78,7 @@ func TestParseManifestAccepts(t *testing.T) {
 func TestParseManifestAcceptsAnEmptyLibc(t *testing.T) {
 	doc := manifestDoc()
 	doc["target"].(map[string]any)["libc"] = ""
-	m, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+	m, err := ParseManifest(encode(t, doc))
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}
@@ -92,8 +93,8 @@ func TestParseManifestRefuses(t *testing.T) {
 		edit   func(doc map[string]any)
 		reason string
 	}{
-		{"format version 2", func(d map[string]any) { d["formatVersion"] = 2 }, "formatVersion"},
-		{"format version missing", func(d map[string]any) { delete(d, "formatVersion") }, "formatVersion"},
+		{"format version 1", func(d map[string]any) { d["formatVersion"] = 1 }, "formatVersion is missing or not 2, the only version this import reads"},
+		{"format version missing", func(d map[string]any) { delete(d, "formatVersion") }, "formatVersion is missing or not 2, the only version this import reads"},
 		{"toolVersion missing", func(d map[string]any) { delete(d, "toolVersion") }, "toolVersion"},
 		{"analysisId missing", func(d map[string]any) { delete(d, "analysisId") }, "analysisId"},
 		{"createdAt missing", func(d map[string]any) { delete(d, "createdAt") }, "createdAt"},
@@ -137,7 +138,7 @@ func TestParseManifestRefuses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			doc := manifestDoc()
 			tt.edit(doc)
-			_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+			_, err := ParseManifest(encode(t, doc))
 			assertRefusal(t, err, tt.reason)
 		})
 	}
@@ -172,14 +173,14 @@ func TestParseManifestRefusesUnsafeText(t *testing.T) {
 		t.Run(f.name+" too long", func(t *testing.T) {
 			doc := manifestDoc()
 			f.set(doc, long)
-			_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+			_, err := ParseManifest(encode(t, doc))
 			assertRefusal(t, err, f.name+" is longer than")
 		})
 		for kind, value := range unsafe {
 			t.Run(f.name+" "+kind, func(t *testing.T) {
 				doc := manifestDoc()
 				f.set(doc, "x"+value)
-				_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+				_, err := ParseManifest(encode(t, doc))
 				assertRefusal(t, err, f.name+" holds a control or unprintable character")
 				if strings.ContainsAny(err.Error(), "\x1b\u202e\u200b\a\n") {
 					t.Errorf("the refusal repeats the manifest's text: %q", err)
@@ -205,7 +206,7 @@ func TestParseManifestRefusesUnsafeText(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			doc := manifestDoc()
 			tt.edit(doc)
-			_, err := ParseManifest(bytes.NewReader(encode(t, doc)))
+			_, err := ParseManifest(encode(t, doc))
 			assertRefusal(t, err, tt.reason)
 		})
 	}
@@ -216,36 +217,49 @@ func TestParseManifestAcceptsTextAtTheBound(t *testing.T) {
 	doc["toolVersion"] = strings.Repeat("a", maxTextBytes)
 	doc["target"].(map[string]any)["os"] = strings.Repeat("é", maxTextBytes/2)
 	pkgOf(doc, 0)["version"] = "1.0.0-" + strings.Repeat("a", maxVersionBytes-len("1.0.0-"))
-	if _, err := ParseManifest(bytes.NewReader(encode(t, doc))); err != nil {
+	if _, err := ParseManifest(encode(t, doc)); err != nil {
 		t.Errorf("text of exactly the bound: %v", err)
 	}
 }
 
 func TestParseManifestRefusesBadDocuments(t *testing.T) {
-	big := append([]byte(`{"toolVersion":"`), bytes.Repeat([]byte("a"), MaxManifestSize)...)
 	tests := []struct {
 		name   string
 		doc    string
 		reason string
 	}{
-		{"over 16 MiB", string(big), "larger than"},
 		{"not JSON", "<html>", "not valid JSON"},
 		{"empty", "", "not valid JSON"},
 		{"trailing data", string(encode(t, manifestDoc())) + `{"x":1}`, "after the manifest"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseManifest(strings.NewReader(tt.doc))
+			_, err := ParseManifest([]byte(tt.doc))
 			assertRefusal(t, err, tt.reason)
 		})
 	}
 }
 
-func TestParseManifestAtTheBound(t *testing.T) {
+func TestReadManifestBound(t *testing.T) {
 	data := encode(t, manifestDoc())
 	pad := bytes.Repeat([]byte(" "), MaxManifestSize-len(data))
-	if _, err := ParseManifest(io.MultiReader(bytes.NewReader(data), bytes.NewReader(pad))); err != nil {
-		t.Errorf("a manifest of exactly %d bytes: %v", MaxManifestSize, err)
+	exact := io.MultiReader(bytes.NewReader(data), bytes.NewReader(pad))
+	got, err := ReadManifest(exact)
+	if err != nil || len(got) != MaxManifestSize {
+		t.Fatalf("a manifest of exactly %d bytes: %d bytes, %v", MaxManifestSize, len(got), err)
+	}
+	if _, err := ParseManifest(got); err != nil {
+		t.Errorf("ParseManifest of the exact-bound manifest: %v", err)
+	}
+
+	over := io.MultiReader(bytes.NewReader(data), bytes.NewReader(pad), strings.NewReader(" "))
+	_, err = ReadManifest(over)
+	assertRefusal(t, err, "the manifest is larger than 16777216 bytes")
+
+	_, err = ReadManifest(iotest.ErrReader(errors.New("disk gone")))
+	var r *Refusal
+	if err == nil || errors.As(err, &r) {
+		t.Errorf("a read failure is a local error, not a refusal: %v", err)
 	}
 }
 

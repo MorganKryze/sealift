@@ -1,8 +1,8 @@
 package importer
 
 import (
-	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"io"
 	"os"
@@ -16,16 +16,22 @@ import (
 // reports it as an incomplete import, never as a refused archive.
 var ErrSource = errors.New("the archive's source failed")
 
+// ErrUnsigned marks a missing signature file. A Source opener returns it, and
+// the attempt refuses the archive as unsigned.
+var ErrUnsigned = errors.New("no signature file")
+
 // maxStoredReason is the longest reason a report keeps: 1,000 characters.
 const maxStoredReason = 1000
 
-// Source is where an attempt reads the manifest and the archive. Each opener
+// Source is where an attempt reads the manifest, its signature and the archive. Each opener
 // returns a fresh stream; an error it marks with ErrSource is a failure of the
 // source, an *archive.Refusal is a refusal, and any other error is a local one.
 type Source struct {
-	Name     string // archive file name for the report
-	Manifest func(ctx context.Context) (io.ReadCloser, error)
-	Archive  func(ctx context.Context) (io.ReadCloser, error)
+	Name          string // archive file name for the report
+	SignatureName string // signature file name for the unsigned refusal; empty means manifest.json.sig
+	Manifest      func(ctx context.Context) (io.ReadCloser, error)
+	Signature     func(ctx context.Context) (io.ReadCloser, error) // returns ErrUnsigned when there is none
+	Archive       func(ctx context.Context) (io.ReadCloser, error)
 }
 
 // Progress receives the attempt's package states as they change. Either field
@@ -49,8 +55,8 @@ type Attempt struct {
 
 type publishEachFunc func(context.Context, Publisher, []Package, string, func(int, Result)) []Result
 
-// RunAttempt checks the archive against its manifest and the signature key,
-// then publishes its packages. It writes only to a.Dir and empties it before
+// RunAttempt checks the manifest's signature, then the archive against the
+// manifest, then publishes its packages. It writes only to a.Dir and empties it before
 // it returns.
 func RunAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error)) Report {
 	return runAttempt(ctx, a, newPublisher, PublishEach)
@@ -60,13 +66,14 @@ func RunAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), publishAll publishEachFunc) Report {
 	defer emptyDir(a.Dir)
 	rep := Report{
-		Outcome:        OutcomeRefused,
-		Unencrypted:    a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
-		ImportVersion:  a.ImportVersion,
-		Archive:        ArchiveInfo{File: a.Source.Name},
-		Nexus:          NexusInfo{URL: a.Settings.NexusURL.String(), Repository: a.Settings.Repository},
-		Packages:       []Result{},
-		ArchiveChecked: ptr(false),
+		Outcome:         OutcomeRefused,
+		Unencrypted:     a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
+		ImportVersion:   a.ImportVersion,
+		Archive:         ArchiveInfo{File: a.Source.Name},
+		Nexus:           NexusInfo{URL: a.Settings.NexusURL.String(), Repository: a.Settings.Repository},
+		Packages:        []Result{},
+		ArchiveChecked:  ptr(false),
+		PublicKeySHA256: a.Settings.PublicKeySHA256,
 	}
 	interrupted := func(err error) bool { return err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) }
 	// stop ends the attempt on an error before any package is listed.
@@ -85,7 +92,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		return rep
 	}
 
-	m, err := readManifest(ctx, a.Source)
+	m, err := readManifest(ctx, a.Source, a.Settings.PublicKey)
 	if err != nil {
 		return stop(err)
 	}
@@ -164,19 +171,53 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 	return rep
 }
 
-// readManifest reads the whole manifest before parsing it, so a read cut
-// short is a failure of the source and never a refusal of the manifest.
-func readManifest(ctx context.Context, src Source) (archive.Manifest, error) {
-	rc, err := src.Manifest(ctx)
+// readManifest reads the manifest once, whole, then the signature file, checks
+// the signature over those bytes and only then parses them, so no untrusted
+// JSON is parsed before it is authenticated and a read cut short is a failure
+// of the source, never a refusal of the manifest.
+func readManifest(ctx context.Context, src Source, trusted ed25519.PublicKey) (archive.Manifest, error) {
+	data, err := readAll(ctx, src.Manifest, archive.ReadManifest)
 	if err != nil {
 		return archive.Manifest{}, err
+	}
+	sig, err := readSignature(ctx, src)
+	if err != nil {
+		return archive.Manifest{}, err
+	}
+	if err := archive.CheckSignature(data, sig, trusted); err != nil {
+		return archive.Manifest{}, err
+	}
+	return archive.ParseManifest(data)
+}
+
+func readSignature(ctx context.Context, src Source) ([]byte, error) {
+	if src.Signature == nil {
+		return nil, signatureMissing(src)
+	}
+	sig, err := readAll(ctx, src.Signature, func(r io.Reader) ([]byte, error) {
+		return io.ReadAll(io.LimitReader(r, archive.MaxSignatureSize+1))
+	})
+	if errors.Is(err, ErrUnsigned) {
+		return nil, signatureMissing(src)
+	}
+	return sig, err
+}
+
+func signatureMissing(src Source) error {
+	name := src.SignatureName
+	if name == "" {
+		name = archive.SignatureFile
+	}
+	return archive.Unsigned(name)
+}
+
+func readAll(ctx context.Context, open func(context.Context) (io.ReadCloser, error), read func(io.Reader) ([]byte, error)) ([]byte, error) {
+	rc, err := open(ctx)
+	if err != nil {
+		return nil, err
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(io.LimitReader(rc, archive.MaxManifestSize+1))
-	if err != nil {
-		return archive.Manifest{}, err
-	}
-	return archive.ParseManifest(bytes.NewReader(data))
+	return read(rc)
 }
 
 // ctxReader stops a read once ctx is done, so an interrupt does not wait for
@@ -201,7 +242,6 @@ func verify(ctx context.Context, a Attempt, m archive.Manifest) ([]archive.Check
 	defer rc.Close()
 	return archive.Verify(ctxReader{ctx, rc}, m, archive.VerifyOptions{
 		ExpectedSHA256: a.ExpectedSHA256,
-		SignatureKey:   a.Settings.SignatureKey,
 		Dir:            a.Dir,
 	})
 }

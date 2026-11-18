@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
@@ -19,6 +20,9 @@ const SignatureFile = "manifest.json.sig"
 
 // MaxSignatureSize bounds the signature file an import reads.
 const MaxSignatureSize = 4 << 10
+
+// MaxPublicKeySize bounds the trusted public key file an import reads.
+const MaxPublicKeySize = 4 << 10
 
 const signatureAlgorithm = "ed25519"
 
@@ -87,6 +91,13 @@ func CheckSignature(manifest, sigFile []byte, trusted ed25519.PublicKey) error {
 		"Carry both again from the connected side")
 }
 
+// Unsigned is the refusal for an archive whose signature file is missing.
+// name is the file's name as the caller looked for it.
+func Unsigned(name string) *Refusal {
+	return refuse("the archive is unsigned: %s is missing beside the manifest. "+
+		"Export it again with sealift 0.5.0 or later and carry the archive, manifest.json and manifest.json.sig together", name)
+}
+
 func unreadable(problem string, args ...any) *Refusal {
 	return refuse("%s is not a signature this import reads: %s", SignatureFile, fmt.Sprintf(problem, args...))
 }
@@ -111,4 +122,38 @@ func publicKeyDER(pub ed25519.PublicKey) []byte {
 		panic("archive: marshal ed25519 public key: " + err.Error())
 	}
 	return der
+}
+
+// ParsePublicKeyPEM reads the trusted key file: one PKIX "PUBLIC KEY" PEM
+// block holding an Ed25519 key, with LF or CRLF line endings and blank space
+// around it. pem.Decode skips any text before a block and fails on an
+// indented BEGIN line, so the text is trimmed and must start with the block.
+// An error names the problem and never the content.
+func ParsePublicKeyPEM(data []byte) (ed25519.PublicKey, error) {
+	if len(data) > MaxPublicKeySize {
+		return nil, fmt.Errorf("it is larger than %d bytes", MaxPublicKeySize)
+	}
+	text := bytes.TrimSpace(data)
+	if len(text) > 0 && !bytes.HasPrefix(text, []byte("-----BEGIN")) {
+		return nil, errors.New("it holds text before the PEM block")
+	}
+	block, rest := pem.Decode(text)
+	if block == nil {
+		return nil, errors.New("it holds no PEM block")
+	}
+	if rest = bytes.TrimSpace(rest); len(rest) > 0 {
+		if bytes.HasPrefix(rest, []byte("-----BEGIN")) {
+			return nil, errors.New("it holds more than one PEM block")
+		}
+		return nil, errors.New("it holds text after the PEM block")
+	}
+	if block.Type != "PUBLIC KEY" {
+		return nil, errors.New("its PEM block is not a PUBLIC KEY block")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	pub, ok := parsed.(ed25519.PublicKey)
+	if err != nil || !ok {
+		return nil, errors.New("its key is not an Ed25519 public key")
+	}
+	return pub, nil
 }

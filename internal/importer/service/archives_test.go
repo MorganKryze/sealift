@@ -83,6 +83,7 @@ func TestListArchives(t *testing.T) {
 	f := newFakeMinio()
 	f.put("user-alice", base+"export.tar.gz", 2048)
 	f.put("user-alice", base+"manifest.json", 10)
+	f.put("user-alice", base+"manifest.json.sig", 300)
 	r := minioRig(t, f)
 	l := listOf(t, r.get("/api/archives", "t"))
 	if !l.MinioConfigured || l.BucketMissing || l.Truncated || l.Bucket != "user-alice" || l.Folder != base {
@@ -107,14 +108,18 @@ func TestListPairsByFolder(t *testing.T) {
 	b := "user-alice"
 	f.put(b, base+"root.tar.gz", 1)
 	f.put(b, base+"manifest.json", 1)
+	f.put(b, base+"manifest.json.sig", 1)
 	f.put(b, base+"sub/own.tar.gz", 1)
 	f.put(b, base+"sub/manifest.json", 1)
+	f.put(b, base+"sub/manifest.json.sig", 1)
 	f.put(b, base+"two/a.tar.gz", 1)
 	f.put(b, base+"two/b.tar.gz", 1)
 	f.put(b, base+"two/manifest.json", 1)
+	f.put(b, base+"two/manifest.json.sig", 1)
 	f.put(b, base+"bare/lonely.tar.gz", 1)
 	f.put(b, base+"deep/er/down.tar.gz", 1)
 	f.put(b, base+"deep/er/manifest.json", 1)
+	f.put(b, base+"deep/er/manifest.json.sig", 1)
 	f.put(b, base+"sub/.keep", 0)
 	f.put(b, base+".keep", 0)
 	got := byKey(listOf(t, minioRig(t, f).get("/api/archives", "t")))
@@ -140,6 +145,58 @@ func TestListPairsByFolder(t *testing.T) {
 		}
 		if a.Importable != w.ok || reasonOf(a) != w.reason {
 			t.Errorf("%s: importable %v reason %q, want %v %q", key, a.Importable, reasonOf(a), w.ok, w.reason)
+		}
+	}
+}
+
+func TestListNeedsTheSignature(t *testing.T) {
+	const noSignature = "no manifest.json.sig in its folder"
+	f := newFakeMinio()
+	b := "user-alice"
+	// Each folder holds one archive and lacks one thing.
+	f.put(b, base+"unsigned/a.tar.gz", 1)
+	f.put(b, base+"unsigned/manifest.json", 1)
+	f.put(b, base+"signed/a.tar.gz", 1)
+	f.put(b, base+"signed/manifest.json", 1)
+	f.put(b, base+"signed/manifest.json.sig", 1)
+	// The signature of another folder does not count, nor does a lookalike.
+	f.put(b, base+"elsewhere/a.tar.gz", 1)
+	f.put(b, base+"elsewhere/manifest.json", 1)
+	f.put(b, base+"signed/elsewhere.sig", 1)
+	f.put(b, base+"lookalike/a.tar.gz", 1)
+	f.put(b, base+"lookalike/manifest.json", 1)
+	f.put(b, base+"lookalike/manifest.json.sig.bak", 1)
+	f.put(b, base+"lookalike/Manifest.json.sig", 1)
+	// The reasons that come before it keep their place.
+	f.put(b, base+"neither/a.tar.gz", 1)
+	f.put(b, base+"several/a.tar.gz", 1)
+	f.put(b, base+"several/b.tar.gz", 1)
+	f.put(b, base+"several/manifest.json", 1)
+	f.put(b, base+"bad//name.tar.gz", 1)
+	f.put(b, base+"bad/manifest.json", 1)
+	f.put(b, base+"sigonly/a.tar.gz", 1)
+	f.put(b, base+"sigonly/manifest.json.sig", 1)
+	got := byKey(listOf(t, minioRig(t, f).get("/api/archives", "t")))
+
+	want := map[string]string{
+		base + "unsigned/a.tar.gz":  noSignature,
+		base + "signed/a.tar.gz":    "",
+		base + "elsewhere/a.tar.gz": noSignature,
+		base + "lookalike/a.tar.gz": noSignature,
+		base + "neither/a.tar.gz":   "no manifest.json in its folder",
+		base + "several/a.tar.gz":   "the folder holds more than one archive",
+		base + "several/b.tar.gz":   "the folder holds more than one archive",
+		base + "bad//name.tar.gz":   "its name cannot be imported",
+		base + "sigonly/a.tar.gz":   "no manifest.json in its folder",
+	}
+	for key, reason := range want {
+		a, ok := got[key]
+		if !ok {
+			t.Errorf("%s is not listed", key)
+			continue
+		}
+		if a.Importable != (reason == "") || reasonOf(a) != reason {
+			t.Errorf("%s: importable %v reason %q, want reason %q", key, a.Importable, reasonOf(a), reason)
 		}
 	}
 }
@@ -197,8 +254,10 @@ func TestListMarksNamesItCannotImport(t *testing.T) {
 	f := newFakeMinio()
 	f.put("user-alice", base+"d//a.tar.gz", 1)
 	f.put("user-alice", base+"d/manifest.json", 1)
+	f.put("user-alice", base+"d/manifest.json.sig", 1)
 	f.put("user-alice", base+"x\x07y.tar.gz", 1)
 	f.put("user-alice", base+"manifest.json", 1)
+	f.put("user-alice", base+"manifest.json.sig", 1)
 	l := listOf(t, minioRig(t, f).get("/api/archives", "t"))
 	if len(l.Archives) != 2 {
 		t.Fatalf("archives = %+v", l.Archives)
@@ -217,9 +276,11 @@ func TestListStaysInTheUsersFolder(t *testing.T) {
 	f := newFakeMinio()
 	f.put("user-alice", base+"mine.tar.gz", 1)
 	f.put("user-alice", base+"manifest.json", 1)
+	f.put("user-alice", base+"manifest.json.sig", 1)
 	f.put("user-alice", "elsewhere/other.tar.gz", 1)
 	f.put("user-bob", base+"his.tar.gz", 1)
 	f.put("user-bob", base+"manifest.json", 1)
+	f.put("user-bob", base+"manifest.json.sig", 1)
 	r := minioRig(t, f)
 
 	// A query parameter or a header must not move the bucket.

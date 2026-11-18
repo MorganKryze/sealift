@@ -1,16 +1,21 @@
 package importer
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MorganKryze/sealift/archive"
 )
 
 const (
-	testKey = "test-key"
 	// testAccessKey and testMinIOSecret are the MinIO credentials the settings files hold.
 	testAccessKey   = "test-access-id"
 	testMinIOSecret = "test-minio-secret"
@@ -30,7 +35,7 @@ const (
   repository: npm-hosted
   user: sealift-import
   passwordFile: nexus-password
-signatureKeyFile: signature-key
+publicKeyFile: public-key.pem
 `
 )
 
@@ -45,12 +50,55 @@ func writeSettings(t *testing.T, body string) string {
 		}
 	}
 	write("nexus-password", testPassword+"\n")
-	write("signature-key", testKey+"\n")
+	write("public-key.pem", archive.PublicKeyPEM(testPub))
 	write("ca.pem", "pem")
 	write("minio-access-key", testAccessKey+"\n")
 	write("minio-secret-key", testMinIOSecret+"\n")
 	write("settings.yaml", body)
 	return filepath.Join(dir, "settings.yaml")
+}
+
+func publicKeyFile(content []byte) func(*testing.T, string) {
+	return func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "public-key.pem"), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func rsaPublicKeyPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+func TestLoadSettingsPublicKey(t *testing.T) {
+	pemText := archive.PublicKeyPEM(testPub)
+	for name, content := range map[string]string{
+		"crlf":                 strings.ReplaceAll(pemText, "\n", "\r\n"),
+		"blank space around":   "\n\n  " + strings.TrimSuffix(pemText, "\n") + "  \n\n",
+		"no final line ending": strings.TrimSuffix(pemText, "\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeSettings(t, validSetting)
+			publicKeyFile([]byte(content))(t, filepath.Dir(path))
+			s, err := LoadSettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !s.PublicKey.Equal(testPub) || s.PublicKeySHA256 != testPubSHA {
+				t.Errorf("trusted key sha256 %s, want %s", s.PublicKeySHA256, testPubSHA)
+			}
+		})
+	}
 }
 
 func TestLoadSettings(t *testing.T) {
@@ -62,8 +110,11 @@ func TestLoadSettings(t *testing.T) {
 		if s.NexusURL.String() != "https://nexus.example.internal" || s.Repository != "npm-hosted" || s.User != "sealift-import" {
 			t.Errorf("got %+v", s)
 		}
-		if string(s.Password) != testPassword || string(s.SignatureKey) != testKey {
+		if string(s.Password) != testPassword {
 			t.Error("one trailing newline must come off each secret file")
+		}
+		if !s.PublicKey.Equal(testPub) || s.PublicKeySHA256 != testPubSHA {
+			t.Errorf("trusted key sha256 %s, want %s", s.PublicKeySHA256, testPubSHA)
 		}
 		if s.CAFile != "" {
 			t.Errorf("CAFile = %q", s.CAFile)
@@ -85,15 +136,15 @@ func TestLoadSettings(t *testing.T) {
 	})
 	t.Run("only one newline comes off", func(t *testing.T) {
 		path := writeSettings(t, validSetting)
-		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "signature-key"), []byte(testKey+"\n\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "nexus-password"), []byte(testPassword+"\n\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		s, err := LoadSettings(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(s.SignatureKey) != testKey+"\n" {
-			t.Errorf("key = %q", s.SignatureKey)
+		if string(s.Password) != testPassword+"\n" {
+			t.Errorf("password = %q", s.Password)
 		}
 	})
 	t.Run("http is accepted", func(t *testing.T) {
@@ -125,19 +176,22 @@ func TestLoadSettingsRefuses(t *testing.T) {
 		{"repository absent", without("  repository: npm-hosted\n"), nil, "nexus.repository", "required"},
 		{"user absent", without("  user: sealift-import\n"), nil, "nexus.user", "required"},
 		{"password file absent", without("  passwordFile: nexus-password\n"), nil, "nexus.passwordFile", "required"},
-		{"key file absent", without("signatureKeyFile: signature-key\n"), nil, "signatureKeyFile", "required"},
+		{"key file absent", without("publicKeyFile: public-key.pem\n"), nil, "publicKeyFile", "required"},
+		{"signatureKeyFile is an unknown field", validSetting + "signatureKeyFile: signature-key\n", nil, "signatureKeyFile", "unknown"},
 		{"unknown field", validSetting + "extra: 1\n", nil, "extra", "unknown"},
 		{"insecure field", strings.Replace(validSetting, "  user:", "  insecure: true\n  user:", 1), nil, "insecure", "unknown"},
 		{"not yaml", "nexus: [", nil, "settings file", "not valid"},
 		{"password file unreadable", validSetting, func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "nexus-password")) }, "nexus.passwordFile", "cannot be read"},
-		{"key file unreadable", validSetting, func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "signature-key")) }, "signatureKeyFile", "cannot be read"},
+		{"key file unreadable", validSetting, func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "public-key.pem")) }, "publicKeyFile", "cannot be read"},
 		{"password empty", validSetting, func(_ *testing.T, dir string) {
 			_ = os.WriteFile(filepath.Join(dir, "nexus-password"), []byte("\n"), 0o600)
 		}, "nexus.passwordFile", "empty"},
-		{"key empty", validSetting, func(_ *testing.T, dir string) { _ = os.WriteFile(filepath.Join(dir, "signature-key"), nil, 0o600) }, "signatureKeyFile", "empty"},
-		{"secret too large", validSetting, func(_ *testing.T, dir string) {
-			_ = os.WriteFile(filepath.Join(dir, "signature-key"), make([]byte, maxSecretBytes+1), 0o600)
-		}, "signatureKeyFile", "larger than"},
+		{"key file empty", validSetting, publicKeyFile(nil), "publicKeyFile", "holds no PEM block"},
+		{"key file over 4 KiB", validSetting, publicKeyFile(make([]byte, archive.MaxPublicKeySize+1)), "publicKeyFile", "larger than 4096 bytes"},
+		{"key file with two blocks", validSetting, publicKeyFile([]byte(archive.PublicKeyPEM(testPub) + archive.PublicKeyPEM(testPub))), "publicKeyFile", "more than one PEM block"},
+		{"key file with text before", validSetting, publicKeyFile([]byte("my key\n" + archive.PublicKeyPEM(testPub))), "publicKeyFile", "text before the PEM block"},
+		{"key file with a private key", validSetting, publicKeyFile(testPrivPEM), "publicKeyFile", "not a PUBLIC KEY block"},
+		{"key file with an RSA key", validSetting, publicKeyFile(rsaPublicKeyPEM(t)), "publicKeyFile", "not an Ed25519 public key"},
 		{"url with user", withURL("https://operator@nexus.example.internal"), nil, "nexus.url", "user name"},
 		{"url with password", withURL("https://operator:hunter2@nexus.example.internal"), nil, "nexus.url", "user name"},
 		{"url with query", withURL("https://nexus.example.internal/?a=b"), nil, "nexus.url", "query"},
@@ -192,7 +246,7 @@ func TestLoadSettingsRefuses(t *testing.T) {
 			if se.Field != tc.field || !strings.Contains(se.Reason, tc.want) {
 				t.Errorf("got field %q reason %q, want %q containing %q", se.Field, se.Reason, tc.field, tc.want)
 			}
-			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", "idp.example.internal", "minio.example.internal", testPassword, testKey, testAccessKey, testMinIOSecret} {
+			for _, leak := range []string{"hunter2", "operator", "nexus.example.internal", "idp.example.internal", "minio.example.internal", testPassword, "my key", privateKeyBody, testAccessKey, testMinIOSecret} {
 				if strings.Contains(err.Error(), leak) {
 					t.Errorf("error %q repeats %q", err, leak)
 				}
@@ -220,9 +274,9 @@ func TestSecretIsRedacted(t *testing.T) {
 	s := Secret("test-password")
 	for _, got := range []string{
 		s.String(), s.GoString(), fmt.Sprintf("%v %+v %#v %s %q %x %d", s, s, s, s, s, s, s),
-		fmt.Sprintf("%v", Settings{Password: s, SignatureKey: s}),
-		fmt.Sprintf("%+v", &Settings{Password: s, SignatureKey: s}),
-		fmt.Sprintf("%#v", Settings{Password: s, SignatureKey: s}),
+		fmt.Sprintf("%v", Settings{Password: s, PublicKey: testPub}),
+		fmt.Sprintf("%+v", &Settings{Password: s, PublicKey: testPub}),
+		fmt.Sprintf("%#v", Settings{Password: s, PublicKey: testPub}),
 	} {
 		if strings.Contains(got, "test-password") || strings.Contains(got, "dGVzdC1w") {
 			t.Errorf("printed a secret: %s", got)
@@ -231,7 +285,7 @@ func TestSecretIsRedacted(t *testing.T) {
 			t.Errorf("no marker in %s", got)
 		}
 	}
-	b, err := jsonOf(Settings{Password: s, SignatureKey: s})
+	b, err := jsonOf(Settings{Password: s, PublicKey: testPub})
 	if err != nil || strings.Contains(b, "test-password") || !strings.Contains(b, "[redacted]") {
 		t.Errorf("json = %s, %v", b, err)
 	}

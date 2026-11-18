@@ -18,11 +18,11 @@ import (
 )
 
 func ExampleWriteTarGz() {
-	key := "import-secret"
+	tarball := "package bytes"
 	entries := []archive.Entry{{
-		Name: "signature.key",
-		Size: int64(len(key)),
-		Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(key)), nil },
+		Name: "left-pad-1.3.0.tgz",
+		Size: int64(len(tarball)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(tarball)), nil },
 	}}
 
 	var buf bytes.Buffer
@@ -37,7 +37,7 @@ func ExampleWriteTarGz() {
 	}
 	// Output:
 	// out/
-	// out/signature.key
+	// out/left-pad-1.3.0.tgz
 }
 
 func ExampleVerify() {
@@ -47,9 +47,6 @@ func ExampleVerify() {
 		{Name: "left-pad-1.3.0.tgz", Size: int64(len(tarball)), Open: func() (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader(tarball)), nil
 		}},
-		{Name: "signature.key", Size: 10, Open: func() (io.ReadCloser, error) {
-			return io.NopCloser(strings.NewReader("import-key")), nil
-		}},
 	}
 	var buf bytes.Buffer
 	if err := archive.WriteTarGz(&buf, "out", entries); err != nil {
@@ -58,7 +55,7 @@ func ExampleVerify() {
 	digest := sha256.Sum256(buf.Bytes())
 
 	m := archive.Manifest{
-		FormatVersion: 1, ToolVersion: "0.3.0", AnalysisID: "20260923T120255Z", CreatedAt: "2026-09-23T12:04:24Z",
+		FormatVersion: 2, ToolVersion: "0.3.0", AnalysisID: "20260923T120255Z", CreatedAt: "2026-09-23T12:04:24Z",
 		Target:  archive.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
 		Archive: archive.Summary{SHA256: hex.EncodeToString(digest[:]), Size: int64(buf.Len())},
 		Packages: []archive.Package{{
@@ -74,7 +71,7 @@ func ExampleVerify() {
 	}
 	defer os.RemoveAll(dir)
 
-	checked, err := archive.Verify(&buf, m, archive.VerifyOptions{SignatureKey: []byte("import-key"), Dir: dir})
+	checked, err := archive.Verify(&buf, m, archive.VerifyOptions{Dir: dir})
 	if err != nil {
 		panic(err)
 	}
@@ -82,7 +79,7 @@ func ExampleVerify() {
 		fmt.Println(c.Package.Name, c.Package.Version)
 	}
 
-	_, err = archive.Verify(strings.NewReader("not an archive"), m, archive.VerifyOptions{SignatureKey: []byte("import-key"), Dir: dir})
+	_, err = archive.Verify(strings.NewReader("not an archive"), m, archive.VerifyOptions{Dir: dir})
 	var refusal *archive.Refusal
 	fmt.Println(errors.As(err, &refusal))
 	// Output:

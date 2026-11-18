@@ -91,6 +91,7 @@ function record(id, folder, attempts, over = {}) {
     formatVersion: 1, id, user: "alice", createdAt: iso(id),
     archive: { key: archiveKey, etag: `"${sha(archiveKey).slice(0, 32)}"`, size: 5_500_000 },
     manifest: { key: `${FOLDER}${folder}manifest.json`, etag: `"${sha(folder).slice(0, 32)}"`, size: 1_200 },
+    signature: { key: `${FOLDER}${folder}manifest.json.sig`, etag: `"${sha(`${folder}sig`).slice(0, 32)}"`, size: 400 },
     expectedSha256: over.expectedSha256 ?? "", attempts,
   }
 }
@@ -162,19 +163,22 @@ function minioAnswer(bucket) {
     case "user-alice": {
       const objects = aliceRecords()
         .filter((r) => r.id !== IDS.completeRemoved)
-        .flatMap((r) => [{ ...r.archive, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.manifest, modified: `${iso(r.id).slice(0, -1)}.000Z` }])
+        .flatMap((r) => [{ ...r.archive, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.manifest, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.signature, modified: `${iso(r.id).slice(0, -1)}.000Z` }])
       const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
       // Archives the service cannot import, one for each rule, and a 200-character folder.
       upload("2026-11-06-new-export/", ARCHIVE, 4_200_000)
       upload("2026-11-06-new-export/", "manifest.json", 1_100)
+      upload("2026-11-06-new-export/", "manifest.json.sig", 400)
       upload("2026-10-28-two-archives/", "first.tar.gz", 3_000_000, "2026-10-28T08:00:00.000Z")
       upload("2026-10-28-two-archives/", "second.tar.gz", 3_100_000, "2026-10-28T08:01:00.000Z")
       upload("2026-10-28-two-archives/", "manifest.json", 900, "2026-10-28T08:02:00.000Z")
+      upload("2026-10-28-two-archives/", "manifest.json.sig", 400, "2026-10-28T08:02:00.000Z")
       upload("2026-10-27-no-manifest/", ARCHIVE, 2_900_000, "2026-10-27T08:00:00.000Z")
       upload("2026-10-26/too/deep/", ARCHIVE, 2_800_000, "2026-10-26T08:00:00.000Z")
       const wide = `${"w".repeat(200)}/`
       upload(wide, ARCHIVE, 2_700_000, "2026-10-25T08:00:00.000Z")
       upload(wide, "manifest.json", 800, "2026-10-25T08:00:00.000Z")
+      upload(wide, "manifest.json.sig", 400, "2026-10-25T08:00:00.000Z")
       return [200, listing(bucket, objects, true)]
     }
     case "user-bob":
@@ -224,9 +228,11 @@ export async function startImportFixtures(dir) {
   await listen(keySet, KEY_SET_PORT)
   await listen(minio, MINIO_PORT)
 
-  const files = { "nexus-password": "gate-nexus-password", "signature.key": "gate-signature-key", "minio-access": "gate-access", "minio-secret": "gate-secret" }
+  const files = { "nexus-password": "gate-nexus-password", "minio-access": "gate-access", "minio-secret": "gate-secret" }
   mkdirSync(dir, { recursive: true })
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), `${text}\n`)
+  // The trusted key is generated per run: the gate holds no fixed key.
+  writeFileSync(join(dir, "public-key.pem"), generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" }))
   const settings = join(dir, "settings.yaml")
   writeFileSync(
     settings,
@@ -236,7 +242,7 @@ export async function startImportFixtures(dir) {
       "  repository: npm-gate",
       "  user: importer",
       "  passwordFile: nexus-password",
-      "signatureKeyFile: signature.key",
+      "publicKeyFile: public-key.pem",
       "token:",
       `  keySetUrl: http://127.0.0.1:${KEY_SET_PORT}/certs`,
       `  issuer: ${ISSUER}`,

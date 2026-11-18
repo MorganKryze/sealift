@@ -19,10 +19,10 @@ func entry(name, body string) Entry {
 
 func TestWriteTarGzIsReproducible(t *testing.T) {
 	var first, second bytes.Buffer
-	if err := WriteTarGz(&first, "out", []Entry{entry("b.tgz", "bbb"), entry("a.tgz", "aa"), entry("signature.key", "k")}); err != nil {
+	if err := WriteTarGz(&first, "out", []Entry{entry("b.tgz", "bbb"), entry("a.tgz", "aa"), entry("c.tgz", "k")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteTarGz(&second, "out", []Entry{entry("signature.key", "k"), entry("a.tgz", "aa"), entry("b.tgz", "bbb")}); err != nil {
+	if err := WriteTarGz(&second, "out", []Entry{entry("c.tgz", "k"), entry("a.tgz", "aa"), entry("b.tgz", "bbb")}); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {

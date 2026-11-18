@@ -18,7 +18,7 @@ import (
 )
 
 // importUsage is the one line printed for a usage error.
-const importUsage = "usage: sealift import -settings <file> [-manifest <file>] [-sha256 <hex>] [-report <file>] <archive>"
+const importUsage = "usage: sealift import -settings <file> [-manifest <file>] [-signature <file>] [-sha256 <hex>] [-report <file>] <archive>"
 
 var hexSHA256 = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
@@ -34,6 +34,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fs.SetOutput(io.Discard)
 	settingsPath := fs.String("settings", "", "settings file")
 	manifestPath := fs.String("manifest", "", "manifest.json, next to the archive by default")
+	signaturePath := fs.String("signature", "", "manifest.json.sig, next to the manifest by default")
 	expected := fs.String("sha256", "", "sha256 of the archive received through a separate channel")
 	reportPath := fs.String("report", "", "write the JSON report to this file")
 	if err := fs.Parse(args); err != nil {
@@ -56,12 +57,24 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if *manifestPath == "" {
 		*manifestPath = filepath.Join(filepath.Dir(archivePath), "manifest.json")
 	}
+	if *signaturePath == "" {
+		*signaturePath = *manifestPath + ".sig"
+	}
 	for _, f := range []struct{ what, path string }{{"archive", archivePath}, {"manifest", *manifestPath}} {
 		h, err := os.Open(f.path)
 		if err != nil {
 			return usage("cannot open the %s: %v", f.what, err)
 		}
 		h.Close()
+	}
+	// A missing signature is a refusal of the archive, not a usage error, so
+	// it is not opened here.
+	if *reportPath != "" {
+		for _, in := range []struct{ what, path string }{{"archive", archivePath}, {"manifest", *manifestPath}, {"signature", *signaturePath}} {
+			if sameFile(*reportPath, in.path) {
+				return usage("-report names the %s: give the report its own file", in.what)
+			}
+		}
 	}
 	settings, err := importer.LoadSettings(*settingsPath)
 	if err != nil {
@@ -71,7 +84,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	rep := importer.Run(ctx, importer.Options{
-		Settings: settings, Archive: archivePath, Manifest: *manifestPath,
+		Settings: settings, Archive: archivePath, Manifest: *manifestPath, Signature: *signaturePath,
 		ExpectedSHA256: *expected, ImportVersion: jobs.ToolVersion,
 	}, nexusPublisher)
 
@@ -88,6 +101,17 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		code = 1
 	}
 	return code
+}
+
+// sameFile reports whether two paths name one file, through links or not. A
+// path that does not exist names no file yet.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	return err == nil && os.SameFile(ai, bi)
 }
 
 func writeReport(path string, rep importer.Report) error {

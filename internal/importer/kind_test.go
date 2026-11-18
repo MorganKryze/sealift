@@ -213,7 +213,7 @@ func TestArchiveCheckedMark(t *testing.T) {
 		"refused at the manifest": {func(_ *runFixture, a *Attempt) {
 			a.Source.Manifest = func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("{")), nil }
 		}, OutcomeRefused, false},
-		"refused at the checks": {func(_ *runFixture, a *Attempt) { a.Settings.SignatureKey = Secret("other-key") }, OutcomeRefused, false},
+		"refused at the checks": {func(_ *runFixture, a *Attempt) { a.ExpectedSHA256 = wrongSHA256 }, OutcomeRefused, false},
 		"complete":              {func(r *runFixture, _ *Attempt) { r.serveUploads() }, OutcomeComplete, true},
 		"incomplete":            {func(r *runFixture, _ *Attempt) { r.f.postStatus = 500 }, OutcomeIncomplete, true},
 	} {
@@ -256,7 +256,7 @@ func TestArchiveCheckedMark(t *testing.T) {
 	t.Run("not called when the checks fail", func(t *testing.T) {
 		r := newRunFixture(t)
 		a := r.attemptOf(t)
-		a.Settings.SignatureKey = Secret("other-key")
+		a.ExpectedSHA256 = wrongSHA256
 		var calls int
 		a.Progress = Progress{Checked: func() { calls++ }}
 		r.runAttempt(t, a)

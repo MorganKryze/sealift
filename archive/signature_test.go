@@ -3,6 +3,8 @@ package archive
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -277,5 +279,92 @@ func TestCheckSignatureTrustsOnlyTheConfiguredKey(t *testing.T) {
 	}
 	if err := CheckSignature(manifest, named, trusted); err == nil {
 		t.Fatal("a signature by the key the file names was accepted")
+	}
+}
+
+func TestParsePublicKeyPEM(t *testing.T) {
+	pub := rfc8032Key(t)
+	one := PublicKeyPEM(pub)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaDER, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(edPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBlock := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER}))
+	rsaBlock := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: rsaDER}))
+	crlf := strings.ReplaceAll(one, "\n", "\r\n")
+
+	accepted := []struct{ name, in string }{
+		{"one block", one},
+		{"no final newline", strings.TrimSuffix(one, "\n")},
+		{"crlf", crlf},
+		{"blank lines around", "\n\n" + one + "\n\n"},
+		{"spaces and tabs around", "  \t" + strings.TrimSuffix(one, "\n") + " \t\r\n"},
+		{"an indented first line", "    " + one},
+		{"crlf with blank space around", "\r\n \r\n" + crlf + "\r\n\r\n"},
+	}
+	for _, tt := range accepted {
+		t.Run("accepts "+tt.name, func(t *testing.T) {
+			got, err := ParsePublicKeyPEM([]byte(tt.in))
+			if err != nil {
+				t.Fatalf("ParsePublicKeyPEM: %v", err)
+			}
+			if !got.Equal(pub) {
+				t.Errorf("parsed another key than the one in the file")
+			}
+		})
+	}
+
+	refused := []struct{ name, in, problem string }{
+		{"empty", "", "holds no PEM block"},
+		{"two blocks", one + one, "more than one PEM block"},
+		{"text before", "my key:\n" + one, "text before"},
+		{"text after", one + "trailing\n", "text after"},
+		{"a private key block", privBlock, "not a PUBLIC KEY block"},
+		{"an RSA key", rsaBlock, "not an Ed25519 public key"},
+		{"4097 bytes", one + strings.Repeat(" ", MaxPublicKeySize+1-len(one)), "larger than 4096 bytes"},
+		{"damaged body", "-----BEGIN PUBLIC KEY-----\n!!!!\n-----END PUBLIC KEY-----\n", "holds no PEM block"},
+		{"not a key", string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte("abc")})), "not an Ed25519 public key"},
+	}
+	for _, tt := range refused {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			_, err := ParsePublicKeyPEM([]byte(tt.in))
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if !strings.Contains(err.Error(), tt.problem) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.problem)
+			}
+			for _, leak := range []string{"my key", "trailing", "abc", base64.StdEncoding.EncodeToString(privDER)} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("the error repeats the file's content: %q", err)
+				}
+			}
+		})
+	}
+}
+
+func TestUnsigned(t *testing.T) {
+	got := Unsigned("manifest.json.sig")
+	want := "the archive is unsigned: manifest.json.sig is missing beside the manifest. " +
+		"Export it again with sealift 0.5.0 or later and carry the archive, manifest.json and manifest.json.sig together"
+	assertRefusal(t, got, want)
+	if got.Reason != want {
+		t.Errorf("reason = %q, want %q", got.Reason, want)
+	}
+	other := Unsigned("my.sig")
+	if !strings.Contains(other.Reason, "my.sig is missing beside the manifest") {
+		t.Errorf("reason = %q, want the name the caller gave", other.Reason)
 	}
 }

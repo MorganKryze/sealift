@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"io"
 	"os"
@@ -33,11 +36,13 @@ func newAttemptRig(t *testing.T) *attemptRig {
 	b := buildBundle(t, leftPad)
 	m.putData(archiveKey, b.archive)
 	m.putData(manifestKey, b.manifest)
+	m.putData(signatureKey, b.signature)
 	h := New(Config{MinIO: m, Settings: nx.settings(t, ca), NewPublisher: newPublisher, ImportVersion: "0.3.0"})
 	imp := imports.Import{
 		ID: "20261106T101500Z-3f9a0c1d", User: "alice",
-		Archive:  imports.Object{Key: archiveKey, ETag: m.etagOf(archiveKey), Size: int64(len(b.archive))},
-		Manifest: imports.Object{Key: manifestKey, ETag: m.etagOf(manifestKey)},
+		Archive:   imports.Object{Key: archiveKey, ETag: m.etagOf(archiveKey), Size: int64(len(b.archive))},
+		Manifest:  imports.Object{Key: manifestKey, ETag: m.etagOf(manifestKey)},
+		Signature: &imports.Object{Key: signatureKey, ETag: m.etagOf(signatureKey), Size: int64(len(b.signature))},
 	}
 	m.calls = nil
 	return &attemptRig{h: h, minio: m, nexus: nx, imp: imp, b: b}
@@ -73,8 +78,8 @@ func TestAttemptReadsEachObjectOnce(t *testing.T) {
 		}
 		gets[c.Key] = c.ETag
 	}
-	if len(gets) != 2 || gets[manifestKey] != a.imp.Manifest.ETag || gets[archiveKey] != a.imp.Archive.ETag {
-		t.Errorf("reads = %v, want the manifest and the archive, each with its recorded ETag", gets)
+	if len(gets) != 3 || gets[manifestKey] != a.imp.Manifest.ETag || gets[archiveKey] != a.imp.Archive.ETag || gets[signatureKey] != a.imp.Signature.ETag {
+		t.Errorf("reads = %v, want the manifest, the signature and the archive, each with its recorded ETag", gets)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
 		t.Errorf("the work directory still holds %d entries", len(entries))
@@ -141,7 +146,7 @@ func failReasons(rep importer.Report) string {
 }
 
 func TestAttemptChangedObjectIsRefused(t *testing.T) {
-	for name, key := range map[string]string{"archive": archiveKey, "manifest": manifestKey} {
+	for name, key := range map[string]string{"archive": archiveKey, "manifest": manifestKey, "signature": signatureKey} {
 		t.Run(name, func(t *testing.T) {
 			a := newAttemptRig(t)
 			a.minio.change(key)
@@ -157,6 +162,72 @@ func TestAttemptChangedObjectIsRefused(t *testing.T) {
 				t.Errorf("archiveChecked %v, want false: no object was read", rep.ArchiveChecked)
 			}
 		})
+	}
+}
+
+func TestServiceSignatureRefusals(t *testing.T) {
+	other, otherPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := archive.PublicKeySHA256(testPub)
+	for name, tc := range map[string]struct {
+		setup  func(t *testing.T, a *attemptRig)
+		reason string
+	}{
+		"a record without signature": {func(_ *testing.T, a *attemptRig) { a.imp.Signature = nil },
+			archive.Unsigned("manifest.json.sig").Reason},
+		"another key": {func(t *testing.T, a *attemptRig) {
+			a.minio.putData(signatureKey, signManifest(t, otherPriv, a.b.manifest))
+			a.imp.Signature.ETag = a.minio.etagOf(signatureKey)
+		}, "the manifest is signed by another key, public key sha256 " + archive.PublicKeySHA256(other) + "; this import trusts " + trusted + "."},
+		"one byte changed in the manifest": {func(_ *testing.T, a *attemptRig) {
+			changed := bytes.Replace(a.b.manifest, []byte(`"20260923T120255Z"`), []byte(`"20260923T120256Z"`), 1)
+			a.minio.putData(manifestKey, changed)
+			a.imp.Manifest.ETag = a.minio.etagOf(manifestKey)
+		}, "the signature does not match the manifest: manifest.json or manifest.json.sig changed after the export."},
+		"a signature that is not JSON": {func(_ *testing.T, a *attemptRig) {
+			a.minio.putData(signatureKey, []byte("not json"))
+			a.imp.Signature.ETag = a.minio.etagOf(signatureKey)
+		}, "manifest.json.sig is not a signature this import reads: it is not a JSON object"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newAttemptRig(t)
+			tc.setup(t, a)
+			rep, rem, dir := a.run(t)
+			if rep.Outcome != importer.OutcomeRefused || !strings.Contains(rep.Reason, tc.reason) {
+				t.Fatalf("outcome %q, reason %q; want refused containing %q", rep.Outcome, rep.Reason, tc.reason)
+			}
+			if rep.ArchiveChecked == nil || *rep.ArchiveChecked {
+				t.Errorf("archiveChecked %v, want false", rep.ArchiveChecked)
+			}
+			if rep.PublicKeySHA256 != trusted {
+				t.Errorf("report key %q, want the trusted %q", rep.PublicKeySHA256, trusted)
+			}
+			if a.nexus.uploadCount() != 0 || rem != nil {
+				t.Errorf("a refused archive was published (%d uploads) or removed (%+v)", a.nexus.uploadCount(), rem)
+			}
+			for _, c := range a.minio.recorded() {
+				if c.Op == "get" && c.Key == archiveKey {
+					t.Errorf("the archive was read although its manifest was not authenticated")
+				}
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Errorf("the work directory still holds %d entries", len(entries))
+			}
+		})
+	}
+}
+
+func TestAttemptSignatureGone(t *testing.T) {
+	a := newAttemptRig(t)
+	a.minio.vanish(signatureKey)
+	rep, rem, _ := a.run(t)
+	if rep.Outcome != importer.OutcomeIncomplete || !strings.Contains(rep.Reason+failReasons(rep), "the signature is no longer in MinIO") {
+		t.Fatalf("outcome %q, reason %q %q; want incomplete: the signature is no longer in MinIO", rep.Outcome, rep.Reason, failReasons(rep))
+	}
+	if a.nexus.uploadCount() != 0 || rem != nil {
+		t.Errorf("nothing may be published or removed: %d uploads, %+v", a.nexus.uploadCount(), rem)
 	}
 }
 

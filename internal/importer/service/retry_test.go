@@ -33,7 +33,8 @@ func (r *importRig) endedImport(t *testing.T, outcome string) string {
 	t.Helper()
 	imp, err := r.store.Create("alice",
 		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey), Size: 1},
-		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey), Size: 1}, "")
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey), Size: 1},
+		&imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey), Size: 1}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

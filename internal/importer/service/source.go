@@ -15,7 +15,7 @@ import (
 )
 
 // changed is why an attempt refuses an object whose ETag moved since the import
-// was created. what names the object: "the archive" or "the manifest".
+// was created. what names the object: "the archive", "the manifest" or "the signature".
 func changed(what string) error {
 	return &archive.Refusal{Reason: what + " changed in MinIO; start a new import"}
 }
@@ -27,16 +27,24 @@ const minioCallTimeout = 30 * time.Second
 // One global queue runs one import at a time, so a stalled MinIO would hold every user.
 var idleReadTimeout = 60 * time.Second
 
-// minioSource reads an import's manifest and archive from the user's bucket,
+// minioSource reads an import's manifest, signature and archive from the user's bucket,
 // each once and each on condition that its ETag is still the recorded one. A
 // failure of the read marks importer.ErrSource, so the attempt ends
 // incomplete; an object that changed is a refusal that says it changed in
 // MinIO and asks for a new import.
 func minioSource(o Objects, bucket string, imp imports.Import) importer.Source {
 	return importer.Source{
-		Name: cleanText(path.Base(imp.Archive.Key)),
+		Name:          cleanText(path.Base(imp.Archive.Key)),
+		SignatureName: signatureName,
 		Manifest: func(ctx context.Context) (io.ReadCloser, error) {
 			return openObject(ctx, o, bucket, imp.Manifest, "the manifest")
+		},
+		Signature: func(ctx context.Context) (io.ReadCloser, error) {
+			sig := sigOf(imp)
+			if sig.Key == "" {
+				return nil, importer.ErrUnsigned
+			}
+			return openObject(ctx, o, bucket, sig, "the signature")
 		},
 		Archive: func(ctx context.Context) (io.ReadCloser, error) {
 			return openObject(ctx, o, bucket, imp.Archive, "the archive")

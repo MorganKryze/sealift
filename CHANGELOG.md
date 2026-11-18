@@ -15,6 +15,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- `sealift import` and `sealift import-server` refuse an archive unless its manifest carries a valid Ed25519 signature by the key in `publicKeyFile`. `signatureKeyFile` is gone from the settings, `sealift import` takes `-signature`, and archives from 0.4 are refused as unsigned. The import report names the trusted key as `publicKeySha256`.
 - Every export writes `manifest.json.sig`, an Ed25519 signature of `manifest.json`, and the archive no longer carries `signature.key`. The done screen says which key signed the export.
 - A refused import no longer blocks a new import of the same archive, so a mistyped sha256 can be corrected by starting again. An import that is queued, running, incomplete or interrupted still does, whatever refused imports of that archive come after it.
 - `GET /api/me` on the import service also names the user's `bucket` and `folder`.

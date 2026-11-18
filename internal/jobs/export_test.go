@@ -345,8 +345,8 @@ func TestExportRun(t *testing.T) {
 	// Reports.
 	var manifest map[string]any
 	readJSON(t, filepath.Join(exportDir, "manifest.json"), &manifest)
-	if manifest["formatVersion"] != float64(1) {
-		t.Errorf("manifest formatVersion = %v, want 1", manifest["formatVersion"])
+	if manifest["formatVersion"] != float64(2) {
+		t.Errorf("manifest formatVersion = %v, want 2", manifest["formatVersion"])
 	}
 	if manifest["analysisId"] != "20260910T080000Z" {
 		t.Errorf("manifest analysisId = %v", manifest["analysisId"])

@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"crypto/sha512"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -25,10 +24,6 @@ import (
 const (
 	// root is the one directory an archive holds, written as sealift writes it.
 	root = "out/"
-	// keyEntry is the signature key's entry name below root.
-	keyEntry = "signature.key"
-	// maxKeySize is the most Verify reads of the archive's signature key: 64 KiB.
-	maxKeySize = 64 << 10
 	// maxTrailingBytes is the most zero padding Verify accepts after the tar
 	// end marker: 16 KiB, above the 10 KiB record padding of GNU tar.
 	maxTrailingBytes = 16 << 10
@@ -118,7 +113,6 @@ func readRefusal(err error) error {
 // VerifyOptions tell Verify what to expect and where to put the tarballs.
 type VerifyOptions struct {
 	ExpectedSHA256 string // hex sha256 received through a separate channel; empty skips the check
-	SignatureKey   []byte // expected content of out/signature.key; the caller trims its newline
 	Dir            string // absolute, existing, private directory that receives the tarballs
 	Limits         Limits
 }
@@ -141,9 +135,6 @@ func Verify(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	// a service does not control.
 	if !filepath.IsAbs(opts.Dir) {
 		return nil, errors.New("archive: Verify needs an absolute directory")
-	}
-	if len(opts.SignatureKey) == 0 {
-		return nil, refuse("no expected signature key was given")
 	}
 	src := &trackedReader{r: io.LimitReader(r, m.Archive.Size+1)}
 	sum := sha256.New()
@@ -245,7 +236,6 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	checked := make([]Checked, len(m.Packages))
 	done := make([]bool, len(m.Packages))
 	seen := map[string]bool{}
-	keySeen := false
 	var unpacked int64
 	for n := 1; ; n++ {
 		h, err := tr.Next()
@@ -279,13 +269,6 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		}
 		unpacked += h.Size
 		file := strings.TrimPrefix(h.Name, root)
-		if file == keyEntry {
-			if err := checkKey(tr, opts.SignatureKey); err != nil {
-				return nil, err
-			}
-			keySeen = true
-			continue
-		}
 		pend, ok := listed[file]
 		if !ok {
 			return nil, refuse("%s is not listed in the manifest", shown(h.Name))
@@ -304,9 +287,6 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		if !ok {
 			return nil, refuse("%s is absent from the archive", m.Packages[i].File)
 		}
-	}
-	if !keySeen {
-		return nil, refuse("%s is absent from the archive", keyEntry)
 	}
 	return checked, nil
 }
@@ -356,20 +336,6 @@ func checkEntryName(h *tar.Header, seen map[string]bool) error {
 		return refuse("entry %s lies in a subdirectory of out/", name)
 	case h.Typeflag != tar.TypeReg:
 		return refuse("entry %s is not a regular file", name)
-	}
-	return nil
-}
-
-func checkKey(r io.Reader, want []byte) error {
-	got, err := io.ReadAll(io.LimitReader(r, maxKeySize+1))
-	if err != nil {
-		return readRefusal(err)
-	}
-	if len(got) > maxKeySize {
-		return refuse("%s is larger than %d bytes", keyEntry, maxKeySize)
-	}
-	if subtle.ConstantTimeCompare(got, want) != 1 {
-		return refuse("%s differs from the expected value", keyEntry)
 	}
 	return nil
 }

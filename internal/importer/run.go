@@ -2,7 +2,9 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -14,11 +16,12 @@ type Options struct {
 	Settings       Settings
 	Archive        string // packages_npm.tar.gz
 	Manifest       string // manifest.json
+	Signature      string // manifest.json.sig; empty reads Manifest + ".sig"
 	ExpectedSHA256 string // hex sha256 received through a separate channel; empty skips the check
 	ImportVersion  string
 }
 
-// Run checks the archive against its manifest and the signature key, then
+// Run checks the manifest's signature, then the archive against the manifest, then
 // publishes its packages. It writes only to one private temporary directory,
 // removed before it returns, and never to the archive or the manifest.
 func Run(ctx context.Context, opts Options, newPublisher func(Settings) (Publisher, error)) Report {
@@ -38,9 +41,23 @@ func runFiles(ctx context.Context, opts Options, newPublisher func(Settings) (Pu
 	open := func(path string) func(context.Context) (io.ReadCloser, error) {
 		return func(context.Context) (io.ReadCloser, error) { return os.Open(path) }
 	}
+	sigPath := opts.Signature
+	if sigPath == "" {
+		sigPath = opts.Manifest + ".sig"
+	}
+	openSignature := func(context.Context) (io.ReadCloser, error) {
+		f, err := os.Open(sigPath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, ErrUnsigned
+		}
+		return f, err
+	}
 	a := Attempt{
-		Settings:       opts.Settings,
-		Source:         Source{Name: filepath.Base(opts.Archive), Manifest: open(opts.Manifest), Archive: open(opts.Archive)},
+		Settings: opts.Settings,
+		Source: Source{
+			Name: filepath.Base(opts.Archive), SignatureName: filepath.Base(sigPath),
+			Manifest: open(opts.Manifest), Signature: openSignature, Archive: open(opts.Archive),
+		},
 		ExpectedSHA256: opts.ExpectedSHA256,
 		ImportVersion:  opts.ImportVersion,
 	}
@@ -51,14 +68,15 @@ func runFiles(ctx context.Context, opts Options, newPublisher func(Settings) (Pu
 	}
 	if err != nil {
 		return Report{
-			Outcome:        OutcomeRefused,
-			Reason:         cut("could not check the archive: " + err.Error()),
-			Unencrypted:    opts.Settings.NexusURL.Scheme == "http",
-			ImportVersion:  opts.ImportVersion,
-			Archive:        ArchiveInfo{File: a.Source.Name},
-			Nexus:          NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
-			Packages:       []Result{},
-			ArchiveChecked: ptr(false),
+			Outcome:         OutcomeRefused,
+			Reason:          cut("could not check the archive: " + err.Error()),
+			Unencrypted:     opts.Settings.NexusURL.Scheme == "http",
+			ImportVersion:   opts.ImportVersion,
+			PublicKeySHA256: opts.Settings.PublicKeySHA256,
+			Archive:         ArchiveInfo{File: a.Source.Name},
+			Nexus:           NexusInfo{URL: opts.Settings.NexusURL.String(), Repository: opts.Settings.Repository},
+			Packages:        []Result{},
+			ArchiveChecked:  ptr(false),
 		}
 	}
 	defer os.RemoveAll(dir)

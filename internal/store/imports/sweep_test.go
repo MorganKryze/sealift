@@ -13,9 +13,9 @@ func TestSweep(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
 
-	queued, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	queued, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 
-	running, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	running, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	work, _, err := s.Begin("alice", running.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	finished, _ := s.Create("bob", testArchiveObject, testManifestObject, "")
+	finished, _ := s.Create("bob", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if _, _, err := s.Begin("bob", finished.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestSweep(t *testing.T) {
 func TestSweepStartsNothing(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if _, err := s.Sweep(); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestSweepStartsNothing(t *testing.T) {
 func TestSweepSkipsDamaged(t *testing.T) {
 	root := testRoot(t)
 	s, logs := openStore(t, root)
-	good, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	good, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	damaged := plantFixture(t, root, "alice", func(m map[string]any) { m["id"] = "20261106T090000Z-aaaaaaaa" })
 	if err := os.WriteFile(filepath.Join(damaged, "import.json"), []byte(`{"formatVersion": 1, "id": "2026`), 0o600); err != nil {
 		t.Fatal(err)
