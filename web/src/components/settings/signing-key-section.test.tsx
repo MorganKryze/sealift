@@ -202,6 +202,23 @@ describe("SigningKeySection", () => {
     expect(screen.queryByText(/did not reach the server/)).toBeNull()
   })
 
+  it("shows a failure after an earlier regenerate succeeded", async () => {
+    const dialog = await opened()
+    vi.mocked(getSigningKey).mockResolvedValue(newKey)
+    fireEvent.click(within(dialog).getByRole("button", { name: "Regenerate" }))
+    await screen.findByText("b".repeat(64))
+    expect(screen.getByRole("status")).toHaveTextContent("New key in use")
+
+    vi.mocked(regenerateSigningKey).mockRejectedValue(
+      new ProblemError(500, { type: "about:blank", title: "regenerate the signing key", status: 500, detail: "store: write signing key: permission denied" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate key" }))
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Regenerate" }))
+
+    expect(await screen.findByText("store: write signing key: permission denied")).toBeInTheDocument()
+    expect(screen.queryByText(/New key in use/)).toBeNull()
+  })
+
   it("names a key that cannot be loaded", async () => {
     vi.mocked(getSigningKey).mockRejectedValue(new Error("boom"))
     renderSection()
