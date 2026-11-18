@@ -123,6 +123,9 @@ type Import struct {
 
 	// Outcome The latest attempt's outcome, or queued or running while it has none
 	Outcome string `json:"outcome"`
+
+	// Signature A MinIO object as it was when the import was created
+	Signature *Object `json:"signature,omitempty"`
 }
 
 // ImportConflict A Problem that names the import in the way
@@ -159,6 +162,9 @@ type Me struct {
 
 	// MinioConfigured Whether the settings file has a minio section
 	MinioConfigured bool `json:"minioConfigured"`
+
+	// PublicKeySha256 The sha256 of the public key every archive's signature must verify with, as the settings file names it
+	PublicKeySha256 string `json:"publicKeySha256"`
 
 	// User The checked token's preferred_username, which names the user's bucket and folder
 	User string `json:"user"`
@@ -204,9 +210,12 @@ type Report struct {
 	Nexus          ReportNexus     `json:"nexus"`
 	Outcome        string          `json:"outcome"`
 	Packages       []ReportPackage `json:"packages"`
-	Reason         string          `json:"reason"`
-	Target         ReportTarget    `json:"target"`
-	ToolVersion    string          `json:"toolVersion"`
+
+	// PublicKeySha256 The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
+	PublicKeySha256 *string      `json:"publicKeySha256,omitempty"`
+	Reason          string       `json:"reason"`
+	Target          ReportTarget `json:"target"`
+	ToolVersion     string       `json:"toolVersion"`
 
 	// Unencrypted True when Nexus, MinIO or the key set is reached over plain http
 	Unencrypted bool `json:"unencrypted"`

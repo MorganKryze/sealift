@@ -30,6 +30,7 @@ function attempt(outcome: string, packages: ReportPackage[], over: Partial<Attem
 }
 
 const ARCHIVE_ETAG = "\"7c1d0a5e9b3f48d2a6e1c04b5f7a93d2-52\""
+const SIGNATURE_ETAG = "\"5b2f8c19d0e347a6b1c8f20d93e47a15\""
 const MANIFEST_ETAG = "\"e41b6d0c97a2358f1c6b0d94a7e35f82\""
 
 function make(a: Attempt, over: Partial<Import> = {}): Import {
@@ -37,6 +38,7 @@ function make(a: Attempt, over: Partial<Import> = {}): Import {
     id: "20261105T161200Z-a1000003", createdAt: "2026-11-05T16:12:00Z", expectedSha256: "", outcome: a.outcome, archiveRemoved: false, attempts: [a],
     archive: { key: "packages/npm/2026-11-05-hr-forms/packages_npm.tar.gz", etag: ARCHIVE_ETAG, size: 5_500_000 },
     manifest: { key: "packages/npm/2026-11-05-hr-forms/manifest.json", etag: MANIFEST_ETAG, size: 900 },
+    signature: { key: "packages/npm/2026-11-05-hr-forms/manifest.json.sig", etag: SIGNATURE_ETAG, size: 300 },
     ...over,
   }
 }
@@ -60,7 +62,19 @@ describe("EndState", () => {
     expect(screen.getByText(MANIFEST_ETAG)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Copy archive ETag" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Copy manifest ETag" })).toBeInTheDocument()
+    expect(screen.getByText(SIGNATURE_ETAG)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Copy signature ETag" })).toBeInTheDocument()
+    const titles = screen.getAllByRole("term").map((t) => t.textContent)
+    expect(titles).toEqual(["Archive ETag", "Manifest ETag", "Signature ETag"])
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
+  })
+
+  it("complete, removed: a record without a signature shows two ETags", async () => {
+    const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason: "" } })
+    renderEnd(make(a, { archiveRemoved: true, signature: undefined }))
+    expect(await screen.findByRole("heading", { name: "Archive removed from MinIO" })).toBeInTheDocument()
+    expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["Archive ETag", "Manifest ETag"])
+    expect(screen.queryByText("Signature ETag")).toBeNull()
   })
 
   it("complete, removed: shows the reason when the manifest could not be removed", async () => {
@@ -107,6 +121,19 @@ describe("EndState", () => {
     expect(cause).toHaveTextContent(expected)
     expect(screen.getByText("This attempt published nothing and read no package.")).toBeInTheDocument()
     expect(screen.queryByText(/Nothing was published/)).toBeNull()
+    expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/")
+    expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
+  })
+
+  it("a signature refusal: gives the reason in full as the cause, publishes nothing and offers Go to archives", async () => {
+    const trusted = "a".repeat(64)
+    const named = "d".repeat(64)
+    const reason = `the manifest is signed by another key, public key sha256 ${named}; this import trusts ${trusted}. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`
+    const a = attempt("refused", [], { report: { ...attempt("refused", [], {}, reason).report, archiveChecked: false, publicKeySha256: trusted } })
+    renderEnd(make(a))
+    expect(await screen.findByRole("heading", { name: "Refused before the first package" })).toBeInTheDocument()
+    expect(screen.getByText(reason)).toBeInTheDocument()
+    expect(screen.getByText("This attempt published nothing and read no package.")).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/")
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
   })

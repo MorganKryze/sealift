@@ -92,11 +92,13 @@ export function ArchivesList() {
       ) : list.bucketMissing ? (
         <Empty title="No archive in your folder" onRefresh={refresh}>
           <span className="block text-ink">{list.message ?? `MinIO has no bucket ${list.bucket} yet: nothing to list`}</span>
-          Once it exists, upload an archive and its <code className={code}>manifest.json</code> side by side in <code className={code}>{where}</code>.
+          Once it exists, upload an archive, its <code className={code}>manifest.json</code> and its <code className={code}>manifest.json.sig</code> side by side in{" "}
+          <code className={code}>{where}</code>.
         </Empty>
       ) : list.archives.length === 0 ? (
         <Empty title="No archive in your folder" onRefresh={refresh}>
-          Upload an archive and its <code className={code}>manifest.json</code> side by side in <code className={code}>{where}</code>, at the root or one folder below. Then refresh.
+          Upload an archive, its <code className={code}>manifest.json</code> and its <code className={code}>manifest.json.sig</code> side by side in{" "}
+          <code className={code}>{where}</code>, at the root or one folder below. Then refresh.
         </Empty>
       ) : (
         <>

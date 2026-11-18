@@ -26,10 +26,13 @@ export const IDS = {
   refusedDigests: "20261103T101500Z-a1000007",
   interrupted: "20261102T090500Z-a1000008",
   refusedLong: "20261101T120000Z-a1000009",
+  refusedSignature: "20261031T100000Z-a100000c",
   legacy: "20261030T080000Z-a100000a",
   longKey: "20261020T170000Z-a100000b",
 }
 
+// The trusted key's sha256, set once the run's key is generated: the reports the store writes carry it.
+let trustedKeySha = ""
 const sha = (text) => createHash("sha256").update(text).digest("hex")
 const iso = (id) => {
   const [stamp] = id.split("-")
@@ -63,7 +66,7 @@ function report(outcome, list, over = {}) {
     toolVersion: "0.4.0", analysisId: "20261101T090000Z",
     target: { os: "linux", cpu: "x64", libc: "glibc", node: "22.17.1", pnpmVer: "12.3.4" },
     nexus: { url: "http://127.0.0.1:18093", repository: "npm-gate" },
-    counts: counted(list), packages: list, archiveChecked: true, ...over,
+    counts: counted(list), packages: list, archiveChecked: true, publicKeySha256: trustedKeySha, ...over,
   }
 }
 
@@ -91,7 +94,8 @@ function record(id, folder, attempts, over = {}) {
     formatVersion: 1, id, user: "alice", createdAt: iso(id),
     archive: { key: archiveKey, etag: `"${sha(archiveKey).slice(0, 32)}"`, size: 5_500_000 },
     manifest: { key: `${FOLDER}${folder}manifest.json`, etag: `"${sha(folder).slice(0, 32)}"`, size: 1_200 },
-    signature: { key: `${FOLDER}${folder}manifest.json.sig`, etag: `"${sha(`${folder}sig`).slice(0, 32)}"`, size: 400 },
+    // A record written by v0.4.0 holds no signature: its folder has none either.
+    signature: over.unsigned ? undefined : { key: `${FOLDER}${folder}manifest.json.sig`, etag: `"${sha(`${folder}sig`).slice(0, 32)}"`, size: 400 },
     expectedSha256: over.expectedSha256 ?? "", attempts,
   }
 }
@@ -105,6 +109,7 @@ function aliceRecords() {
   const removed = { removed: true, reason: "" }
   const kept = { removed: false, reason: "the archive's ETag changed after the import read it" }
   const digestReason = `the archive's sha256 is ${sha("changed")} but the expected sha256 is ${sha("expected")}`
+  const signatureReason = `the manifest is signed by another key, public key sha256 ${sha("other key")}; this import trusts ${trustedKeySha}. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`
   const longFolder = "k".repeat(1024 - FOLDER.length - 1 - ARCHIVE.length)
   const longKey = `${FOLDER}${longFolder}/${ARCHIVE}`
   if (longKey.length !== 1024) throw new Error(`the long key holds ${longKey.length} bytes, not 1024`)
@@ -138,8 +143,11 @@ function aliceRecords() {
       ended(1, iso(IDS.refusedLong), "refused", [], { reason: longReason("the manifest refused the archive:"), archiveChecked: false }),
     ]),
     record(IDS.legacy, "2026-10-30-legacy-site/", [
-      // A record written by v0.4.0: no kind on a failed package, no archiveChecked.
-      ended(1, iso(IDS.legacy), "incomplete", packages(12, 8, 2, [{ reason: "Nexus answered 500" }, { reason: "interrupted" }]), { archiveChecked: undefined }),
+      // A record written by v0.4.0: no kind on a failed package, no archiveChecked, no public key sha256.
+      ended(1, iso(IDS.legacy), "incomplete", packages(12, 8, 2, [{ reason: "Nexus answered 500" }, { reason: "interrupted" }]), { archiveChecked: undefined, publicKeySha256: undefined }),
+    ], { unsigned: true }),
+    record(IDS.refusedSignature, "2026-10-31-regenerated/", [
+      ended(1, iso(IDS.refusedSignature), "refused", [], { reason: signatureReason, archiveChecked: false }),
     ]),
     record(IDS.longKey, `${longFolder}/`, [ended(1, iso(IDS.longKey), "complete", packages(30, 20, 10))], { archiveKey: longKey }),
   ]
@@ -163,7 +171,7 @@ function minioAnswer(bucket) {
     case "user-alice": {
       const objects = aliceRecords()
         .filter((r) => r.id !== IDS.completeRemoved)
-        .flatMap((r) => [{ ...r.archive, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.manifest, modified: `${iso(r.id).slice(0, -1)}.000Z` }, { ...r.signature, modified: `${iso(r.id).slice(0, -1)}.000Z` }])
+        .flatMap((r) => [r.archive, r.manifest, r.signature].filter(Boolean).map((o) => ({ ...o, modified: `${iso(r.id).slice(0, -1)}.000Z` })))
       const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
       // Archives the service cannot import, one for each rule, and a 200-character folder.
       upload("2026-11-06-new-export/", ARCHIVE, 4_200_000)
@@ -232,7 +240,9 @@ export async function startImportFixtures(dir) {
   mkdirSync(dir, { recursive: true })
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), `${text}\n`)
   // The trusted key is generated per run: the gate holds no fixed key.
-  writeFileSync(join(dir, "public-key.pem"), generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" }))
+  const trusted = generateKeyPairSync("ed25519").publicKey
+  trustedKeySha = sha(trusted.export({ type: "spki", format: "der" }))
+  writeFileSync(join(dir, "public-key.pem"), trusted.export({ type: "spki", format: "pem" }))
   const settings = join(dir, "settings.yaml")
   writeFileSync(
     settings,

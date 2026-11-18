@@ -9,6 +9,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/s3"
 	"github.com/MorganKryze/sealift/internal/importer/token"
 )
@@ -76,6 +78,22 @@ func TestMeSaysWhetherMinIOIsConfigured(t *testing.T) {
 				t.Fatalf("body %q: %+v, %v", rec.Body, me, err)
 			}
 		})
+	}
+}
+
+func TestMeNamesTheTrustedKey(t *testing.T) {
+	want := archive.PublicKeySHA256(testPub)
+	r := newRigConfig(t, Config{
+		Verifier: fakeVerifier{claims: map[string]token.Claims{"t": named("alice")}},
+		Settings: importer.Settings{PublicKey: testPub, PublicKeySHA256: want},
+	})
+	rec := r.get("/api/me", "t")
+	var me Me
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %q: %v", rec.Code, rec.Body, err)
+	}
+	if me.PublicKeySha256 != want {
+		t.Errorf("publicKeySha256 = %q, want %q", me.PublicKeySha256, want)
 	}
 }
 

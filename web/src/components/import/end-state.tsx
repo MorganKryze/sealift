@@ -71,6 +71,7 @@ export function EndState({ imp }: { imp: Import }) {
           <dl className="mt-2 grid gap-3">
             <Etag title="Archive ETag" value={imp.archive.etag} label="archive ETag" />
             <Etag title="Manifest ETag" value={imp.manifest.etag} label="manifest ETag" />
+            {imp.signature ? <Etag title="Signature ETag" value={imp.signature.etag} label="signature ETag" /> : null}
           </dl>
         </Card>
       )

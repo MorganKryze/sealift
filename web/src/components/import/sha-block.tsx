@@ -9,6 +9,8 @@ interface ShaBlockProps {
   manifest: string
   /** The attempt's record of the archive's checks; absent before they run and in a report that never recorded them. */
   checked: boolean | undefined
+  /** The public key sha256 the attempt checked with; absent before it ran and in a report of sealift 0.4. */
+  publicKey: string | undefined
   /** The attempt's status: an absent mark means "not run yet" while it waits or runs, "not recorded" once it ended. */
   status: string
 }
@@ -29,7 +31,7 @@ function Digest({ title, value, label }: { title: string; value: string; label: 
  * Both digests in full and what the attempt recorded about the archive's checks. The word
  * "matched" appears only when the record says the checks passed: an outcome or a count proves nothing.
  */
-export function ShaBlock({ expected, manifest, checked, status }: ShaBlockProps) {
+export function ShaBlock({ expected, manifest, checked, publicKey, status }: ShaBlockProps) {
   return (
     <div>
       <dl className="grid gap-4">
@@ -49,12 +51,20 @@ export function ShaBlock({ expected, manifest, checked, status }: ShaBlockProps)
             <dd className="mt-1 text-sm">Not read</dd>
           </div>
         )}
+        {publicKey ? (
+          <Digest title="Public key sha256" value={publicKey} label="public key sha256" />
+        ) : (
+          <div>
+            <dt className="text-sm text-muted">Public key sha256</dt>
+            <dd className="mt-1 text-sm">{status === "queued" || status === "running" ? "Not read" : "Not recorded"}</dd>
+          </div>
+        )}
       </dl>
       <p className="mt-4 flex items-start gap-2 text-sm">
         {checked === true ? (
           <>
             <CircleCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-severity-resolved-fg" />
-            <span>The archive matched: it passed its checks against the manifest and the signature key.</span>
+            <span>The archive matched: its manifest carries a valid signature by this key, and the archive passed its checks against the manifest.</span>
           </>
         ) : checked === false ? (
           <>

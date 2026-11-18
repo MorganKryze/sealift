@@ -45,7 +45,11 @@ describe("ArchiveRow", () => {
     renderRow(archive({ importable: false, reason: "the folder holds more than one archive" }))
     await screen.findByText("Cannot be imported")
     expect(screen.getByText("the folder holds more than one archive")).toBeInTheDocument()
-    expect(screen.getByText(/Keep one archive and its manifest.json side by side, at the root of packages\/npm\/ or one folder below/)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Keep one archive with its manifest.json and manifest.json.sig side by side, at the root of packages/npm/ or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.",
+      ),
+    ).toBeInTheDocument()
     expect(screen.queryByRole("button")).not.toBeInTheDocument()
     expect(screen.queryByRole("link")).not.toBeInTheDocument()
     expect(screen.queryByText("Start")).not.toBeInTheDocument()

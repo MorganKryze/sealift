@@ -164,7 +164,7 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/me` | The user the checked token stands for, whether the settings file has a `minio` section, and the user's `bucket` and `folder`: `{"user":"alice","minioConfigured":true,"bucket":"user-alice","folder":"packages/npm/"}`. The bucket and the folder are named whether or not the settings file has a `minio` section. |
+| `GET /api/me` | The user the checked token stands for, whether the settings file has a `minio` section, the user's `bucket` and `folder`, and `publicKeySha256`, the sha256 of the public key every signature must verify with: `{"user":"alice","minioConfigured":true,"bucket":"user-alice","folder":"packages/npm/","publicKeySha256":"9f2c…"}`. The bucket and the folder are named whether or not the settings file has a `minio` section. |
 | `GET /api/archives` | The archives in the user's MinIO folder. |
 | `POST /api/imports` | Queue an import of one of those archives. |
 | `GET /api/imports` | The user's imports, newest first. |
@@ -244,7 +244,7 @@ Before it reads anything, each attempt, the first included, heads the archive, t
 
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
 
-The report carries two fields that `sealift import -report` writes too, described in [The import report](archive-format.md#the-import-report). `archiveChecked` is `true` once the archive passed its checks and `false` before, or when the attempt ended without passing them. Each failed package has a `kind`: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. A client reads the kind to tell what to do next and reads `reason` for the words. An attempt that ended before it read the archive because an object changed in MinIO has `archiveChecked` false and no package. An import recorded by sealift 0.4.0 or earlier has neither field, and the service serves it as it is, without a `kind` and without `archiveChecked`.
+The report carries three fields that `sealift import -report` writes too, described in [The import report](archive-format.md#the-import-report). `publicKeySha256` is the sha256 of the public key the attempt checked the signature with. `archiveChecked` is `true` once the archive passed its checks and `false` before, or when the attempt ended without passing them. Each failed package has a `kind`: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. A client reads the kind to tell what to do next and reads `reason` for the words. An attempt that ended before it read the archive because an object changed in MinIO has `archiveChecked` false and no package. An import recorded by sealift 0.4.0 or earlier has none of them, and the service serves it as it is, without a `kind`, without `archiveChecked` and without `publicKeySha256`.
 
 While an attempt runs, its report grows in two steps. Before the manifest is read, the packages are empty and `archiveChecked` is absent. Once the manifest is read, the report holds the manifest's `target`, the `archive` and `nexus` objects and every package as `pending`, with `archiveChecked` false and no `outcome`. When the archive passes its checks, `archiveChecked` turns `true`, and each package then moves to its final state. The `outcome` and the `reason` are written with the end.
 

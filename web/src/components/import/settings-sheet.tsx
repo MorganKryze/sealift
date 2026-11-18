@@ -1,6 +1,7 @@
 import { X } from "lucide-react"
 import { useEffect, useRef } from "react"
 
+import { CopyControl } from "@/components/copy-control"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useReturnFocus } from "@/hooks/use-return-focus"
 import { useMe } from "@/import/api/queries"
@@ -98,6 +99,21 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
             <div>
               <dt className="text-muted">Folder</dt>
               <dd className="mt-0.5 font-mono [overflow-wrap:anywhere]">{value(me.data?.folder)}</dd>
+            </div>
+          </dl>
+        </section>
+        <section className="flex flex-col gap-4">
+          <div>
+            <h3 className="text-base font-semibold text-ink">Trusted key</h3>
+            <p className="mt-0.5 text-sm text-muted">Archives must be signed by the key with this sha256. Compare it with the one in sealift's Settings on the connected side.</p>
+          </div>
+          <dl className="grid gap-3 text-sm">
+            <div>
+              <dt className="text-muted">Public key sha256</dt>
+              <dd className="mt-0.5 flex flex-wrap items-start gap-x-3 gap-y-2">
+                <code className="min-w-0 font-mono text-[13px] [overflow-wrap:anywhere]">{value(me.data?.publicKeySha256)}</code>
+                {me.data?.publicKeySha256 ? <CopyControl text={me.data.publicKeySha256} label="public key sha256" /> : null}
+              </dd>
             </div>
           </dl>
         </section>

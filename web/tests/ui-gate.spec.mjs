@@ -59,6 +59,7 @@ export const IMPORT = {
     { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
     { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
     { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
     { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
     { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
     { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
