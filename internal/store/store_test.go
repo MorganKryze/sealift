@@ -128,6 +128,13 @@ func TestOpenRewritesA04Settings(t *testing.T) {
 	if jsonHasKey(t, raw, "signatureKey") || strings.Contains(string(raw), "lab-signature-key") {
 		t.Fatalf("settings.json still holds the key: %s", raw)
 	}
+	var onDisk Settings
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("decode settings.json: %v", err)
+	}
+	if onDisk != want {
+		t.Fatalf("settings.json holds %+v, want %+v", onDisk, want)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
@@ -141,8 +148,12 @@ func TestOpenRewritesA04Settings(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	if _, err := Open(root); err != nil {
+	second, err := Open(root)
+	if err != nil {
 		t.Fatalf("second Open: %v", err)
+	}
+	if got := second.Settings(); got != want {
+		t.Fatalf("second Open Settings() = %+v, want %+v", got, want)
 	}
 	info, err = os.Stat(path)
 	if err != nil {
