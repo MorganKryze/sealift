@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 import { nextAction } from "@/import/lib/kinds"
 import { counts, notFinished, type Attempt, type ReportPackage } from "@/import/lib/outcome"
 
-import { CopyControl } from "./copy-control"
+import { CopyControl } from "@/components/copy-control"
 
 const PAGE = 100
 

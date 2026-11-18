@@ -25,7 +25,8 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 // Routes returns every route this backend serves: the health check
 // outside the contract, every operation of api/openapi.yaml mounted at
 // base URL /api through the generated strict server, and the frontend
-// build in static for every other path. WatchJob (the event stream) is
+// build in static for every other path. refuseCrossSite wraps all of it and
+// guards the signing key's regenerate route only. WatchJob (the event stream) is
 // one of the contract's operations: Handlers embeds *EventsHandler, so the
 // generated dispatch reaches it exactly like any JSON operation.
 func Routes(h *Handlers, static fs.FS) http.Handler {
@@ -52,5 +53,5 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 		http.NotFound(w, r)
 	})
 	mux.Handle("/", SPA(static))
-	return mux
+	return refuseCrossSite(mux, allowedHosts(h.ListenAddr))
 }

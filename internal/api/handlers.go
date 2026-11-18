@@ -25,10 +25,13 @@ const manifestSizeLimit = 1 << 20
 // every operation reads or writes through Store, Service or Tools.
 type Handlers struct {
 	*EventsHandler
-	Store   *store.Store
-	Service *jobs.Service
-	Tools   *tools.Manager
-	Trivy   runner.Trivy
+	// ListenAddr is the address the server listens on; its host may send a
+	// regenerate of the signing key.
+	ListenAddr string
+	Store      *store.Store
+	Service    *jobs.Service
+	Tools      *tools.Manager
+	Trivy      runner.Trivy
 }
 
 // problemBody is the shape every operation's default response carries.

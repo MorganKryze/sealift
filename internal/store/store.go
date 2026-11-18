@@ -64,10 +64,16 @@ type Store struct {
 
 	mu       sync.RWMutex
 	settings Settings
+	signing  SigningKey
+
+	// regenerating serializes key replacements, so the file and the key in
+	// use always come from the same call.
+	regenerating sync.Mutex
 }
 
 // Open creates the data volume layout under root when it is missing, then
-// loads private/settings.json or writes the defaults there.
+// loads private/settings.json or writes the defaults there, then loads
+// private/signing-key.pem or generates the key pair.
 //
 // It also sets the process umask to 002. A container's default umask of 022
 // would strip the group write bit from every file this package creates
@@ -112,6 +118,12 @@ func Open(root string) (*Store, error) {
 		s.settings = loaded
 		s.mu.Unlock()
 	}
+
+	key, err := loadSigningKey(s.signingKeyPath())
+	if err != nil {
+		return nil, err
+	}
+	s.signing = key
 	return s, nil
 }
 

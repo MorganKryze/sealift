@@ -2,10 +2,10 @@ import { Link } from "@tanstack/react-router"
 import { Archive, CircleCheck, CirclePause, Info, ShieldX, type LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
+import { CopyControl } from "@/components/copy-control"
 import { counts, latestAttempt, type Import } from "@/import/lib/outcome"
 import { formatWhen } from "@/lib/utils"
 
-import { CopyControl } from "./copy-control"
 import { RetryAction } from "./retry-card"
 
 function Card({ icon: Icon, tone, title, children, panel = "border-line bg-card" }: { icon: LucideIcon; tone: string; title: ReactNode; children: ReactNode; panel?: string }) {

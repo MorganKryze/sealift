@@ -333,7 +333,7 @@ function controlClass(invalid: boolean) {
   )
 }
 
-function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+export function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
       <div>

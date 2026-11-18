@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, CircleQuestionMark } from "lucide-react"
 
-import { CopyControl } from "./copy-control"
+import { CopyControl } from "@/components/copy-control"
 
 interface ShaBlockProps {
   /** The sha256 the user gave when starting, or empty. */

@@ -88,6 +88,25 @@ A dependency left out of the selection, or given an empty list, stays at its cur
 
 [Settings](../settings.md#from-the-api) shows both, with real answers.
 
+## Signing key
+
+sealift generates an Ed25519 key pair on first start and keeps the private key in the data volume, in `private/signing-key.pem` (mode 0600, in a 0700 directory). The API returns the public half only: no route, answer, log line or error carries the private key.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/signing-key` | The public key and its fingerprint: `{"publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...", "publicKeySha256": "<64 lowercase hex digits>"}`. `publicKeySha256` is the sha256 of the key's DER SubjectPublicKeyInfo encoding. |
+| `POST /api/signing-key/regenerate` | Replace the key pair with a new one and answer with the new public key, in the same shape. The body is `{}` with `Content-Type: application/json`. |
+
+A regenerate answers:
+
+| Status | When |
+| --- | --- |
+| 200 | The new pair is on disk and in use. |
+| 403 | The `Host` is not this server's own (the listen address's host, `localhost`, `127.0.0.1` or `::1`), the `Origin` is not one of those hosts, `Sec-Fetch-Site` is `cross-site`, or the body is not `application/json`. The key is unchanged. |
+| 500 | The new key cannot be written. The problem's `detail` names the file; the old key stays on disk and in use. |
+
+A request with no `Origin` and a JSON body passes the check, as curl must. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a PEM private key or is not Ed25519: it never replaces a key file by itself.
+
 ## Tools
 
 | Route | Purpose |
