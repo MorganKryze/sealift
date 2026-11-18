@@ -196,6 +196,14 @@ func TestSigningKeyNeverPrints(t *testing.T) {
 		outputs["store "+verb] = fmt.Sprintf(verb, s)
 		outputs["holder "+verb] = fmt.Sprintf(verb, holder{Name: "h", Store: s})
 	}
+	type job struct {
+		name string
+		key  SigningKey
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d", "%x", "%q"} {
+		outputs["job "+verb] = fmt.Sprintf(verb, job{name: "j", key: key})
+		outputs["ptr job "+verb] = fmt.Sprintf(verb, &job{name: "j", key: key})
+	}
 	outputs["Sprint"] = fmt.Sprint(key, []SigningKey{key}, map[string]SigningKey{"k": key})
 	blob, err := json.Marshal(key)
 	if err != nil {

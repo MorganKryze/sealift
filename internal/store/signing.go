@@ -23,9 +23,10 @@ type SigningKey struct {
 	PublicPEM       string
 	PublicKeySHA256 string
 
-	// private is a pointer to the key: fmt prints a nested pointer as an
-	// address, even when a bad verb makes it print the holder's fields.
-	private *ed25519.PrivateKey
+	// private is a pointer to a pointer to the key. A bad verb on a struct
+	// that holds this value makes fmt print the field again at depth 0 and
+	// dereference one pointer level; the second level stays an address.
+	private **ed25519.PrivateKey
 }
 
 // String names the key by its public key sha256.
@@ -41,10 +42,11 @@ func (k SigningKey) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(k.String
 
 func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 	pub := priv.Public().(ed25519.PublicKey)
+	p := &priv
 	return SigningKey{
 		PublicPEM:       archive.PublicKeyPEM(pub),
 		PublicKeySHA256: archive.PublicKeySHA256(pub),
-		private:         &priv,
+		private:         &p,
 	}
 }
 
