@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,6 +146,30 @@ func TestLoadSettings(t *testing.T) {
 		}
 		if string(s.Password) != testPassword+"\n" {
 			t.Errorf("password = %q", s.Password)
+		}
+	})
+	t.Run("files lists every file the settings name", func(t *testing.T) {
+		body := strings.Replace(validSetting, "passwordFile: nexus-password\n", "passwordFile: nexus-password\n  caFile: ca.pem\n", 1)
+		body += strings.Replace(tokenSection, "  audience: sealift\n", "  audience: sealift\n  caFile: ca.pem\n", 1)
+		body += strings.Replace(minioSection, "  secretKeyFile: minio-secret-key\n", "  secretKeyFile: minio-secret-key\n  caFile: ca.pem\n", 1)
+		path := writeSettings(t, body)
+		s, err := LoadSettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Dir(path)
+		want := []NamedFile{
+			{"the settings file", path},
+			{"nexus.passwordFile", filepath.Join(dir, "nexus-password")},
+			{"publicKeyFile", filepath.Join(dir, "public-key.pem")},
+			{"nexus.caFile", filepath.Join(dir, "ca.pem")},
+			{"token.caFile", filepath.Join(dir, "ca.pem")},
+			{"minio.accessKeyFile", filepath.Join(dir, "minio-access-key")},
+			{"minio.secretKeyFile", filepath.Join(dir, "minio-secret-key")},
+			{"minio.caFile", filepath.Join(dir, "ca.pem")},
+		}
+		if !slices.Equal(s.Files, want) {
+			t.Errorf("Files = %v, want %v", s.Files, want)
 		}
 	})
 	t.Run("http is accepted", func(t *testing.T) {
