@@ -270,7 +270,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get settings, with signatureKey masked */
+        /** Get settings */
         get: operations["getSettings"];
         /** Update settings */
         put: operations["updateSettings"];
@@ -444,8 +444,6 @@ export interface components {
         /** @description Every value the interface can change. */
         Settings: {
             target: components["schemas"]["Target"];
-            /** @description Masked on read, never logged */
-            signatureKey: string;
             minReleaseAgeDays: number;
             resolveParallelism: number;
             downloadParallelism: number;
@@ -591,7 +589,7 @@ export interface components {
             latestSizeBytes: number;
             /** @description Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age */
             trivyRecommended?: string;
-            /** @description Whether trivy, its database and a signature key are all in place */
+            /** @description Whether trivy and its database are both in place */
             ready: boolean;
             /** @description Names of what ready needs and does not have yet */
             missing: string[];
@@ -1117,7 +1115,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated settings, with signatureKey masked */
+            /** @description Updated settings */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -65,8 +65,8 @@ func newTestHandlers(t *testing.T, q *jobs.Queue) *Handlers {
 
 // seedToolsReady makes st report ready (tools.Manager.Ready) without any
 // network access: an installed, active Trivy version, a vulnerability
-// database date, and a signature key. A test of the readiness gate
-// itself starts from a store this was never called on instead.
+// database date. A test of the readiness gate itself starts from a store
+// this was never called on instead.
 func seedToolsReady(t *testing.T, st *store.Store) {
 	t.Helper()
 	const version = "0.0.0-test"
@@ -85,11 +85,6 @@ func seedToolsReady(t *testing.T, st *store.Store) {
 	meta := `{"UpdatedAt":"2026-09-01T00:00:00Z"}`
 	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(meta), 0o664); err != nil {
 		t.Fatalf("seed trivy db metadata: %v", err)
-	}
-	settings := st.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := st.SaveSettings(settings); err != nil {
-		t.Fatalf("seed signature key: %v", err)
 	}
 }
 

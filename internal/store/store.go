@@ -116,6 +116,9 @@ func Open(root string) (*Store, error) {
 		if err := readJSONFile(settingsPath, &loaded); err != nil {
 			return nil, fmt.Errorf("store: read settings: %w", err)
 		}
+		if err := dropSignatureKey(settingsPath, loaded); err != nil {
+			return nil, err
+		}
 		s.mu.Lock()
 		s.settings = loaded
 		s.mu.Unlock()
@@ -127,6 +130,27 @@ func Open(root string) (*Store, error) {
 	}
 	s.signing = &key
 	return s, nil
+}
+
+// dropSignatureKey rewrites a settings.json from a 0.4 volume without its
+// shared "signatureKey", which the signing key replaced. A file without the
+// field is left as it is.
+func dropSignatureKey(path string, loaded Settings) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("store: read settings: %w", err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return fmt.Errorf("store: read settings: %w", err)
+	}
+	if _, ok := keys["signatureKey"]; !ok {
+		return nil
+	}
+	if err := writeJSONFile(path, loaded, settingsMode); err != nil {
+		return fmt.Errorf("store: rewrite settings: %w", err)
+	}
+	return nil
 }
 
 // Root returns the directory the store is rooted at.

@@ -19,6 +19,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - A refused import no longer blocks a new import of the same archive, so a mistyped sha256 can be corrected by starting again. An import that is queued, running, incomplete or interrupted still does, whatever refused imports of that archive come after it.
 - `GET /api/me` on the import service also names the user's `bucket` and `folder`.
 
+### Removed
+
+- The signature key setting: the Settings section and the setup field are gone, and an export no longer needs a key typed in. A `settings.json` from 0.4 loses its `signatureKey` on the first start.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

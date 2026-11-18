@@ -15,7 +15,6 @@ type Target struct {
 // Settings holds every value the interface can change.
 type Settings struct {
 	Target              Target `json:"target"`
-	SignatureKey        string `json:"signatureKey"`
 	MinReleaseAgeDays   int    `json:"minReleaseAgeDays"`
 	ResolveParallelism  int    `json:"resolveParallelism"`
 	DownloadParallelism int    `json:"downloadParallelism"`

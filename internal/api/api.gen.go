@@ -315,9 +315,6 @@ type Settings struct {
 	MinReleaseAgeDays   int `json:"minReleaseAgeDays"`
 	ResolveParallelism  int `json:"resolveParallelism"`
 
-	// SignatureKey Masked on read, never logged
-	SignatureKey string `json:"signatureKey"`
-
 	// Target The system a resolution or an export is prepared for
 	Target Target `json:"target"`
 }
@@ -371,7 +368,7 @@ type ToolsState struct {
 	Missing       []string `json:"missing"`
 	PnpmInstalled []string `json:"pnpmInstalled"`
 
-	// Ready Whether trivy, its database and a signature key are all in place
+	// Ready Whether trivy and its database are both in place
 	Ready          bool      `json:"ready"`
 	TrivyActive    string    `json:"trivyActive"`
 	TrivyDbDate    time.Time `json:"trivyDbDate"`
@@ -643,7 +640,7 @@ type ServerInterface interface {
 	// SetProjectTarget Change the project's target platform and toolchain
 	// (PUT /projects/{projectId}/target)
 	SetProjectTarget(w http.ResponseWriter, r *http.Request, projectId ProjectId)
-	// GetSettings Get settings, with signatureKey masked
+	// GetSettings Get settings
 	// (GET /settings)
 	GetSettings(w http.ResponseWriter, r *http.Request)
 	// UpdateSettings Update settings
@@ -2535,7 +2532,7 @@ type StrictServerInterface interface {
 	// SetProjectTarget Change the project's target platform and toolchain
 	// (PUT /projects/{projectId}/target)
 	SetProjectTarget(ctx context.Context, request SetProjectTargetRequestObject) (SetProjectTargetResponseObject, error)
-	// GetSettings Get settings, with signatureKey masked
+	// GetSettings Get settings
 	// (GET /settings)
 	GetSettings(ctx context.Context, request GetSettingsRequestObject) (GetSettingsResponseObject, error)
 	// UpdateSettings Update settings

@@ -35,10 +35,6 @@ import (
 // this zero value.
 var ToolVersion = "dev"
 
-// ErrSignatureKeyMissing reports an export queued while settings.json still
-// holds an empty signatureKey.
-var ErrSignatureKeyMissing = errors.New("jobs: signatureKey is empty, set it in settings before exporting")
-
 // ErrUnknownSelection reports a selection entry naming a version the
 // analysis never resolved: neither a dependency's current version nor one
 // of its candidates.
@@ -127,9 +123,6 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 		}
 	}()
 
-	if e.Settings.SignatureKey == "" {
-		return ErrSignatureKeyMissing
-	}
 	// One key signs the whole export: a regenerate while it runs must not
 	// split the archive's manifest and the signature across two keys.
 	key := e.Store.SigningKey()

@@ -233,7 +233,7 @@ func (h *testHarness) newExport(t *testing.T, analysisDir, exportDir string, inc
 		Registry: &npm.Client{Registry: h.registry.URL, Backoff: func(int) time.Duration { return 0 }},
 		Trivy:    &exportFakeTrivy{scanJSON: exportScanJSON},
 		Project:  store.Project{ID: "demo", Name: "demo", Target: store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}},
-		Settings: store.Settings{SignatureKey: "top-secret", DownloadParallelism: 4},
+		Settings: store.Settings{DownloadParallelism: 4},
 		Analysis: AnalysisRef{ID: "20260910T080000Z", Dir: analysisDir, Result: h.result()},
 		// @scope/gadget selects two versions at once, so a version that
 		// breaks the build is not the only one already sitting in Nexus.
@@ -733,20 +733,6 @@ func TestExportFilesNeverHoldThePrivateKey(t *testing.T) {
 		}
 	}
 	check("the events", []byte(strings.Join(events, "\n")))
-}
-
-func TestExportRunRefusesEmptySignatureKey(t *testing.T) {
-	h := newTestHarness(t)
-	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
-	h.buildAnalysis(analysisDir)
-
-	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
-	exp := h.newExport(t, analysisDir, exportDir, false)
-	exp.Settings.SignatureKey = ""
-
-	if err := exp.Run(context.Background(), noopEmit); !errors.Is(err, ErrSignatureKeyMissing) {
-		t.Fatalf("Run: err = %v, want ErrSignatureKeyMissing", err)
-	}
 }
 
 // TestExportDownloadSkipsCacheHit proves the cache hit does not merely

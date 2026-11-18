@@ -2,12 +2,12 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { getSettings, updateSettings, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
+import { getSigningKey, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
 import { SetupScreen } from "@/components/setup-screen"
 
 vi.mock("@/api/settings", async () => {
   const actual = await vi.importActual<typeof import("@/api/settings")>("@/api/settings")
-  return { ...actual, getSettings: vi.fn(), updateSettings: vi.fn(), updateTrivy: vi.fn(), updateTrivyDB: vi.fn() }
+  return { ...actual, getSigningKey: vi.fn(), updateTrivy: vi.fn(), updateTrivyDB: vi.fn() }
 })
 
 const missing: ToolsState = {
@@ -19,7 +19,7 @@ const missing: ToolsState = {
   trivyDbDate: "0001-01-01T00:00:00Z",
   latestSizeBytes: 45_424_969,
   ready: false,
-  missing: ["trivy", "trivy-db", "signature-key"],
+  missing: ["trivy", "trivy-db"],
 }
 
 function renderSetup(onContinue = vi.fn()) {
@@ -38,8 +38,10 @@ function renderSetup(onContinue = vi.fn()) {
 
 const card = (title: RegExp) => screen.getByRole("heading", { name: title }).closest("[data-tool]") as HTMLElement
 
+const SHA = "3f1c9a5e7b2d4c60a8e1f3b5d7c9a1e3f5b7d9c1e3a5b7d9f1c3e5a7b9d1f3c5"
+
 beforeEach(() => {
-  vi.mocked(getSettings).mockResolvedValue({ target: { os: "linux", cpu: "x64", libc: "glibc", node: "22.17.1", pnpmVer: "10.34.5" }, signatureKey: "", minReleaseAgeDays: 14, resolveParallelism: 4, downloadParallelism: 16 })
+  vi.mocked(getSigningKey).mockResolvedValue({ publicKeyPem: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n", publicKeySha256: SHA })
 })
 
 describe("SetupScreen", () => {
@@ -70,13 +72,20 @@ describe("SetupScreen", () => {
     expect(onContinue).toHaveBeenCalledOnce()
   })
 
-  it("saves the key on Enter", async () => {
-    vi.mocked(updateSettings).mockResolvedValue({} as never)
+  it("says the key is generated and shows its sha256, with no input", async () => {
     renderSetup()
-    await waitFor(() => expect(getSettings).toHaveBeenCalled())
-    const input = screen.getByLabelText("Signature key")
-    fireEvent.change(input, { target: { value: "a-key" } })
-    fireEvent.submit(input)
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ signatureKey: "a-key" })))
+    const keyCard = card(/^Signing key$/)
+    expect(within(keyCard).getByText("Generated on this volume. Carry its public key once to the import side, over a channel you trust.")).toBeInTheDocument()
+    expect(await within(keyCard).findByText(SHA)).toBeInTheDocument()
+    expect(within(keyCard).getByRole("button", { name: "Copy public key" })).toBeInTheDocument()
+    expect(within(keyCard).getByText("Ready")).toBeInTheDocument()
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+  })
+
+  it("introduces the generated key", () => {
+    renderSetup()
+    expect(
+      screen.getByText("sealift scans with Trivy and signs the manifest of each archive with a key it generated for this volume. Nothing downloads until you press Install."),
+    ).toBeInTheDocument()
   })
 })

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Check, Eye, EyeOff, KeyRound } from "lucide-react"
+import { Check } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import { ProblemError } from "@/api/client"
@@ -16,13 +16,12 @@ interface SettingsFormProps {
 interface FormState {
   platform: string
   node: string
-  newKey: string
   minReleaseAgeDays: string
   resolveParallelism: string
   downloadParallelism: string
 }
 
-type FieldKey = "platform" | "node" | "newKey" | "minReleaseAgeDays" | "resolveParallelism" | "downloadParallelism"
+type FieldKey = "platform" | "node" | "minReleaseAgeDays" | "resolveParallelism" | "downloadParallelism"
 
 // Mirrors the store's own checks, so a mistake shows next to its field as it is typed.
 const EXACT_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
@@ -39,7 +38,6 @@ function toFormState(settings: Settings): FormState {
   return {
     platform: platformIdOf(settings.target) ?? CURRENT_TARGET,
     node: settings.target.node,
-    newKey: "",
     minReleaseAgeDays: String(settings.minReleaseAgeDays),
     resolveParallelism: String(settings.resolveParallelism),
     downloadParallelism: String(settings.downloadParallelism),
@@ -74,28 +72,20 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   const queryClient = useQueryClient()
   const [saved, setSaved] = useState(settings)
   const [form, setForm] = useState<FormState>(() => toFormState(settings))
-  const [replacingKey, setReplacingKey] = useState(false)
-  const [showKey, setShowKey] = useState(false)
-  const [confirmClear, setConfirmClear] = useState(false)
 
   const saveMutation = useMutation({
     mutationFn: (next: Settings) => updateSettings(next),
     onSuccess: (result) => {
       setSaved(result)
       setForm(toFormState(result))
-      setReplacingKey(false)
-      setConfirmClear(false)
       queryClient.setQueryData(["settings"], result)
-      // The key counts toward readiness: clearing or setting it moves setup in or out.
-      void queryClient.invalidateQueries({ queryKey: ["tools"] })
     },
   })
 
   const errors = fieldErrors(form)
   const initial = toFormState(saved)
-  const dirty =
-    replacingKey || (Object.keys(initial) as (keyof FormState)[]).some((key) => form[key].trim() !== initial[key].trim())
-  const hasErrors = Object.keys(errors).length > 0 || (replacingKey && form.newKey.trim() === "")
+  const dirty = (Object.keys(initial) as (keyof FormState)[]).some((key) => form[key].trim() !== initial[key].trim())
+  const hasErrors = Object.keys(errors).length > 0
 
   const saveError = saveMutation.error instanceof ProblemError ? saveMutation.error : null
   const serverField = serverFieldOf(saveError?.problem?.detail)
@@ -106,7 +96,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
     setForm((current) => ({ ...current, [key]: value }))
   }
 
-  function payload(overrides: Partial<Settings> = {}): Settings {
+  function payload(): Settings {
     const platform = targetOf(form.platform) ?? {
       os: saved.target.os,
       cpu: saved.target.cpu,
@@ -118,11 +108,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         node: form.node.trim(),
         pnpmVer: saved.target.pnpmVer,
       },
-      signatureKey: replacingKey ? form.newKey.trim() : saved.signatureKey,
       minReleaseAgeDays: Number(form.minReleaseAgeDays),
       resolveParallelism: Number(form.resolveParallelism),
       downloadParallelism: Number(form.downloadParallelism),
-      ...overrides,
     }
   }
 
@@ -136,12 +124,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   function discard() {
     saveMutation.reset()
     setForm(toFormState(saved))
-    setReplacingKey(false)
-    setShowKey(false)
   }
 
   const currentOption = form.platform === CURRENT_TARGET || initial.platform === CURRENT_TARGET
-  const keySet = saved.signatureKey !== ""
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-8" noValidate>
@@ -184,80 +169,6 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             className={cn(controlClass(!!errorFor("node")), "font-mono")}
           />
         </Field>
-      </Section>
-
-      <Section title="Signature key" description="Written as signature.key into every archive. Your Nexus import checks it.">
-        <div data-field className="flex flex-col gap-3">
-          {replacingKey ? (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="newKey" className="text-sm font-medium text-ink">
-                New signature key
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="newKey"
-                  type={showKey ? "text" : "password"}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={form.newKey}
-                  onChange={(event) => update("newKey", event.target.value)}
-                  className={cn(controlClass(false), "flex-1 font-mono")}
-                  autoFocus
-                />
-                <Button type="button" variant="outline" size="sm" className="h-10" onClick={() => setShowKey((v) => !v)}>
-                  {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                  <span className="sr-only">{showKey ? "Hide the key" : "Show the key"}</span>
-                </Button>
-              </div>
-              <p className="text-xs text-muted">Saved when you press Save. The old key stops working in new archives.</p>
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-card px-3.5 py-3">
-              <KeyRound className="size-4 text-muted" />
-              <span className="flex-1 text-sm text-ink">
-                {keySet ? (
-                  <>
-                    Key saved <span className="font-mono text-muted">••••••••</span>
-                  </>
-                ) : (
-                  <span className="text-severity-critical-fg">No key. Exports are blocked until one is saved.</span>
-                )}
-              </span>
-              <Button type="button" variant="outline" size="sm" onClick={() => setReplacingKey(true)}>
-                {keySet ? "Replace" : "Add a key"}
-              </Button>
-              {keySet ? (
-                <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmClear(true)}>
-                  Clear
-                </Button>
-              ) : null}
-            </div>
-          )}
-
-          {confirmClear ? (
-            <div
-              role="alertdialog"
-              aria-label="Clear the signature key"
-              className="rounded-lg border border-severity-critical/40 bg-severity-critical/5 p-3.5 text-sm"
-            >
-              <p className="font-medium text-ink">Clear the signature key?</p>
-              <p className="mt-1 text-muted">Exports stay blocked until a new key is saved, and the setup screen opens again.</p>
-              <div className="mt-3 flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={saveMutation.isPending}
-                  onClick={() => saveMutation.mutate({ ...saved, signatureKey: "" })}
-                >
-                  Clear the key
-                </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmClear(false)}>
-                  Keep it
-                </Button>
-              </div>
-            </div>
-          ) : null}
-        </div>
       </Section>
 
       <Section title="Limits" description="How cautious and how fast analyses and exports are.">

@@ -108,9 +108,9 @@ async function main() {
 
   const manifest = readFileSync("project/package.json");
 
-  // On a fresh volume, before trivy, its database and a signature key
-  // are all in place, creating a project must be refused rather than
-  // queuing an analysis that only fails once it reaches trivy itself.
+  // On a fresh volume, before trivy and its database are both in place,
+  // creating a project must be refused rather than queuing an analysis
+  // that only fails once it reaches trivy itself.
   const precheckForm = new FormData();
   precheckForm.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");
   const precheckRes = await fetch(`${api}/projects`, { method: "POST", body: precheckForm });
@@ -134,16 +134,6 @@ async function main() {
 
   const toolsAfterDB = await json(`${api}/tools/trivy/db/update`, { method: "POST" });
   console.log("trivy database installed:", toolsAfterDB.trivyDbDate);
-
-  // An export refuses to start while signatureKey stays empty, and PUT
-  // requires the full settings object.
-  const settings = await json(`${api}/settings`);
-  settings.signatureKey = "e2e-test-signature";
-  await json(`${api}/settings`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
 
   const form = new FormData();
   form.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");

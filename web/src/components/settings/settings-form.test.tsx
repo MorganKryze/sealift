@@ -13,7 +13,6 @@ vi.mock("@/api/settings", async () => {
 
 const baseSettings: Settings = {
   target: { os: "linux", cpu: "x64", libc: "glibc", node: "22.17.1", pnpmVer: "10.34.5" },
-  signatureKey: "********",
   minReleaseAgeDays: 14,
   resolveParallelism: 4,
   downloadParallelism: 16,
@@ -31,7 +30,7 @@ const save = () => screen.getByRole("button", { name: "Save" })
 
 beforeEach(() => {
   vi.mocked(updateSettings).mockReset()
-  vi.mocked(updateSettings).mockImplementation(async (s) => ({ ...s, signatureKey: s.signatureKey ? "********" : "" }))
+  vi.mocked(updateSettings).mockImplementation(async (s) => s)
 })
 
 describe("SettingsForm", () => {
@@ -79,26 +78,16 @@ describe("SettingsForm", () => {
     expect(save()).toBeDisabled()
   })
 
-  it("keeps the stored key untouched unless it is replaced", async () => {
+  it("has no Signature key section and saves no key", async () => {
     renderForm()
+    expect(screen.queryByRole("heading", { name: "Signature key" })).toBeNull()
+    expect(screen.queryByLabelText(/signature key/i)).toBeNull()
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+
     fireEvent.change(screen.getByLabelText("Resolve parallelism"), { target: { value: "8" } })
     fireEvent.click(save())
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ signatureKey: "********" })))
-
-    fireEvent.click(screen.getByRole("button", { name: "Replace" }))
-    fireEvent.change(screen.getByLabelText("New signature key"), { target: { value: "real-key" } })
-    fireEvent.click(save())
-    await waitFor(() => expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({ signatureKey: "real-key" })))
-  })
-
-  it("clears the key only after confirming, and says what it blocks", async () => {
-    renderForm()
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }))
-    const dialog = screen.getByRole("alertdialog")
-    expect(within(dialog).getByText(/Exports stay blocked/)).toBeInTheDocument()
-
-    fireEvent.click(within(dialog).getByRole("button", { name: "Clear the key" }))
-    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ signatureKey: "" })))
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled())
+    expect(Object.keys(vi.mocked(updateSettings).mock.calls[0][0]).sort()).toEqual(["downloadParallelism", "minReleaseAgeDays", "resolveParallelism", "target"])
   })
 
   it("shows a server refusal under the field it names", async () => {

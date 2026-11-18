@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Database, KeyRound, LoaderCircle, ShieldCheck } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { type ReactNode } from "react"
 
 import { ProblemError } from "@/api/client"
-import { getSettings, updateSettings, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
+import { getSigningKey, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
+import { CopyControl } from "@/components/copy-control"
 import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -23,8 +24,7 @@ interface SetupScreenProps {
  */
 export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
   const queryClient = useQueryClient()
-  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
-  const [keyValue, setKeyValue] = useState("")
+  const keyQuery = useQuery({ queryKey: ["signing-key"], queryFn: getSigningKey })
 
   const installMutation = useMutation({
     // Each tool's state reaches the cards as soon as it lands, so the user
@@ -38,17 +38,8 @@ export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
     onSuccess: (state) => queryClient.setQueryData(["tools"], state),
   })
 
-  const saveKeyMutation = useMutation({
-    mutationFn: (signatureKey: string) => updateSettings({ ...settingsQuery.data!, signatureKey }),
-    onSuccess: () => {
-      setKeyValue("")
-      void queryClient.invalidateQueries({ queryKey: ["tools"] })
-    },
-  })
-
   const missingTrivy = tools.missing.includes("trivy")
   const missingDb = tools.missing.includes("trivy-db")
-  const missingKey = tools.missing.includes("signature-key")
   const needsInstall = missingTrivy || missingDb
 
   const installError = installMutation.error instanceof ProblemError ? installMutation.error : null
@@ -61,7 +52,6 @@ export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
       Install Trivy {tools.trivyLatest} anyway
     </Button>
   )
-  const saveKeyError = saveKeyMutation.error instanceof ProblemError ? saveKeyMutation.error : null
 
   return (
     <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col gap-6 px-5 py-8">
@@ -69,8 +59,8 @@ export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
         <p className="text-xs font-semibold tracking-wide text-muted uppercase">First run</p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-ink">Prepare sealift</h1>
         <p className="mt-1.5 max-w-[62ch] text-muted">
-          sealift scans with Trivy and signs each archive with the key your Nexus import checks. Nothing downloads
-          until you press Install.
+          sealift scans with Trivy and signs the manifest of each archive with a key it generated for this volume. Nothing
+          downloads until you press Install.
         </p>
       </div>
 
@@ -95,59 +85,31 @@ export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
           ready={!missingDb}
           busy={installMutation.isPending && !missingTrivy && missingDb}
         />
-        <Card className="grid grid-cols-[40px_1fr_auto] items-center gap-3.5 p-4">
-          <span
-            className={
-              "grid size-10 flex-none place-items-center rounded-[10px] border border-line " +
-              (missingKey ? "bg-card text-muted" : "border-transparent bg-accent/15 text-accent")
-            }
-          >
+        <Card data-tool className="grid grid-cols-[40px_1fr_auto] items-center gap-3.5 p-4">
+          <span className="grid size-10 flex-none place-items-center rounded-[10px] border border-transparent bg-accent/15 text-accent">
             <KeyRound className="size-5" />
           </span>
-          <div>
-            <h3 className="text-sm font-semibold text-ink">Signature key</h3>
-            <p className="text-sm text-muted">
-              The value your Nexus import project expects in{" "}
-              <code className="font-mono text-xs">signature.key</code>. Ask its owner if you do not have it.
-            </p>
-            {missingKey ? (
-              <form
-                className="mt-2.5 flex flex-wrap gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  if (settingsQuery.data && keyValue.trim() && !saveKeyMutation.isPending) {
-                    saveKeyMutation.mutate(keyValue.trim())
-                  }
-                }}
-              >
-                <input
-                  type="password"
-                  value={keyValue}
-                  onChange={(event) => setKeyValue(event.target.value)}
-                  placeholder="Paste the key"
-                  autoComplete="off"
-                  aria-label="Signature key"
-                  className="h-9 min-w-55 flex-1 rounded-md border border-line bg-background px-3 text-sm outline-none focus:border-accent"
-                />
-                <Button type="submit" size="sm" disabled={!settingsQuery.data || !keyValue.trim() || saveKeyMutation.isPending}>
-                  Save key
-                </Button>
-              </form>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-ink">Signing key</h3>
+            <p className="text-sm text-muted">Generated on this volume. Carry its public key once to the import side, over a channel you trust.</p>
+            {keyQuery.data ? (
+              <div className="mt-2.5 flex flex-col gap-2">
+                <code className="font-mono text-[13px] [overflow-wrap:anywhere]">{keyQuery.data.publicKeySha256}</code>
+                <div>
+                  <CopyControl text={keyQuery.data.publicKeyPem} label="public key" />
+                </div>
+              </div>
+            ) : keyQuery.isError ? (
+              <p role="alert" className="mt-2 text-sm text-severity-critical-fg">
+                Could not load the signing key: {keyQuery.error.message}
+              </p>
             ) : null}
           </div>
-          <span className={"inline-flex items-center gap-1.5 text-sm font-medium " + (missingKey ? "text-muted" : "text-severity-resolved-fg")}>
-            {missingKey ? (
-              "Required to export"
-            ) : (
-              <>
-                <Check className="size-3.5" strokeWidth={3} /> Saved
-              </>
-            )}
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium whitespace-nowrap text-severity-resolved-fg">
+            <Check className="size-3.5" strokeWidth={3} /> Ready
           </span>
         </Card>
       </div>
-
-      {saveKeyError ? <ProblemNotice status={saveKeyError.status} problem={saveKeyError.problem} /> : null}
 
       {needsInstall ? (
         <div className="flex flex-col items-start gap-3">
@@ -180,8 +142,6 @@ export function SetupScreen({ tools, onContinue }: SetupScreenProps) {
             </ProblemNotice>
           ) : null}
         </div>
-      ) : missingKey ? (
-        <p className="text-sm text-muted">Save the signature key to continue.</p>
       ) : (
         <Button size="lg" className="self-start" onClick={onContinue}>
           Continue

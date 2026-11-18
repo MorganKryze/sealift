@@ -16,9 +16,9 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 
 | Status | When |
 | --- | --- |
-| 400 | An invalid body: a manifest sealift refuses, a selection it did not resolve, an empty export, a missing signature key, a target or limit out of range |
+| 400 | An invalid body: a manifest sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
 | 404 | An unknown project, analysis or export |
-| 409 | Trivy, its database or the key is missing (`tools-missing`); the analysis is not done; a Trivy release younger than the minimum release age |
+| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; a Trivy release younger than the minimum release age |
 | 502 | GitHub cannot be reached to list Trivy releases |
 | 500 | Anything else; the server log has the cause |
 
@@ -71,7 +71,7 @@ The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupt
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, an export that packs nothing, or a missing key; 409 when the analysis is not done. |
+| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, or an export that packs nothing; 409 when the analysis is not done. |
 | `GET /api/projects/{projectId}/exports/{exportId}` | The export: state, steps, failure, and once done its files. |
 | `DELETE /api/projects/{projectId}/exports/{exportId}` | Delete the export and its files. |
 | `POST /api/projects/{projectId}/exports/{exportId}/cancel` | Cancel the export, running or queued. |
@@ -83,8 +83,8 @@ A dependency left out of the selection, or given an empty list, stays at its cur
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/settings` | Every setting; `signatureKey` reads `********` once set. |
-| `PUT /api/settings` | Replace every setting. `"signatureKey": "********"` keeps the saved key, `""` clears it. 400 for a target or limit out of range. |
+| `GET /api/settings` | Every setting: the target and the three limits. |
+| `PUT /api/settings` | Replace every setting. A `signatureKey` in the body is ignored and never saved. 400 for a target or limit out of range. |
 
 [Settings](../settings.md#from-the-api) shows both, with real answers.
 

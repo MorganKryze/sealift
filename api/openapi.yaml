@@ -346,7 +346,7 @@ paths:
       operationId: getSettings
       tags:
         - settings
-      summary: Get settings, with signatureKey masked
+      summary: Get settings
       responses:
         "200":
           description: Settings
@@ -369,7 +369,7 @@ paths:
               $ref: "#/components/schemas/Settings"
       responses:
         "200":
-          description: Updated settings, with signatureKey masked
+          description: Updated settings
           content:
             application/json:
               schema:
@@ -634,9 +634,6 @@ components:
       properties:
         target:
           $ref: "#/components/schemas/Target"
-        signatureKey:
-          type: string
-          description: Masked on read, never logged
         minReleaseAgeDays:
           type: integer
         resolveParallelism:
@@ -645,7 +642,6 @@ components:
           type: integer
       required:
         - target
-        - signatureKey
         - minReleaseAgeDays
         - resolveParallelism
         - downloadParallelism
@@ -954,7 +950,7 @@ components:
             release age
         ready:
           type: boolean
-          description: Whether trivy, its database and a signature key are all in place
+          description: Whether trivy and its database are both in place
         missing:
           type: array
           description: Names of what ready needs and does not have yet
