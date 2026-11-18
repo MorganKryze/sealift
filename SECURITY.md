@@ -29,6 +29,7 @@ Include the version, what an attacker needs, and the steps that show the problem
 
 ## What it does not
 
+- The Trivy release lookup trusts the address in `SEALIFT_GITHUB_API` when you set it: that server supplies the release date, the checksums and the download address, so a mirror you do not control defeats the sha256 check and the minimum release age for Trivy. sealift accepts only `https`, or `http` on a loopback host.
 - `signature.key` is a shared value written in plain text into every archive. Anyone who knows it can build an archive the import accepts. It is not a cryptographic signature.
 - The minimum release age relies on pnpm's `minimumReleaseAge`, which the default pnpm 10.34.5 honours. An older pnpm set through the API can ignore it for transitive packages.
 - A malicious package with no published CVE passes: Trivy knows only disclosed vulnerabilities. The minimum release age and the signals on each candidate reduce that risk; they do not remove it.

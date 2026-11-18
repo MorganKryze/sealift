@@ -16,7 +16,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - A refused import no longer blocks a new import of the same archive, so a mistyped sha256 can be corrected by starting again. An import that is queued, running, incomplete or interrupted still does, whatever refused imports of that archive come after it.
 - `GET /api/me` on the import service also names the user's `bucket` and `folder`.
-- `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`.
+- `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
 
 ## [0.4.0] - 2026-11-06
 
