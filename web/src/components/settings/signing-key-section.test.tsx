@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { ProblemError } from "@/api/client"
+import { ProblemError, UNREACHABLE } from "@/api/client"
 import { getSigningKey, regenerateSigningKey, type SigningKey } from "@/api/settings"
 import { SigningKeySection } from "@/components/settings/signing-key-section"
 
@@ -168,6 +168,17 @@ describe("SigningKeySection", () => {
     expect(await screen.findByText("b".repeat(64))).toBeInTheDocument()
     expect(screen.queryByText(SHA)).toBeNull()
     expect(getSigningKey).toHaveBeenCalledTimes(2)
+  })
+
+  it("says the new key is in use when the answer is lost after the swap", async () => {
+    vi.mocked(regenerateSigningKey).mockRejectedValue(new ProblemError(0, UNREACHABLE))
+    const dialog = await opened()
+    vi.mocked(getSigningKey).mockResolvedValue(newKey)
+    fireEvent.click(within(dialog).getByRole("button", { name: "Regenerate" }))
+
+    expect(await screen.findByText("b".repeat(64))).toBeInTheDocument()
+    expect(await screen.findByRole("status")).toHaveTextContent("New key in use")
+    expect(screen.queryByText(/did not reach the server/)).toBeNull()
   })
 
   it("names a key that cannot be loaded", async () => {

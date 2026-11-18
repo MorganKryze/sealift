@@ -3,7 +3,7 @@ import { Download } from "lucide-react"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 
 import { ProblemError } from "@/api/client"
-import { getSigningKey, regenerateSigningKey } from "@/api/settings"
+import { getSigningKey, regenerateSigningKey, type SigningKey } from "@/api/settings"
 import { CopyControl } from "@/components/copy-control"
 import { ProblemNotice } from "@/components/problem-notice"
 import { Section } from "@/components/settings/settings-form"
@@ -52,9 +52,14 @@ export function SigningKeySection() {
       setReplaced(true)
       close()
     },
-    onError: () => close(),
     // The server may have swapped the key before the answer was lost: read it again.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["signing-key"] }),
+    onError: async () => {
+      const before = keyQuery.data?.publicKeySha256
+      close()
+      await queryClient.invalidateQueries({ queryKey: ["signing-key"] })
+      const after = queryClient.getQueryData<SigningKey>(["signing-key"])?.publicKeySha256
+      if (after && after !== before) setReplaced(true)
+    },
   })
 
   useEffect(() => {
@@ -73,7 +78,7 @@ export function SigningKeySection() {
   }
 
   const key = keyQuery.data
-  const failure = regenerate.error instanceof ProblemError ? regenerate.error : null
+  const failure = !replaced && regenerate.error instanceof ProblemError ? regenerate.error : null
 
   return (
     <Section
