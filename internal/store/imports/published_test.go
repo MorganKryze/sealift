@@ -2,6 +2,7 @@ package imports
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -121,6 +122,67 @@ func TestPublishedListReadsStoredRecords(t *testing.T) {
 		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\ng@1.0.0\nh@1.0.0\n"
 		if string(out) != want {
 			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		}
+	})
+
+	t.Run("a package that may have reached Nexus is listed whatever its record", func(t *testing.T) {
+		imp := newImport(t, reopened, user)
+		if _, _, err := reopened.Begin(user, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := reopened.Listed(user, imp.ID, 1, pending("p", "l", "m", "s", "n")); err != nil {
+			t.Fatal(err)
+		}
+		ended := []importer.Result{
+			result("l", importer.Failed, importer.KindLocal),
+			result("m", importer.Failed, importer.KindMismatch),
+			result("s", importer.Failed, importer.KindSource),
+		}
+		for i, r := range ended {
+			if err := reopened.Ended(user, imp.ID, 1, i+1, r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// No sweep: p and n are still pending, as in a live or crashed attempt.
+		out, err := exec.Command(node, script, filepath.Join(root, user, imp.ID, recordFile)).Output()
+		if err != nil {
+			t.Fatalf("node: %v", err)
+		}
+		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\np@1.0.0\nl@1.0.0\nn@1.0.0\n"
+		if string(out) != want {
+			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		}
+	})
+
+	t.Run("a failure written without a kind is possible", func(t *testing.T) {
+		rec := `{"formatVersion":1,"attempts":[{"n":1,"status":"ended","report":{"packages":[` +
+			`{"name":"o","version":"1.0.0","state":"failed","reason":"interrupted"},` +
+			`{"name":"q","version":"1.0.0","state":"failed","reason":"upload failed: 502"}]}}]}`
+		file := filepath.Join(t.TempDir(), "import.json")
+		if err := os.WriteFile(file, []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(node, script, file).Output()
+		if err != nil {
+			t.Fatalf("node: %v", err)
+		}
+		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\no@1.0.0\nq@1.0.0\n"
+		if string(out) != want {
+			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		}
+	})
+
+	t.Run("a file that is not an import record is refused", func(t *testing.T) {
+		for _, rec := range []string{`{}`, `{"formatVersion":2,"attempts":[]}`, `[]`} {
+			file := filepath.Join(t.TempDir(), "x.json")
+			if err := os.WriteFile(file, []byte(rec), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := exec.Command(node, script, file).Run()
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+				t.Errorf("%s: err = %v, want exit 1", rec, err)
+			}
 		}
 	})
 

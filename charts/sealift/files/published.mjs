@@ -10,17 +10,23 @@ if (!file) {
 }
 
 const record = JSON.parse(readFileSync(file, "utf8"))
-// A failure of these kinds may have reached Nexus before it was recorded.
-const possibleKinds = new Set(["nexus", "interrupted"])
+if (record?.formatVersion !== 1 || !Array.isArray(record.attempts)) {
+  console.error(`${file} is not an import record`)
+  process.exit(1)
+}
+// These failures happen before the upload. Any other failure may have reached
+// Nexus: a read-back can fail on the import's own side (local), records from
+// v0.4.0 carry no kind, and a pending package was never swept.
+const neverUploaded = new Set(["conflict", "mismatch", "source"])
 
 const published = new Map()
 const possible = new Map()
-for (const attempt of record.attempts ?? []) {
+for (const attempt of record.attempts) {
   for (const pkg of attempt.report?.packages ?? []) {
     const id = `${pkg.name}@${pkg.version}`
     if (pkg.state === "published") {
       published.set(id, true)
-    } else if (pkg.state === "failed" && possibleKinds.has(pkg.kind)) {
+    } else if (pkg.state === "pending" || (pkg.state === "failed" && !neverUploaded.has(pkg.kind))) {
       possible.set(id, true)
     }
   }
