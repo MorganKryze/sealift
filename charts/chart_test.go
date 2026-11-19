@@ -243,8 +243,8 @@ func TestChartRunsOneImportService(t *testing.T) {
 	if got := at(find(t, docs, "Service", ""), "spec", "ports", 0, "port"); got != 8080 {
 		t.Errorf("service port = %v, want 8080", got)
 	}
-	if got := kinds(docs); len(got) != 5 {
-		t.Errorf("rendered %v, want a Deployment, a Service, a PersistentVolumeClaim and two ConfigMaps", got)
+	if got := kinds(docs); len(got) != 6 {
+		t.Errorf("rendered %v, want a Deployment, a Service, a NetworkPolicy, a PersistentVolumeClaim and two ConfigMaps", got)
 	}
 
 	t.Run("no value raises the replica count", func(t *testing.T) {
@@ -653,5 +653,148 @@ func TestChartSettingsLoad(t *testing.T) {
 				t.Error("the loaded key is not the test key")
 			}
 		})
+	}
+}
+
+var ingressValues = []string{"--set", "ingress.enabled=true", "--set", "ingress.host=sealift.example.internal",
+	"--set", "ingress.auth.url=https://auth.example.internal/oauth2/auth",
+	"--set", "ingress.auth.signin=https://auth.example.internal/oauth2/start"}
+
+func TestChartIngress(t *testing.T) {
+	ing := find(t, mustRender(t, ingressValues...), "Ingress", "")
+	for key, want := range map[string]string{
+		"nginx.ingress.kubernetes.io/auth-url":              "https://auth.example.internal/oauth2/auth",
+		"nginx.ingress.kubernetes.io/auth-signin":           "https://auth.example.internal/oauth2/start",
+		"nginx.ingress.kubernetes.io/auth-response-headers": "X-Auth-Request-Access-Token",
+	} {
+		if got := at(ing, "metadata", "annotations", key); got != want {
+			t.Errorf("annotation %s = %v, want %s", key, got, want)
+		}
+	}
+	if got := at(ing, "spec", "rules", 0, "host"); got != "sealift.example.internal" {
+		t.Errorf("host = %v", got)
+	}
+	if got := at(ing, "spec", "rules", 0, "http", "paths", 0, "backend", "service", "name"); got != "rel-sealift" {
+		t.Errorf("backend = %v, want rel-sealift", got)
+	}
+	if got := at(ing, "spec", "tls", 0, "secretName"); got != "rel-sealift-tls" {
+		t.Errorf("tls secret = %v, want rel-sealift-tls", got)
+	}
+	t.Run("a named TLS secret", func(t *testing.T) {
+		ing := find(t, mustRender(t, append(ingressValues, "--set", "ingress.tls.secretName=sealift-tls", "--set", "ingress.className=nginx")...), "Ingress", "")
+		if got := at(ing, "spec", "tls", 0, "secretName"); got != "sealift-tls" {
+			t.Errorf("tls secret = %v, want sealift-tls", got)
+		}
+		if got := at(ing, "spec", "ingressClassName"); got != "nginx" {
+			t.Errorf("class = %v, want nginx", got)
+		}
+	})
+	t.Run("the token header reaches the annotation and the settings", func(t *testing.T) {
+		docs := mustRender(t, append(ingressValues, "--set", "token.header=X-Forwarded-Access-Token")...)
+		if got := at(find(t, docs, "Ingress", ""), "metadata", "annotations", "nginx.ingress.kubernetes.io/auth-response-headers"); got != "X-Forwarded-Access-Token" {
+			t.Errorf("auth-response-headers = %v", got)
+		}
+		if got := settingsOf(t, docs); !strings.Contains(got, "header: X-Forwarded-Access-Token") {
+			t.Errorf("settings = %q, want the same header", got)
+		}
+	})
+	for _, key := range []string{"ingress.auth.url", "ingress.auth.signin", "ingress.host"} {
+		t.Run(key+" empty is refused", func(t *testing.T) {
+			_, err := render(t, append(ingressValues, "--set", key+"=")...)
+			if err == nil || !strings.Contains(err.Error(), key+" is required") {
+				t.Errorf("err = %v, want %q", err, key+" is required")
+			}
+		})
+	}
+	t.Run("ingress off renders none and the notes print the annotations", func(t *testing.T) {
+		for _, k := range kinds(mustRender(t)) {
+			if strings.HasPrefix(k, "Ingress/") {
+				t.Errorf("rendered %s, want no Ingress", k)
+			}
+		}
+		notes := installNotes(t)
+		for _, want := range []string{"nginx.ingress.kubernetes.io/auth-url", "nginx.ingress.kubernetes.io/auth-signin", "nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-Access-Token"} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("notes lack %q:\n%s", want, notes)
+			}
+		}
+	})
+	t.Run("the notes print the address when on", func(t *testing.T) {
+		if notes := installNotes(t, ingressValues...); !strings.Contains(notes, "https://sealift.example.internal/") {
+			t.Errorf("notes lack the address:\n%s", notes)
+		}
+	})
+}
+
+func TestChartNetworkPolicy(t *testing.T) {
+	var policies []map[string]any
+	for _, d := range mustRender(t) {
+		if d["kind"] == "NetworkPolicy" {
+			policies = append(policies, d)
+		}
+	}
+	if len(policies) != 1 {
+		t.Fatalf("rendered %d NetworkPolicy documents, want 1", len(policies))
+	}
+	p := policies[0]
+	if got := fmt.Sprint(at(p, "spec", "policyTypes")); got != "[Ingress]" {
+		t.Errorf("policyTypes = %v, want [Ingress]", got)
+	}
+	rules, _ := at(p, "spec", "ingress").([]any)
+	if len(rules) != 1 {
+		t.Fatalf("ingress rules = %d, want 1", len(rules))
+	}
+	if peers, _ := at(rules[0], "from").([]any); len(peers) != 1 {
+		t.Fatalf("peers = %v, want one", peers)
+	}
+	if got := at(rules[0], "from", 0, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); got != "ingress-nginx" {
+		t.Errorf("namespace = %v, want ingress-nginx", got)
+	}
+	if at(rules[0], "from", 0, "podSelector") != nil {
+		t.Error("the peer selects pods without a value")
+	}
+	if ports, _ := at(rules[0], "ports").([]any); len(ports) != 1 || at(ports[0], "port") != "http" {
+		t.Errorf("ports = %v, want http alone", at(rules[0], "ports"))
+	}
+	t.Run("pod labels narrow the peer", func(t *testing.T) {
+		p := find(t, mustRender(t, "--set", "networkPolicy.ingressPodLabels.app\\.kubernetes\\.io/name=ingress-nginx", "--set", "networkPolicy.ingressNamespace=edge"), "NetworkPolicy", "")
+		if got := at(p, "spec", "ingress", 0, "from", 0, "podSelector", "matchLabels", "app.kubernetes.io/name"); got != "ingress-nginx" {
+			t.Errorf("pod selector = %v", got)
+		}
+		if got := at(p, "spec", "ingress", 0, "from", 0, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); got != "edge" {
+			t.Errorf("namespace = %v, want edge", got)
+		}
+	})
+	t.Run("off renders none and the notes warn", func(t *testing.T) {
+		for _, k := range kinds(mustRender(t, "--set", "networkPolicy.enabled=false")) {
+			if strings.HasPrefix(k, "NetworkPolicy/") {
+				t.Errorf("rendered %s, want none", k)
+			}
+		}
+		if notes := installNotes(t, "--set", "networkPolicy.enabled=false"); !strings.Contains(notes, "Any pod of the cluster can reach the service") {
+			t.Errorf("notes lack the warning:\n%s", notes)
+		}
+	})
+	t.Run("the notes give the reach check when on", func(t *testing.T) {
+		if notes := installNotes(t); !strings.Contains(notes, "kubectl run") || !strings.Contains(notes, "curl -m 5") {
+			t.Errorf("notes lack the reach check:\n%s", notes)
+		}
+	})
+}
+
+func TestChartExampleValues(t *testing.T) {
+	example := filepath.Join(chartDir, "values-example.yaml")
+	_, err := run(t, "template", "rel", chartDir, "-f", example)
+	if err == nil || !strings.Contains(err.Error(), "still holds its placeholder <") {
+		t.Errorf("err = %v, want a placeholder refusal", err)
+	}
+	out, err := run(t, "template", "rel", chartDir, "-f", example, "-f", testValues, "-f", "testdata/example-filled.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"kind: Ingress", "kind: NetworkPolicy"} {
+		if n := strings.Count(out, "\n"+kind+"\n"); n != 1 {
+			t.Errorf("%s rendered %d times, want 1", kind, n)
+		}
 	}
 }

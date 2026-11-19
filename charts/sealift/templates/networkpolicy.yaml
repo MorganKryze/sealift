@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "sealift.fullname" . }}
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "sealift.selectorLabels" . | nindent 6 }}
+  # Only ingress is restricted. Egress stays open because the service
+  # reaches Keycloak, MinIO, Nexus and DNS at addresses the chart cannot know.
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace | quote }}
+          {{- with .Values.networkPolicy.ingressPodLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+{{- end }}

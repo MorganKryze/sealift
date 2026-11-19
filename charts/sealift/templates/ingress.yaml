@@ -1,0 +1,40 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := include "sealift.value" (list "ingress.host" .Values.ingress.host) }}
+{{- $authURL := include "sealift.value" (list "ingress.auth.url" .Values.ingress.auth.url) }}
+{{- $signin := include "sealift.value" (list "ingress.auth.signin" .Values.ingress.auth.signin) }}
+{{- $header := include "sealift.value" (list "token.header" .Values.token.header) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sealift.fullname" . }}
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/auth-url: {{ $authURL | quote }}
+    nginx.ingress.kubernetes.io/auth-signin: {{ $signin | quote }}
+    nginx.ingress.kubernetes.io/auth-response-headers: {{ $header | quote }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ default (printf "%s-tls" (include "sealift.fullname" .)) .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "sealift.fullname" . }}
+                port:
+                  name: http
+{{- end }}

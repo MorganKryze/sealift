@@ -1,0 +1,7 @@
+# Fills the ingress placeholders of values-example.yaml.
+ingress:
+  enabled: true
+  host: sealift.example.internal
+  auth:
+    url: https://auth.example.internal/oauth2/auth
+    signin: https://auth.example.internal/oauth2/start?rd=$escaped_request_uri

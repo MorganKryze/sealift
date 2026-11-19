@@ -13,3 +13,22 @@ The key given in the values has the sha256 {{ include "sealift.publicKeySHA256" 
 
 Warning: persistence is off. /data lives in an emptyDir. The import records, and an import that is running, are lost when the pod is replaced.
 {{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Address: {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+
+The ingress is off. The service {{ include "sealift.fullname" . }} listens on port {{ .Values.service.port }}. An Ingress you write by hand needs these annotations, so that ingress-nginx signs users in and forwards the token header the service reads. They are not proven in the lab.
+  nginx.ingress.kubernetes.io/auth-url: {{ default "<oauth2-proxy-auth-url>" .Values.ingress.auth.url }}
+  nginx.ingress.kubernetes.io/auth-signin: {{ default "<oauth2-proxy-signin-url>" .Values.ingress.auth.signin }}
+  nginx.ingress.kubernetes.io/auth-response-headers: {{ .Values.token.header }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+
+Network policy: check that the cluster enforces it. From a namespace other than {{ .Values.networkPolicy.ingressNamespace }}, this must time out:
+  kubectl run reach-check --rm -it --restart=Never --image=<curl-image> -- curl -m 5 http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz
+{{- else }}
+
+Warning: the network policy is off. Any pod of the cluster can reach the service. The service still checks every token.
+{{- end }}
