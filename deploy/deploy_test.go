@@ -60,10 +60,10 @@ func TestConnectedCompose(t *testing.T) {
 		if !slices.Equal(add, []string{"KILL", "SETGID", "SETUID"}) {
 			t.Errorf("%s: cap_add = %v, want SETUID SETGID KILL", name, s.CapAdd)
 		}
-		for _, o := range s.SecurityOpt {
-			if strings.Contains(o, "no-new-privileges") {
-				t.Errorf("%s: security_opt carries %q, which breaks the switch to the tools user", name, o)
-			}
+		// A daemon.json can set no-new-privileges for every container, so
+		// the service turns it off by name: leaving it out is not enough.
+		if !slices.Equal(s.SecurityOpt, []string{"no-new-privileges=false"}) {
+			t.Errorf("%s: security_opt = %v, want [no-new-privileges=false]", name, s.SecurityOpt)
 		}
 		if len(s.Ports) == 0 {
 			t.Errorf("%s: no port mapping", name)
