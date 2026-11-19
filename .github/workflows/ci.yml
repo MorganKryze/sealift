@@ -94,6 +94,8 @@ jobs:
         with:
           persist-credentials: false
       - name: end-to-end test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: docker compose -f test/e2e/docker-compose.yml up --abort-on-container-exit --exit-code-from test
       - name: compose down
         if: always()

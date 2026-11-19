@@ -156,3 +156,33 @@ id -g
 		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
+
+// TestRun_ChildEnvironmentCarriesNoSecrets proves a child sees the settings
+// it needs and none of the server's secrets: the GitHub token the server
+// reads at start must not reach a poisoned pnpm or Trivy release.
+func TestRun_ChildEnvironmentCarriesNoSecrets(t *testing.T) {
+	t.Setenv("SEALIFT_GITHUB_TOKEN", "leak-me")
+	t.Setenv("GITHUB_TOKEN", "leak-me-too")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "leak-me-three")
+	t.Setenv("SEALIFT_NODE_SECRET", "leak-me-four")
+	t.Setenv("HOME", "/data/home")
+	t.Setenv("NPM_CONFIG_REGISTRY", "http://registry:4873")
+	t.Setenv("HTTPS_PROXY", "http://proxy:3128")
+
+	dir := t.TempDir()
+	script := writeScript(t, dir, "env.sh", "env\n")
+	out, err := run(context.Background(), dir, script, nil, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, secret := range []string{"leak-me", "SEALIFT_GITHUB_TOKEN", "GITHUB_TOKEN", "AWS_SECRET", "SEALIFT_NODE_SECRET"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("child environment contains %q:\n%s", secret, out)
+		}
+	}
+	for _, want := range []string{"HOME=/data/home\n", "NPM_CONFIG_REGISTRY=http://registry:4873\n", "HTTPS_PROXY=http://proxy:3128\n", "PATH="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("child environment lacks %q:\n%s", want, out)
+		}
+	}
+}

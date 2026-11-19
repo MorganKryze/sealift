@@ -14,6 +14,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The import screens show the trusted public key sha256 in Settings and on each import, and the signature's ETag beside the archive's and the manifest's.
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
 - `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
+- `SEALIFT_GITHUB_TOKEN` authenticates the Trivy release lookups against the GitHub API, which lifts the anonymous rate limit that answers `403` on a shared address. The token goes to the API address only.
 
 ### Changed
 
@@ -33,6 +34,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+- pnpm and Trivy receive only an allowlist of the server's environment: `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, the locale, CA and proxy variables, and the `NPM_CONFIG_`, `PNPM_`, `NODE_` and `TRIVY_` prefixes.
 - The analysis log no longer shows the user and password of a URL that pnpm prints.
 - An analysis refuses a pnpm lockfile whose package names or versions are not safe to use in a path.
 - An archive is no longer trusted for carrying a key of its own: the import side checks the manifest against the public key it was given, so a copy of the archive that someone altered on the way is refused.

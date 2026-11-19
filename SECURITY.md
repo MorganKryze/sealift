@@ -28,11 +28,11 @@ Include the version, what an attacker needs, and the steps that show the problem
 - Every export signs `manifest.json` with an Ed25519 key that sealift generates for its volume. The manifest names the archive's sha256 and every package's sha512, so one signature covers everything the import publishes. The import verifies the exact bytes it then parses, before it reads the manifest or the archive, with the one key in its settings. No key or digest carried by the archive, the manifest or MinIO changes the verdict: it only chooses the wording of a refusal. The check runs again on every retry.
 - The private key lives in `private/signing-key.pem` of the data volume, mode 0600, out of reach of the `tools` user. No API answer, log line, error, event, report or file of an export carries it, and a damaged key file stops sealift at start instead of being replaced by a new key.
 - Regenerating the key is a `POST` that sealift refuses with 403 when its `Host` is not the server's own, when its `Origin` is another site's, when `Sec-Fetch-Site` is `cross-site` or when its body is not JSON, so a page in another tab cannot break the import's trust.
-- Tokens, the MinIO secret key, the Nexus password and the private signing key stay out of logs, responses and stored records.
+- Tokens (the GitHub token included), the MinIO secret key, the Nexus password and the private signing key stay out of logs, responses and stored records.
 
 ## What it does not
 
-- The Trivy release lookup trusts the address in `SEALIFT_GITHUB_API` when you set it: that server supplies the release date, the checksums and the download address, so a mirror you do not control defeats the sha256 check and the minimum release age for Trivy. sealift accepts only `https`, or `http` on a loopback host.
+- The Trivy release lookup trusts the address in `SEALIFT_GITHUB_API` when you set it: that server supplies the release date, the checksums and the download address, so a mirror you do not control defeats the sha256 check and the minimum release age for Trivy. sealift accepts only `https`, or `http` on a loopback host. `SEALIFT_GITHUB_TOKEN` goes to that same address, so a mirror receives the token.
 - The signature shows that the manifest came from the holder of the private key. It does not show who asked for the export: anyone who reaches sealift's port can have any selection signed.
 - There is no freshness check. An old archive with a valid signature stays importable until the key is regenerated.
 - The reports (`summary.md`, `findings.csv`, `report.cdx.json`, `report.trivy.json`) are not signed. They inform the import side and are not covered.

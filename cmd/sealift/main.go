@@ -165,8 +165,10 @@ var onQueueReady func(*jobs.Queue)
 // checksums and the download address of Trivy all come from that API, so the
 // address must be https, or http on a loopback host for the browser gate. The
 // error never repeats the value, which could carry credentials.
+// SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
+	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
 	raw := os.Getenv("SEALIFT_GITHUB_API")
 	if raw == "" {
 		return m, nil

@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -475,5 +479,143 @@ func TestUpdateTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
 
 	if _, err := m.UpdateTrivy(context.Background(), "", false); !errors.Is(err, ErrReleaseSourceUnavailable) {
 		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseSourceUnavailable", err)
+	}
+}
+
+// authSpy wraps a release server's handler and records the Authorization
+// header of every request, keyed by path.
+func authSpy(t *testing.T, publishedAt time.Time) (*httptest.Server, func() map[string]string) {
+	t.Helper()
+	inner, _ := trivyRelease(t, publishedAt, false)
+	var mu sync.Mutex
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path] = r.Header.Get("Authorization")
+		mu.Unlock()
+		// The inner server's asset URLs point at itself: proxy by path.
+		resp, err := http.Get(inner.URL + r.URL.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		// Rewrite the asset host so downloads come back to this server.
+		body = bytes.ReplaceAll(body, []byte(inner.URL), []byte("http://"+r.Host))
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() map[string]string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := map[string]string{}
+		for k, v := range seen {
+			out[k] = v
+		}
+		return out
+	}
+}
+
+const testToken = "ghp_test_secret_token_value"
+
+func TestGitHubTokenSentOnReleaseLookups(t *testing.T) {
+	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
+	m, _ := newTestManager(t, srv)
+	m.GitHubToken = testToken
+
+	if _, err := m.latestTrivyRelease(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.trivyReleaseByTag(context.Background(), "0.55.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.recommendedTrivyRelease(context.Background(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/repos/aquasecurity/trivy/releases/latest",
+		"/repos/aquasecurity/trivy/releases/tags/v0.55.0",
+		"/repos/aquasecurity/trivy/releases",
+	} {
+		if got, want := seen()[path], "Bearer "+testToken; got != want {
+			t.Errorf("Authorization on %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestGitHubTokenAbsentWhenUnset(t *testing.T) {
+	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
+	m, _ := newTestManager(t, srv)
+
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
+		t.Fatal(err)
+	}
+	for path, got := range seen() {
+		if got != "" {
+			t.Errorf("Authorization on %s = %q, want none", path, got)
+		}
+	}
+}
+
+// The test server serves the assets on the API's own origin, the worst
+// case: only the request kind decides, never the address.
+func TestGitHubTokenNotSentOnAssetDownloads(t *testing.T) {
+	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
+	m, _ := newTestManager(t, srv)
+	m.GitHubToken = testToken
+
+	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
+		t.Fatal(err)
+	}
+	got := seen()
+	for _, path := range []string{
+		"/trivy_0.55.0_Linux-64bit.tar.gz",
+		"/trivy_0.55.0_checksums.txt",
+	} {
+		if _, ok := got[path]; !ok {
+			t.Fatalf("%s was never requested", path)
+		}
+		if got[path] != "" {
+			t.Errorf("Authorization on asset %s = %q, want none", path, got[path])
+		}
+	}
+	if got["/repos/aquasecurity/trivy/releases/latest"] == "" {
+		t.Error("the release lookup carried no token")
+	}
+}
+
+func TestGitHubTokenNeverInErrorsOrLogs(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// A server that echoes the credential into its body, as a
+				// hostile or buggy mirror could.
+				http.Error(w, r.Header.Get("Authorization"), status)
+			}))
+			t.Cleanup(srv.Close)
+			var logs bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			m := NewManager(fakeVolume{root: t.TempDir(), settings: store.Settings{MinReleaseAgeDays: 7}}, srv.Client(), log)
+			m.GitHubAPI = srv.URL
+			m.GitHubToken = testToken
+
+			_, err := m.UpdateTrivy(context.Background(), "", false)
+			if err == nil {
+				t.Fatal("UpdateTrivy succeeded against a failing API")
+			}
+			if !errors.Is(err, ErrReleaseSourceUnavailable) {
+				t.Errorf("error = %v, want ErrReleaseSourceUnavailable", err)
+			}
+			if strings.Contains(err.Error(), testToken) {
+				t.Errorf("error text carries the token: %q", err)
+			}
+			if _, err := m.TrivyState(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(logs.String(), testToken) {
+				t.Errorf("log carries the token: %q", logs.String())
+			}
+		})
 	}
 }
