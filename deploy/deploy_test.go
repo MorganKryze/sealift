@@ -124,6 +124,9 @@ func TestArgoCDExamples(t *testing.T) {
 
 	var app struct {
 		Spec struct {
+			Destination struct {
+				Namespace string
+			}
 			Sources []struct {
 				Chart          string
 				TargetRevision string `yaml:"targetRevision"`
@@ -154,6 +157,9 @@ func TestArgoCDExamples(t *testing.T) {
 	}
 	if !hasRef || !hasChart {
 		t.Errorf("sources: ref values = %v, chart sealift = %v", hasRef, hasChart)
+	}
+	if app.Spec.Destination.Namespace != "<namespace>" {
+		t.Errorf("destination namespace = %q, want the <namespace> placeholder", app.Spec.Destination.Namespace)
 	}
 	if app.Spec.SyncPolicy.Automated != nil {
 		t.Error("syncPolicy.automated is set")
