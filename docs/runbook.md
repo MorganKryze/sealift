@@ -57,6 +57,10 @@ Each value below is found once and used in every place the table names. The char
 
 No value of the chart holds a credential. The three Secret keys are created by hand in [the Secret](#the-secret). The values repository is public to everyone who reads the cluster's Git, so it holds addresses, the public key and the CA certificate, which are public on the air-gapped network, and nothing else.
 
+Whoever can write to that repository can change what the service trusts and where it sends its credentials. Restrict writes to a few people, and let changes reach `main` only through a review. Six keys need a second look at every sync, since each one moves trust: `publicKey`, `ca`, `keycloak.*`, `token.header`, `nexus.url` and `minio.url`. After any change to `publicKey`, redo step 7 of [the checklist](#the-checklist) and compare the fingerprint again.
+
+The Keycloak, Nexus and MinIO addresses are `https://` URLs. The chart refuses `http://` for `keycloak.realmUrl` and `keycloak.keySetUrl` and names the key. It accepts `http://` for `nexus.url` and `minio.url`, so only you keep them on https: over `http://` the Nexus password and every archive cross the network in the clear.
+
 ## Prerequisites
 
 | Need | Version |
@@ -86,16 +90,20 @@ Copy `deploy/connected/compose.yaml` and `deploy/connected/.env.example` from th
 
    The service shows `healthy` after a minute. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
 2. Open the page and follow the setup screen, which downloads Trivy and its database. [Getting started](getting-started.md) walks through the first archive.
-3. Open **Settings**, press **Download** in the signing key section and keep the file as `public-key.pem`. Read the `Public key sha256` next to it and write it down. This is the file that goes into the values and the value that the air-gapped side must show.
+3. Open **Settings**, press **Download** in the signing key section and keep the file as `public-key.pem`. Read the `Public key sha256` next to it and write it down. This is the file that goes into the values and the value that the air-gapped side must show. Send the fingerprint by [another channel](#values-that-cross-by-another-channel).
 4. Export an archive as [Workflow](workflow.md) describes. Record the archive's sha256 on this side, before the key:
 
    <!-- illustrative -->
    ```sh
    shasum -a 256 packages_npm.tar.gz manifest.json manifest.json.sig
    ```
-5. Carry three files, with the sha256 of the archive: `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig`. Check them against the sha256 you wrote down after the key, on the kiosk.
+5. Carry three files: `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig`. Send the archive's sha256 by [another channel](#values-that-cross-by-another-channel), and check the three files against it on the kiosk.
 
 The volume `sealift_sealift-data` holds the private signing key. A lost volume means a new key, and the air-gapped side then refuses every archive until it holds the new public key. [Deployment](deployment.md#the-key-the-import-trusts) says how to restore a key from a backup.
+
+## Values that cross by another channel
+
+Five values prove that what arrives is what left: the public key and its `Public key sha256`, the archive's sha256, the image id, and the sha256 of the chart tgz and of the image tar. Send them by a channel that is neither the kiosk nor the USB key: a ticket, a call, a printed sheet. A copy that crosses on the key proves nothing, since whoever swaps a file swaps the value beside it. Every comparison below uses the copy you received by that channel: the key's fingerprint at step 7 of [the checklist](#the-checklist), the archive's sha256 in `Expected sha256 (optional)`, and the image id and the two sha256 lines at the Harbor step.
 
 ## From GHCR through the key into Harbor
 
@@ -120,8 +128,8 @@ Everything before the key happens on the connected side. Nothing here was run en
    ```
 
    The first `helm push` of a release creates the package `ghcr.io/morgankryze/charts/sealift`, and GHCR can make a new package private. If the pull is refused, check on GitHub that the package is public, or run `helm registry login ghcr.io` first. An Argo CD that reads GHCR directly needs the package public as well.
-3. Carry the two files and the recorded values through the key. No other image crosses: oauth2-proxy and ingress-nginx are your team's.
-4. On the air-gapped side, check before you push anything. Both sha256 lines must match what you recorded:
+3. Carry the two files through the key and send the recorded values by [another channel](#values-that-cross-by-another-channel). No other image crosses: oauth2-proxy and ingress-nginx are your team's.
+4. On the air-gapped side, check before you push anything. Both sha256 lines must match the values you received by the other channel:
 
    <!-- illustrative -->
    ```sh
@@ -130,7 +138,7 @@ Everything before the key happens on the connected side. Nothing here was run en
    docker image inspect --format '{{.Architecture}} {{.Id}}' ghcr.io/morgankryze/sealift:0.6.0
    ```
 
-   The architecture must be `amd64` and the id must equal the one you recorded. Stop on any difference.
+   The architecture must be `amd64` and the id must equal the one you received by the other channel. Stop on any difference.
 5. Push the image into `<harbor-host>/<harbor-project>` and the chart into a path apart, so that an image and a chart both named `sealift` at one version never overwrite each other:
 
    <!-- illustrative -->
@@ -148,15 +156,21 @@ The tgz holds `files/published.mjs`, the script of [the rollback list](#the-roll
 
 ## The Secret
 
-The chart never creates a Secret. Create it in the namespace by hand, from three files that hold one value each and that you delete afterwards, so no value reaches your shell history or a log:
+The chart never creates a Secret. Create it in the namespace by hand, from three files that hold one value each and that you delete afterwards, so no value reaches your shell history or a log. In bash, `read -rs` prompts for a value without echoing it. Write each file readable by you alone:
 
 <!-- illustrative -->
 ```sh
+umask 077
+read -rs -p 'Nexus password: ' v; printf '%s' "$v" > nexus-password; echo
+read -rs -p 'MinIO access key: ' v; printf '%s' "$v" > minio-access-key; echo
+read -rs -p 'MinIO secret key: ' v; printf '%s' "$v" > minio-secret-key; echo
+unset v
 kubectl create namespace <namespace>
 kubectl -n <namespace> create secret generic <secret-name> \
   --from-file=nexus-password=./nexus-password \
   --from-file=minio-access-key=./minio-access-key \
   --from-file=minio-secret-key=./minio-secret-key
+rm nexus-password minio-access-key minio-secret-key
 ```
 
 The three key names are fixed. When Harbor needs a pull credential, create it as well, from a Docker config file of the pull robot that you delete afterwards, and name it in `imagePullSecrets`:
@@ -167,7 +181,7 @@ kubectl -n <namespace> create secret generic <pull-secret> \
   --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson=./docker-config.json
 ```
 
-A plain Secret is base64. Anyone who can read Secrets in the namespace can read these three, so ask the administrators to restrict that right.
+A plain Secret is base64. Anyone who can read Secrets in the namespace can read these three, so ask the administrators to restrict that right. Three more Secrets need the same restriction: the pull Secret, the TLS Secret `<import-tls-secret>` in `<namespace>`, and its copy in `<oauth2-proxy-namespace>`, which holds the same private key a second time. oauth2-proxy's own Secret, with the client secret and the cookie secret, belongs to your team.
 
 ## The certificate
 
@@ -300,7 +314,7 @@ spec:
                   number: <oauth2-proxy-port>
 ```
 
-The Secret `<import-tls-secret>` must exist in `<oauth2-proxy-namespace>`: [the certificate](#the-certificate) shows the command.
+The Secret `<import-tls-secret>` must exist in `<oauth2-proxy-namespace>`: [the certificate](#the-certificate) shows the command. It holds the TLS private key a second time, so restrict who reads Secrets there too.
 
 ### The oauth2-proxy settings
 
@@ -347,7 +361,7 @@ The chart marks the claim it creates so that `helm uninstall` and an Argo CD pru
 
 ## The sync
 
-In Argo CD, open the Application `sealift`, review the diff, and sync. A render error names the value's key, since the chart fails before anything reaches the cluster. Then watch the pod:
+In Argo CD, open the Application `sealift`, review the diff, and sync. Read the diff of `publicKey`, `ca`, `keycloak.*`, `token.header`, `nexus.url` and `minio.url` line by line, as [the drop-in values](#the-drop-in-values) say. A render error names the value's key, since the chart fails before anything reaches the cluster. Then watch the pod:
 
 <!-- illustrative -->
 ```sh
@@ -375,7 +389,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 5. A minute after sign-in | Reload the screen: it still answers | `upstream sent too big header`, or a 502 | Set `proxy-buffer-size` to `16k` and `auth-always-set-cookie` to `"true"` |
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
-| 7. The trusted key | The Settings sheet's `Public key sha256` equals the one from step 3 of [the connected side](#the-connected-side) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
+| 7. The trusted key | The Settings sheet's `Public key sha256` equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
 | 8. The network policy | Run the command under this table from a pod in another namespace. The pod starts and prints `blocked: TimeoutError` or `blocked: TypeError` | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
 | | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
 | 9. A forged header | Through the ingress, send your session cookie and a forged `X-Auth-Request-Access-Token` and `X-Access-Token`: the answer is for you, the signed-in user | The answer is for the forged value, or a 200 without a cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
@@ -446,7 +460,7 @@ The import publishes into the npm hosted repository that Package Pusher writes t
 
 | Worst case | Guard |
 | --- | --- |
-| A wrong archive reaches Nexus | The import writes nothing until the signature verifies with the trusted key, the sha256 you give matches, the archive's sha256 and size match the manifest, and each tarball matches its manifest entry. Fill `Expected sha256 (optional)` on every import into this repository, with the value recorded before the key |
+| A wrong archive reaches Nexus | The import writes nothing until the signature verifies with the trusted key, the sha256 you give matches, the archive's sha256 and size match the manifest, and each tarball matches its manifest entry. Fill `Expected sha256 (optional)` on every import into this repository, with the sha256 you received by [another channel](#values-that-cross-by-another-channel) |
 | A version Nexus holds is replaced | The import reads each version before its upload and fails one held with other bytes (kind `conflict`), and reads it back after and fails one Nexus serves with other bytes (kind `nexus`). The repository allows redeploy and the request asks no change, since Package Pusher republishes there |
 | A race with Package Pusher | Never start a Package Pusher publish into the repository while an import is queued or running. A version uploaded by both tools between the import's check and its upload leaves the last writer's bytes. **Imports** and an import's panel show `Queued` and `Running`: [Importing](importing.md#imports) |
 | A partial publish | An attempt that ends `Incomplete` keeps what it published, the archive and its manifest in MinIO, and its records. A project whose lockfile names a missing package cannot install until a retry ends `Complete`. The next step is the retry, which uploads only what Nexus lacks, never a removal |

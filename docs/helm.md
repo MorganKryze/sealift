@@ -30,16 +30,16 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 | `image.digest` | empty | When set, the pod pulls this digest |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | Secrets that let the pod pull from Harbor |
-| `nexus.url` | required | The Nexus address |
+| `nexus.url` | required | The Nexus address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `nexus.repository` | required | The npm hosted repository the import publishes into |
 | `nexus.user` | required | The import's Nexus user |
-| `keycloak.realmUrl` | required | The realm's address |
+| `keycloak.realmUrl` | required | The realm's address. The chart refuses `http://` and names the key |
 | `keycloak.clientId` | required | The client of the import's oauth2-proxy, and the token's audience |
 | `keycloak.issuer` | empty | Empty means `realmUrl` |
 | `keycloak.audience` | empty | Empty means `clientId` |
-| `keycloak.keySetUrl` | empty | Empty means `<realmUrl>/protocol/openid-connect/certs` |
+| `keycloak.keySetUrl` | empty | Empty means `<realmUrl>/protocol/openid-connect/certs`. The chart refuses `http://` and names the key |
 | `token.header` | `X-Auth-Request-Access-Token` | The one request header the service reads the token from. The chart writes the same value into the Ingress's `auth-response-headers` |
-| `minio.url` | required | The MinIO address |
+| `minio.url` | required | The MinIO address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `minio.region` | `us-east-1` | |
 | `secret.name` | required | A Secret you create, with the keys `nexus-password`, `minio-access-key` and `minio-secret-key` |
 | `publicKey.pem` | required unless a ConfigMap is named | The collection's public key as one PEM block |
