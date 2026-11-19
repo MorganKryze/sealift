@@ -40,6 +40,11 @@ function inNexus(imp: Import): string {
   return `All ${c.total} packages are in Nexus: ${c.published} published, ${c.present} present.`
 }
 
+/** The objects the import read and removal guards: a record of sealift 0.4 holds no signature. */
+function objectsOf(imp: Import): string {
+  return imp.signature ? "the archive, the manifest and the signature" : "the archive and the manifest"
+}
+
 /**
  * How the latest attempt ended, in the cases the report and the progress cannot say: a complete
  * attempt and what became of the archive, a refusal, an interruption. An incomplete attempt is the
@@ -61,12 +66,12 @@ export function EndState({ imp }: { imp: Import }) {
     }
     if (a.removal.removed) {
       return (
-        <Card icon={CircleCheck} tone="text-severity-resolved-fg" title={a.removal.reason ? "Archive removed from MinIO, manifest kept" : "Archive removed from MinIO"}>
+        <Card icon={CircleCheck} tone="text-severity-resolved-fg" title={a.removal.reason ? "Archive removed from MinIO, its manifest or signature kept" : "Archive removed from MinIO"}>
           <p>{inNexus(imp)}</p>
           {a.removal.reason ? (
             <p className="[overflow-wrap:anywhere]">{a.removal.reason}</p>
           ) : (
-            <p>sealift removed both objects from your folder, after checking that each still carried the ETag it read at the start.</p>
+            <p>{`sealift removed ${objectsOf(imp)} from your folder, after checking that each still carried the ETag it read at the start.`}</p>
           )}
           <dl className="mt-2 grid gap-3">
             <Etag title="Archive ETag" value={imp.archive.etag} label="archive ETag" />
@@ -81,7 +86,7 @@ export function EndState({ imp }: { imp: Import }) {
         <p>{`${inNexus(imp)} The archive stays in MinIO. Its reason:`}</p>
         <p className="rounded-md border border-line bg-background p-3 text-sm [overflow-wrap:anywhere]">{a.removal.reason || "Not recorded"}</p>
         <p className="text-muted">
-          Retry adds an attempt: it checks every package again and removes the archive only if both objects still carry the ETags this import read. An archive replaced since is refused.
+          {`Retry adds an attempt: it checks every package again and removes the archive only if ${objectsOf(imp)} still carry the ETags this import read. An archive replaced since is refused.`}
         </p>
         <RetryAction imp={imp} />
       </Card>
