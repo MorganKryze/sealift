@@ -169,6 +169,22 @@ kubectl -n <namespace> create secret generic <pull-secret> \
 
 A plain Secret is base64. Anyone who can read Secrets in the namespace can read these three, so ask the administrators to restrict that right.
 
+## The certificate
+
+The import's Ingress serves `<import-host>` over TLS from a Secret of type `kubernetes.io/tls` in `<namespace>`. The chart never creates it. Ask the administrators for the certificate and its key (the [request](admin-request.md) asks for them), then create the Secret from two files that you delete afterwards:
+
+<!-- illustrative -->
+```sh
+kubectl -n <namespace> create secret tls <import-tls-secret> \
+  --cert=./import-host.crt --key=./import-host.key
+```
+
+The values name it in `ingress.tls.secretName`. Without that key, the Ingress asks for a Secret named `sealift-tls`. The certificate file holds the full chain, the host's certificate first.
+
+The `/oauth2` Ingress of [the route of `/oauth2/`](#the-route-of-oauth2) names `<import-tls-secret>` as its `secretName`. An Ingress reads a Secret from its own namespace only, so create the same Secret in `<oauth2-proxy-namespace>`, with the same command and `-n <oauth2-proxy-namespace>`.
+
+A controller that serves a default certificate for `<import-host>` is the alternative. Set `ingress.tls.enabled: false`, so that the Ingress has no `tls` block, drop the `tls` block of the `/oauth2` Ingress, and add `nginx.ingress.kubernetes.io/ssl-redirect: "true"` to `ingress.annotations`, since ingress-nginx redirects to HTTPS on its own only for an Ingress with a `tls` block. The install notes then print an `http://` address: open it as `https://`.
+
 ## The values in Git
 
 Create `<values-path>/values.yaml` in `<values-repo-url>`. It starts from `charts/sealift/values-example.yaml`, which is also inside the chart:
@@ -201,6 +217,8 @@ persistence:
 ingress:
   className: nginx
   host: <import-host>
+  tls:
+    secretName: <import-tls-secret>
   auth:
     url: <oauth2-proxy-auth-url>
     signin: <oauth2-proxy-signin-url>
@@ -274,6 +292,8 @@ spec:
                 port:
                   number: <oauth2-proxy-port>
 ```
+
+The Secret `<import-tls-secret>` must exist in `<oauth2-proxy-namespace>`: [the certificate](#the-certificate) shows the command.
 
 ### The oauth2-proxy settings
 
