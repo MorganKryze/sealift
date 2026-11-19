@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-19
+
 ### Added
 
 - A Helm chart for the import service, published beside the image at `oci://ghcr.io/morgankryze/charts/sealift` with each release. It runs one non-root pod, keeps `/data` on a claim that Helm and Argo CD leave in place, takes its credentials from one Secret you create, signs users in through ingress-nginx and admits only the ingress controller's namespace through a NetworkPolicy. It refuses to render while a value is missing or still a placeholder, and names the key. [Helm chart](docs/helm.md) describes it.
@@ -165,7 +167,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MorganKryze/sealift/compare/v0.4.0...v0.6.0
 [0.4.0]: https://github.com/MorganKryze/sealift/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MorganKryze/sealift/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/MorganKryze/sealift/compare/v0.2.1...v0.2.2
