@@ -19,6 +19,11 @@ export const UI = {
     "/sessions/demo/export",
     "/sessions/missing/review",
   ],
+  // A page with a control pressed first: the state is checked as a route is. `opens` names the role
+  // and name the pressed control must bring up.
+  states: [
+    { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
@@ -299,6 +304,26 @@ for (const route of UI.routes) {
           theme,
           // /api/tools asks GitHub for the latest Trivy, which can take 30 s, so idle is a best effort.
           ready: (p) => p.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {}),
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
+for (const state of UI.states) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${state.path} ${state.open.name} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${state.path} · ${state.open.name} · ${width}px · ${theme}`,
+          url: new URL(state.path, UI.baseURL).href,
+          width,
+          theme,
+          ready: async (p) => {
+            await p.getByRole(state.open.role, { name: state.open.name }).click()
+            await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+          },
         })
         expect(failures, failures.join("\n")).toEqual([])
       })
