@@ -55,6 +55,12 @@ func ParseLockfile(r io.Reader) ([]LockPackage, error) {
 		if !ok {
 			return nil, fmt.Errorf("pnpm lockfile: malformed package key %q", key)
 		}
+		if !ValidName(name) {
+			return nil, fmt.Errorf("pnpm lockfile: %q has an invalid package name", key)
+		}
+		if !IsExactVersion(version) {
+			return nil, fmt.Errorf("pnpm lockfile: %q has a version that is not exact", key)
+		}
 		if p.Resolution.Integrity == "" {
 			return nil, fmt.Errorf("pnpm lockfile: %s has no registry integrity", key)
 		}
