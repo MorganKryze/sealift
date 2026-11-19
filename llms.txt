@@ -16,6 +16,9 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 - [The air gap](docs/air-gap.md): the archive, the signature and the trusted key, the reports, sha256 checks, the import, lockfile drift
 - [Importing](docs/importing.md): the import service screens: Archives, Imports and one import, the trusted key, every state and the retry card
 - [Deployment](docs/deployment.md): hardened Compose, capabilities, reverse proxy with SSE, outbound hosts, the /data volume, the key the import trusts, upgrades, backups
+- [Runbook](docs/runbook.md): both sides from nothing to a first import: the drop-in values, Harbor, the Secret, the ingress and oauth2-proxy values, a checklist, upgrades, backups, the worst cases on a shared Nexus repository and the rollback list
+- [Helm chart](docs/helm.md): the chart of the import service, every value, the `token.header` setting, the install notes, Argo CD and the release
+- [Request to the administrators](docs/admin-request.md): the MinIO, Nexus and Keycloak accounts and the infrastructure the install needs, with the reason for each
 - [Troubleshooting](docs/troubleshooting.md): each message with its cause and fix
 - [FAQ](docs/faq.md): lockfiles, transitive dependencies, other ecosystems, data, reset
 

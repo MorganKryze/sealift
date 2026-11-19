@@ -44,7 +44,7 @@ flowchart LR
   user -->|"sign in, start an import"| gw
   gw --> proxy
   proxy --> kc
-  gw -->|"access token in X-Access-Token"| imp
+  gw -->|"access token in the token header"| imp
   imp -->|"key set"| kc
   imp -->|"list, read, delete"| minio
   imp -->|"read, upload"| nexus
@@ -200,7 +200,7 @@ The server also reads the settings file and the secret files beside it from a re
 
 ## Deployment shapes
 
-The connected side runs as one container with one volume, bound to a loopback address or put behind a proxy that authenticates. The air-gapped side runs `sealift import-server` in a read-only container with no capability, behind a gateway and oauth2-proxy that sign users in, next to Keycloak, MinIO and Nexus. [Deployment](deployment.md) covers both, and [`lab/README.md`](../lab/README.md) starts a local copy of both sides with the crossing protocol.
+The connected side runs as one container with one volume, bound to a loopback address or put behind a proxy that authenticates. The air-gapped side runs `sealift import-server` in a read-only container with no capability, behind a gateway and oauth2-proxy that sign users in, next to Keycloak, MinIO and Nexus. [Deployment](deployment.md) covers both. On Kubernetes, a Helm chart installs the import service and one Compose file starts the collection: [Helm chart](helm.md), [Runbook](runbook.md) and [Request to the administrators](admin-request.md). [`lab/README.md`](../lab/README.md) starts a local copy of both sides with the crossing protocol.
 
 ## Glossary
 
@@ -237,6 +237,9 @@ The connected side runs as one container with one volume, bound to a loopback ad
 | [The air gap](air-gap.md) | What crosses, what to check and what the import side receives |
 | [Importing](importing.md) | The three screens of the import service, with every state |
 | [Deployment](deployment.md) | Compose, reverse proxy, the import service, the data volume, upgrades and backups |
+| [Runbook](runbook.md) | Both sides from nothing to a first import, with a checklist |
+| [Helm chart](helm.md) | The chart of the import service, its values and Argo CD |
+| [Request to the administrators](admin-request.md) | The accounts and the infrastructure the install needs |
 | [Troubleshooting](troubleshooting.md) | Each message sealift shows, its cause and its fix |
 | [FAQ](faq.md) | Lockfiles, other ecosystems, what leaves the machine, where data lives |
 | [Contributing](../CONTRIBUTING.md) | The local stack, the checks, commits and releases |

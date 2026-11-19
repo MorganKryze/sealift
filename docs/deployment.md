@@ -1,6 +1,6 @@
 # Deployment
 
-This page covers running sealift for a team: Compose, a reverse proxy, the data volume, upgrades and backups. [Getting started](getting-started.md) has the one-line `docker run` for a first try.
+This page covers running sealift for a team: Compose, a reverse proxy, the data volume, upgrades and backups. To deploy both sides from written steps, with a Helm chart for the import service on Kubernetes, read [the runbook](runbook.md), [Helm chart](helm.md) and [Request to the administrators](admin-request.md). [Getting started](getting-started.md) has the one-line `docker run` for a first try.
 
 ## The image
 
@@ -145,7 +145,7 @@ A regenerate in Settings replaces the key, with the same consequence for the imp
 
 ## The import service
 
-`sealift import-server` runs on the air-gapped side. It lets each signed-in user import the archives in their own MinIO folder into Nexus. It serves the contract of [`api/import.yaml`](../api/import.yaml), described in [API](dev/api.md#the-import-service), and runs behind a gateway that signs users in. The lab in `lab/` runs it that way, and the statements below were checked against that lab.
+`sealift import-server` runs on the air-gapped side. It lets each signed-in user import the archives in their own MinIO folder into Nexus. It serves the contract of [`api/import.yaml`](../api/import.yaml), described in [API](dev/api.md#the-import-service), and runs behind a gateway that signs users in. The lab in `lab/` runs it that way, and the statements below were checked against that lab. On Kubernetes, [Helm chart](helm.md) installs it, and [the runbook](runbook.md) takes the image and the chart through Harbor and checks every link.
 
 The image carries two copies of the binary. `sealift-import` holds no capability, and `docker-entrypoint.sh` starts `sealift import` and `sealift import-server` from it. Both start and run under `--cap-drop ALL` as user 10000, with an empty `CapPrm`, `CapEff` and `CapAmb`. An image cannot set `--cap-drop`: set it yourself, as the compose example below does. Without it, the container keeps Docker's default capability bounding set, which the setuid binaries of the base image can use. The collection role keeps its own copy, which holds `SETUID`, `SETGID` and `KILL`.
 
@@ -184,7 +184,7 @@ minio:
   secretKeyFile: minio-secret-key
 ```
 
-`token` is required. Without `minio`, the service starts and lists no archive. Both URLs follow the rules of `nexus.url`, and an `http` URL is logged as a warning at start and named in the `unencrypted` list of `GET /api/archives`.
+`token` is required. Its optional `header` names the one request header the service reads the access token from. It defaults to `X-Access-Token`, so a settings file without it reads as before. The service reads that header and no other: not `X-Access-Token` when another name is set, not `Authorization`, not a cookie. It refuses to start, naming `token.header`, when the value is empty, is not a valid header name, or is `Authorization`, `Cookie` or `Host`. Set it to the name your gateway sets on every request: ingress-nginx forwards oauth2-proxy's access token as `X-Auth-Request-Access-Token`, which is the chart's default. Without `minio`, the service starts and lists no archive. Both URLs follow the rules of `nexus.url`, and an `http` URL is logged as a warning at start and named in the `unencrypted` list of `GET /api/archives`.
 
 ### Keycloak
 
@@ -198,7 +198,7 @@ MinIO refused a policy that gave `s3:GetBucketLocation` an `s3:prefix` condition
 
 ### The gateway
 
-The gateway signs users in and forwards the access token. In the lab, nginx asks oauth2-proxy about every request and copies the token from the answer into `X-Access-Token`, the one header the service reads:
+The gateway signs users in and forwards the access token. In the lab, nginx asks oauth2-proxy about every request and copies the token from the answer into `X-Access-Token`, the header the settings name in `token.header`, `X-Access-Token` by default:
 
 <!-- illustrative -->
 ```nginx

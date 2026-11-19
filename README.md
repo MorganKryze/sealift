@@ -65,7 +65,7 @@ Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks t
 | --- | --- |
 | Start | [Getting started](docs/getting-started.md), [Workflow](docs/workflow.md) |
 | Use | [How sealift chooses](docs/how-sealift-chooses.md), [Settings](docs/settings.md), [The air gap](docs/air-gap.md) |
-| Deploy | [Deployment](docs/deployment.md), [Troubleshooting](docs/troubleshooting.md), [FAQ](docs/faq.md) |
+| Deploy | [Deployment](docs/deployment.md), [Runbook](docs/runbook.md), [Helm chart](docs/helm.md), [Request to the administrators](docs/admin-request.md), [Troubleshooting](docs/troubleshooting.md), [FAQ](docs/faq.md) |
 | Develop | [Contributing](CONTRIBUTING.md), [Architecture](docs/dev/architecture.md), [Ranking](docs/dev/ranking.md), [API](docs/dev/api.md), [Archive format](docs/dev/archive-format.md), [Web](docs/dev/web.md) |
 
 [docs/README.md](docs/README.md) lists every page with a line on each.

@@ -18,6 +18,9 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 ## Deploying
 
 - [Deployment](deployment.md): Compose, reverse proxy, the data volume, the key the import trusts, upgrades and backups.
+- [Runbook](runbook.md): both sides from nothing to a first import, with every value to replace, Harbor, the sign-in values, a checklist and the worst cases on a shared Nexus repository.
+- [Helm chart](helm.md): the chart of the import service, every value, the install notes and Argo CD.
+- [Request to the administrators](admin-request.md): the accounts and the infrastructure the install needs, with the reason for each.
 
 ## Reference
 
