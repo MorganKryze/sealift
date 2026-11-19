@@ -273,7 +273,7 @@ func TestExportSummaryPrintsTheExportedScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(summary, []byte("| After (exported set) | 1 | 1 | 0 | 1 | 0 |")) {
+	if !bytes.Contains(summary, []byte("| In the archive | 1 | 1 | 0 | 1 | 0 |")) {
 		t.Errorf("summary.md After row is not the exported scan's (1, 1, 0, 1, 0):\n%s", summary)
 	}
 	if bytes.Contains(summary, []byte("| 7 | 7 | 7 | 7 | 7 |")) {
@@ -302,10 +302,43 @@ func TestExportSummaryLabelsBothRowsByScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"| Before (whole project) |", "| After (exported set) |"} {
+	for _, want := range []string{"| Before (whole project) |", "| In the archive |"} {
 		if !bytes.Contains(summary, []byte(want)) {
 			t.Errorf("summary.md missing the row %q:\n%s", want, summary)
 		}
+	}
+}
+
+// With the project tree in the archive, the archive's own scan counts the
+// old versions too, so the summary also prints the project once the
+// selection applies, from the analysis' project scan.
+func TestExportSummaryPrintsTheProjectedRow(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-OLD", "PkgName": "widgets", "InstalledVersion": "1.0.0", "Severity": "HIGH", "Title": "o"},
+    {"VulnerabilityID": "CVE-OTHER", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "LOW", "Title": "l"}
+  ]}]}`
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(scan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, true)
+	for i, d := range exp.Analysis.Result.Dependencies {
+		if d.Name == "widgets" {
+			exp.Analysis.Result.Dependencies[i].CVEs = []CVE{{ID: "CVE-OLD", Severity: "HIGH"}}
+		}
+	}
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(summary, []byte("| After (project with this selection) | 0 | 0 | 0 | 1 | 0 |")) {
+		t.Errorf("summary.md lacks the projected row without CVE-OLD:\n%s", summary)
 	}
 }
 

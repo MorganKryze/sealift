@@ -832,11 +832,12 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 	if err != nil {
 		return err
 	}
+	projected := e.projected()
 
 	s := report.Summary{
 		AnalysisDate: status.CreatedAt, TrivyDBDate: status.TrivyDBDate, TrivyVersion: status.TrivyVersion,
 		ToolVersion: ToolVersion, Target: e.Project.Target,
-		Before: rank.Vector(e.Analysis.Result.Before), After: &after,
+		Before: rank.Vector(e.Analysis.Result.Before), Projected: projected, After: &after,
 		Dependencies: deps, RemainingCritical: critical, RemainingHigh: high,
 		Signals: signals, ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(shipped),
 	}
@@ -859,6 +860,26 @@ func findCandidate(cands []Candidate, version string) (Candidate, bool) {
 		}
 	}
 	return Candidate{}, false
+}
+
+// projected estimates the project once the selection applies, from the
+// analysis' own project scan. A scan it cannot read leaves the row out of
+// summary.md rather than failing the export over a report.
+func (e *Export) projected() *rank.Vector {
+	path := filepath.Join(e.Analysis.Dir, "project.trivy.json")
+	f, err := os.Open(path)
+	if err != nil {
+		slog.Warn("jobs: no project scan for summary.md", "path", path, "error", err)
+		return nil
+	}
+	defer f.Close()
+	findings, err := rank.ReadTrivyJSON(f)
+	if err != nil {
+		slog.Warn("jobs: unreadable project scan for summary.md", "path", path, "error", err)
+		return nil
+	}
+	v := projectedVector(findings, e.Analysis.Result.Dependencies, e.Request.Selection)
+	return &v
 }
 
 // exportedFindings reads the export's own just-written report.trivy.json,
