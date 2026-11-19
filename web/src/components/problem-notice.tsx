@@ -41,8 +41,11 @@ export function ProblemNotice({ status, problem, className, children }: ProblemN
         </ul>
       ) : (
         <>
-          <p className="font-medium">{problem?.title ?? "Request failed"}</p>
+          <p className="font-medium">{problem?.title ?? (status > 0 ? `Request failed with HTTP ${status}` : "Request failed")}</p>
           {problem?.detail ? <p className="text-muted">{problem.detail}</p> : null}
+          {!problem && status > 0 ? (
+            <p className="text-muted">The server answered, but no detail reached the browser, which a proxy in front of sealift can cause. The sealift container's log names the cause.</p>
+          ) : null}
           {problem?.type === "tools-missing" ? (
             <Link to="/" className="mt-2 inline-block font-medium text-accent underline underline-offset-2">
               Open setup
