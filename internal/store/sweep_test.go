@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -110,11 +111,11 @@ func TestMarkRunningInterruptedOnEmptyStoreReturnsZero(t *testing.T) {
 	}
 }
 
-// TestRemoveOrphanDirsRemovesOnlyTmpDirectories proves the startup sweep
-// removes an unfinished analyses/<id>.tmp or exports/<id>.tmp directory,
-// left behind by a crash mid-job, while leaving a committed directory of
-// the same kind untouched.
-func TestRemoveOrphanDirsRemovesOnlyTmpDirectories(t *testing.T) {
+// TestRemoveOrphanDirsKeepsAnInterruptedAnalysis proves a restart keeps an
+// analysis that was running: its .tmp directory is committed under its final
+// name in state interrupted, while an export .tmp and an analysis .tmp with
+// no status.json are removed.
+func TestRemoveOrphanDirsKeepsAnInterruptedAnalysis(t *testing.T) {
 	s := openTestStore(t)
 
 	mkdir := func(rel string) string {
@@ -124,33 +125,132 @@ func TestRemoveOrphanDirsRemovesOnlyTmpDirectories(t *testing.T) {
 		}
 		return dir
 	}
-
-	orphanAnalysis := mkdir("proj-1/analyses/20260917T101502Z.tmp")
-	if err := os.WriteFile(filepath.Join(orphanAnalysis, "status.json"), []byte(`{"state":"running"}`), fileMode); err != nil {
-		t.Fatalf("write status.json: %v", err)
+	write := func(dir, name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), fileMode); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
+
+	const id = "20260917T101502Z"
+	running := mkdir("proj-1/analyses/" + id + ".tmp")
+	write(running, "status.json", `{"state":"running","step":"resolve"}`)
+	write(running, "log.txt", "resolving\n")
+	queued := mkdir("proj-1/analyses/20260917T101504Z.tmp")
 	orphanExport := mkdir("proj-2/exports/20260917T101503Z.tmp")
 	committed := mkdir("proj-1/analyses/20260916T090000Z")
-	if err := os.WriteFile(filepath.Join(committed, "status.json"), []byte(`{"state":"done"}`), fileMode); err != nil {
-		t.Fatalf("write status.json: %v", err)
-	}
+	write(committed, "status.json", `{"state":"done"}`)
 
+	if _, err := s.MarkRunningInterrupted(); err != nil {
+		t.Fatalf("MarkRunningInterrupted: %v", err)
+	}
 	n, err := s.RemoveOrphanDirs()
 	if err != nil {
 		t.Fatalf("RemoveOrphanDirs: %v", err)
 	}
 	if n != 2 {
-		t.Fatalf("removed = %d, want 2", n)
+		t.Fatalf("removed = %d, want 2 (the queued analysis and the export)", n)
 	}
 
-	if _, err := os.Stat(orphanAnalysis); !os.IsNotExist(err) {
-		t.Errorf("orphan analysis .tmp dir still present: %v", err)
+	kept := filepath.Join(s.Root(), "projects", "proj-1", "analyses", id)
+	raw, err := os.ReadFile(filepath.Join(kept, "status.json"))
+	if err != nil {
+		t.Fatalf("interrupted analysis status.json: %v", err)
 	}
-	if _, err := os.Stat(orphanExport); !os.IsNotExist(err) {
-		t.Errorf("orphan export .tmp dir still present: %v", err)
+	if !strings.Contains(string(raw), interruptedJSON) {
+		t.Errorf("status.json = %s, want state interrupted", raw)
+	}
+	if _, err := os.Stat(filepath.Join(kept, "log.txt")); err != nil {
+		t.Errorf("log.txt not kept: %v", err)
+	}
+	for _, gone := range []string{running, queued, orphanExport} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Errorf("%s still present: %v", gone, err)
+		}
 	}
 	if _, err := os.Stat(committed); err != nil {
 		t.Errorf("committed directory removed, want it untouched: %v", err)
+	}
+
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	found := false
+	for _, info := range infos {
+		if info.ID == id {
+			found = true
+			if info.State != Interrupted {
+				t.Errorf("listed state = %q, want %q", info.State, Interrupted)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Analyses did not list %s: %+v", id, infos)
+	}
+}
+
+// TestRemoveOrphanDirsDoesNotKeepAnAnalysisStillRunning proves the sweep
+// never commits an analysis whose status.json still says running: no live
+// job backs it, so listing it would show a job that does not exist. The
+// directory is removed instead.
+func TestRemoveOrphanDirsDoesNotKeepAnAnalysisStillRunning(t *testing.T) {
+	s := openTestStore(t)
+	const id = "20260917T101502Z"
+	tmp := filepath.Join(s.Root(), "projects", "proj-1", "analyses", id+".tmp")
+	if err := os.MkdirAll(tmp, dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "status.json"), []byte(`{"state":"running"}`), fileMode); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := s.RemoveOrphanDirs(); err != nil {
+		t.Fatalf("RemoveOrphanDirs: %v", err)
+	}
+	assertNoRunningAnalysis(t, s, id)
+}
+
+// TestSweepDoesNotListARunningAnalysisItCouldNotMark covers a crash that
+// leaves the .tmp unwritable (a full disk, a read-only directory): the
+// status cannot be rewritten to interrupted, and the analysis must not be
+// committed still running.
+func TestSweepDoesNotListARunningAnalysisItCouldNotMark(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	s := openTestStore(t)
+	const id = "20260917T101502Z"
+	tmp := filepath.Join(s.Root(), "projects", "proj-1", "analyses", id+".tmp")
+	if err := os.MkdirAll(tmp, dirMode); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "status.json"), []byte(`{"state":"running"}`), fileMode); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chmod(tmp, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(tmp, 0o755) })
+
+	if _, err := s.MarkRunningInterrupted(); err != nil {
+		t.Fatalf("MarkRunningInterrupted: %v", err)
+	}
+	if _, err := s.RemoveOrphanDirs(); err != nil {
+		t.Fatalf("RemoveOrphanDirs: %v", err)
+	}
+	assertNoRunningAnalysis(t, s, id)
+}
+
+func assertNoRunningAnalysis(t *testing.T, s *Store, id string) {
+	t.Helper()
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	for _, info := range infos {
+		if info.ID == id && info.State == Running {
+			t.Errorf("Analyses lists %s as running, but no job backs it", id)
+		}
 	}
 }
 
