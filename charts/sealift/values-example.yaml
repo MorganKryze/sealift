@@ -14,7 +14,7 @@ secret:
 publicKey:
   pem: <public-key-pem>
 ingress:
-  host: <ingress-host>
+  host: <import-host>
   auth:
     url: <oauth2-proxy-auth-url>
     signin: <oauth2-proxy-signin-url>

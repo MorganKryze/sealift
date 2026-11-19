@@ -60,3 +60,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "sealift.publicKeySHA256" -}}
 {{- regexReplaceAll "-----[A-Z ]+-----|\\s" .Values.publicKey.pem "" | b64dec | sha256sum -}}
 {{- end -}}
+
+{{/* sealift.scan takes (list "<path>" <value>) and fails on a string with a <name> placeholder, naming its key. */}}
+{{- define "sealift.scan" -}}
+{{- $path := index . 0 -}}
+{{- $v := index . 1 -}}
+{{- $kind := kindOf $v -}}
+{{- if eq $kind "map" -}}
+{{- range $k, $x := $v -}}
+{{- include "sealift.scan" (list (ternary $k (printf "%s.%s" $path $k) (eq $path "")) $x) -}}
+{{- end -}}
+{{- else if eq $kind "slice" -}}
+{{- range $i, $x := $v -}}
+{{- include "sealift.scan" (list (printf "%s[%d]" $path $i) $x) -}}
+{{- end -}}
+{{- else if eq $kind "string" -}}
+{{- if regexMatch "<[^<>]+>" $v -}}
+{{- fail (printf "%s still holds its placeholder %s" $path (regexFind "<[^<>]+>" $v)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

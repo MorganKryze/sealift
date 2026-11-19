@@ -21,7 +21,7 @@ Package Pusher takes the first object under `packages/npm/` in a user's bucket a
 
 ## The drop-in values
 
-Each value below is found once and used in every place the table names. The placeholders are the ones `charts/sealift/values-example.yaml` holds, and the chart refuses to render while one is left.
+Each value below is found once and used in every place the table names. The chart refuses to render while a `<name>` is left in any string value, and the error names the key. `charts/sealift/values-example.yaml` holds the ones that have no default. A name that only appears in a command, such as `<other-namespace>`, is not checked: read your commands before you run them.
 
 | Name | Provided by | Goes to | Secret |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ Each value below is found once and used in every place the table names. The plac
 | `<oauth2-proxy-signin-url>` | Your team | `ingress.auth.signin` | no |
 | `<oauth2-proxy-service>`, `<oauth2-proxy-namespace>`, `<oauth2-proxy-port>` | Your team | the `/oauth2/` route and `<oauth2-proxy-auth-url>` | no |
 | `<ingress-namespace>` | Administrators | `networkPolicy.ingressNamespace` | no |
+| `<other-namespace>` | You | the network policy check of the checklist, any namespace besides `<namespace>` and `<ingress-namespace>` | no |
 | `<nexus-url>` | Administrators | `nexus.url` | no |
 | `<nexus-repository>` | Administrators | `nexus.repository` | no |
 | `<nexus-user>` | Administrators | `nexus.user` | no |
@@ -43,6 +44,9 @@ Each value below is found once and used in every place the table names. The plac
 | `<minio-url>` | Administrators | `minio.url` | no |
 | MinIO access key and secret key | Administrators | Secret keys `minio-access-key` and `minio-secret-key` | yes |
 | `<secret-name>` | You | `secret.name`, the name in `kubectl create secret` | no |
+| `<pull-secret>` | You | `imagePullSecrets`, the name in `kubectl create secret` for a Harbor pull credential | no |
+| `<import-tls-secret>` | Administrators | `ingress.tls.secretName`, the name in `kubectl create secret tls`, the `/oauth2` Ingress's `secretName` | no |
+| `<test-repository>` | Administrators | the probe's hosted npm repository in [the `latest` tag](#the-latest-tag) check, a repository other than the shared one | no |
 | `<public-key-pem>` | The connected side | `publicKey.pem`, from sealift's Settings | no |
 | `<ca-pem>` | Administrators | `ca.pem`, one file for every internal certificate authority | no |
 | `<storage-class>` | Administrators | `persistence.storageClass`, empty for the cluster default | no |

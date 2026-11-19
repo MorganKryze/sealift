@@ -345,6 +345,34 @@ func TestChartRefusesUnfilledValues(t *testing.T) {
 	})
 }
 
+// TestChartRefusesPlaceholdersInEveryValue leaves one runbook placeholder in
+// each value the chart renders without a check of its own.
+func TestChartRefusesPlaceholdersInEveryValue(t *testing.T) {
+	tests := []struct {
+		name, values, key, placeholder string
+	}{
+		{"ingress namespace", "networkPolicy:\n  ingressNamespace: <ingress-namespace>\n", "networkPolicy.ingressNamespace", "<ingress-namespace>"},
+		{"CA", "ca:\n  pem: |\n    <ca-pem>\n", "ca.pem", "<ca-pem>"},
+		{"storage class", "persistence:\n  storageClass: <storage-class>\n", "persistence.storageClass", "<storage-class>"},
+		{"pull secret", "imagePullSecrets:\n  - name: <pull-secret>\n", "imagePullSecrets[0].name", "<pull-secret>"},
+		{"image repository", "image:\n  repository: <harbor-host>/<harbor-project>/sealift\n", "image.repository", "<harbor-host>"},
+		{"annotation", "ingress:\n  annotations:\n    example.com/x: <annotation>\n", "ingress.annotations.example.com/x", "<annotation>"},
+		{"ingress TLS secret", "ingress:\n  tls:\n    secretName: <import-tls-secret>\n", "ingress.tls.secretName", "<import-tls-secret>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := render(t, "-f", writeValues(t, tt.values))
+			want := tt.key + " still holds its placeholder " + tt.placeholder
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want %q", err, want)
+			}
+		})
+	}
+	t.Run("a value with no placeholder renders", func(t *testing.T) {
+		mustRender(t, "-f", writeValues(t, "imagePullSecrets:\n  - name: harbor-pull\nca:\n  pem: |\n    "+strings.ReplaceAll(strings.TrimSpace(testCA), "\n", "\n    ")+"\n"))
+	})
+}
+
 func settingsOf(t *testing.T, docs []map[string]any) string {
 	t.Helper()
 	s, _ := at(find(t, docs, "ConfigMap", "rel-sealift-settings"), "data", "settings.yaml").(string)
@@ -832,6 +860,11 @@ func TestChartNetworkPolicy(t *testing.T) {
 
 func TestChartExampleValues(t *testing.T) {
 	example := filepath.Join(chartDir, "values-example.yaml")
+	if b, err := os.ReadFile(example); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(b), "host: <import-host>") {
+		t.Error("the example names the ingress host something other than <import-host>")
+	}
 	_, err := run(t, "template", "rel", chartDir, "-f", example)
 	if err == nil || !strings.Contains(err.Error(), "still holds its placeholder <") {
 		t.Errorf("err = %v, want a placeholder refusal", err)

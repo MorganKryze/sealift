@@ -21,7 +21,7 @@ The chart's version and `appVersion` both equal the release: version 0.6.0 runs 
 
 ## Values
 
-An empty value marked required is a drop-in. The chart refuses to render until it is filled and names the key. A value that still holds a placeholder such as `<nexus-url>` is refused the same way. No value turns certificate checks off, and no value holds a credential.
+An empty value marked required is a drop-in. The chart refuses to render until it is filled and names the key. A string value that still holds a placeholder such as `<nexus-url>` is refused the same way, wherever it sits: `image.repository`, `imagePullSecrets`, `ca.pem`, an annotation. No value turns certificate checks off, and no value holds a credential.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
