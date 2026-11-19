@@ -25,6 +25,11 @@ jobs:
           context: .
           load: true
           tags: sealift:smoke-test
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+      # Blocks the build and the publish when the image carries a fixable
+      # high or critical vulnerability.
+      - name: scan the image
+        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --no-progress sealift:smoke-test
       - name: healthz, volume permissions, cap_setuid and cap_setgid
         run: |
           docker run -d --name sealift-smoke -v sealift-smoke-data:/data -p 18080:8080 sealift:smoke-test
