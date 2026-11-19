@@ -192,6 +192,14 @@ func TestCheckSignature(t *testing.T) {
 		t.Errorf("an unknown field must be ignored: %v", err)
 	}
 
+	padded := append(bytes.TrimRight(file, "\n"), bytes.Repeat([]byte(" "), MaxSignatureSize-len(bytes.TrimRight(file, "\n")))...)
+	if len(padded) != MaxSignatureSize {
+		t.Fatalf("fixture is %d bytes, want %d", len(padded), MaxSignatureSize)
+	}
+	if err := CheckSignature(manifest, padded, pub); err != nil {
+		t.Errorf("a signature file of exactly %d bytes: %v", MaxSignatureSize, err)
+	}
+
 	_, other, _ := ed25519.GenerateKey(nil)
 	otherSha := PublicKeySHA256(other.Public().(ed25519.PublicKey))
 	trusted := PublicKeySHA256(pub)

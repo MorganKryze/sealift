@@ -362,6 +362,38 @@ func TestAttemptVerifiesBeforeParsing(t *testing.T) {
 	}
 }
 
+// overrun serves spaces and fails once a reader asks for a byte past the
+// first limit, so only a bounded read ends before the failure.
+type overrun struct{ served, limit int }
+
+func (o *overrun) Read(p []byte) (int, error) {
+	if o.served >= o.limit {
+		return 0, errors.New("read past the bound")
+	}
+	n := min(len(p), o.limit-o.served)
+	for i := range n {
+		p[i] = ' '
+	}
+	o.served += n
+	return n, nil
+}
+
+func (o *overrun) Close() error { return nil }
+
+func TestAttemptReadsAtMostOneByteOverTheSignatureBound(t *testing.T) {
+	r := newRunFixture(t)
+	a := r.attemptOf(t)
+	body := &overrun{limit: archive.MaxSignatureSize + 1}
+	a.Source.Signature = func(context.Context) (io.ReadCloser, error) { return body, nil }
+	rep := r.runAttempt(t, a)
+	if rep.Outcome != OutcomeRefused || !strings.Contains(rep.Reason, "it is larger than 4096 bytes") {
+		t.Fatalf("outcome %q reason %q, want a refusal naming the 4096 bytes", rep.Outcome, rep.Reason)
+	}
+	if body.served > archive.MaxSignatureSize+1 {
+		t.Errorf("read %d bytes of the signature, want at most %d", body.served, archive.MaxSignatureSize+1)
+	}
+}
+
 func TestAttemptSignatureRefusals(t *testing.T) {
 	for name, tc := range map[string]struct {
 		signature func(context.Context) (io.ReadCloser, error)
