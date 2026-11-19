@@ -80,15 +80,16 @@ The copy of the image that crosses is `linux/amd64` only, and the chart schedule
 
 Copy `deploy/connected/compose.yaml` and `deploy/connected/.env.example` from the repository at the release tag into one folder. Rename the example to `.env`.
 
-1. Set `SEALIFT_PORT` in `.env` when 8080 is taken, and `SEALIFT_IMAGE` to the release you carry. Start the collection role:
+1. Set `SEALIFT_PORT` in `.env` when 8080 is taken, and `SEALIFT_IMAGE` to the release you carry. The Compose file keeps a volume named `sealift-data` that exists already, such as the one of a `docker run` install, and does not create one. Create it, then start the collection role:
 
    <!-- illustrative -->
    ```sh
+   docker volume create sealift-data
    docker compose up -d
    docker compose ps
    ```
 
-   The service shows `healthy` after a minute. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
+   `docker volume create` prints `sealift-data`, also when the volume exists, and changes nothing then. Without it, `docker compose up` stops with `external volume "sealift-data" not found`. The service shows `healthy` after a minute. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
 2. Open the page and follow the setup screen, which downloads Trivy and its database. [Getting started](getting-started.md) walks through the first archive.
 3. Open **Settings**, press **Download** in the signing key section and keep the file as `public-key.pem`. Read the `Public key sha256` next to it and write it down. This is the file that goes into the values and the value that the air-gapped side must show. Send the fingerprint by [another channel](#values-that-cross-by-another-channel).
 4. Export an archive as [Workflow](workflow.md) describes. Record the archive's sha256 on this side, before the key:
@@ -99,7 +100,7 @@ Copy `deploy/connected/compose.yaml` and `deploy/connected/.env.example` from th
    ```
 5. Carry three files: `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig`. Send the archive's sha256 by [another channel](#values-that-cross-by-another-channel), and check the three files against it on the kiosk.
 
-The volume `sealift_sealift-data` holds the private signing key. A lost volume means a new key, and the air-gapped side then refuses every archive until it holds the new public key. [Deployment](deployment.md#the-key-the-import-trusts) says how to restore a key from a backup.
+The volume `sealift-data` holds the private signing key. A lost volume means a new key, and the air-gapped side then refuses every archive until it holds the new public key. [Deployment](deployment.md#the-key-the-import-trusts) says how to restore a key from a backup.
 
 ## Values that cross by another channel
 
@@ -395,7 +396,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 9. A forged header | Through the ingress, send your session cookie and a forged `X-Auth-Request-Access-Token` and `X-Access-Token`: the answer is for you, the signed-in user | The answer is for the forged value, or a 200 without a cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
 | 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`. The import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
 | | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
-| 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | The import is not `Complete`, or the repository is not the one in the settings |
+| 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | Nexus does not hold it. Look for an import that is not `Complete`, a version that an administrator removed since (see [the rollback list](#the-rollback-list)), a lockfile that names a package the archive did not carry, or a registry address other than `<nexus-url>/repository/<nexus-repository>/` |
 | 12. Memory | After step 10, `kubectl -n <namespace> top pod` shows the peak. Write it down | An `OOMKilled` pod | Raise `resources.limits.memory`. The attempt ended `interrupted`, and a retry continues it |
 
 ### Step 8, the network policy check
@@ -413,39 +414,74 @@ The expected result is one printed line, `blocked: TimeoutError` (the packet was
 
 A pod that never starts proves nothing, and kubectl then ends with `timed out waiting for the condition`, which looks like a timeout. Open `kubectl -n <other-namespace> get pod reach-check` in a second terminal. If the pod is in `ErrImagePull` or `ImagePullBackOff`, the other namespace lacks the pull secret: create `<pull-secret>` there as [the Secret](#the-secret) shows, and add `--overrides='{"spec":{"imagePullSecrets":[{"name":"<pull-secret>"}]}}'`. A namespace that enforces the `restricted` standard refuses the pod at once, with a message that names the rule: take a namespace that does not.
 
+## Checking that no import runs
+
+**Imports** shows one user's imports. A sync, a backup and a restore concern every user's, so check the records of the whole cluster:
+
+<!-- illustrative -->
+```sh
+kubectl -n <namespace> exec deploy/sealift -- grep -rlE '"status": "(queued|running)"' /data/imports
+```
+
+The check passes when the command prints no path and kubectl ends with `command terminated with exit code 1`, which is grep's answer for no match. Each printed path is an import with a queued or running attempt: wait, and run the command again. An `exit code 2`, a `No such file or directory` line or any kubectl error means the check did not run, and proves nothing.
+
 ## Upgrades
 
-1. Carry the new image and chart through [Harbor](#from-ghcr-through-the-key-into-harbor).
-2. Bump `targetRevision` in `application.yaml` to the new release, and `image.tag` if you pin it.
-3. Open **Imports** and wait until none is queued or running.
-4. Sync. An import that is running at the sync ends `interrupted`, and a retry continues it.
+1. Take [the backup](#backup-and-restore) of the import's records, and of the collection's volume when the connected side changes.
+2. Carry the new image and chart through [Harbor](#from-ghcr-through-the-key-into-harbor).
+3. Bump `targetRevision` in `application.yaml` to the new release, and `image.tag` if you pin it.
+4. Run [the check](#checking-that-no-import-runs) until it passes.
+5. Sync. An import that is running at the sync ends `interrupted`, and a retry continues it.
 
 The connected side changes `SEALIFT_IMAGE` in `.env`, then `docker compose pull && docker compose up -d`. Sessions, archives, settings and the key carry over.
 
 ## Backup and restore
 
-Take both while no job runs.
+Take both when [no import runs](#checking-that-no-import-runs). Take one as well before an upgrade, and before you delete a claim.
 
-The import's records, under `/data/imports`:
+The import's records, under `/data/imports`. Count the records, write the backup, and read it back:
 
 <!-- illustrative -->
 ```sh
-kubectl -n <namespace> exec deploy/sealift -- tar czf - -C /data imports > imports-backup.tgz
+kubectl -n <namespace> exec deploy/sealift -- sh -c 'find /data/imports -name import.json | wc -l'
+kubectl -n <namespace> exec deploy/sealift -- tar czf - -C /data imports > imports-backup.tgz && echo "backup written"
+tar tzf imports-backup.tgz > /dev/null && echo "backup readable"
 ```
 
-To restore, extract the file into the same path of a new pod (`kubectl exec -i deploy/sealift -- tar xzf - -C /data < imports-backup.tgz`) before any import starts, and run `chown` only if the files do not belong to uid 10000. The claim itself survives `helm uninstall` and an Argo CD prune.
+The first command prints the number of records. Both `echo` lines must appear. A missing line, or any error, means the backup is not usable: do not rely on the file.
 
-The collection's volume holds the private key. Stop the container, archive the volume, and start again:
+To restore, use a pod whose `/data/imports` is empty. Restoring over records overwrites them, so check first:
 
 <!-- illustrative -->
 ```sh
+kubectl -n <namespace> exec deploy/sealift -- ls -A /data/imports
+```
+
+The command must print nothing. A `No such file or directory` line means the claim is new and empty: that is fine as well. When it lists anything, stop: the pod holds records, and the restore would replace them. Then extract the backup, restart the pod, and count the records again:
+
+<!-- illustrative -->
+```sh
+kubectl -n <namespace> exec -i deploy/sealift -- tar xzf - -C /data < imports-backup.tgz
+kubectl -n <namespace> rollout restart deploy/sealift
+kubectl -n <namespace> rollout status deploy/sealift
+kubectl -n <namespace> exec deploy/sealift -- sh -c 'find /data/imports -name import.json | wc -l'
+```
+
+The restart makes the service read the restored records, and the count must equal the one taken before the backup. The pod runs as user 10000, which owns what it extracts, so no `chown` is needed. The claim itself survives `helm uninstall` and an Argo CD prune.
+
+The collection's volume holds the private key. Check that the volume exists, stop the container, archive the volume, start again, and read the archive back:
+
+<!-- illustrative -->
+```sh
+docker volume inspect sealift-data > /dev/null && echo "volume found"
 docker compose stop sealift
-docker run --rm -v sealift_sealift-data:/data:ro -v "$PWD":/backup alpine \
+docker run --rm -v sealift-data:/data:ro -v "$PWD":/backup alpine \
   tar czf /backup/sealift-data.tar.gz --exclude=./cache --exclude=./trivy-cache -C /data .
 docker compose start sealift
+tar tzf sealift-data.tar.gz | grep private/signing-key.pem
 ```
 
-Keep that archive as you keep the key.
+`volume found` must print first: a missing volume ends with `No such volume`, and a `docker run` on a wrong name creates an empty one and archives nothing. The last command must print the key's path, `./private/signing-key.pem`. Keep that archive as you keep the key.
 
 ## Logs
 
@@ -462,7 +498,7 @@ The import publishes into the npm hosted repository that Package Pusher writes t
 | --- | --- |
 | A wrong archive reaches Nexus | The import writes nothing until the signature verifies with the trusted key, the sha256 you give matches, the archive's sha256 and size match the manifest, and each tarball matches its manifest entry. Fill `Expected sha256 (optional)` on every import into this repository, with the sha256 you received by [another channel](#values-that-cross-by-another-channel) |
 | A version Nexus holds is replaced | The import reads each version before its upload and fails one held with other bytes (kind `conflict`), and reads it back after and fails one Nexus serves with other bytes (kind `nexus`). The repository allows redeploy and the request asks no change, since Package Pusher republishes there |
-| A race with Package Pusher | Never start a Package Pusher publish into the repository while an import is queued or running. A version uploaded by both tools between the import's check and its upload leaves the last writer's bytes. **Imports** and an import's panel show `Queued` and `Running`: [Importing](importing.md#imports) |
+| A race with Package Pusher | Never start a Package Pusher publish into the repository while an import is queued or running, for any user: [the check](#checking-that-no-import-runs) covers the whole cluster. A version uploaded by both tools between the import's check and its upload leaves the last writer's bytes. **Imports** and an import's panel show `Queued` and `Running`: [Importing](importing.md#imports) |
 | A partial publish | An attempt that ends `Incomplete` keeps what it published, the archive and its manifest in MinIO, and its records. A project whose lockfile names a missing package cannot install until a retry ends `Complete`. The next step is the retry, which uploads only what Nexus lacks, never a removal |
 | A newer `latest` | See below |
 | A rollback | See [the rollback list](#the-rollback-list) |
@@ -484,7 +520,7 @@ curl -s <nexus-url>/repository/<test-repository>/probe | node -e 'process.stdin.
 
 ### The rollback list
 
-sealift holds no delete right in Nexus, and this kit adds no route to delete. A rollback is an administrator's act, from a list that the import's records give. The list holds, for one import, every package that any of its attempts published, as `name@version`. It never holds a package that was only `present`, which Nexus held before the import and which may be Package Pusher's. It lists apart the packages that may have landed: a package that failed with the kind `interrupted` or `nexus`, a package left pending, and a failure with no kind.
+sealift holds no delete right in Nexus, and this kit adds no route to delete. A rollback is an administrator's act, from a list that the import's records give. The list holds, for one import, every package that any of its attempts published, as `name@version`. It never holds a package that was only `present`, which Nexus held before the import and which may be Package Pusher's. It lists apart the packages that may have landed: a package that failed with the kind `interrupted`, `nexus` or `local`, a package left pending, and a failure with no kind. `local` is a failure on the import's own side, such as the read-back after an upload, so the upload may have happened. A third list holds the packages that never reached an upload.
 
 The records sit under `/data/imports/<user>/<id>/import.json`. The script reads one record and writes nothing:
 
@@ -494,13 +530,30 @@ kubectl -n <namespace> exec deploy/sealift -- ls /data/imports/<user>
 kubectl -n <namespace> exec -i deploy/sealift -- node - /data/imports/<user>/<id>/import.json < sealift/files/published.mjs
 ```
 
-The output has two parts, `Published by this import:` and `Possibly published, check each in Nexus first:`. An import that ended `Complete` has the first part only.
+The output has three parts:
+
+| Part | What it holds |
+| --- | --- |
+| `Published by this import:` | One `name@version` per package that an attempt uploaded |
+| `Possibly published, check each in Nexus first:` | Each package that may have landed, followed by one line for every attempt that touched it: the attempt's number, its failure kind, its reason, and the times it started and ended |
+| Never uploaded | Each package whose every attempt failed before any upload: the reason starts with `repository check failed:`, or the kind is `conflict`, `mismatch` or `source` |
+
+An import that ended `Complete` has the first part only. A line `<path> is not an import record` on stderr, or a usage line, means the path is wrong and nothing was listed.
 
 Steps for the administrator:
 
-1. For each package under `Published by this import:`, decide whether it must go. Deleting a version breaks any project that installed it since.
-2. For each package under the second heading, check in Nexus before you delete anything. A `nexus` failure that never reached an upload, such as a failed repository check or a failed read before the upload, can name a version that Package Pusher published. Open the import in the screens and read the package's reason: a reason that starts with `repository check failed:` was never uploaded, so leave it. Otherwise open the component in Nexus under **Browse**, and read its asset: the uploader must be the sealift publisher user and the upload time must fall within the import's attempt. Delete the component only when both hold.
-3. In Nexus, open **Browse**, select the repository, find the component, select **Delete component**, and confirm. The same is available through the REST API as `DELETE /service/rest/v1/components/<component-id>` for a user with the delete privilege.
-4. Record what you deleted.
+1. For each package under `Published by this import:`, decide whether it must go, and read its asset in Nexus as step 2 says before you delete it: another tool can have replaced the version since. Deleting a version breaks any project that installed it.
+2. For each package under `Possibly published`, check in Nexus before you delete anything. Such a package may be one that Package Pusher published. Open the component in Nexus under **Browse** and read its asset. Both must hold: the uploader is the sealift publisher user, and the upload time falls between the start and the end of one of the attempt lines listed for that package. When either fails, leave the component.
+3. Leave every package of the third part. Its attempts never reached an upload, so a version Nexus holds under that name was never sealift's. Delete nothing there.
+4. Before you delete a version, list the other imports whose records name the package:
+
+   <!-- illustrative -->
+   ```sh
+   kubectl -n <namespace> exec deploy/sealift -- grep -rl '"name": "<name>"' /data/imports
+   ```
+
+   Each path is an import that carries that package, possibly at that version. Their users lose the version when you delete it, and those imports do not restore it: ask them for a fresh export that carries it, imported again.
+5. In Nexus, open **Browse**, select the repository, find the component, select **Delete component**, and confirm. The same is available through the REST API as `DELETE /service/rest/v1/components/<component-id>` for a user with the delete privilege.
+6. Record what you deleted.
 
 What a deletion does to `latest` and to the package's metadata is not proven in the lab. A package found bad after the import goes through the same list.

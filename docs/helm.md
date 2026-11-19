@@ -73,7 +73,7 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 
 ## Storage
 
-Persistence is on by default. The chart creates a claim with `helm.sh/resource-policy: keep` and the Argo CD sync options `Prune=false,Delete=false`, so `helm uninstall`, and a prune or delete by Argo CD, leave the claim and its records in place. A claim left behind after a planned removal is deleted by hand. The service writes to it as group 2000.
+Persistence is on by default. The chart creates a claim with `helm.sh/resource-policy: keep` and the Argo CD sync options `Prune=false,Delete=false`, so `helm uninstall`, and a prune or delete by Argo CD, leave the claim and its records in place. A claim left behind after a planned removal is deleted by hand, after a backup of its records: [the runbook](runbook.md#backup-and-restore) shows how, and how to restore. Take one before each upgrade as well. The service writes to it as group 2000.
 
 With `persistence.enabled: false`, `/data` is an `emptyDir`. Import records, and an import that is running, are lost when the pod is replaced. The install notes say so.
 
