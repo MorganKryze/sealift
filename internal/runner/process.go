@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -51,6 +53,37 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// childEnvNames and childEnvPrefixes list what a child inherits from the
+// server: where to find programs and a home, locale, certificates, proxies,
+// and the settings pnpm, node and Trivy read from their own prefixed
+// variables. Everything else stays behind, notably SEALIFT_GITHUB_TOKEN: a
+// poisoned pnpm or Trivy release harvests the environment it is given.
+var (
+	childEnvNames = map[string]bool{
+		"PATH": true, "HOME": true, "TMPDIR": true, "TZ": true, "LANG": true,
+		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true,
+		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
+		"http_proxy": true, "https_proxy": true, "no_proxy": true,
+	}
+	childEnvPrefixes = []string{"LC_", "NPM_CONFIG_", "npm_config_", "PNPM_", "NODE_", "TRIVY_"}
+)
+
+// childEnv returns the allowed part of the server's environment.
+func childEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		allowed := childEnvNames[name]
+		for _, prefix := range childEnvPrefixes {
+			allowed = allowed || strings.HasPrefix(name, prefix)
+		}
+		if allowed {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 // run starts name with args in dir and waits for it to end or for ctx to be
 // canceled. Every child gets its own process group (Setpgid): a
 // cancellation kills the whole group with a single signal, not just the
@@ -61,6 +94,7 @@ func (b *syncBuffer) String() string {
 func run(ctx context.Context, dir, name string, args []string, asUser *Credential) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	cmd.Env = childEnv()
 
 	var out syncBuffer
 	cmd.Stdout = &out

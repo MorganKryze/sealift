@@ -102,7 +102,7 @@ To resolve and download packages through an npm mirror, set both variables to it
 
 `SEALIFT_GITHUB_API` replaces `https://api.github.com` as the place sealift looks up Trivy releases. Leave it unset unless you serve a mirror of that API. The value must be an `https` URL without credentials; `http` is accepted only on `localhost`, `127.0.0.1` and `::1`, and sealift refuses to start on any other value. The mirror is fully trusted: it supplies the release date that the minimum release age checks, the checksums file, and the address sealift downloads the Trivy binary from, so the sha256 check proves nothing against a hostile mirror.
 
-`SEALIFT_GITHUB_TOKEN` is a GitHub token that sealift sends as `Authorization: Bearer` on its release lookups at the GitHub API, and nowhere else. Set it when GitHub answers `403` because many users share your outbound address and use up the anonymous rate limit. A token with no scopes is enough. Unset keeps the lookups anonymous.
+`SEALIFT_GITHUB_TOKEN` is a GitHub token that sealift sends as `Authorization: Bearer` on its release lookups at the GitHub API, and nowhere else: pnpm and Trivy run without it. Set it when GitHub answers `403` because many users share your outbound address and use up the anonymous rate limit. A token with no scopes is enough. Unset keeps the lookups anonymous.
 
 ## The data volume
 

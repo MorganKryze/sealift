@@ -26,10 +26,10 @@ func installFakeNode(t *testing.T, body string) {
 
 func TestPnpmCLI_Resolve_Success(t *testing.T) {
 	captureDir := t.TempDir()
-	t.Setenv("CAPTURE_DIR", captureDir)
-	installFakeNode(t, `cp package.json "$CAPTURE_DIR/package.json"
-cp pnpm-workspace.yaml "$CAPTURE_DIR/workspace.yaml"
-printf '%s\n' "$@" > "$CAPTURE_DIR/args.txt"
+	t.Setenv("NODE_CAPTURE_DIR", captureDir)
+	installFakeNode(t, `cp package.json "$NODE_CAPTURE_DIR/package.json"
+cp pnpm-workspace.yaml "$NODE_CAPTURE_DIR/workspace.yaml"
+printf '%s\n' "$@" > "$NODE_CAPTURE_DIR/args.txt"
 printf 'lockfileVersion: "9.0"\npackages: {}\n' > pnpm-lock.yaml
 echo "resolution done"
 `)
