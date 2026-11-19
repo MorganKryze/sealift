@@ -34,6 +34,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+- pnpm and Trivy receive only an allowlist of the server's environment: `PATH`, `HOME`, `TMPDIR`, `TZ`, `LANG`, the locale, CA and proxy variables, and the `NPM_CONFIG_`, `PNPM_`, `NODE_` and `TRIVY_` prefixes.
 - The analysis log no longer shows the user and password of a URL that pnpm prints.
 - An analysis refuses a pnpm lockfile whose package names or versions are not safe to use in a path.
 - An archive is no longer trusted for carrying a key of its own: the import side checks the manifest against the public key it was given, so a copy of the archive that someone altered on the way is refused.
