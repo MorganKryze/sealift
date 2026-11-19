@@ -5,9 +5,9 @@ Logs:
 
 Secret: the pod needs the Secret {{ .Values.secret.name }} in this namespace, with three keys: nexus-password, minio-access-key and minio-secret-key. The chart never creates it. Without it the pod stays in ContainerCreating and its events name the Secret.
 
-Public key: open the service's Settings sheet and compare the Trusted key sha256 with the one in the collection's Settings.
+Public key: open the service's Settings sheet and compare the Public key sha256 under Trusted key with the one in the collection's Settings.
 {{- if not .Values.publicKey.existingConfigMap }}
-The key given in the values has the sha256 {{ include "sealift.publicKeySHA256" . }}.
+The key given in the values has the Public key sha256 {{ include "sealift.publicKeySHA256" . }}.
 {{- end }}
 {{- range $key, $v := dict "nexus.url" .Values.nexus.url "minio.url" .Values.minio.url }}
 {{- if hasPrefix "http://" (lower (toString $v)) }}
@@ -32,9 +32,9 @@ The ingress is off. The service {{ include "sealift.fullname" . }} listens on po
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 
-Network policy: check that the cluster enforces it. From a pod in a namespace other than {{ .Release.Namespace }} and {{ .Values.networkPolicy.ingressNamespace }}, the request below must time out or be refused. The pod runs this release's own image, so no other image is needed. Where Harbor asks for credentials, that namespace needs the pull secret too.
-  kubectl -n <other-namespace> run reach-check --rm -i --restart=Never --image={{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }} --command -- node -e 'fetch("http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name))'
-The pod must start and print one line. "blocked: TimeoutError" or "blocked: TypeError" means the policy holds. "reached 200" means the network plugin ignores the policy. A pod that never starts (ErrImagePull, Pending) or a kubectl that ends with "timed out waiting for the condition" proves nothing.
+Network policy: check that the cluster enforces it. From a pod in a namespace other than {{ .Release.Namespace }} and {{ .Values.networkPolicy.ingressNamespace }}, the request below must time out. The pod runs this release's own image, so no other image is needed. Where Harbor asks for credentials, that namespace needs the pull secret too.
+  kubectl -n <other-namespace> run reach-check --rm -i --restart=Never --image={{ include "sealift.image" . }} --command -- node -e 'fetch("http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log(["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")))'
+The pod must start and print one line. "blocked: TimeoutError" is the only line that means the policy holds. "reached 200" means the network plugin ignores the policy. "blocked: TypeError ENOTFOUND" means the address is wrong, and "blocked: TypeError ECONNREFUSED" means nothing answers behind it: run kubectl -n {{ .Release.Namespace }} get endpoints {{ include "sealift.fullname" . }} first, and expect an address. Neither of the two proves the policy. A pod that never starts (ErrImagePull, Pending) or a kubectl that ends with "timed out waiting for the condition" proves nothing.
 {{- else }}
 
 Warning: the network policy is off. Any pod of the cluster can reach the service. The service still checks every token.

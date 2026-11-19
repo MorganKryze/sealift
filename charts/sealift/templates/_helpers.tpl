@@ -56,6 +56,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (include "sealift.fullname" .) .Values.persistence.existingClaim -}}
 {{- end -}}
 
+{{/* sealift.image is the image the pod runs, pinned by digest when one is given. */}}
+{{- define "sealift.image" -}}
+{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ end }}
+{{- end -}}
+
 {{/* sealift.publicKeySHA256 is the fingerprint the service shows: the sha256 of the key's DER encoding. */}}
 {{- define "sealift.publicKeySHA256" -}}
 {{- regexReplaceAll "-----[A-Z ]+-----|\\s" .Values.publicKey.pem "" | b64dec | sha256sum -}}

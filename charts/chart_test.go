@@ -614,6 +614,7 @@ func TestChartNotes(t *testing.T) {
 		"sealift-import",
 		"nexus-password", "minio-access-key", "minio-secret-key",
 		"Trusted key",
+		"Public key sha256",
 	} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
@@ -625,6 +626,9 @@ func TestChartNotes(t *testing.T) {
 	}
 	if want := archive.PublicKeySHA256(pub); !strings.Contains(notes, want) {
 		t.Errorf("notes lack the key's sha256 %s:\n%s", want, notes)
+	}
+	if strings.Contains(notes, "Trusted key sha256") {
+		t.Errorf("notes use a label the Settings sheet does not show:\n%s", notes)
 	}
 	if strings.Contains(notes, "emptyDir") {
 		t.Error("notes warn about an emptyDir while persistence is on")
@@ -881,6 +885,13 @@ func TestChartNetworkPolicy(t *testing.T) {
 			t.Errorf("notes lack the warning:\n%s", notes)
 		}
 	})
+	t.Run("the reach check runs the pinned image", func(t *testing.T) {
+		const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		notes := installNotes(t, "--set", "image.digest="+digest)
+		if want := "--image=ghcr.io/morgankryze/sealift:0.6.0@" + digest + " "; !strings.Contains(notes, want) {
+			t.Errorf("notes lack %q:\n%s", want, notes)
+		}
+	})
 	t.Run("the notes give the reach check when on", func(t *testing.T) {
 		notes := installNotes(t)
 		for _, want := range []string{
@@ -890,10 +901,18 @@ func TestChartNetworkPolicy(t *testing.T) {
 			"AbortSignal.timeout(5000)",
 			"http://rel-sealift.default.svc:8080/healthz",
 			"proves nothing",
+			`["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")`,
+			`"blocked: TimeoutError" is the only line`,
+			"ENOTFOUND",
+			"ECONNREFUSED",
+			"get endpoints rel-sealift",
 		} {
 			if !strings.Contains(notes, want) {
 				t.Errorf("notes lack %q:\n%s", want, notes)
 			}
+		}
+		if strings.Contains(notes, `"blocked: TypeError" means the policy holds`) {
+			t.Errorf("notes accept a TypeError as proof:\n%s", notes)
 		}
 		if strings.Contains(notes, "<curl-image>") {
 			t.Errorf("notes name an image the kit never brings:\n%s", notes)
