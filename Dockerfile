@@ -46,6 +46,10 @@ FROM node:${NODE_VERSION}-bookworm-slim AS final
 # certificate, failing an analysis at "prepare-tools" with no visible error.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# sealift runs pnpm from its own download with node; the npm, corepack and
+# yarn the base image bundles are never called and only carry CVEs.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
 RUN groupadd --gid 2000 data \
     && useradd --uid 10000 --gid data --home-dir /data/home --no-create-home app \
     && useradd --uid 10001 --gid data --home-dir /data/home --no-create-home tools \

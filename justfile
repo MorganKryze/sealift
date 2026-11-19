@@ -7,7 +7,7 @@ hooks:
     ln -sf ../../githooks/pre-commit .git/hooks/pre-commit
 
 # Run what CI runs: formatting, vet, lint, race tests.
-check: fmt-check vet lint test
+check: fmt-check vet lint test vulncheck
 
 fmt-check:
     test -z "$(gofmt -l .)"
@@ -17,6 +17,9 @@ vet:
 
 lint:
     golangci-lint run ./...
+
+vulncheck:
+    go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 test:
     go test -race ./...
