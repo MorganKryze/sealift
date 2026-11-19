@@ -242,6 +242,14 @@ func (w *walker) assemble() (Set, bool) {
 	slices.SortStableFunc(all, comparePins)
 	files := map[string][]string{}
 	first := map[string]Pin{}
+	// A pip install checks a wheel against every hash list that names its
+	// package, so only the hashes every pin of a key allows count.
+	type allowedHashes struct {
+		hashes   []string
+		places   []string
+		reported bool
+	}
+	allowed := map[string]allowedHashes{}
 	for _, p := range all {
 		if !slices.Contains(files[p.Key], p.File) {
 			files[p.Key] = append(files[p.Key], p.File)
@@ -249,12 +257,29 @@ func (w *walker) assemble() (Set, bool) {
 		f, ok := first[p.Key]
 		if !ok {
 			first[p.Key] = p
-			continue
+			f = p
 		}
 		if !SameVersion(f.Version, p.Version) {
 			w.probs.add(p.File, p.Line, p.Name+"=="+p.Version, fmt.Sprintf("conflicting pins for %s: %s:%d pins %s, %s:%d pins %s",
 				p.Key, f.File, f.Line, f.Version, p.File, p.Line, p.Version))
+			continue
 		}
+		if len(p.Hashes) == 0 {
+			continue
+		}
+		h := allowed[p.Key]
+		h.places = append(h.places, fmt.Sprintf("%s:%d", p.File, p.Line))
+		if h.hashes == nil {
+			h.hashes = slices.Clone(p.Hashes)
+		} else {
+			h.hashes = slices.DeleteFunc(h.hashes, func(x string) bool { return !slices.Contains(p.Hashes, x) })
+			if len(h.hashes) == 0 && !h.reported {
+				h.reported = true
+				w.probs.add(p.File, p.Line, p.Name+"=="+p.Version, fmt.Sprintf("no hash in common for %s: %s",
+					p.Key, strings.Join(h.places, ", ")))
+			}
+		}
+		allowed[p.Key] = h
 	}
 	for _, list := range files {
 		slices.Sort(list)
@@ -265,16 +290,12 @@ func (w *walker) assemble() (Set, bool) {
 	for _, p := range reqs {
 		n := len(set.Requirements)
 		if n > 0 {
-			prev := &set.Requirements[n-1]
+			prev := set.Requirements[n-1]
 			if prev.Key == p.Key && SameVersion(prev.Version, p.Version) && prev.Marker == p.Marker && slices.Equal(prev.Extras, p.Extras) {
-				for _, h := range p.Hashes {
-					if !slices.Contains(prev.Hashes, h) {
-						prev.Hashes = append(prev.Hashes, h)
-					}
-				}
 				continue
 			}
 		}
+		p.Hashes = slices.Clone(allowed[p.Key].hashes)
 		set.Requirements = append(set.Requirements, p)
 	}
 	for _, p := range cons {
@@ -284,6 +305,7 @@ func (w *walker) assemble() (Set, bool) {
 		if n := len(set.Constraints); n > 0 && set.Constraints[n-1].Key == p.Key {
 			continue
 		}
+		p.Hashes = slices.Clone(allowed[p.Key].hashes)
 		set.Constraints = append(set.Constraints, p)
 	}
 	return set, true

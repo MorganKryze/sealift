@@ -351,3 +351,80 @@ func TestParseFilesCleansProblemReason(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFilesIntersectsHashes(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []File
+		want  []string
+	}{
+		{"two files overlap", []File{
+			{Name: "a.txt", Data: []byte("x==1.0 --hash=sha256:" + hexA + " --hash=sha256:" + hexB + "\n")},
+			{Name: "b.txt", Data: []byte("x==1.0 --hash=sha256:" + hexB + "\n")},
+		}, []string{hexB}},
+		{"constraint hash on a required pin", []File{
+			{Name: "r.txt", Data: []byte("-c c.txt\nx==1.0\n")},
+			{Name: "c.txt", Data: []byte("x==1.0 --hash=sha256:" + hexA + "\n")},
+		}, []string{hexA}},
+		{"constraint narrows a required pin", []File{
+			{Name: "r.txt", Data: []byte("-c c.txt\nx==1.0 --hash=sha256:" + hexA + " --hash=sha256:" + hexB + "\n")},
+			{Name: "c.txt", Data: []byte("x==1.0 --hash=sha256:" + hexB + "\n")},
+		}, []string{hexB}},
+		{"pin without hashes asks for none", []File{
+			{Name: "a.txt", Data: []byte("x==1.0\n")},
+			{Name: "b.txt", Data: []byte("x==1.0 --hash=sha256:" + hexA + "\n")},
+		}, []string{hexA}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, probs := ParseFiles(tt.files)
+			if len(probs) != 0 {
+				t.Fatalf("problems = %+v", probs)
+			}
+			if len(s.Requirements) != 1 || !reflect.DeepEqual(s.Requirements[0].Hashes, tt.want) {
+				t.Errorf("requirements = %+v, want hashes %v", s.Requirements, tt.want)
+			}
+		})
+	}
+
+	s, probs := ParseFiles([]File{
+		{Name: "r.txt", Data: []byte("-c c.txt\nx==1.0\n")},
+		{Name: "c.txt", Data: []byte("y==2 --hash=sha256:" + hexA + "\n")},
+	})
+	if len(probs) != 0 || len(s.Constraints) != 1 || !reflect.DeepEqual(s.Constraints[0].Hashes, []string{hexA}) {
+		t.Errorf("constraint-only hashes lost: %+v %+v", s.Constraints, probs)
+	}
+}
+
+func TestParseFilesRefusesHashesWithNothingInCommon(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []File
+		want  []string
+	}{
+		{"two files", []File{
+			{Name: "a.txt", Data: []byte("x==1.0 --hash=sha256:" + hexA + "\n")},
+			{Name: "b.txt", Data: []byte("\nx==1.0.0 --hash=sha256:" + hexB + "\n")},
+		}, []string{"a.txt:1", "b.txt:2"}},
+		{"constraint against requirement", []File{
+			{Name: "r.txt", Data: []byte("-c c.txt\nx==1.0 --hash=sha256:" + hexA + "\n")},
+			{Name: "c.txt", Data: []byte("x==1.0 --hash=sha256:" + hexB + "\n")},
+		}, []string{"c.txt:1", "r.txt:2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, probs := ParseFiles(tt.files)
+			if len(probs) != 1 {
+				t.Fatalf("problems = %+v, want one", probs)
+			}
+			for _, want := range append(tt.want, "x", "hash") {
+				if !strings.Contains(probs[0].Reason, want) {
+					t.Errorf("reason %q lacks %q", probs[0].Reason, want)
+				}
+			}
+			if len(s.Requirements) != 0 {
+				t.Errorf("set is not empty: %+v", s)
+			}
+		})
+	}
+}
