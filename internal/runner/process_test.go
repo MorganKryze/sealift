@@ -164,6 +164,7 @@ func TestRun_ChildEnvironmentCarriesNoSecrets(t *testing.T) {
 	t.Setenv("SEALIFT_GITHUB_TOKEN", "leak-me")
 	t.Setenv("GITHUB_TOKEN", "leak-me-too")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "leak-me-three")
+	t.Setenv("SEALIFT_NODE_SECRET", "leak-me-four")
 	t.Setenv("HOME", "/data/home")
 	t.Setenv("NPM_CONFIG_REGISTRY", "http://registry:4873")
 	t.Setenv("HTTPS_PROXY", "http://proxy:3128")
@@ -174,7 +175,7 @@ func TestRun_ChildEnvironmentCarriesNoSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	for _, secret := range []string{"leak-me", "SEALIFT_GITHUB_TOKEN", "GITHUB_TOKEN", "AWS_SECRET"} {
+	for _, secret := range []string{"leak-me", "SEALIFT_GITHUB_TOKEN", "GITHUB_TOKEN", "AWS_SECRET", "SEALIFT_NODE_SECRET"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("child environment contains %q:\n%s", secret, out)
 		}
