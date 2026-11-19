@@ -155,9 +155,24 @@ func mount(d map[string]any, name string) map[string]any {
 	return nil
 }
 
+// clientInstall skips the test under Helm 3, whose install --dry-run=client
+// still asks a cluster for its version; Helm 4 renders without one. CI runs
+// these tests in the chart job, which installs Helm 4.
+func clientInstall(t *testing.T) {
+	t.Helper()
+	out, err := run(t, "version", "--short")
+	if err != nil {
+		t.Fatalf("helm version: %v", err)
+	}
+	if strings.HasPrefix(out, "v3.") {
+		t.Skip("helm 3 cannot dry-run an install without a cluster")
+	}
+}
+
 // installNotes returns the NOTES text of a client-side dry-run install.
 func installNotes(t *testing.T, args ...string) string {
 	t.Helper()
+	clientInstall(t)
 	out, err := run(t, append([]string{"install", "rel", chartDir, "--dry-run=client", "-f", testValues}, args...)...)
 	if err != nil {
 		t.Fatalf("install %v: %v", args, err)
@@ -648,6 +663,7 @@ func TestChartNotes(t *testing.T) {
 		}
 	})
 	t.Run("a placeholder fails the install", func(t *testing.T) {
+		clientInstall(t)
 		_, err := run(t, "install", "rel", chartDir, "--dry-run=client", "-f", testValues, "--set", "nexus.url=<nexus-url>")
 		if err == nil || !strings.Contains(err.Error(), "nexus.url still holds its placeholder <nexus-url>") {
 			t.Errorf("err = %v, want the placeholder refusal", err)
