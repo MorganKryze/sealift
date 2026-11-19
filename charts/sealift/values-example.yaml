@@ -1,0 +1,20 @@
+# Example values. Replace every <name> with your own value. The chart
+# refuses to render while one placeholder is left, and names its key.
+nexus:
+  url: <nexus-url>
+  repository: <nexus-repository>
+  user: <nexus-user>
+keycloak:
+  realmUrl: <keycloak-realm-url>
+  clientId: <keycloak-client-id>
+minio:
+  url: <minio-url>
+secret:
+  name: <secret-name>
+publicKey:
+  pem: <public-key-pem>
+ingress:
+  host: <import-host>
+  auth:
+    url: <oauth2-proxy-auth-url>
+    signin: <oauth2-proxy-signin-url>

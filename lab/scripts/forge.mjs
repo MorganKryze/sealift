@@ -4,11 +4,17 @@
 //   docker compose run --rm airgap-shell node /scripts/forge.mjs other-key
 //   docker compose run --rm airgap-shell node /scripts/forge.mjs none
 //   docker compose run --rm airgap-shell node /scripts/forge.mjs expired
+//   docker compose run --rm -e HEADER=X-Auth-Request-Access-Token airgap-shell node /scripts/forge.mjs absent
 //
 // other-key  an RS256 token signed with a key the realm does not hold
 // none       a token whose header says alg none
 // expired    a real realm token, sent once its lifetime and the service's
 //            60-second leeway have passed (about 6 minutes)
+// absent     no token header at all
+//
+// HEADER names the header that carries the token. It defaults to
+// X-Access-Token, the header the settings name unless `token.header` says
+// otherwise.
 //
 // The tokens are never printed.
 import { createSign, generateKeyPairSync } from "node:crypto"
@@ -17,6 +23,7 @@ const service = process.env.SERVICE ?? "http://import-server:8080"
 const realm = process.env.REALM ?? "http://keycloak:8080/realms/lab"
 const issuer = "http://localhost:18444/realms/lab"
 const leewaySeconds = 60
+const header = process.env.HEADER ?? "X-Access-Token"
 
 const b64 = (v) => Buffer.from(typeof v === "string" ? v : JSON.stringify(v)).toString("base64url")
 
@@ -60,13 +67,15 @@ async function expired() {
   return token
 }
 
-const modes = { "other-key": otherKey, none, expired }
+const absent = async () => null
+
+const modes = { "other-key": otherKey, none, expired, absent }
 const mode = process.argv[2]
 if (!modes[mode]) {
   console.error(`usage: node forge.mjs ${Object.keys(modes).join("|")}`)
   process.exit(2)
 }
 const token = await modes[mode]()
-const res = await fetch(`${service}/api/me`, { headers: { "X-Access-Token": token } })
+const res = await fetch(`${service}/api/me`, { headers: token === null ? {} : { [header]: token } })
 const body = await res.json().catch(() => ({}))
 console.log(`${mode}: ${res.status} ${body.title ?? ""} | ${body.detail ?? ""}`)

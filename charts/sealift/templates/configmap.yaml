@@ -1,0 +1,56 @@
+{{- $nexusURL := include "sealift.value" (list "nexus.url" .Values.nexus.url) -}}
+{{- $repository := include "sealift.value" (list "nexus.repository" .Values.nexus.repository) -}}
+{{- $user := include "sealift.value" (list "nexus.user" .Values.nexus.user) -}}
+{{- $realm := include "sealift.value" (list "keycloak.realmUrl" .Values.keycloak.realmUrl) | trimSuffix "/" -}}
+{{- $clientID := include "sealift.value" (list "keycloak.clientId" .Values.keycloak.clientId) -}}
+{{- $minioURL := include "sealift.value" (list "minio.url" .Values.minio.url) -}}
+{{- $header := include "sealift.value" (list "token.header" .Values.token.header) -}}
+{{- if not .Values.publicKey.existingConfigMap -}}
+{{- $pem := include "sealift.value" (list "publicKey.pem" .Values.publicKey.pem) -}}
+{{- end -}}
+{{- $minio := dict "url" $minioURL "accessKeyFile" "../secrets/minio-access-key" "secretKeyFile" "../secrets/minio-secret-key" -}}
+{{- if .Values.minio.region -}}
+{{- $_ := set $minio "region" .Values.minio.region -}}
+{{- end -}}
+{{- $settings := dict
+  "nexus" (dict "url" $nexusURL "repository" $repository "user" $user "passwordFile" "../secrets/nexus-password")
+  "publicKeyFile" "../public-key/public-key.pem"
+  "token" (dict
+    "keySetUrl" (default (printf "%s/protocol/openid-connect/certs" $realm) .Values.keycloak.keySetUrl)
+    "issuer" (default $realm .Values.keycloak.issuer)
+    "audience" (default $clientID .Values.keycloak.audience)
+    "header" $header)
+  "minio" $minio -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sealift.fullname" . }}-settings
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+data:
+  settings.yaml: |
+    {{- toYaml $settings | nindent 4 }}
+{{- if and .Values.publicKey.pem (not .Values.publicKey.existingConfigMap) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sealift.fullname" . }}-public-key
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+data:
+  public-key.pem: |
+    {{- .Values.publicKey.pem | trim | nindent 4 }}
+{{- end }}
+{{- if and .Values.ca.pem (not .Values.ca.existingConfigMap) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sealift.fullname" . }}-ca
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+data:
+  ca.pem: |
+    {{- .Values.ca.pem | trim | nindent 4 }}
+{{- end }}

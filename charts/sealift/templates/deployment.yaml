@@ -1,0 +1,136 @@
+{{- $secret := include "sealift.value" (list "secret.name" .Values.secret.name) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sealift.fullname" . }}
+  labels:
+    {{- include "sealift.labels" . | nindent 4 }}
+spec:
+  # One pod: the import queue and its records assume one writer on /data.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "sealift.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # The service reads its settings once at start.
+        checksum/settings: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "sealift.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: sealift
+          image: "{{ include "sealift.image" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - sealift
+            - import-server
+            - -settings
+            - /etc/sealift/config/settings.yaml
+            - -addr
+            - 0.0.0.0:8080
+            - -data
+            - /data
+          {{- if or .Values.ca.pem .Values.ca.existingConfigMap }}
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/sealift/ca/ca.pem
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/sealift/config
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/sealift/secrets
+              readOnly: true
+            - name: public-key
+              mountPath: /etc/sealift/public-key
+              readOnly: true
+            {{- if or .Values.ca.pem .Values.ca.existingConfigMap }}
+            - name: ca
+              mountPath: /etc/sealift/ca
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: settings
+          configMap:
+            name: {{ include "sealift.fullname" . }}-settings
+        - name: secrets
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+            items:
+              - key: nexus-password
+                path: nexus-password
+              - key: minio-access-key
+                path: minio-access-key
+              - key: minio-secret-key
+                path: minio-secret-key
+        - name: public-key
+          configMap:
+            name: {{ include "sealift.publicKeyConfigMap" . }}
+            items:
+              - key: public-key.pem
+                path: public-key.pem
+        {{- if or .Values.ca.pem .Values.ca.existingConfigMap }}
+        - name: ca
+          configMap:
+            name: {{ include "sealift.caConfigMap" . }}
+            items:
+              - key: ca.pem
+                path: ca.pem
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "sealift.claimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

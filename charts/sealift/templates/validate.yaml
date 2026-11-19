@@ -1,0 +1,8 @@
+{{- /* Renders nothing: it fails on a placeholder left in any value. */ -}}
+{{- include "sealift.scan" (list "" .Values) -}}
+{{- /* The service trusts Keycloak's keys, so it fetches them over https only. */ -}}
+{{- range $key, $v := dict "keycloak.realmUrl" .Values.keycloak.realmUrl "keycloak.keySetUrl" .Values.keycloak.keySetUrl -}}
+{{- if hasPrefix "http://" (lower (toString $v)) -}}
+{{- fail (printf "%s must be an https address, got %s" $key $v) -}}
+{{- end -}}
+{{- end -}}

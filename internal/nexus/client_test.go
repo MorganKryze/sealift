@@ -297,3 +297,42 @@ func TestFetchCopyErrorCut(t *testing.T) {
 type errWriter struct{ err error }
 
 func (w errWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestUploadSendsTheTarballAlone(t *testing.T) {
+	var requests atomic.Int32
+	type part struct{ name, body string }
+	var parts []part
+	var method, path, query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		method, path, query = r.Method, r.URL.Path, r.URL.RawQuery
+		mr, err := r.MultipartReader()
+		if err != nil {
+			t.Errorf("multipart: %v", err)
+			return
+		}
+		for {
+			p, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			b, _ := io.ReadAll(p)
+			parts = append(parts, part{p.FormName(), string(b)})
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := newClient(t, srv, "")
+	if err := c.Upload(context.Background(), "pkg-1.0.0.tgz", strings.NewReader("tarball bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Fatalf("requests = %d, want 1", n)
+	}
+	if method != http.MethodPost || path != "/service/rest/v1/components" || query != "repository=npm-hosted" {
+		t.Errorf("request = %s %s?%s", method, path, query)
+	}
+	if len(parts) != 1 || parts[0].name != "npm.asset" || parts[0].body != "tarball bytes" {
+		t.Errorf("form parts = %+v, want only npm.asset with the tarball", parts)
+	}
+}

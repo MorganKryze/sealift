@@ -103,3 +103,32 @@ jobs:
           docker buildx imagetools create "${tags[@]}" \
             "ghcr.io/morgankryze/sealift:${{ github.sha }}-amd64" \
             "ghcr.io/morgankryze/sealift:${{ github.sha }}-arm64"
+
+  chart:
+    name: publish the chart
+    needs: merge-manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.22.1
+      - name: package the chart and push it next to the image
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          helm package charts/sealift --version "$version" --app-version "$version"
+          printf '%s' "$TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          if ! out=$(helm push "sealift-${version}.tgz" oci://ghcr.io/morgankryze/charts 2>&1); then
+            echo "::error::helm push failed: $out"
+            exit 1
+          fi

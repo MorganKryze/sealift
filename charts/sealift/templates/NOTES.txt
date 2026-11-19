@@ -1,0 +1,41 @@
+The import service {{ include "sealift.fullname" . }} runs in namespace {{ .Release.Namespace }}.
+
+Logs:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "sealift.fullname" . }}
+
+Secret: the pod needs the Secret {{ .Values.secret.name }} in this namespace, with three keys: nexus-password, minio-access-key and minio-secret-key. The chart never creates it. Without it the pod stays in ContainerCreating and its events name the Secret.
+
+Public key: open the service's Settings sheet and compare the Public key sha256 under Trusted key with the one in the collection's Settings.
+{{- if not .Values.publicKey.existingConfigMap }}
+The key given in the values has the Public key sha256 {{ include "sealift.publicKeySHA256" . }}.
+{{- end }}
+{{- range $key, $v := dict "nexus.url" .Values.nexus.url "minio.url" .Values.minio.url }}
+{{- if hasPrefix "http://" (lower (toString $v)) }}
+
+Warning: {{ $key }} uses http. The service sends its credentials to that address, and https is expected.
+{{- end }}
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+Warning: persistence is off. /data lives in an emptyDir. The import records, and an import that is running, are lost when the pod is replaced.
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Address: {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+
+The ingress is off. The service {{ include "sealift.fullname" . }} listens on port {{ .Values.service.port }}. An Ingress you write by hand needs these annotations, so that ingress-nginx signs users in and forwards the token header the service reads. They are not proven in the lab.
+  nginx.ingress.kubernetes.io/auth-url: {{ default "<oauth2-proxy-auth-url>" .Values.ingress.auth.url }}
+  nginx.ingress.kubernetes.io/auth-signin: {{ default "<oauth2-proxy-signin-url>" .Values.ingress.auth.signin }}
+  nginx.ingress.kubernetes.io/auth-response-headers: {{ .Values.token.header }}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+
+Network policy: check that the cluster enforces it. From a pod in a namespace other than {{ .Release.Namespace }} and {{ .Values.networkPolicy.ingressNamespace }}, the request below must time out. The pod runs this release's own image, so no other image is needed. Where Harbor asks for credentials, that namespace needs the pull secret too.
+  kubectl -n <other-namespace> run reach-check --rm -i --restart=Never --image={{ include "sealift.image" . }} --command -- node -e 'fetch("http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log(["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")))'
+The pod must start and print one line. "blocked: TimeoutError" is the only line that means the policy holds. "reached 200" means the network plugin ignores the policy. "blocked: TypeError ENOTFOUND" means the address is wrong, and "blocked: TypeError ECONNREFUSED" means nothing answers behind it: run kubectl -n {{ .Release.Namespace }} get endpoints {{ include "sealift.fullname" . }} first, and expect an address. Neither of the two proves the policy. A pod that never starts (ErrImagePull, Pending) or a kubectl that ends with "timed out waiting for the condition" proves nothing.
+{{- else }}
+
+Warning: the network policy is off. Any pod of the cluster can reach the service. The service still checks every token.
+{{- end }}

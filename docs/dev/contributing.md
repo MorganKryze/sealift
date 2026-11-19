@@ -15,6 +15,8 @@ This page is for anyone about to change sealift's code, contributors human or au
 | `sbom/` | The CycloneDX writer |
 | `web/` | The React interface, and `embed.go`, which embeds its build into the binary |
 | `test/e2e/` | The end-to-end test: sealift, two Verdaccio registries and a test runner in Compose |
+| `charts/` | The Helm chart of the import service and its render tests in Go, which run the `helm` binary |
+| `deploy/` | The Compose file of the collection role and the Argo CD examples, with their tests |
 | `lab/` | A local copy of both sides of the air gap: sealift, Nexus, MinIO, Keycloak, oauth2-proxy and a gateway |
 | `docs/` | User and developer documentation |
 | `scripts/` | `check-docs.mjs`, the link, anchor and runnable-example check for Markdown |
@@ -147,6 +149,7 @@ sealift installs its own pnpm, 10.34.5 by default, into the data volume to resol
 | `just web-check` | Typecheck, ESLint and Vitest on the web app |
 | `just web-build` | The production build of both web entries |
 | `just docs` | The Markdown check: its own tests, then every link, anchor and block |
+| `just chart` | `helm lint --strict` and the chart's render tests; needs Helm, and fails without it when `SEALIFT_CHART=1` |
 
 ### Run the server
 
@@ -247,6 +250,7 @@ The repository has no mutation-testing setup. A new test should still fail for t
 | `integration`, on amd64 and arm64 | `go test -tags integration -race ./...` with Node 22 and Trivy installed | `just integration` |
 | `web` | `pnpm install --frozen-lockfile`, typecheck, lint, tests, the docs check, the production build | `just web-check`, `just docs`, `just web-build` |
 | `e2e`, on amd64 and arm64 | The Compose end-to-end test | `just e2e` |
+| `chart` | `helm lint --strict` and the render tests of `charts/`, with Helm 3.22.1; the tests fail instead of skipping | `just chart` |
 
 `.github/workflows/image.yml` builds the image on pushes to `main`, on version tags and on pull requests. A smoke test first builds it natively, starts it, calls `/healthz`, and checks the `app` user, that the `tools` user can write to `/data` but cannot read `/data/private/settings.json`, and that `HOME` exists. It then builds each architecture on its own runner. Only pushes and tags publish, and a `v` tag adds the version and `latest` tags to the manifest.
 
@@ -341,7 +345,7 @@ Each part gets the access it needs and no more:
 - pnpm and Trivy run as the `tools` user. `private/settings.json` is mode 0600 and readable by `app` only, so the tools cannot read the settings.
 - The import binary has no capability, and the image runs as `app`, not root. The import roles are built to run under `--cap-drop ALL`, which the operator sets in the Compose file or `docker run`.
 - `internal/importer/s3` can list, head, read and delete, and has no call that writes an object. Deletion happens only after a complete import, and only when the archive and manifest still carry the ETag the import recorded.
-- The import service reads the token from one header, `X-Access-Token`, and takes the user from the checked claims through the request context and from nowhere else. A user sees only their own folder in MinIO and their own imports.
+- The import service reads the token from one header, the one `token.header` names (`X-Access-Token` by default), and takes the user from the checked claims through the request context and from nowhere else. A user sees only their own folder in MinIO and their own imports.
 - The Nexus account the import publishes with, in `lab/`, may read, browse, add and edit in the `npm` repository and upload components, and nothing else. The import never overwrites a version Nexus holds with other bytes.
 
 ### Never report success for work that did not happen

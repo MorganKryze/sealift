@@ -164,6 +164,9 @@ func TestImportServerExitCodes(t *testing.T) {
 			}
 			return []string{"-settings", serverSettings(t, tokenSection(serverKeySet)), "-data", file}
 		}, 1, "imports"},
+		{"token header refused", func(t *testing.T) []string {
+			return []string{"-settings", serverSettings(t, tokenSection(serverKeySet)+"  header: Authorization\n"), "-data", data}
+		}, 2, "token.header cannot be Authorization, Cookie or Host"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -260,7 +263,7 @@ func TestImportServerTakesNoAuthSwitch(t *testing.T) {
 	}
 	want := []string{
 		"Settings.NexusURL", "Settings.Repository", "Settings.User", "Settings.Password", "Settings.CAFile", "Settings.PublicKey", "Settings.PublicKeySHA256", "Settings.Token", "Settings.MinIO", "Settings.Files",
-		"TokenSettings.KeySetURL", "TokenSettings.Issuer", "TokenSettings.Audience", "TokenSettings.CAFile",
+		"TokenSettings.KeySetURL", "TokenSettings.Issuer", "TokenSettings.Audience", "TokenSettings.CAFile", "TokenSettings.Header",
 	}
 	if !slices.Equal(fields, want) {
 		t.Errorf("the settings fields are %v, want %v", fields, want)
