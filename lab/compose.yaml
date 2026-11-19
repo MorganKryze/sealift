@@ -104,6 +104,9 @@ services:
   import-server:
     image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.4.0}
     command: [sealift, import-server, -settings, /import/settings.yaml]
+    # Without import/public-key.pem it exits with code 2; a stopped container
+    # drops its DNS name and the gateway cannot start without it.
+    restart: on-failure
     networks: [airgap]
     cap_drop: [ALL]
     read_only: true

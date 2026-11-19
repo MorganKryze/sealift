@@ -7,9 +7,13 @@ A local copy of both sides of the air gap, for development and proofs of concept
 ```sh
 cd lab
 just image                  # from the repository root: builds sealift:dev
+docker compose up -d sealift
+node scripts/carry-key.mjs
 docker compose up -d
 ./setup.sh
 ```
+
+The import service exits with code 2 without `import/public-key.pem`, and a stopped `import-server` takes the gateway down with it, so the second line carries the connected sealift's public key before the rest of the stack starts. The key is generated per volume; [Cross the gap](#cross-the-gap) says when to carry it again.
 
 Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.4.0`. That release has no import screens: until the next release, start the lab with `SEALIFT_IMAGE=sealift:dev docker compose up -d`, after `just image`. `SEALIFT_IMAGE` picks any other image.
 
@@ -49,7 +53,7 @@ The air-gapped shell must reach nexus, minio and keycloak, and neither registry.
 
 The protocol follows the real crossing. The `transfer/` folder plays the USB key and the kiosk: it is the only path between the two sides, and only a person moves files through it.
 
-1. Connected side: in sealift at http://localhost:18450, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig` into `lab/transfer/`. The key is generated per volume, so carry its public key to the import side once, before `import-server` starts: from `lab/`, run `node scripts/carry-key.mjs`. It writes `import/public-key.pem` (untracked) from the connected sealift's `GET /api/signing-key` and prints the public key sha256, which equals the one in sealift's Settings and, once the service runs, in the import's Settings sheet. The import service and `sealift import` exit with code 2 without that file. Run the script again after a regenerate or a new volume, then restart `import-server`.
+1. Connected side: in sealift at http://localhost:18450, install Trivy and its database, drop a `package.json`, analyse it and export. Save `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig` into `lab/transfer/`. The key is generated per volume, so carry its public key to the import side once, before `import-server` starts (Start does it on a fresh lab): from `lab/`, run `node scripts/carry-key.mjs`. It writes `import/public-key.pem` (untracked) from the connected sealift's `GET /api/signing-key` and prints the public key sha256, which equals the one in sealift's Settings and, once the service runs, in the import's Settings sheet. The import service and `sealift import` exit with code 2 without that file. Run the script again after a regenerate or a new volume, then restart `import-server`.
 2. Check the archive before it crosses: `shasum -a 256 transfer/packages_npm.tar.gz` must print the `archive.sha256` of `manifest.json`.
 3. Air-gapped side: upload the archive, its manifest and its signature into the user's bucket, as users do through the MinIO browser:
 
