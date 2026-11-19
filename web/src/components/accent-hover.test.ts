@@ -13,7 +13,7 @@ function sources(dir: string): string[] {
 describe("accent buttons", () => {
   it("keep the label contrast on hover", () => {
     // hover:opacity blends the accent fill with the page and drops the label below AA.
-    const offenders = sources(__dirname).filter((file) => !file.endsWith("imports-list.tsx") &&
+    const offenders = sources(__dirname).filter((file) =>
       readFileSync(file, "utf8")
         .split("\n")
         .some((line) => /\bbg-accent\b/.test(line) && /\bhover:opacity-/.test(line)),
