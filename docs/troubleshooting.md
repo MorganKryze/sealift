@@ -159,7 +159,9 @@ The export could not download a package. The message and the log name it. A regi
 
 sealift stops at start, naming the file, when `private/signing-key.pem` exists in the data volume and cannot be read, is not a PEM private key or is not an Ed25519 key. The messages read `store: signing key <path> cannot be read`, `store: signing key <path> is not a PEM private key` and `store: signing key <path> is not an Ed25519 key`. sealift never replaces the file by itself, because a silent new key would make the import side refuse every archive.
 
-Restore the file from a backup of the volume. When there is none, remove `private/signing-key.pem` by hand and start again: sealift generates a new key, and you carry its public key to the import side before the next crossing. [Deployment](deployment.md#the-key-the-import-trusts) covers a lost volume.
+For `cannot be read`, the key is usually intact and the file's owner or mode is wrong, as after a volume restored or copied by another user. Stop sealift, then give `private/signing-key.pem` to the user the image runs as, `app` (uid 10000), with mode 0600 inside `private/` at mode 0700 (`chown 10000:10000` and `chmod 0600`), and start again. Do not remove the file: it is the only copy of the private key.
+
+For `is not a PEM private key` or `is not an Ed25519 key`, the file is damaged or foreign. Restore it from a backup of the volume. When there is none, remove `private/signing-key.pem` by hand and start again: sealift generates a new key, and you carry its public key to the import side before the next crossing. [Deployment](deployment.md#the-key-the-import-trusts) covers a lost volume.
 
 ## Import
 

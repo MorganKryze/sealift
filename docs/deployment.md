@@ -135,7 +135,7 @@ publicKeyFile: public-key.pem
 
 Take the key from **Download**, or **Copy**, in sealift's Settings, or from `GET /api/signing-key`. The file holds one `PUBLIC KEY` PEM block, at most 4 KiB, with LF or CRLF line endings. `sealift import` and `sealift import-server` exit with code 2 and name `publicKeyFile` when it is absent or unreadable. A relative path resolves from the settings file's directory. Then compare the Public key sha256: sealift's Settings shows it, and the import's Settings sheet and every report show the one the import trusts. Carrying the key through the kiosk with the archive weakens the check, because whoever can forge the archive there can forge the key.
 
-A lost volume means a new key. Restore `private/signing-key.pem` from a backup to keep the old one. Without a backup, sealift generates another key on the next start, and the import side refuses every archive until it receives the new public key, the archives exported before included. The key has no import: a key pair made elsewhere cannot be loaded.
+A lost volume means a new key. Stop sealift, restore `private/signing-key.pem` from a backup to keep the old one, give the file to the user the image runs as (`app`, uid 10000) with mode 0600 inside `private/` at mode 0700, and start again. A file left with the wrong owner or mode stops sealift with `cannot be read`; fix the owner or mode, and keep the file. Without a backup, sealift generates another key on the next start, and the import side refuses every archive until it receives the new public key, the archives exported before included. The key has no import: a key pair made elsewhere cannot be loaded.
 
 A backup of the volume holds the private key. Keep it as you keep the volume.
 
