@@ -1,0 +1,25 @@
+# Deploys the sealift chart with the values kept in your own repository.
+# There is no automated sync: a person syncs each change.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sealift
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: <harbor-host>/<harbor-project>/charts
+      chart: sealift
+      targetRevision: 0.6.0
+      helm:
+        valueFiles:
+          - $values/<values-path>/values.yaml
+    - repoURL: <values-repo-url>
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sealift
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
