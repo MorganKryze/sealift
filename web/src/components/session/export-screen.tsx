@@ -6,6 +6,7 @@ import { apiFetch, ApiError } from "@/api/client"
 import { getSigningKey } from "@/api/settings"
 import { cancelExport, queueExport, type Analysis, type DependencyResult, type Export, type Project } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
+import { EraseProject } from "@/components/ephemeral"
 import { ProblemNotice } from "@/components/problem-notice"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
@@ -434,6 +435,7 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
           </Button>
         </div>
       ) : null}
+      {isMain && onNewSession ? <EraseProject projectId={projectId} onErased={onNewSession} /> : null}
     </>
   )
 }

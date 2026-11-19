@@ -92,3 +92,8 @@ export async function createProject(file: File): Promise<Project> {
 
   return (await response.json()) as Project
 }
+
+/** Deletes a project and everything under it; in ephemeral mode the server also empties its caches. */
+export function deleteProject(projectId: string): Promise<void> {
+  return apiFetchProblem<void>(`/projects/${projectId}`, { method: "DELETE" })
+}
