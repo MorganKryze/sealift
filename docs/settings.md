@@ -2,7 +2,7 @@
 
 This page describes each setting: what it changes, its range and its default. **Settings**, in the header, opens the panel over the current screen. A change to the limits applies to the next analysis or export; one that is running keeps the values it started with. A change to the target applies to sessions created after it: a session keeps the target it started with, retries included.
 
-![The settings panel: appearance, target platform, signature key, limits and scanner](assets/settings.png)
+![The settings panel: appearance, target platform, signing key, limits and scanner](assets/settings.png)
 
 When a field changes, a bar at the bottom shows Unsaved changes, with **Save** and **Discard changes**. An invalid value shows its error under the field, and **Save** stays disabled.
 
@@ -31,14 +31,18 @@ The Node version the projects run with, as an exact version such as `22.17.1`. T
 
 Read-only, under Scanner. This release of sealift uses pnpm `10.34.5`, and picks it when it starts. Every project resolves with it.
 
-## Signature key
+## Signing key
 
-sealift writes the key as `signature.key` into every archive. Your Nexus import checks it. The key is a shared value that tells the import side the archive came from sealift; it is not a cryptographic signature.
+sealift signs the manifest of every archive with an Ed25519 key. It generates the key pair on its first start and keeps the private key in its data volume, in `private/signing-key.pem`. No screen, API answer, log line or exported file shows the private key. The import side checks each signature with the public key and refuses an archive signed by any other.
 
-Once saved, the panel shows Key saved with the value hidden, and the API returns `********` in its place. sealift never logs it.
+The section shows two values:
 
-- **Replace** opens a field for a new key, with **Show the key** to check what you pasted. The old key stops working in new archives once you press **Save**. Archives already built keep theirs.
-- **Clear** asks Clear the signature key? first. Exports stay blocked until a new key is saved, and the setup screen opens again.
+- **Public key** is the PEM block, with **Copy** and **Download**. The download is a file named `sealift-public-key.pem`. Carry it once to the import side, over a channel you trust, and name it in the import's `publicKeyFile` setting. [Deployment](deployment.md#the-key-the-import-trusts) shows where it goes.
+- **Public key sha256** is the sha256 of the key, in full, with **Copy**. The import side shows the same value in its own Settings. Compare the two by eye before your first crossing: equal values mean the import side holds the key you carry from.
+
+**Regenerate key** asks Regenerate the signing key? first. Confirming replaces the key pair. **Keep the current key**, or Escape, leaves it. After a regenerate, the import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before, which carry the old signature. Carry the new public key before your next crossing.
+
+The key lives in the volume. Delete the volume, or `private/signing-key.pem`, and the next start generates another key, which the import side must receive. A key file that exists and cannot be read, is not a PEM private key or is not Ed25519 stops sealift at start with the file's name: it never replaces a key by itself.
 
 ## Limits
 
@@ -63,7 +67,7 @@ Trivy, its vulnerability database, and pnpm, with their versions.
 
 ## From the API
 
-The panel reads and writes `/api/settings`. `GET` returns every setting:
+The panel reads and writes `/api/settings`. The signing key has its own routes, which [the API reference](dev/api.md#signing-key) describes. `GET` returns every setting:
 
 <!-- run -->
 <!-- expect: "minReleaseAgeDays":14 -->
@@ -72,17 +76,17 @@ curl -s http://localhost:8080/api/settings
 ```
 
 ```json
-{"downloadParallelism":16,"minReleaseAgeDays":14,"resolveParallelism":4,"signatureKey":"********","target":{"cpu":"x64","libc":"glibc","node":"22.17.1","os":"linux","pnpmVer":"10.34.5"}}
+{"downloadParallelism":16,"minReleaseAgeDays":14,"resolveParallelism":4,"target":{"cpu":"x64","libc":"glibc","node":"22.17.1","os":"linux","pnpmVer":"10.34.5"}}
 ```
 
-`PUT` replaces every setting at once, so send them all. `"signatureKey": "********"` keeps the saved key; `""` clears it. A value out of range answers 400 and names it:
+`PUT` replaces every setting at once, so send them all. A value out of range answers 400 and names it:
 
 <!-- run -->
 <!-- expect: download parallelism must be between 1 and 32, not 1000 -->
 ```sh
 curl -s -X PUT http://localhost:8080/api/settings \
   -H 'content-type: application/json' \
-  -d '{"downloadParallelism":1000,"minReleaseAgeDays":14,"resolveParallelism":4,"signatureKey":"********","target":{"cpu":"x64","libc":"glibc","node":"22.17.1","os":"linux","pnpmVer":"10.34.5"}}'
+  -d '{"downloadParallelism":1000,"minReleaseAgeDays":14,"resolveParallelism":4,"target":{"cpu":"x64","libc":"glibc","node":"22.17.1","os":"linux","pnpmVer":"10.34.5"}}'
 ```
 
 ```json

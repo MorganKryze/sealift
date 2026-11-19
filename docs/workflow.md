@@ -12,13 +12,13 @@ The first run opens on Prepare sealift. It lists three things sealift needs, wit
 | --- | --- |
 | Trivy | `github.com/aquasecurity/trivy`, checked against its sha256 |
 | Vulnerability database | `mirror.gcr.io`, updated every six hours upstream; sealift refreshes it before each analysis |
-| Signature key | You: the value your Nexus import project expects in `signature.key` |
+| Signing key | sealift: an Ed25519 key it generated for this volume, shown with its public key sha256 and **Copy public key** |
 
-**Install Trivy (43.3 MB) and its database (about 120 MB, 1.4 GB once unpacked)** starts both downloads. Nothing downloads before this click. Each row then shows its download running, then the version installed. **Save key** stores the key. **Continue** appears once all three are ready.
+**Install Trivy (45.2 MB) and its database (about 120 MB, 1.4 GB once unpacked)** starts both downloads. Nothing downloads before this click. Each row then shows its download running, then the version installed. The signing key needs no action: its card reads Ready from the first start. Carry its public key to the import side once, over a channel you trust. **Continue** appears once Trivy and its database are installed.
 
-When the latest Trivy release is younger than the minimum release age, the button names the newest release past that age instead, such as **Install Trivy 0.73.0 and its database**, and **Install Trivy 0.74.0 anyway** installs the latest. A failed install shows the cause and **Retry**. Until the key is saved, the screen reads Save the signature key to continue.
+When the latest Trivy release is younger than the minimum release age, the button names the newest release past that age instead, such as **Install Trivy 0.73.0 and its database**, and **Install Trivy 0.74.0 anyway** installs the latest. A failed install shows the cause and **Retry**.
 
-The setup screen opens again whenever Trivy, its database or the key goes missing, for example after **Clear** in the settings.
+The setup screen opens again whenever Trivy or its database goes missing.
 
 ![The setup screen before install](assets/setup.png)
 
@@ -130,7 +130,7 @@ The review also comes in dark:
 
 ## Export
 
-The export runs five steps: List the packages to export, Download and verify each package, Strip publishConfig, Pack and sign the archive, Write the reports. While it runs, it counts the packages downloaded, those served from the cache, and the percentage done.
+The export runs five steps: List the packages to export, Download and verify each package, Strip publishConfig, Pack the archive, Sign the manifest and write the reports. While it runs, it counts the packages downloaded, those served from the cache, and the percentage done.
 
 ![Building the archive: 74 of 100 packages, none from cache, 74 percent](assets/export-running.png)
 
@@ -140,9 +140,10 @@ A finished export reads Archive ready:
 
 - the archive card shows Sealed, the package count, the size, and the sha256 with **Copy**;
 - **Download archive** downloads `packages_npm.tar.gz`;
-- Reports lists five files, each with **Download**: `findings.csv`, `manifest.json`, `report.cdx.json`, `report.trivy.json`, `summary.md`.
+- under the sha256, one line says which key signed the archive: this sealift's current key, a key replaced since (export again), or none, for an archive exported by 0.4.0 or earlier;
+- Reports lists six files, each with **Download**: `findings.csv`, `manifest.json`, `manifest.json.sig`, `report.cdx.json`, `report.trivy.json`, `summary.md`. The import needs `manifest.json` and `manifest.json.sig` beside the archive.
 
-![Archive ready, with the archive card and the five reports](assets/export-done.png)
+![Archive ready, with the archive card and the six files](assets/export-done.png)
 
 **Export another selection** returns to the review to build a second archive from the same analysis. The earlier one stays below, under Earlier archive from this analysis. **Start a new session** returns home.
 

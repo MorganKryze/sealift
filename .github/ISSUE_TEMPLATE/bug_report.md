@@ -14,4 +14,4 @@ labels: bug
 
 **The message on screen**, word for word:
 
-**The log**: from **Show the log**, or `docker logs sealift`. Remove the signature key and any private package name first.
+**The log**: from **Show the log**, or `docker logs sealift`. Remove any private package name first.

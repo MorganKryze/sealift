@@ -47,7 +47,7 @@ The session id is in the address bar, after `/sessions/`.
 
 ## How do I start over from scratch?
 
-Remove the container and its volume, then run it again. Every session, archive, setting and the key go with the volume.
+Remove the container and its volume, then run it again. Every session, archive and setting go with the volume, and so does the signing key: the next start generates a new one, which the import side must receive.
 
 <!-- illustrative -->
 ```sh
@@ -55,9 +55,15 @@ docker rm -f sealift
 docker volume rm sealift-data
 ```
 
-## Is signature.key a signature?
+## What does the signature prove?
 
-No. It is a shared value the import checks, written as plain text into the archive. It tells the import side the archive came from your sealift. The sha256, carried by a separate channel, is what shows the file did not change. [The air gap](air-gap.md#the-signature-key) explains both.
+That the `manifest.json` came from the holder of sealift's private key, which stays in that sealift's data volume. The manifest names the archive's sha256 and every package's sha512, so a valid signature covers every byte the import publishes. The import checks it with the public key you carried once to its settings, and refuses an archive signed by any other key. [The air gap](air-gap.md#the-signature-and-the-trusted-key) explains both sides.
+
+It does not prove who pressed Export: anyone who reaches sealift's port can have a selection signed. It says nothing about freshness, so an old archive with a valid signature stays importable until you regenerate the key. It does not cover the reports. [Security policy](../SECURITY.md) lists these limits.
+
+## What if I regenerate the key, or lose the volume?
+
+The import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before. Carry the new public key to the file `publicKeyFile` names, compare the Public key sha256 on both sides, then export again. [Deployment](deployment.md#the-key-the-import-trusts) covers a lost volume.
 
 ## Can two people use the same sealift?
 

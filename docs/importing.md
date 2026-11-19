@@ -2,7 +2,11 @@
 
 This page covers the three screens of `sealift import-server`, the import service on the air-gapped side: Archives, Imports and one import. The service publishes the npm packages of an archive to Nexus. Each user sees their own archives and imports and no one else's.
 
-Sign in through your organisation's gateway and open its address. The header names the screens, `Archives` and `Imports`, your user name and `Settings`. The Settings sheet holds `Appearance` (the theme, saved in this browser only) and `Your MinIO folder`, the `Bucket` and `Folder` the service reads your archives from.
+Sign in through your organisation's gateway and open its address. The header names the screens, `Archives` and `Imports`, your user name and `Settings`. The Settings sheet holds `Appearance` (the theme, saved in this browser only), `Your MinIO folder`, the `Bucket` and `Folder` the service reads your archives from, and `Trusted key`, described below.
+
+## The trusted key
+
+The sheet's `Trusted key` section shows `Public key sha256` in full, with a copy button, and says `Archives must be signed by the key with this sha256. Compare it with the one in sealift's Settings on the connected side.` The service reads the key from the file `publicKeyFile` names in its settings and checks every archive against it. Compare the value by eye with the Public key sha256 in sealift's Settings, once, before the first crossing: [The air gap](air-gap.md#the-signature-and-the-trusted-key) explains how the key gets here. When the two differ, this service does not trust that sealift: stop and carry the public key again.
 
 ## Archives
 
@@ -10,13 +14,14 @@ Sign in through your organisation's gateway and open its address. The header nam
 
 Archives lists the archives in your MinIO folder, newest first: `packages/npm/` in your bucket, and one folder below it. The line under the title counts them, such as `5 archives · 2 importable`. `All` and `Importable` filter the rows, and `Refresh` reads the folder again. The list also reads again each time you open the screen.
 
-An archive can be imported when its folder holds one archive and its `manifest.json`, side by side. Any other row says `Cannot be imported` and why:
+An archive can be imported when its folder holds one archive, its `manifest.json` and its `manifest.json.sig`, side by side. Any other row says `Cannot be imported` and why:
 
 | Reason on the row | What to do |
 | --- | --- |
 | `its name cannot be imported` | Rename or move it: the key must end in `.tar.gz`, sit in `packages/npm/` or one folder below it, hold no empty, `.` or `..` segment and no control character, and stay within 1,024 bytes. |
-| `the folder holds more than one archive` | Keep one archive and its manifest.json in the folder. |
+| `the folder holds more than one archive` | Keep one archive with its manifest.json and manifest.json.sig in the folder. |
 | `no manifest.json in its folder` | Upload the manifest next to the archive. |
+| `no manifest.json.sig in its folder` | Upload the signature next to the manifest. sealift 0.4.0 and earlier wrote none: export such an archive again. |
 
 An importable row says `Can be imported`, then one of these:
 
@@ -50,7 +55,7 @@ An import shows the archive's name and folder, its state, the settings it ran wi
 | `Running` | Going through its stages, see below. |
 | `Complete` | Every package is in Nexus. |
 | `Incomplete` | At least one package failed. |
-| `Refused` | A check failed before the first package. |
+| `Refused` | A check failed before the first package, the signature check first. |
 | `Interrupted` | The service stopped before the attempt ended. |
 | `Not recorded` | A record that names no state this version knows. |
 
@@ -62,16 +67,16 @@ While it runs, one panel shows the stage and stays in place: `Waiting its turn`,
 
 | Card | When | What it says |
 | --- | --- | --- |
-| `Archive removed from MinIO` | `Complete`, the removal recorded | `All 101 packages are in Nexus: 0 published, 101 present.` Both objects were removed after each still carried the ETag the import read. The card shows `Archive ETag` and `Manifest ETag`. |
-| `Archive removed from MinIO, manifest kept` | `Complete`, the manifest could not go | The reason follows. |
+| `Archive removed from MinIO` | `Complete`, the removal recorded | `All 101 packages are in Nexus: 0 published, 101 present.` The archive, the manifest and the signature were removed, in that order, after each still carried the ETag the import read. The card shows `Archive ETag`, `Manifest ETag` and `Signature ETag`. |
+| `Archive removed from MinIO, manifest kept` | `Complete`, the manifest or the signature could not go | The reason follows. |
 | `Archive kept in MinIO` | `Complete`, the removal failed or was refused | The reason, and a `Retry import` button. |
 | `Checking the archive's removal` | `Complete`, no removal recorded yet | The page updates until the service records it. |
-| `Refused before the first package` | `Refused` | The reason, such as both digests when the expected sha256 differs. `This attempt published nothing and read no package.` and `Go to archives`. Starting the archive again is allowed. |
+| `Refused before the first package` | `Refused` | The reason, such as both digests when the expected sha256 differs, or one of the signature reasons that [Troubleshooting](troubleshooting.md#import) lists. `This attempt published nothing and read no package.` and `Go to archives`. Starting the archive again is allowed. |
 | `Stopped before it ended` | `Interrupted` | `The service stopped or restarted before this attempt ended.`, how many packages were finished and how many were not. |
 
-The words `complete` and `removed` appear only when the record says so. The `Archive sha256 check` block says `The archive matched: it passed its checks against the manifest and the signature key.` only when the attempt recorded that the checks passed, and `The archive has not passed its checks.` when it recorded that they did not. An attempt that has not reached the checks yet, because it is queued or running before the manifest is read, says `The archive's checks have not run yet.` An attempt that ended with no check result, such as one interrupted while it waited or a record written by 0.4.0, says `Not recorded: this attempt did not record the archive's checks.` A package of a 0.4.0 record has no kind, and its next action is the general one: `Read the reason: it names what failed. Fix that, then retry.`
+The words `complete` and `removed` appear only when the record says so. The `Archive sha256 check` block says `The archive matched: its manifest carries a valid signature by this key, and the archive passed its checks against the manifest.` only when the attempt recorded that the signature verified and the checks passed, and `The archive has not passed its checks.` when it recorded that they did not. An attempt that has not reached the checks yet, because it is queued or running before the manifest is read, says `The archive's checks have not run yet.` An attempt that ended with no check result, such as one interrupted while it waited or a record written by 0.4.0, says `Not recorded: this attempt did not record the archive's checks.` A package of a 0.4.0 record has no kind, and its next action is the general one: `Read the reason: it names what failed. Fix that, then retry.`
 
-The `Archive sha256 check` block shows `Expected sha256` (`No expected sha256 was given.` when you gave none) and `Manifest sha256`, each with a `Copy` button. Where the browser offers no clipboard, which is the case on a page served over plain http from any name other than `localhost`, the button selects the text and says `The clipboard is not available on this page. The text is selected: press Ctrl+C, or Command+C on a Mac, to copy it.`
+The `Archive sha256 check` block shows `Expected sha256` (`No expected sha256 was given.` when you gave none), `Manifest sha256` and `Public key sha256`, the trusted key's, each with a `Copy` button. A record without the key's sha256 says `Not recorded`, and so does a record written by 0.4.0. Where the browser offers no clipboard, which is the case on a page served over plain http from any name other than `localhost`, the button selects the text and says `The clipboard is not available on this page. The text is selected: press Ctrl+C, or Command+C on a Mac, to copy it.`
 
 ### The retry card
 
@@ -83,7 +88,7 @@ An `Incomplete` import shows a card titled `1 of 101 packages are not in Nexus`.
 | `Fails again until fixed outside sealift` | `conflict`, `mismatch`, `nexus`, `local`, each with its count and its words. |
 | `Cause not recorded` | A package with no kind, or one this version does not know. |
 
-For a `conflict`, the card says `Nexus holds this version with other bytes, and sealift never overwrites it. If that copy is the wrong one, delete it in Nexus, then retry.` The retry button is `Retry import`. If the service refuses it, the card says `The retry was refused` and why. Earlier attempts stay listed under `Earlier attempts`.
+For a `conflict`, the card says `Nexus holds this version with other bytes, and sealift never overwrites it. If that copy is the wrong one, delete it in Nexus, then retry.` The retry button is `Retry import`. A retry checks the signature again before anything else, so a retry of an import recorded by 0.4.0, which holds no signature, ends `Refused` as unsigned: start a new import from an archive exported again. If the service refuses it, the card says `The retry was refused` and why. Earlier attempts stay listed under `Earlier attempts`.
 
 ![An incomplete import with its retry card and the failed package](assets/import-incomplete.png)
 
@@ -110,3 +115,5 @@ The screens above were read on the lab's gateway at http://localhost:18440 (see 
 - `bob` saw none of alice's archives or imports, and her import's address answered `No such import` to him.
 
 Not driven in the lab this time: the cards for a kept archive and a removal not yet recorded, a retry, an import that was refused after an incomplete attempt, and the clipboard fallback of `Copy`. The unit tests and the browser gate's fixtures cover the cards and the wording.
+
+The signature was checked in the lab on commit 744e44c, through the command and the service's API, not through these screens in a browser: the trusted key's sha256 from `GET /api/me` equalled the one sealift's `GET /api/signing-key` gave, an export of the connected sealift imported `complete` through `sealift import` and through the service, a manifest changed by one byte was refused with `the signature does not match the manifest` (exit 3), an export made after a regenerate was refused with `the manifest is signed by another key` and both sha256 named, a folder without `manifest.json.sig` listed its archive as not importable, and an archive from the 0.4.0 image was refused as unsigned.

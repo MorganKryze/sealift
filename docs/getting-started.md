@@ -7,7 +7,7 @@ This page takes you from nothing to a first archive in about ten minutes. It use
 - Docker on a machine with outbound HTTPS to GitHub (Trivy), `mirror.gcr.io` (its vulnerability database) and `registry.npmjs.org` (pnpm and packages). [Deployment](deployment.md#outbound-access) lists the hosts.
 - About 2 GB of free disk for Trivy, its database and the package cache.
 
-sealift runs on the connected side of your network. Only the archive it builds and its `manifest.json` need to cross to the air-gapped side.
+sealift runs on the connected side of your network. Only the archive it builds, its `manifest.json` and the manifest's signature, `manifest.json.sig`, need to cross to the air-gapped side.
 
 ## 1. Run it
 
@@ -37,11 +37,11 @@ curl -s http://localhost:8080/healthz
 
 Open <http://localhost:8080>. The first run opens on Prepare sealift.
 
-![The setup screen, listing Trivy 0.74.0 at 43.3 MB, its vulnerability database at about 120 MB, and the signature key field, above one install button](assets/setup.png)
+![The setup screen, listing Trivy 0.76.2 at 45.2 MB, its vulnerability database at about 120 MB, and the signing key, above one install button](assets/setup.png)
 
-1. Press **Install Trivy (43.3 MB) and its database (about 120 MB, 1.4 GB once unpacked)**. Nothing downloads before this click. The sizes are those of the Trivy release shown; yours may differ.
-2. Paste the signature key your Nexus import expects and press **Save key**. Ask the owner of the import project if you do not have it. To try sealift without one, any value works; replace it before you carry an archive.
-3. Press **Continue** once both show as ready.
+1. Press **Install Trivy (45.2 MB) and its database (about 120 MB, 1.4 GB once unpacked)**. Nothing downloads before this click. The sizes are those of the Trivy release shown; yours may differ.
+2. The Signing key card shows Ready: sealift generated an Ed25519 key for this volume when it started, and shows the sha256 of its public key. Nothing to type. Before your first crossing, press **Copy public key** and carry it to the import side, over a channel you trust. [The air gap](air-gap.md#the-signature-and-the-trusted-key) shows how.
+3. Press **Continue** once Trivy and its database are installed.
 
 sealift checks Trivy against its published sha256. When the latest Trivy release is younger than 14 days, it offers the newest release past that age instead.
 
@@ -80,17 +80,18 @@ sealift resolves the project, scans it, lists the newer versions of each depende
 
 The review opens on sealift's proposal: 45 CVEs today, including 1 critical, and none with the proposed versions. Open **express** to see why sealift proposes 5.1.0 and holds 4.22.3 back. [How sealift chooses](how-sealift-chooses.md) explains the rules.
 
-Press **Confirm and build the archive**. sealift downloads the 100 packages the selection needs, checks each one's integrity, and ends on Archive ready.
+Press **Confirm and build the archive**. sealift downloads the 101 packages the selection needs, checks each one's integrity, signs the manifest with the key, and ends on Archive ready.
 
-![Archive ready: packages_npm.tar.gz, sealed, 100 packages, 6.7 MB, with its sha256, a download button, and five reports below](assets/export-done.png)
+![Archive ready: packages_npm.tar.gz, sealed, 101 packages, 6.7 MB, with its sha256, a download button, and six files below](assets/export-done.png)
 
 ## 6. Take the files
 
-Press **Download archive** for `packages_npm.tar.gz`, and **Download** next to each report you want to hand over. The same files stay on the volume under `/data/projects/<session>/exports/<export>/`:
+Press **Download archive** for `packages_npm.tar.gz`, and **Download** next to `manifest.json`, `manifest.json.sig` and each report you want to hand over. The import refuses an archive that arrives without its manifest and its signature. The same files stay on the volume under `/data/projects/<session>/exports/<export>/`:
 
 ```
-packages_npm.tar.gz   the packages and signature.key
+packages_npm.tar.gz   the packages
 manifest.json         every package with its sha512
+manifest.json.sig     the manifest's Ed25519 signature
 findings.csv          every CVE, one row each
 report.cdx.json       CycloneDX SBOM
 report.trivy.json     raw Trivy output
@@ -102,4 +103,4 @@ summary.md            before, after, remaining CVEs
 ## Next
 
 - [Workflow](workflow.md): every screen, every button.
-- [Settings](settings.md): the target platform, the key, the limits.
+- [Settings](settings.md): the target platform, the signing key, the limits.
