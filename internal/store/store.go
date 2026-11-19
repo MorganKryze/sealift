@@ -46,6 +46,12 @@ const (
 )
 
 // defaultSettings are the values a freshly created store starts with.
+//
+// ResolveParallelism is 4 because each resolution is one pnpm process, and 8
+// would double peak memory inside a desktop container where an OOM kill is
+// worse than a slower analysis; users can raise it in Settings.
+// DownloadParallelism is 16, and stays a setting so users behind a limiting
+// proxy can lower it. TestOpenStartsWithSettledParallelism pins both.
 var defaultSettings = Settings{
 	Target: Target{
 		OS:      "linux",
