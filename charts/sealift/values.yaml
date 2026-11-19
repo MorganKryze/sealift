@@ -69,6 +69,35 @@ service:
   type: ClusterIP
   port: 8080
 
+ingress:
+  # Renders one Ingress that signs users in through ingress-nginx external
+  # authentication. The annotations below are not proven in the lab.
+  enabled: true
+  className: ""
+  # The one host the service answers on.
+  host: ""
+  path: /
+  pathType: Prefix
+  # Extra annotations, merged with the three sign-in annotations.
+  annotations: {}
+  tls:
+    enabled: true
+    # Empty means <fullname>-tls.
+    secretName: ""
+  auth:
+    # The oauth2-proxy address ingress-nginx asks before it serves a request.
+    url: ""
+    # Where ingress-nginx sends a user who is not signed in.
+    signin: ""
+
+networkPolicy:
+  # Admits the service's pod only from the ingress controller's namespace.
+  enabled: true
+  ingressNamespace: ingress-nginx
+  # Narrows the admitted peers to the controller's pods. Empty admits the
+  # whole namespace.
+  ingressPodLabels: {}
+
 # Requests and a memory limit; no CPU limit. Not measured on a real archive.
 resources:
   requests:

@@ -16,3 +16,6 @@ publicKey:
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEAfeijnGwLPX7OsM+Psi9HTKFkPKEFMZVWaXDua1BTEOA=
     -----END PUBLIC KEY-----
+# Off here so the default render stays one service; tests turn it on.
+ingress:
+  enabled: false
