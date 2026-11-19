@@ -26,6 +26,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - The signature key setting: the Settings section and the setup field are gone, and an export no longer needs a key typed in. A `settings.json` from 0.4 loses its `signatureKey` on the first start.
 
+### Security
+
+- An archive is no longer trusted for carrying a key of its own: the import side checks the manifest against the public key it was given, so a copy of the archive that someone altered on the way is refused.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added
