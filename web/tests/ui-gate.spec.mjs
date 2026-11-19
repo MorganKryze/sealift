@@ -81,6 +81,10 @@ export const IMPORT = {
   ],
 }
 
+// A copy button shows "Copy" and keeps its full name for assistive technology. Without the
+// stylesheet's `.sr-only` rule in the import bundle, the full name prints beside the visible word.
+const COPY_BUTTONS = "button:has(> .sr-only)"
+
 // Collection routes the import pages must never call.
 const COLLECTION_API = /^\/api\/(projects|settings|tools|jobs)(\/|$)/
 
@@ -328,8 +332,16 @@ for (const route of IMPORT.routes) {
           },
           extra: async (p) => {
             const violations = await p.evaluate(() => window.__violations)
+            const shown = await p.evaluate((selector) =>
+              [...document.querySelectorAll(selector)]
+                .filter((b) => b.getBoundingClientRect().width > 0 && b.querySelector(":scope > .sr-only").getBoundingClientRect().width > 1)
+                .map((b) => b.innerText.replace(/\s+/g, " ").trim()), COPY_BUTTONS)
             release()
-            return [...stray, ...violations.map((v) => `${where} · content security policy: ${v}`)]
+            return [
+              ...stray,
+              ...violations.map((v) => `${where} · content security policy: ${v}`),
+              ...shown.map((t) => `${where} · button "${t}": the hidden label is visible, so the stylesheet lacks .sr-only`),
+            ]
           },
         })
         release()
