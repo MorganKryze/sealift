@@ -122,6 +122,49 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
 
 A crossing passes when the sha256 of the key matches on both sides, step 2 matches, step 4 reports no `failed`, and step 5 installs every selected version. With a planted conflict, step 4 fails that one package and step 5 installs the rest.
 
+## Check a gateway that forwards another header
+
+Some gateways pass the access token in a header other than `X-Access-Token`. The service reads the one header `token.header` names and no other. The lab's gateway sends the token in both `X-Access-Token` and `X-Auth-Request-Access-Token`, so the lab can run the service on the second.
+
+Copy `import/` to a scratch directory, add the header to its `token` section, and keep the key files that `setup.sh` wrote next to it:
+
+```yaml
+token:
+  keySetUrl: http://keycloak:8080/realms/lab/protocol/openid-connect/certs
+  issuer: http://localhost:18444/realms/lab
+  audience: oauth2-proxy
+  header: X-Auth-Request-Access-Token
+```
+
+Write a compose override in the scratch directory that mounts the copy at `/import`:
+
+```yaml
+services:
+  import-server:
+    volumes:
+      - import-data:/data
+      - <scratch>/import:/import:ro
+```
+
+Start the service with it:
+
+```sh
+SEALIFT_IMAGE=sealift:dev docker compose -f compose.yaml -f <scratch>/override.yaml up -d import-server
+```
+
+Sign in with `node scripts/session.mjs alice alice` and call `http://localhost:18440/api/me` and `/api/archives` with the cookie. Both answer 200 for alice, also when the request carries `X-Auth-Request-Access-Token: forged` and `X-Access-Token: forged`: the gateway overwrites both headers with the token it checked.
+
+Past the gateway, `forge.mjs` takes `HEADER` and a mode `absent` that sends no token:
+
+```sh
+docker compose -f compose.yaml -f <scratch>/override.yaml run --rm \
+  -e HEADER=X-Auth-Request-Access-Token airgap-shell node /scripts/forge.mjs absent
+```
+
+The service answers 401 with `absent check failed`. A `none` token sent in `X-Access-Token` gets the same answer, which shows the service ignores the default header once the settings name another.
+
+This ran on commit 4ca9743 with the image built by `just image`. Restore the lab with `SEALIFT_IMAGE=sealift:dev docker compose -f compose.yaml up -d import-server`, then check that `/healthz` answers 200.
+
 ## Stop
 
 ```sh
