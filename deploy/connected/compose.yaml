@@ -5,7 +5,7 @@ name: sealift
 
 services:
   sealift:
-    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.6.1}
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.6.2}
     restart: unless-stopped
     ports:
       - 127.0.0.1:${SEALIFT_PORT:-8080}:8080

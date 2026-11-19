@@ -2,7 +2,7 @@ apiVersion: v2
 name: sealift
 description: The import service of sealift, for the air-gapped side.
 type: application
-version: 0.6.1
-appVersion: "0.6.1"
+version: 0.6.2
+appVersion: "0.6.2"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/MorganKryze/sealift
