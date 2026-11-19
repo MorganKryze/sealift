@@ -245,18 +245,25 @@ What the lab did not prove: every ingress-nginx annotation below. They come from
 | `auth-url` | `http://<oauth2-proxy-service>.<oauth2-proxy-namespace>.svc.cluster.local:<oauth2-proxy-port>/oauth2/auth` | `ingress.auth.url` | not proven in the lab |
 | `auth-signin` | `https://<import-host>/oauth2/start?rd=$scheme://$host$escaped_request_uri` | `ingress.auth.signin` | not proven in the lab |
 | `auth-response-headers` | `X-Auth-Request-Access-Token` | set by the chart from `token.header` | not proven in the lab |
-| `configuration-snippet` | `auth_request_set $auth_cookie $upstream_http_set_cookie;` and `add_header Set-Cookie $auth_cookie always;` | `ingress.annotations` | not proven in the lab |
+| `auth-always-set-cookie` | `"true"` | `ingress.annotations` | not proven in the lab |
 | `proxy-buffer-size` | `16k` | `ingress.annotations` | not proven in the lab |
 
-The snippet hands the refreshed session cookie to the browser on every answer. `always` keeps it on a 4xx or 5xx answer, which `add_header` drops by default. Without it, oauth2-proxy renews the session on every request. The 16k buffer holds oauth2-proxy's answer, which carries a session cookie of about 3.3 KiB next to the token headers: with the default 4k buffer, a request a minute after sign-in failed in the lab's nginx with `upstream sent too big header`. If ingress-nginx runs with snippet annotations disabled, the cookie line goes into the controller's own configuration, and your team decides how.
+`auth-always-set-cookie` hands the refreshed session cookie to the browser on every answer, including a 4xx or 5xx one, which ingress-nginx drops by default. Without it, oauth2-proxy renews the session on every request. The 16k buffer holds oauth2-proxy's answer, which carries a session cookie of about 3.3 KiB next to the token headers: with the default 4k buffer, a request a minute after sign-in failed in the lab's nginx with `upstream sent too big header`.
 
-Put the last two in `ingress.annotations`:
+Put both in `ingress.annotations`:
 
 <!-- illustrative -->
 ```yaml
 ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
+    nginx.ingress.kubernetes.io/auth-always-set-cookie: "true"
+```
+
+A fallback exists for a controller that lacks `auth-always-set-cookie`, and only where your team allows snippet annotations. ingress-nginx refuses them by default since controller 1.9, and its admission webhook then rejects the whole Ingress. Replace the second line with this one, which does by hand what `auth-always-set-cookie` does:
+
+<!-- illustrative -->
+```yaml
     nginx.ingress.kubernetes.io/configuration-snippet: |
       auth_request_set $auth_cookie $upstream_http_set_cookie;
       add_header Set-Cookie $auth_cookie always;
@@ -360,11 +367,12 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | | | `CrashLoopBackOff` and exit code 2, with a log line that names a settings field, `token.header` included | Correct the value the line names. The service refuses to start on an empty header, an invalid name, or `Authorization`, `Cookie` or `Host` |
 | | | `ImagePullBackOff` | Check `image.repository`, `imagePullSecrets` and the robot account |
 | | | `Pending` | Check the claim's storage class and the `amd64` node selector |
+| | | The sync fails with `admission webhook "validate.nginx.ingress.kubernetes.io" denied the request` and a message such as `annotation group ConfigurationSnippet contains risky annotation` | The controller refuses snippet annotations. Remove `configuration-snippet` from `ingress.annotations` and use `auth-always-set-cookie` as [the annotations](#annotations-on-the-imports-ingress) say. The pod can be `Running` while the Ingress does not exist, so check `kubectl -n <namespace> get ingress` |
 | 2. TLS to the three services | The log shows no certificate error after the first request that reads MinIO, Nexus or Keycloak | `x509: certificate signed by unknown authority` | Give the authority in `ca.pem`, one bundle file for all three |
 | 3. Sign in | Opening `https://<import-host>/` sends you to Keycloak, and back to the **Archives** screen with your name in the header | A redirect loop or a 500 at `/oauth2/` | Check the `/oauth2/` route and `--redirect-url` |
 | 4. The token | **Archives** lists your folder without an error | 401 naming `issuer`, `audience` or `signature` | Compare `keycloak.realmUrl` with the token's `iss`, `keycloak.clientId` with `aud`, and `keycloak.keySetUrl` with the realm's keys |
 | | | 401 `absent` on every call after sign-in | The ingress forwards another header than `token.header`, or oauth2-proxy does not pass the access token. Check `auth-response-headers` and `--pass-access-token` |
-| 5. A minute after sign-in | Reload the screen: it still answers | `upstream sent too big header`, or a 502 | Set `proxy-buffer-size` to `16k` and the cookie snippet |
+| 5. A minute after sign-in | Reload the screen: it still answers | `upstream sent too big header`, or a 502 | Set `proxy-buffer-size` to `16k` and `auth-always-set-cookie` to `"true"` |
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
 | 7. The trusted key | The Settings sheet's `Public key sha256` equals the one from step 3 of [the connected side](#the-connected-side) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
