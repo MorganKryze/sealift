@@ -19,8 +19,8 @@ export function EphemeralBanner() {
   return (
     <div role="note" className="border-b border-line bg-card">
       <p className="mx-auto max-w-240 px-5 py-2 text-sm text-muted">
-        <span className="font-medium text-ink">Ephemeral instance.</span> A project and the caches it filled are erased after {data.idleMinutes}{" "}
-        minutes without activity, or as soon as you erase it from its archive screen.
+        <span className="font-medium text-ink">Ephemeral instance.</span> A project and the caches it filled are erased after {data.idleMinutes} {data.idleMinutes === 1 ? "minute" : "minutes"}{" "}
+        without activity, or as soon as you erase it from its archive screen.
       </p>
     </div>
   )

@@ -31,6 +31,12 @@ describe("ephemeral banner", () => {
     expect(screen.getByText(/45 minutes without activity/)).toBeInTheDocument()
   })
 
+  it("says minute for a one-minute delay", async () => {
+    vi.mocked(getInstance).mockResolvedValue({ ephemeral: true, idleMinutes: 1 })
+    wrap(<EphemeralBanner />)
+    expect(await screen.findByText(/after 1 minute without activity/)).toBeInTheDocument()
+  })
+
   it("shows nothing outside the mode", async () => {
     vi.mocked(getInstance).mockResolvedValue({ ephemeral: false })
     wrap(<EphemeralBanner />)
