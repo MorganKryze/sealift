@@ -6,7 +6,9 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -68,7 +70,10 @@ func run(addr, root string, log *slog.Logger) error {
 	// A Trivy release asset runs tens of megabytes; give the download
 	// enough time without leaving the client unbounded.
 	toolsHTTP := &http.Client{Timeout: 5 * time.Minute}
-	toolsManager := tools.NewManager(st, toolsHTTP, log)
+	toolsManager, err := newToolsManager(st, toolsHTTP, log)
+	if err != nil {
+		return err
+	}
 	installed, err := toolsManager.InstalledTrivy()
 	if err != nil {
 		return err
@@ -154,6 +159,41 @@ var onQueueReady func(*jobs.Queue)
 // SEALIFT_TOOLS_GID. It returns nil, leaving children under the caller's
 // own identity, when either variable is unset or does not parse as a
 // uint32, which covers every test and a bare host outside the image.
+// newToolsManager builds the tools manager with the GitHub API address from
+// SEALIFT_GITHUB_API. Unset keeps the public API. The release date, the
+// checksums and the download address of Trivy all come from that API, so the
+// address must be https, or http on a loopback host for the browser gate. The
+// error never repeats the value, which could carry credentials.
+func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
+	m := tools.NewManager(vol, client, log)
+	raw := os.Getenv("SEALIFT_GITHUB_API")
+	if raw == "" {
+		return m, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return nil, errBadGitHubAPI
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && isLoopback(u.Hostname()):
+	default:
+		return nil, errBadGitHubAPI
+	}
+	m.GitHubAPI = raw
+	return m, nil
+}
+
+var errBadGitHubAPI = errors.New("SEALIFT_GITHUB_API must be an https URL without credentials, or an http URL on localhost, 127.0.0.1 or ::1")
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func toolsCredential() *runner.Credential {
 	uidEnv := os.Getenv("SEALIFT_TOOLS_UID")
 	gidEnv := os.Getenv("SEALIFT_TOOLS_GID")

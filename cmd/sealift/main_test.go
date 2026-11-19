@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,7 @@ func TestToolsCredential(t *testing.T) {
 // TestRunServesHealthAndStopsOnSignal starts the real wiring on a free port,
 // so a broken store, queue or route shows up here rather than in the image.
 func TestRunServesHealthAndStopsOnSignal(t *testing.T) {
+	localGitHub(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +131,7 @@ func (j *blockingJob) Run(ctx context.Context, emit func(jobs.Event)) error {
 // job before shutting the server down, so the connection goes idle quickly
 // and run returns well under the 10 second shutdown timeout.
 func TestRunCancelsRunningJobBeforeShuttingDownServer(t *testing.T) {
+	localGitHub(t)
 	started := make(chan struct{})
 	onQueueReady = func(q *jobs.Queue) {
 		if _, err := q.Submit(&blockingJob{started: started}); err != nil {
@@ -227,5 +230,141 @@ func TestSubcommand(t *testing.T) {
 				t.Errorf("subcommand(%q) = %q, %q; want %q, %q", tt.args, name, rest, tt.wantName, tt.wantRest)
 			}
 		})
+	}
+}
+
+// localGitHub points SEALIFT_GITHUB_API at a local server that answers 404 and
+// reports the paths it is asked for. A test that starts run sets it first, so
+// no test reaches api.github.com.
+func localGitHub(t *testing.T) <-chan string {
+	t.Helper()
+	asked := make(chan string, 8)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case asked <- r.URL.Path:
+		default:
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(gh.Close)
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	return asked
+}
+
+// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
+// manager: GET /api/tools looks up the latest Trivy release, and the server
+// named by the variable must be the one asked.
+func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
+	asked := localGitHub(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	var resp *http.Response
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err = client.Get("http://" + addr + "/api/tools"); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GET /api/tools never answered: %v", err)
+	}
+	resp.Body.Close()
+
+	select {
+	case path := <-asked:
+		if want := "/repos/aquasecurity/trivy/releases/latest"; path != want {
+			t.Errorf("fake GitHub asked for %q, want %q", path, want)
+		}
+	default:
+		t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
+	}
+
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("run returned %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not return after SIGTERM")
+	}
+}
+
+// TestNewToolsManagerGitHubAPI covers the lookup address the manager gets from
+// SEALIFT_GITHUB_API: unset keeps the public API, a local or https address is
+// used as given, and anything else stops the start without echoing the value.
+func TestNewToolsManagerGitHubAPI(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{"unset keeps the public API", "", "", false},
+		{"https mirror", "https://mirror.example.internal/github", "https://mirror.example.internal/github", false},
+		{"http on 127.0.0.1", "http://127.0.0.1:8123", "http://127.0.0.1:8123", false},
+		{"http on localhost", "http://localhost:8123", "http://localhost:8123", false},
+		{"http on ::1", "http://[::1]:8123", "http://[::1]:8123", false},
+		{"http on another host", "http://mirror.example.internal", "", true},
+		{"http on a private address", "http://10.0.0.5:8123", "", true},
+		{"no scheme", "mirror.example.internal", "", true},
+		{"host and port without scheme", "127.0.0.1:8123", "", true},
+		{"other scheme", "ftp://mirror.example.internal", "", true},
+		{"no host", "https://", "", true},
+		{"userinfo", "https://mirroruser:s3cretTOKEN@mirror.example.internal", "", true},
+		{"userinfo on loopback", "http://mirroruser:s3cretTOKEN@127.0.0.1:8123", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SEALIFT_GITHUB_API", c.value)
+			m, err := newToolsManager(nil, nil, nil)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("newToolsManager accepted %q", c.value)
+				}
+				if strings.Contains(err.Error(), "s3cretTOKEN") || strings.Contains(err.Error(), "mirroruser") {
+					t.Errorf("error repeats the credentials: %v", err)
+				}
+				if !strings.Contains(err.Error(), "SEALIFT_GITHUB_API") {
+					t.Errorf("error does not name the variable: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.GitHubAPI != c.want {
+				t.Errorf("GitHubAPI = %q, want %q", m.GitHubAPI, c.want)
+			}
+		})
+	}
+}
+
+// TestRunRefusesAnUnsafeGitHubAPI checks the start fails before it listens.
+func TestRunRefusesAnUnsafeGitHubAPI(t *testing.T) {
+	t.Setenv("SEALIFT_GITHUB_API", "http://mirror.example.internal")
+	err := run("127.0.0.1:0", filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil {
+		t.Fatal("run accepted an http mirror on a non-loopback host")
 	}
 }
