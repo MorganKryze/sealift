@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-19
+
 ### Added
 
 - An ephemeral mode for the collection side. With `SEALIFT_EPHEMERAL=1`, a project and the caches it filled are erased from the export screen, or after `SEALIFT_EPHEMERAL_IDLE` minutes without activity (60 by default). Project ids no longer name the project, and `deploy/connected/compose.ephemeral.yaml` keeps projects and caches in RAM. [Deployment](docs/deployment.md#ephemeral-mode) describes it.
@@ -184,7 +186,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/MorganKryze/sealift/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/MorganKryze/sealift/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MorganKryze/sealift/compare/v0.4.0...v0.6.0
 [0.4.0]: https://github.com/MorganKryze/sealift/compare/v0.3.0...v0.4.0
