@@ -71,6 +71,9 @@ type Store struct {
 	// regenerating serializes key replacements, so the file and the key in
 	// use always come from the same call.
 	regenerating sync.Mutex
+
+	// ephemeral draws project ids that do not derive from the name.
+	ephemeral bool
 }
 
 // Open creates the data volume layout under root when it is missing, then

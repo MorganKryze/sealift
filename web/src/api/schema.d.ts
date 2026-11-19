@@ -281,6 +281,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How this instance was deployed */
+        get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/signing-key": {
         parameters: {
             query?: never;
@@ -440,6 +457,12 @@ export interface components {
             node: string;
             /** @example 10.34.5 */
             pnpmVer: string;
+        };
+        /** @description How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes. */
+        Instance: {
+            ephemeral: boolean;
+            /** @description Present in ephemeral mode only. */
+            idleMinutes?: number;
         };
         /** @description Every value the interface can change. */
         Settings: {
@@ -1122,6 +1145,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Settings"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deployment mode */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
                 };
             };
             default: components["responses"]["Problem"];

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -108,4 +109,14 @@ func originAllowed(origin string, allowed []string) bool {
 		return false
 	}
 	return hostAllowed(hostName(u.Host), allowed)
+}
+
+// GetInstance reports whether this instance runs in ephemeral mode.
+func (h *Handlers) GetInstance(_ context.Context, _ GetInstanceRequestObject) (GetInstanceResponseObject, error) {
+	in := Instance{Ephemeral: h.Ephemeral > 0}
+	if in.Ephemeral {
+		minutes := int(h.Ephemeral / time.Minute)
+		in.IdleMinutes = &minutes
+	}
+	return GetInstance200JSONResponse(in), nil
 }

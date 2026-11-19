@@ -376,6 +376,21 @@ paths:
                 $ref: "#/components/schemas/Settings"
         default:
           $ref: "#/components/responses/Problem"
+  /instance:
+    get:
+      operationId: getInstance
+      tags:
+        - settings
+      summary: How this instance was deployed
+      responses:
+        "200":
+          description: The deployment mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        default:
+          $ref: "#/components/responses/Problem"
   /signing-key:
     get:
       operationId: getSigningKey
@@ -628,6 +643,20 @@ components:
         - libc
         - node
         - pnpmVer
+    Instance:
+      type: object
+      description: >-
+        How this instance was deployed. In ephemeral mode, a project and the
+        shared caches are erased when it is deleted, and every project is
+        deleted once it has been idle for idleMinutes.
+      properties:
+        ephemeral:
+          type: boolean
+        idleMinutes:
+          type: integer
+          description: Present in ephemeral mode only.
+      required:
+        - ephemeral
     Settings:
       type: object
       description: Every value the interface can change.

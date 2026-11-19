@@ -228,6 +228,14 @@ type Failure struct {
 	Step    string `json:"step"`
 }
 
+// Instance How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes.
+type Instance struct {
+	Ephemeral bool `json:"ephemeral"`
+
+	// IdleMinutes Present in ephemeral mode only.
+	IdleMinutes *int `json:"idleMinutes,omitempty"`
+}
+
 // LogData Payload of a log event
 type LogData struct {
 	Line string `json:"line"`
@@ -589,6 +597,9 @@ func (t *Event_Data) UnmarshalJSON(b []byte) error {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// GetInstance How this instance was deployed
+	// (GET /instance)
+	GetInstance(w http.ResponseWriter, r *http.Request)
 	// WatchJob Server-sent events of the running job
 	// (GET /jobs/current/events)
 	WatchJob(w http.ResponseWriter, r *http.Request)
@@ -674,6 +685,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// GetInstance operation middleware
+func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetInstance(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // WatchJob operation middleware
 func (siw *ServerInterfaceWrapper) WatchJob(w http.ResponseWriter, r *http.Request) {
@@ -1441,6 +1466,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/jobs/current/events", wrapper.WatchJob)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/settings", wrapper.GetSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/settings", wrapper.UpdateSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance", wrapper.GetInstance)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/signing-key", wrapper.GetSigningKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/signing-key/regenerate", wrapper.RegenerateSigningKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetTools)
@@ -1452,6 +1478,44 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 }
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type GetInstanceRequestObject struct {
+}
+
+type GetInstanceResponseObject interface {
+	VisitGetInstanceResponse(w http.ResponseWriter) error
+}
+
+type GetInstance200JSONResponse Instance
+
+func (response GetInstance200JSONResponse) VisitGetInstanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetInstancedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetInstancedefaultApplicationProblemPlusJSONResponse) VisitGetInstanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type WatchJobRequestObject struct {
 }
@@ -2481,6 +2545,9 @@ func (response UpdateTrivydefaultApplicationProblemPlusJSONResponse) VisitUpdate
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// GetInstance How this instance was deployed
+	// (GET /instance)
+	GetInstance(ctx context.Context, request GetInstanceRequestObject) (GetInstanceResponseObject, error)
 	// WatchJob Server-sent events of the running job
 	// (GET /jobs/current/events)
 	WatchJob(ctx context.Context, request WatchJobRequestObject) (WatchJobResponseObject, error)
@@ -2595,6 +2662,30 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// GetInstance operation middleware
+func (sh *strictHandler) GetInstance(w http.ResponseWriter, r *http.Request) {
+	var request GetInstanceRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetInstance(ctx, request.(GetInstanceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetInstance")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetInstanceResponseObject); ok {
+		if err := validResponse.VisitGetInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // WatchJob operation middleware
