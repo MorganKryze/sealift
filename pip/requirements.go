@@ -389,7 +389,7 @@ func parseOption(file string, lineNo int, line string, names map[string]bool, pf
 		value, hasValue = strings.TrimPrefix(tok[2:], "="), len(tok) > 2
 		opt = tok[:2]
 	default:
-		probs.add(file, lineNo, line, fmt.Sprintf("option %s is not accepted", opt))
+		probs.add(file, lineNo, line, fmt.Sprintf("option %s is not accepted", cleanText(opt)))
 		return
 	}
 	rest := fields[1:]
@@ -397,11 +397,11 @@ func parseOption(file string, lineNo int, line string, names map[string]bool, pf
 		value, rest = rest[0], rest[1:]
 	}
 	if value == "" {
-		probs.add(file, lineNo, line, fmt.Sprintf("option %s needs a file name", opt))
+		probs.add(file, lineNo, line, fmt.Sprintf("option %s needs a file name", cleanText(opt)))
 		return
 	}
 	if len(rest) > 0 {
-		probs.add(file, lineNo, line, fmt.Sprintf("option %s takes one file name", opt))
+		probs.add(file, lineNo, line, fmt.Sprintf("option %s takes one file name", cleanText(opt)))
 		return
 	}
 	target := strings.TrimPrefix(value, "./")
@@ -411,7 +411,7 @@ func parseOption(file string, lineNo int, line string, names map[string]bool, pf
 	case strings.ContainsAny(target, `/\`):
 		probs.add(file, lineNo, line, "an include names an uploaded file by its plain file name, not a path")
 	case !names[target]:
-		probs.add(file, lineNo, line, fmt.Sprintf("%q is not one of the uploaded files", target))
+		probs.add(file, lineNo, line, fmt.Sprintf("%q is not one of the uploaded files", cleanText(target)))
 	default:
 		pf.includes = append(pf.includes, include{target: target, constraint: constraint, line: lineNo, text: line})
 	}
@@ -468,7 +468,7 @@ func parseRequirement(line string) (Pin, string) {
 		for _, e := range strings.Split(rest[1:end], ",") {
 			e = strings.TrimSpace(e)
 			if !ValidName(e) {
-				return Pin{}, fmt.Sprintf("invalid extra %q", e)
+				return Pin{}, fmt.Sprintf("invalid extra %q", cleanText(e))
 			}
 			if k := Normalize(e); !seen[k] {
 				seen[k] = true
@@ -495,7 +495,7 @@ func parseRequirement(line string) (Pin, string) {
 	case strings.Contains(version, "+"):
 		return Pin{}, "local versions are not accepted"
 	case !IsExactVersion(version):
-		return Pin{}, fmt.Sprintf("%q is not a PEP 440 version", version)
+		return Pin{}, fmt.Sprintf("%q is not a PEP 440 version", cleanText(version))
 	}
 	pin.Version = version
 
@@ -522,7 +522,7 @@ func parseHashes(tokens []string) ([]string, string) {
 		tok := tokens[i]
 		opt, value, hasValue := strings.Cut(tok, "=")
 		if opt != "--hash" {
-			return nil, fmt.Sprintf("option %s is not accepted after a requirement", opt)
+			return nil, fmt.Sprintf("option %s is not accepted after a requirement", cleanText(opt))
 		}
 		if !hasValue {
 			if i+1 >= len(tokens) {
@@ -546,7 +546,8 @@ func parseHashes(tokens []string) ([]string, string) {
 	return hashes, ""
 }
 
-// cleanText makes a requirements line safe to show: no control or format
+// cleanText makes a requirements line, or a fragment of one quoted in a
+// refusal, safe to show: no control or format
 // characters, no URL credentials, at most 200 runes.
 func cleanText(s string) string {
 	s = userinfoRE.ReplaceAllString(s, "$1")

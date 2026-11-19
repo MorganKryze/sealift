@@ -319,3 +319,35 @@ func TestRequirementsIn(t *testing.T) {
 		t.Errorf("empty set gives %q", got)
 	}
 }
+
+func TestParseFilesCleansProblemReason(t *testing.T) {
+	junk := "\x1b[31m" + string(rune(0x202e)) + "evil" + strings.Repeat("Z", 15000)
+	tests := []struct {
+		name string
+		data string
+	}{
+		{"option", "-" + junk + "\n"},
+		{"option after requirement", "x==1.0 --" + junk + "\n"},
+		{"version", "x==" + junk + "\n"},
+		{"extra", "x[" + junk + "]==1.0\n"},
+		{"include target", "-r " + junk + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, probs := ParseFiles(one(tt.data))
+			if len(probs) != 1 {
+				t.Fatalf("problems = %d, want 1", len(probs))
+			}
+			r := probs[0].Reason
+			if strings.ContainsAny(r, "\x1b\u202e") {
+				t.Errorf("reason keeps a control or format character: %q", r)
+			}
+			if len(r) > 400 {
+				t.Errorf("reason is %d bytes, want at most 400", len(r))
+			}
+			if !strings.Contains(r, "evil") {
+				t.Errorf("reason lost the offending text: %q", r)
+			}
+		})
+	}
+}
