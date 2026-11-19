@@ -6,8 +6,8 @@ This page describes the whole of sealift in one read: what it is for, the two si
 
 An air-gapped network installs npm packages from an internal registry, and someone has to fill that registry with versions that are safe to install. sealift rebuilds that chain in two roles of one Go binary:
 
-- The collection role runs on a connected machine. It reads a `package.json`, finds the known CVEs in the packages it pulls in, ranks the newer version of each direct dependency, lets a person review the proposal, and packs the chosen versions into an archive with a manifest and reports.
-- The import role runs on the air-gapped network. It checks an archive against its manifest and publishes its packages to a Nexus repository. It runs as `sealift import`, a command for one archive, or as `sealift import-server`, a service behind a gateway that signs users in. Each user imports from their own MinIO folder.
+- The collection role runs on a connected machine. It reads a `package.json`, finds the known CVEs in the packages it pulls in, ranks the newer version of each direct dependency, lets a person review the proposal, and packs the chosen versions into an archive with a signed manifest and reports.
+- The import role runs on the air-gapped network. It checks the manifest's signature and the archive against the manifest, and publishes its packages to a Nexus repository. It runs as `sealift import`, a command for one archive, or as `sealift import-server`, a service behind a gateway that signs users in. Each user imports from their own MinIO folder.
 
 The image `ghcr.io/morgankryze/sealift` carries both roles. The two sides share the archive format and no network: a person carries the files from one to the other. The collection side handles npm only, and takes a `package.json` whose direct dependencies are pinned to exact versions ([FAQ](faq.md)).
 
@@ -24,7 +24,7 @@ flowchart LR
     db["Trivy database on mirror.gcr.io"]
   end
 
-  usb[["USB crossing: archive and manifest.json"]]
+  usb[["USB crossing: archive, manifest.json and manifest.json.sig"]]
 
   subgraph airgap["Air-gapped side"]
     gw["Gateway"]
@@ -39,7 +39,7 @@ flowchart LR
   sealift -->|"metadata and tarballs"| npm
   sealift -->|"Trivy release"| gh
   sealift -->|"vulnerability database"| db
-  sealift -->|"archive, manifest, reports"| usb
+  sealift -->|"archive, manifest, signature, reports"| usb
   usb -->|"uploaded by the user"| minio
   user -->|"sign in, start an import"| gw
   gw --> proxy
@@ -74,19 +74,19 @@ sequenceDiagram
   Op->>S: confirm a selection
   S->>R: download each selected package and its tree
   Note over S: check each tarball against the registry hash, pack the archive
-  S-->>Op: packages_npm.tar.gz, manifest.json, reports
-  Op->>K: archive and manifest, sha256 noted
-  K->>M: upload both into the user's folder
+  S-->>Op: packages_npm.tar.gz, manifest.json, manifest.json.sig, reports
+  Op->>K: archive, manifest and signature, sha256 noted
+  K->>M: upload all three into the user's folder
   Op->>G: start an import
   G->>I: request with the access token
-  Note over I: check the token, record both ETags, queue the attempt
-  I->>M: read manifest, then archive
-  Note over I: check signature, size, sha256, entries, per-package sha512
+  Note over I: check the token, record the three ETags, queue the attempt
+  I->>M: read manifest and signature, then archive
+  Note over I: check signature, then manifest, size, sha256, entries, per-package sha512
   loop each package, in manifest order
     I->>N: read the version, upload if absent, read it back
   end
   I-->>Op: report per package, through the screens
-  I->>M: compare ETags again, delete archive, then manifest
+  I->>M: compare ETags again, delete archive, manifest, then signature
 ```
 
 The operator checks the archive's sha256 on both sides of the USB key and can pass the value to the import as `expectedSha256`. [The air gap](air-gap.md) covers that routine.
@@ -111,14 +111,14 @@ The analysis is nine steps and the export five, each with an id that the events 
 
 `sealift import` runs the checks and the publishing for one archive on local files and prints a report. `sealift import-server` wraps the same run in a queue, a record per import and a MinIO source. The steps of one attempt in the service are:
 
-1. Start. `POST /api/imports` checks the token, takes the user from its `preferred_username` claim, checks that the key names an importable archive in the user's folder and lists the folder. It records the ETags and sizes of the archive and its manifest. It answers 409 when the same objects already have an import that is queued, running, incomplete or interrupted.
+1. Start. `POST /api/imports` checks the token, takes the user from its `preferred_username` claim, checks that the key names an importable archive in the user's folder and lists the folder. An archive is importable only with its `manifest.json` and `manifest.json.sig` beside it. It records the ETags and sizes of the archive, its manifest and its signature. It answers 409 when the same objects already have an import that is queued, running, incomplete or interrupted.
 2. Queue. Imports run one at a time across all users, in the order they started. The queue marks the attempt running and makes a working directory for it.
-3. Compare ETags. The attempt heads both objects and compares them with the recorded ETags. A changed object ends the attempt refused, and a missing one ends it incomplete.
-4. Read the manifest. The service reads `manifest.json` from MinIO and validates it. Every package is then listed as pending.
-5. Check the archive. The service reads the archive once from MinIO and checks the manifest's signature against the trusted public key, then the archive against the manifest ([Archive format](dev/archive-format.md#what-sealift-import-checks)). A failed check ends the attempt refused and publishes nothing.
+3. Compare ETags. The attempt heads the three objects and compares them with the recorded ETags. A changed object ends the attempt refused, and a missing one ends it incomplete.
+4. Check the signature. The service reads `manifest.json` and `manifest.json.sig` from MinIO and checks the signature against the trusted public key. Only then does it parse and validate the manifest, so no unauthenticated JSON is parsed. Every package is then listed as pending.
+5. Check the archive. The service reads the archive once from MinIO and checks it against the manifest ([Archive format](dev/archive-format.md#what-sealift-import-checks)). A failed check ends the attempt refused and publishes nothing.
 6. Publish. For each package, in manifest order, the run inspects the tarball and reads the version from Nexus. A version with the same bytes is `present`. A version with other bytes is a `conflict` and is never overwritten. A missing version is uploaded and read back, and it is `published` only when the read-back digest matches. The state of each package is stored as soon as it ends.
 7. End. The attempt's outcome and report are stored. The outcome is `complete` when every package is published or present, and `incomplete` when one failed.
-8. Remove. After a `complete` end, the service heads both objects again, and deletes the archive and then its manifest only if each still carries the recorded ETag. The result is stored as the attempt's removal.
+8. Remove. After a `complete` end, the service heads the three objects again, and deletes the archive, then its manifest, then its signature, only if each still carries the recorded ETag. The result is stored as the attempt's removal.
 9. Retry. `POST /api/imports/{importId}/retry` adds an attempt. It repeats every step above, reads every package from Nexus again and uploads only what Nexus lacks.
 
 ```mermaid
@@ -218,13 +218,13 @@ The connected side runs as one container with one volume, bound to a loopback ad
 | Proposal | The candidate sealift suggests for a dependency |
 | Selection | The versions a person confirms in the review. The export packs them |
 | Export | The five-step job that builds the archive and its reports from a selection |
-| Crossing | The trip of an archive and its manifest from the connected side to the air-gapped side, with the sha256 checks on each end |
+| Crossing | The trip of an archive, its manifest and its signature from the connected side to the air-gapped side, with the sha256 checks on each end |
 | Import | The record of one archive in the import service, with its attempts. Also the act of publishing an archive's packages to Nexus |
 | Attempt | One try at an import. A retry adds a new one |
 | Outcome | `complete`, `incomplete`, `refused` or `interrupted`, the end of an attempt |
 | Kind | Why a package failed: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local` |
-| User folder | `packages/npm/` in the MinIO bucket `user-<name>`, where a user's archives and manifests sit |
-| Removal | The deletion of the archive and its manifest from MinIO after a complete import, guarded by their ETags |
+| User folder | `packages/npm/` in the MinIO bucket `user-<name>`, where a user's archives, manifests and signatures sit |
+| Removal | The deletion of the archive, its manifest and its signature from MinIO after a complete import, guarded by their ETags |
 
 ## Where to read next
 
