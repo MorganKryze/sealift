@@ -52,12 +52,12 @@ function renderEnd(imp: Import) {
 }
 
 describe("EndState", () => {
-  it("complete, removed: says every package is in Nexus, both objects went after their ETag check, and shows both ETags", async () => {
+  it("complete, removed: says every package is in Nexus, the three objects went after their ETag check, and shows their ETags", async () => {
     const a = attempt("complete", [...many(94, "published"), ...many(7, "present")], { removal: { removed: true, reason: "" } })
     renderEnd(make(a, { archiveRemoved: true }))
     expect(await screen.findByRole("heading", { name: "Archive removed from MinIO" })).toBeInTheDocument()
     expect(screen.getByText(/All 101 packages are in Nexus: 94 published, 7 present\./)).toBeInTheDocument()
-    expect(screen.getByText(/removed both objects from your folder, after checking that each still carried the ETag it read/)).toBeInTheDocument()
+    expect(screen.getByText("sealift removed the archive, the manifest and the signature from your folder, after checking that each still carried the ETag it read at the start.")).toBeInTheDocument()
     expect(screen.getByText(ARCHIVE_ETAG)).toBeInTheDocument()
     expect(screen.getByText(MANIFEST_ETAG)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Copy archive ETag" })).toBeInTheDocument()
@@ -75,6 +75,8 @@ describe("EndState", () => {
     expect(await screen.findByRole("heading", { name: "Archive removed from MinIO" })).toBeInTheDocument()
     expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["Archive ETag", "Manifest ETag"])
     expect(screen.queryByText("Signature ETag")).toBeNull()
+    expect(screen.getByText("sealift removed the archive and the manifest from your folder, after checking that each still carried the ETag it read at the start.")).toBeInTheDocument()
+    expect(document.body.textContent ?? "").not.toMatch(/signature/i)
   })
 
   it("complete, removed: shows the reason when the manifest could not be removed", async () => {
@@ -82,8 +84,18 @@ describe("EndState", () => {
     const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason } })
     renderEnd(make(a, { archiveRemoved: true }))
     expect(await screen.findByText(reason)).toBeInTheDocument()
-    expect(screen.queryByText(/removed both objects/)).toBeNull()
-    expect(screen.getByRole("heading", { name: "Archive removed from MinIO, manifest kept" })).toBeInTheDocument()
+    expect(screen.queryByText(/sealift removed the archive/)).toBeNull()
+    expect(screen.getByRole("heading", { name: "Archive removed from MinIO, its manifest or signature kept" })).toBeInTheDocument()
+  })
+
+  it("complete, removed: the title does not say the manifest stayed when only the signature did", async () => {
+    const reason = "the archive and the manifest were removed, but manifest.json.sig could not be and stays in the folder: access denied"
+    const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason } })
+    renderEnd(make(a, { archiveRemoved: true }))
+    expect(await screen.findByText(reason)).toBeInTheDocument()
+    const title = screen.getByRole("heading", { level: 2 }).textContent ?? ""
+    expect(title).toBe("Archive removed from MinIO, its manifest or signature kept")
+    expect(title).not.toBe("Archive removed from MinIO, manifest kept")
   })
 
   it("complete, kept: says the archive stays, gives the recorded reason and offers Retry with what it does", async () => {
@@ -93,7 +105,7 @@ describe("EndState", () => {
     expect(await screen.findByRole("heading", { name: "Archive kept in MinIO" })).toBeInTheDocument()
     expect(screen.getByText(/All 60 packages are in Nexus/)).toBeInTheDocument()
     expect(screen.getByText(reason)).toBeInTheDocument()
-    expect(screen.getByText(/it checks every package again and removes the archive only if both objects still carry the ETags this import read/)).toBeInTheDocument()
+    expect(screen.getByText(/it checks every package again and removes the archive only if the archive, the manifest and the signature still carry the ETags this import read/)).toBeInTheDocument()
     expect(screen.getByText(/An archive replaced since is refused/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Retry import" })).toBeInTheDocument()
   })

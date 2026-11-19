@@ -817,3 +817,34 @@ func TestAnalysis_CancelledRunLeavesDirectory(t *testing.T) {
 		t.Fatalf("status.State = %q, want %q", status.State, store.Cancelled)
 	}
 }
+
+// TestLogStripsURLCredentials proves the job log, both log.txt and the
+// emitted "log" event, drops the user and password of a URL while keeping
+// its host and path.
+func TestLogStripsURLCredentials(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "log.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var events []Event
+	r := &run{logFile: f, emit: func(e Event) { events = append(events, e) }}
+
+	r.log("pnpm: fetch http://alice:s3cr3t@10.0.0.1:4873/x failed")
+
+	written, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	for name, got := range map[string]string{"log.txt": string(written), "event": string(events[0].Data)} {
+		if strings.Contains(got, "alice") || strings.Contains(got, "s3cr3t") {
+			t.Errorf("%s = %q, still holds the credentials", name, got)
+		}
+		if !strings.Contains(got, "://10.0.0.1:4873/x") {
+			t.Errorf("%s = %q, lost the host or path", name, got)
+		}
+	}
+}

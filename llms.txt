@@ -8,6 +8,7 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 
 ## Docs
 
+- [Overview](docs/overview.md): the two roles, context and crossing diagrams, the collection and import pipelines, what each check proves, the /data layout, a glossary
 - [Getting started](docs/getting-started.md): docker run, the setup screen, a first archive from a five-dependency project
 - [Workflow](docs/workflow.md): each screen of a session with every button label
 - [How sealift chooses](docs/how-sealift-chooses.md): CVE vectors by severity, tie-breaks, the eight signals, the minimum release age, the review groups
@@ -21,6 +22,7 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 ## Developers
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): requirements, layout, local stack, checks, commit style, releases
+- [Contributor guide](docs/dev/contributing.md): repository map, package dependency diagram, tests and the browser gate, CI checks, how a change is made, design choices to keep, where to add a route, screen, setting or import check
 - [Architecture](docs/dev/architecture.md): API, service, queue, the nine analysis steps, the export steps, the /data layout
 - [Ranking](docs/dev/ranking.md): rank.Signals, rank.Best, rank.KeyVersions, where the analysis calls them, tests
 - [API](docs/dev/api.md): every route, error statuses, the server-sent event stream

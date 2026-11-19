@@ -90,7 +90,7 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
 
    - Records kept in the `import-data` volume by 0.4.0 read with `Not recorded` and the general next action.
    - Archives lists the lab archives, with a row that cannot be imported for a folder holding two archives and one for a folder without a manifest, and a started import's row links to it.
-   - A start with a wrong expected sha256 ends `Refused` with both digests; starting again with the right one runs, and ends `Complete` with the archive removed and both ETags shown.
+   - A start with a wrong expected sha256 ends `Refused` with both digests; starting again with the right one runs, and ends `Complete` with the archive removed and the three ETags shown.
    - A planted conflict ends `Incomplete`, names the package and Nexus's reason, and says what to change before a retry. After the version is deleted in Nexus, the retry completes.
    - `docker compose pause nexus` during an import, then `docker compose restart import-server`, shows `Interrupted`. After `docker compose unpause nexus`, the retry completes.
    - Deleting the `_oauth2_proxy` cookie and pressing `Refresh` shows `Your session has ended`.

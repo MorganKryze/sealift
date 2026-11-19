@@ -72,3 +72,24 @@ func TestParseLockfileRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLockfileRejectsUnsafeKey(t *testing.T) {
+	for _, key := range []string{
+		"a@1.0.0/../../x",
+		"a@../../x",
+		"a@1.0.0/x",
+		"../a@1.0.0",
+		"@s/../a@1.0.0",
+		"a/b@1.0.0",
+		"a@^1.0.0",
+		"a@https://example.com/a.tgz",
+	} {
+		doc := "lockfileVersion: '9.0'\npackages:\n  '" + key + "':\n    resolution: {integrity: sha512-AA==}\n"
+		_, err := ParseLockfile(strings.NewReader(doc))
+		if err == nil {
+			t.Errorf("%s: ParseLockfile returned no error", key)
+		} else if !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: error %q does not name the key", key, err)
+		}
+	}
+}

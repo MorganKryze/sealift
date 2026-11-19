@@ -165,6 +165,11 @@ const pnpmFailureLimit = 300
 // as configured.
 var urlCredentials = regexp.MustCompile(`://[^/\s]*@`)
 
+// StripURLCredentials drops the user and password of every URL in s.
+func StripURLCredentials(s string) string {
+	return urlCredentials.ReplaceAllString(s, "://")
+}
+
 // pnpmFailure picks the sentence that explains a failed install out of
 // pnpm's output. pnpm 10 prints it on its ERR_PNPM_ line. Later versions
 // print the code alone, then a cause chain whose last link is the root
@@ -207,7 +212,7 @@ func pnpmFailure(output string) string {
 // cleanFailure readies pnpm's text for the screen and the API: no URL
 // credentials, no control or format characters, a bounded length.
 func cleanFailure(s string) string {
-	s = urlCredentials.ReplaceAllString(s, "://")
+	s = StripURLCredentials(s)
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1

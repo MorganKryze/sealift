@@ -14,6 +14,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - `sealift import-server` serves its own screens: Archives at `/`, Imports at `/imports` and an import at `/imports/<id>`, with the header and the Settings sheet. The files need no token, every other path outside `/api` and `/healthz` answers 404, and every answer carries a Content-Security-Policy and framing headers.
 - The import screens show the trusted public key sha256 in Settings and on each import, and the signature's ETag beside the archive's and the manifest's.
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
+- `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
 
 ### Changed
 
@@ -27,8 +28,14 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - The signature key setting: the Settings section and the setup field are gone, and an export no longer needs a key typed in. A `settings.json` from 0.4 loses its `signatureKey` on the first start.
 
+### Fixed
+
+- An analysis that a restart interrupts now stays listed as interrupted instead of disappearing.
+
 ### Security
 
+- The analysis log no longer shows the user and password of a URL that pnpm prints.
+- An analysis refuses a pnpm lockfile whose package names or versions are not safe to use in a path.
 - An archive is no longer trusted for carrying a key of its own: the import side checks the manifest against the public key it was given, so a copy of the archive that someone altered on the way is refused.
 
 ## [0.4.0] - 2026-11-06

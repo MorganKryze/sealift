@@ -145,7 +145,7 @@ export function SigningKeySection() {
             className="rounded-lg border border-severity-critical/40 bg-severity-critical/5 p-3.5 text-sm"
           >
             <p className="font-medium text-ink">Regenerate the signing key?</p>
-            <p className="mt-1 text-muted">
+            <p className="mt-1 text-ink">
               The import side refuses every new archive until it holds the new public key. Archives you already exported stay signed with the current key,
               which the import refuses once it trusts the new one.
             </p>

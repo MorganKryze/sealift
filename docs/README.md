@@ -4,6 +4,7 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 
 ## First steps
 
+- [Overview](overview.md): what sealift is, the two sides, one crossing end to end, the checks and the state on disk.
 - [Getting started](getting-started.md): from nothing to a first archive in ten minutes.
 - [Workflow](workflow.md): each screen of a session, and every button on it.
 
@@ -26,6 +27,7 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 ## Developing
 
 - [Contributing](../CONTRIBUTING.md): the local stack, the checks, commits and releases.
+- [Contributor guide](dev/contributing.md): the repository map, tests, CI, how a change is made, the design choices to keep, where to add things.
 - [Architecture](dev/architecture.md): the API, the job queue, the analysis and export steps, the data volume.
 - [Ranking](dev/ranking.md): signals, the choice of a candidate, and the tests to extend.
 - [API](dev/api.md): every route, its errors, and the event stream.
