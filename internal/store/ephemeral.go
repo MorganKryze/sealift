@@ -198,6 +198,8 @@ func (s *Store) SweepEphemeral(idle time.Duration, now time.Time) Sweep {
 		switch err := s.DeleteProject(p.Name()); {
 		case err == nil:
 			r.Deleted++
+		case errors.Is(err, ErrNotFound):
+			// Deleted by hand during this pass.
 		case errors.Is(err, ErrBusy):
 			remaining++
 		default:

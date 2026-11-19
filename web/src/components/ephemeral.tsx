@@ -52,9 +52,9 @@ export function EraseProject({ projectId, onErased }: EraseProjectProps) {
       onErased()
     },
     onError: (error) => {
-      // A 409 (a job runs) or a 404 left the project as it was. Any other
-      // failure came after the delete itself, so the selection goes too.
-      if (!(error instanceof ProblemError) || (error.status !== 409 && error.status !== 404)) clearTabStorage()
+      // Only a 409 (a job runs) left the project as it was. A 404 means the
+      // sweep erased it already; any other failure came after the delete.
+      if (!(error instanceof ProblemError) || error.status !== 409) clearTabStorage()
     },
   })
   const failure = erase.error instanceof ProblemError ? erase.error : null
