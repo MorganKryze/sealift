@@ -18,6 +18,15 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - `GET /api/me` on the import service also names the user's `bucket` and `folder`.
 - `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
 
+### Fixed
+
+- An analysis that a restart interrupts now stays listed as interrupted instead of disappearing.
+
+### Security
+
+- The analysis log no longer shows the user and password of a URL that pnpm prints.
+- An analysis refuses a pnpm lockfile whose package names or versions are not safe to use in a path.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added
