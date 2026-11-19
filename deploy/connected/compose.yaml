@@ -1,0 +1,31 @@
+# The collection side, on a host that reaches the internet.
+# Bound to 127.0.0.1: sealift has no login. Publish it through a reverse
+# proxy that authenticates, or an SSH tunnel.
+name: sealift
+
+services:
+  sealift:
+    image: ${SEALIFT_IMAGE:-ghcr.io/morgankryze/sealift:0.6.0}
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${SEALIFT_PORT:-8080}:8080
+    volumes:
+      - sealift-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    # pnpm and Trivy run as a second user, which needs SETUID and SETGID.
+    # KILL stops a cancelled job. Do not add no-new-privileges: it blocks
+    # that switch and every analysis fails.
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - KILL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+
+volumes:
+  sealift-data: {}

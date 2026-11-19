@@ -1,0 +1,15 @@
+# Registers the Harbor chart repository in Argo CD. Apply it to the argocd
+# namespace. It holds no credential: add the credential to this Secret in
+# the cluster, never in this file. The url has no oci:// prefix.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sealift-charts
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+stringData:
+  name: sealift-charts
+  type: helm
+  enableOCI: "true"
+  url: <harbor-host>/<harbor-project>/charts
