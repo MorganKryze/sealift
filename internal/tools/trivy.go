@@ -251,6 +251,11 @@ func (m *Manager) ActivateTrivy(version string) error {
 // activateTrivyLocked is ActivateTrivy's body, called both directly and
 // from inside UpdateTrivy, which already holds mu.
 func (m *Manager) activateTrivyLocked(version string) error {
+	// The version names a directory and the link's target, so anything but
+	// a release number could point the active Trivy anywhere.
+	if !releaseNumber.MatchString(version) {
+		return ErrInvalidTrivyVersion
+	}
 	dir := filepath.Join(m.vol.Root(), "tools", "trivy", version)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("trivy %s is not installed: %w", version, err)
