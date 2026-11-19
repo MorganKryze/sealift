@@ -698,6 +698,31 @@ func TestChartIngress(t *testing.T) {
 			t.Errorf("settings = %q, want the same header", got)
 		}
 	})
+	t.Run("user annotations cannot replace the sign-in ones", func(t *testing.T) {
+		values := writeValues(t, "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/auth-url: \"\"\n    nginx.ingress.kubernetes.io/auth-signin: https://evil.example/start\n    nginx.ingress.kubernetes.io/auth-response-headers: X-Other\n    nginx.ingress.kubernetes.io/proxy-body-size: 8m\n")
+		out, err := run(t, append([]string{"template", "rel", chartDir, "-f", testValues, "-f", values, "--show-only", "templates/ingress.yaml"}, ingressValues...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"auth-url", "auth-signin", "auth-response-headers"} {
+			if n := strings.Count(out, "nginx.ingress.kubernetes.io/"+key+":"); n != 1 {
+				t.Errorf("%s appears %d times, want 1:\n%s", key, n, out)
+			}
+		}
+		if !strings.Contains(out, "proxy-body-size") {
+			t.Errorf("other user annotations were dropped:\n%s", out)
+		}
+	})
+	t.Run("only sign-in annotations in the user map leave a valid Ingress", func(t *testing.T) {
+		values := writeValues(t, "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/auth-url: x\n")
+		docs, err := render(t, append([]string{"-f", values}, ingressValues...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := at(find(t, docs, "Ingress", ""), "metadata", "annotations", "nginx.ingress.kubernetes.io/auth-url"); got != "https://auth.example.internal/oauth2/auth" {
+			t.Errorf("auth-url = %v", got)
+		}
+	})
 	for _, key := range []string{"ingress.auth.url", "ingress.auth.signin", "ingress.host"} {
 		t.Run(key+" empty is refused", func(t *testing.T) {
 			_, err := render(t, append(ingressValues, "--set", key+"=")...)

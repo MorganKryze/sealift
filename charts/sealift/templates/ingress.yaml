@@ -10,7 +10,7 @@ metadata:
   labels:
     {{- include "sealift.labels" . | nindent 4 }}
   annotations:
-    {{- with .Values.ingress.annotations }}
+    {{- with omit .Values.ingress.annotations "nginx.ingress.kubernetes.io/auth-url" "nginx.ingress.kubernetes.io/auth-signin" "nginx.ingress.kubernetes.io/auth-response-headers" }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
     nginx.ingress.kubernetes.io/auth-url: {{ $authURL | quote }}
