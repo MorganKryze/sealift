@@ -345,6 +345,40 @@ func TestChartRefusesUnfilledValues(t *testing.T) {
 	})
 }
 
+func TestChartRequiresHTTPSForKeycloak(t *testing.T) {
+	for _, key := range []string{"keycloak.realmUrl", "keycloak.keySetUrl"} {
+		t.Run(key+" over http is refused", func(t *testing.T) {
+			_, err := render(t, "--set", key+"=http://sso.example.internal/realms/example")
+			want := key + " must be an https address"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want %q", err, want)
+			}
+		})
+	}
+	t.Run("a mixed-case scheme is refused too", func(t *testing.T) {
+		_, err := render(t, "--set", "keycloak.keySetUrl=HTTP://sso.example.internal/certs")
+		if err == nil || !strings.Contains(err.Error(), "keycloak.keySetUrl must be an https address") {
+			t.Errorf("err = %v, want the https refusal", err)
+		}
+	})
+	t.Run("https renders", func(t *testing.T) {
+		mustRender(t, "--set", "keycloak.keySetUrl=https://sso.example.internal/certs")
+	})
+	t.Run("the notes warn about an http Nexus or MinIO and still render", func(t *testing.T) {
+		notes := installNotes(t, "--set", "nexus.url=http://nexus.example.internal", "--set", "minio.url=http://minio.example.internal")
+		for _, want := range []string{"nexus.url uses http", "minio.url uses http", "https is expected"} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("notes lack %q:\n%s", want, notes)
+			}
+		}
+	})
+	t.Run("the notes stay quiet with https", func(t *testing.T) {
+		if notes := installNotes(t); strings.Contains(notes, "uses http") {
+			t.Errorf("notes warn with https addresses:\n%s", notes)
+		}
+	})
+}
+
 // TestChartRefusesPlaceholdersInEveryValue leaves one runbook placeholder in
 // each value the chart renders without a check of its own.
 func TestChartRefusesPlaceholdersInEveryValue(t *testing.T) {
@@ -628,9 +662,9 @@ func TestChartSettingsLoad(t *testing.T) {
 			"https://sso.example.internal/realms/example/protocol/openid-connect/certs",
 			"sealift-import", "X-Auth-Request-Access-Token"},
 		{"explicit issuer, audience and key set",
-			[]string{"--set", "keycloak.issuer=https://public.example.internal/realms/example", "--set", "keycloak.audience=other", "--set", "keycloak.keySetUrl=http://keycloak.example.internal/certs"},
+			[]string{"--set", "keycloak.issuer=https://public.example.internal/realms/example", "--set", "keycloak.audience=other", "--set", "keycloak.keySetUrl=https://keycloak.example.internal/certs"},
 			"https://public.example.internal/realms/example",
-			"http://keycloak.example.internal/certs",
+			"https://keycloak.example.internal/certs",
 			"other", "X-Auth-Request-Access-Token"},
 		{"another header", []string{"--set", "token.header=x-other-token"},
 			"https://sso.example.internal/realms/example",

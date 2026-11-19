@@ -9,6 +9,12 @@ Public key: open the service's Settings sheet and compare the Trusted key sha256
 {{- if not .Values.publicKey.existingConfigMap }}
 The key given in the values has the sha256 {{ include "sealift.publicKeySHA256" . }}.
 {{- end }}
+{{- range $key, $v := dict "nexus.url" .Values.nexus.url "minio.url" .Values.minio.url }}
+{{- if hasPrefix "http://" (lower (toString $v)) }}
+
+Warning: {{ $key }} uses http. The service sends its credentials to that address, and https is expected.
+{{- end }}
+{{- end }}
 {{- if not .Values.persistence.enabled }}
 
 Warning: persistence is off. /data lives in an emptyDir. The import records, and an import that is running, are lost when the pod is replaced.
