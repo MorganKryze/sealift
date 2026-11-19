@@ -59,7 +59,7 @@ Each value below is found once and used in every place the table names. The char
 
 No value of the chart holds a credential. The three Secret keys are created by hand in [the Secret](#the-secret). The values repository is public to everyone who reads the cluster's Git, so it holds addresses, the public key and the CA certificate, which are public on the air-gapped network, and nothing else.
 
-Whoever can write to that repository can change what the service trusts and where it sends its credentials. Restrict writes to a few people, and let changes reach `main` only through a review. Six keys need a second look at every sync, since each one moves trust: `publicKey`, `ca`, `keycloak.*`, `token.header`, `nexus.url` and `minio.url`. After any change to `publicKey`, redo step 7 of [the checklist](#the-checklist) and compare the fingerprint again.
+Whoever can write to that repository can change what the service trusts and where it sends its credentials. Restrict writes to a few people, and let changes reach `main` only through a review. These keys need a second look at every sync, since each one moves trust or reach: `publicKey`, `ca`, `keycloak.*`, `token.header`, `nexus.url`, `minio.url`, `image.*`, `ingress.annotations` and `networkPolicy.*`. After any change to `publicKey`, redo step 7 of [the checklist](#the-checklist) and compare the fingerprint again.
 
 The Keycloak, Nexus and MinIO addresses are `https://` URLs. The chart refuses `http://` for `keycloak.realmUrl` and `keycloak.keySetUrl` and names the key. It accepts `http://` for `nexus.url` and `minio.url`, so only you keep them on https: over `http://` the Nexus password and every archive cross the network in the clear.
 
@@ -159,7 +159,7 @@ The tgz holds `files/published.mjs`, the script of [the rollback list](#the-roll
 
 ## The Secret
 
-The chart never creates a Secret. Create it in the namespace by hand, from three files that hold one value each and that you delete afterwards, so no value reaches your shell history or a log. In bash, `read -rs` prompts for a value without echoing it. Write each file readable by you alone:
+The chart never creates a Secret. Create it in the namespace by hand, from three files that hold one value each and that you delete afterwards, so no value reaches your shell history or a log. Run these lines in bash (`read -rs -p` behaves differently in zsh and would write an empty file there); `read -rs` prompts for a value without echoing it. Write each file readable by you alone:
 
 <!-- illustrative -->
 ```sh
@@ -393,7 +393,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
 | 7. The trusted key | The Settings sheet's `Public key sha256` equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
-| 8. The network policy | Run the command under this table from a pod in another namespace. The pod starts and prints a line that begins `blocked: TimeoutError`. No other line passes | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
+| 8. The network policy | First run the command under this table with `-n <ingress-namespace>`: it must print `reached 200`, which proves the address and the port. Then run it from a pod in another namespace: the pod starts and prints a line that begins `blocked: TimeoutError`. No other line passes, and a timeout without the first run proves nothing (a wrong port also times out) | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
 | | | `blocked: TypeError ENOTFOUND` | The address is wrong: the name `sealift.<namespace>.svc` did not resolve. The check proved nothing. Correct `<namespace>` and run it again |
 | | | `blocked: TypeError ECONNREFUSED` | A host answered with a refusal, so no packet was dropped. Run `kubectl -n <namespace> get endpoints sealift`: with no address, the service has no ready pod and the check proved nothing. With an address, the policy does not drop the traffic: ask the administrators whether the plugin enforces NetworkPolicy and how it treats a denied connection |
 | | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
@@ -577,13 +577,13 @@ The output has three parts:
 | `Possibly published, check each in Nexus first:` | Each package that may have landed, followed by one line for every attempt that touched it, in the form `attempt <n>: state=<state> kind=<kind> reason=<reason> started=<time> ended=<time>`, with `-` for a value the record does not hold |
 | `Never uploaded, nothing to remove:` | Each package whose every attempt failed before any upload: the reason starts with `repository check failed:`, or the kind is `conflict`, `mismatch` or `source` |
 
-An import that ended `Complete` has the first part only. A line `<path> is not an import record` on stderr, or a usage line, means the path is wrong and nothing was listed.
+The script prints all three headings every time; a heading with nothing under it is empty. An import that ended `Complete` can still list a package under `Possibly published` when one of its attempts failed it before a later attempt found it present. A line `<path> is not an import record` on stderr, or a usage line, means the path is wrong and nothing was listed.
 
 Steps for the administrator:
 
 1. For each package under `Published by this import:`, decide whether it must go, and read its asset in Nexus as step 2 says before you delete it: another tool can have replaced the version since. Deleting a version breaks any project that installed it.
 2. For each package under `Possibly published`, check in Nexus before you delete anything. Such a package may be one that Package Pusher published. Open the component in Nexus under **Browse** and read its asset. Both must hold: the uploader is the sealift publisher user, and the upload time falls between the start and the end of one of the attempt lines listed for that package. When either fails, leave the component.
-3. Leave every package of the third part. Its attempts never reached an upload, so a version Nexus holds under that name was never sealift's. Delete nothing there.
+3. Leave every package of the third part. Its attempts never reached an upload, so a version Nexus holds under that name was never this import's. Delete nothing there.
 4. Before you delete a version, list the other imports whose records name the package:
 
    <!-- illustrative -->
@@ -591,7 +591,7 @@ Steps for the administrator:
    kubectl -n <namespace> exec deploy/sealift -- grep -rl '"name": "<name>"' /data/imports
    ```
 
-   Each path is an import that carries that package, possibly at that version. Their users lose the version when you delete it, and those imports do not restore it: ask them for a fresh export that carries it, imported again.
+   Each path is an import that carries that package, possibly at that version, this import included. Any of them that did not end `Complete` publishes the version again on its next retry, or on a new start of its archive, because an upload sends every version Nexus lacks. So, for a version you remove because it is bad: before you delete it, have each such archive removed from its user's MinIO folder, or tell its users not to retry or start it again. An import that ended `Complete` has no archive left to publish from; its users need a fresh export, imported again, if they still need a good version.
 5. In Nexus, open **Browse**, select the repository, find the component, select **Delete component**, and confirm. The same is available through the REST API as `DELETE /service/rest/v1/components/<component-id>` for a user with the delete privilege.
 6. Record what you deleted.
 
