@@ -358,7 +358,7 @@ func TestParsePublicKeyPEM(t *testing.T) {
 func TestUnsigned(t *testing.T) {
 	got := Unsigned("manifest.json.sig")
 	want := "the archive is unsigned: manifest.json.sig is missing beside the manifest. " +
-		"Export it again with sealift 0.5.0 or later and carry the archive, manifest.json and manifest.json.sig together"
+		"Export it again with sealift 0.6.0 or later and carry the archive, manifest.json and manifest.json.sig together"
 	assertRefusal(t, got, want)
 	if got.Reason != want {
 		t.Errorf("reason = %q, want %q", got.Reason, want)

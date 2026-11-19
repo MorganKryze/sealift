@@ -95,7 +95,7 @@ func CheckSignature(manifest, sigFile []byte, trusted ed25519.PublicKey) error {
 // name is the file's name as the caller looked for it.
 func Unsigned(name string) *Refusal {
 	return refuse("the archive is unsigned: %s is missing beside the manifest. "+
-		"Export it again with sealift 0.5.0 or later and carry the archive, manifest.json and manifest.json.sig together", name)
+		"Export it again with sealift 0.6.0 or later and carry the archive, manifest.json and manifest.json.sig together", name)
 }
 
 func unreadable(problem string, args ...any) *Refusal {
