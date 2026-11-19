@@ -236,7 +236,7 @@ The chart's Ingress carries three annotations from the values: `auth-url`, `auth
 
 What the lab proved: the oauth2-proxy settings below, which ran in `lab/compose.yaml`, and the path of the header, which ran at commit 4ca9743 with the service reading `X-Auth-Request-Access-Token` behind the lab's nginx. In that run, a request through the gateway with a forged value in both `X-Auth-Request-Access-Token` and `X-Access-Token` answered for the signed-in user, and a request straight to the service with no token answered 401 with the check `absent`.
 
-What the lab did not prove: every ingress-nginx annotation below. They come from ingress-nginx's documentation. cairn's pages give the Ingress's shape and no sign-in. Friday's install is their first run.
+What the lab did not prove: every ingress-nginx annotation below. They come from ingress-nginx's documentation. The first install on the cluster is their first run, and the checklist is their test.
 
 ### Annotations on the import's Ingress
 
