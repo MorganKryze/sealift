@@ -402,6 +402,15 @@ func TestChartRefusesPlaceholdersInEveryValue(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an address between angle brackets is not a placeholder", func(t *testing.T) {
+		mustRender(t, "-f", writeValues(t, "ingress:\n  annotations:\n    example.com/owner: Ops <ops@example.internal>\n"))
+	})
+	t.Run("a name between angle brackets is", func(t *testing.T) {
+		_, err := render(t, "-f", writeValues(t, "ingress:\n  annotations:\n    example.com/owner: Ops <ops-team>\n"))
+		if err == nil || !strings.Contains(err.Error(), "ingress.annotations.example.com/owner still holds its placeholder <ops-team>") {
+			t.Errorf("err = %v, want a refusal naming <ops-team>", err)
+		}
+	})
 	t.Run("a value with no placeholder renders", func(t *testing.T) {
 		mustRender(t, "-f", writeValues(t, "imagePullSecrets:\n  - name: harbor-pull\nca:\n  pem: |\n    "+strings.ReplaceAll(strings.TrimSpace(testCA), "\n", "\n    ")+"\n"))
 	})

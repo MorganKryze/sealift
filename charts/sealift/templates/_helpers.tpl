@@ -6,8 +6,8 @@
 {{- fail (printf "%s is required" $key) -}}
 {{- end -}}
 {{- $s := toString $v -}}
-{{- if regexMatch "<[^<>]+>" $s -}}
-{{- fail (printf "%s still holds its placeholder %s" $key (regexFind "<[^<>]+>" $s)) -}}
+{{- if regexMatch "<[a-zA-Z0-9-]+>" $s -}}
+{{- fail (printf "%s still holds its placeholder %s" $key (regexFind "<[a-zA-Z0-9-]+>" $s)) -}}
 {{- end -}}
 {{- $s -}}
 {{- end -}}
@@ -75,8 +75,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "sealift.scan" (list (printf "%s[%d]" $path $i) $x) -}}
 {{- end -}}
 {{- else if eq $kind "string" -}}
-{{- if regexMatch "<[^<>]+>" $v -}}
-{{- fail (printf "%s still holds its placeholder %s" $path (regexFind "<[^<>]+>" $v)) -}}
+{{- if regexMatch "<[a-zA-Z0-9-]+>" $v -}}
+{{- fail (printf "%s still holds its placeholder %s" $path (regexFind "<[a-zA-Z0-9-]+>" $v)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
