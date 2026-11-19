@@ -74,6 +74,13 @@ type Store struct {
 
 	// ephemeral draws project ids that do not derive from the name.
 	ephemeral bool
+
+	// purgeMu makes a purge and the creation of a job directory exclusive,
+	// so a job either exists before the purge checks for one or starts
+	// after the caches are gone. purgePending, guarded by it, records a
+	// purge that a job in flight put off.
+	purgeMu      sync.RWMutex
+	purgePending bool
 }
 
 // Open creates the data volume layout under root when it is missing, then

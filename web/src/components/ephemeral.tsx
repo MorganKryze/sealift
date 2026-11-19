@@ -32,6 +32,15 @@ interface EraseProjectProps {
   onErased: () => void
 }
 
+/** The tab keeps the version selection in sessionStorage, package names included. */
+function clearTabStorage() {
+  try {
+    sessionStorage.clear()
+  } catch {
+    // Storage disabled: there is nothing in it to clear.
+  }
+}
+
 /** The archive screen's erase control, on an ephemeral instance only. */
 export function EraseProject({ projectId, onErased }: EraseProjectProps) {
   const { data } = useInstance()
@@ -39,14 +48,13 @@ export function EraseProject({ projectId, onErased }: EraseProjectProps) {
   const erase = useMutation({
     mutationFn: () => deleteProject(projectId),
     onSuccess: () => {
-      // The tab keeps the version selection in sessionStorage, package names
-      // included: nothing of the project may outlive the erase here either.
-      try {
-        sessionStorage.clear()
-      } catch {
-        // Storage disabled: there is nothing in it to clear.
-      }
+      clearTabStorage()
       onErased()
+    },
+    onError: (error) => {
+      // A 409 (a job runs) or a 404 left the project as it was. Any other
+      // failure came after the delete itself, so the selection goes too.
+      if (!(error instanceof ProblemError) || (error.status !== 409 && error.status !== 404)) clearTabStorage()
     },
   })
   const failure = erase.error instanceof ProblemError ? erase.error : null
@@ -65,8 +73,8 @@ export function EraseProject({ projectId, onErased }: EraseProjectProps) {
         >
           <p className="font-medium text-ink">Erase this project?</p>
           <p className="mt-1 text-ink">
-            Its manifest, analyses, reports and archive leave this server, with the caches that recorded its packages. Download the archive,
-            manifest.json and manifest.json.sig first: nothing brings them back.
+            Its manifest, analyses, reports and archive leave this server. The caches that recorded its packages go with them, or as soon
+            as no other analysis or export runs. Download the archive, manifest.json and manifest.json.sig first: nothing brings them back.
           </p>
           <div className="mt-3 flex gap-2">
             <Button type="button" size="sm" disabled={erase.isPending} onClick={() => erase.mutate()}>

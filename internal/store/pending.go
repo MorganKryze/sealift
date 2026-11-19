@@ -38,6 +38,8 @@ func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
 	if err := validID(projectID); err != nil {
 		return nil, err
 	}
+	s.purgeMu.RLock()
+	defer s.purgeMu.RUnlock()
 
 	parent := filepath.Join(s.root, "projects", projectID, kind)
 	if err := os.MkdirAll(parent, dirMode); err != nil {

@@ -91,14 +91,22 @@ func projectBusy(dir string) (bool, error) {
 	return false, nil
 }
 
-// lastActivity is the newest modification time under dir.
+// lastActivity is the newest modification time under dir. An entry that
+// vanishes during the walk, such as a download a job moves into the cache,
+// is skipped.
 func lastActivity(dir string) (time.Time, error) {
 	var newest time.Time
 	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		info, err := d.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -110,53 +118,99 @@ func lastActivity(dir string) (time.Time, error) {
 	return newest, err
 }
 
+// PurgeIfIdle empties the caches when no job is in flight. With a job in
+// flight it records the purge as pending, for the sweep to run once the
+// instance is idle. It reports whether it emptied anything.
+func (s *Store) PurgeIfIdle() (bool, error) {
+	s.purgeMu.Lock()
+	defer s.purgeMu.Unlock()
+	busy, err := s.Busy()
+	if err != nil {
+		return false, err
+	}
+	if busy {
+		s.purgePending = true
+		return false, nil
+	}
+	empty, err := s.cachesEmpty()
+	if err != nil {
+		return false, err
+	}
+	if !empty {
+		if err := s.PurgeCaches(); err != nil {
+			return false, err
+		}
+	}
+	s.purgePending = false
+	return !empty, nil
+}
+
+func (s *Store) isPurgePending() bool {
+	s.purgeMu.RLock()
+	defer s.purgeMu.RUnlock()
+	return s.purgePending
+}
+
+// Sweep is what one SweepEphemeral pass did. Failed counts the projects it
+// could not read or delete; their errors stay out of the log, since a path
+// under a project can name a package.
+type Sweep struct {
+	Deleted int
+	Purged  bool
+	Failed  int
+}
+
 // SweepEphemeral deletes every project with no job in flight whose newest
-// file is older than idle, then empties the caches when no project remains
-// and no job is in flight. It reports how many projects it deleted and
-// whether it emptied the caches.
-func (s *Store) SweepEphemeral(idle time.Duration, now time.Time) (deleted int, purged bool, err error) {
+// file is older than idle. A project it cannot read or delete is counted
+// and skipped, so one bad entry never stops the others. It then empties the
+// caches when the instance is idle and either no project remains or a
+// purge was put off.
+func (s *Store) SweepEphemeral(idle time.Duration, now time.Time) Sweep {
+	var r Sweep
 	root := filepath.Join(s.root, "projects")
 	projects, err := os.ReadDir(root)
 	if err != nil {
-		return 0, false, fmt.Errorf("store: list projects: %w", err)
+		r.Failed++
+		return r
 	}
 	remaining := 0
 	for _, p := range projects {
 		dir := filepath.Join(root, p.Name())
 		busy, err := projectBusy(dir)
-		if err != nil {
-			return deleted, false, err
+		if err != nil || busy {
+			if err != nil {
+				r.Failed++
+			}
+			remaining++
+			continue
 		}
 		last, err := lastActivity(dir)
 		if err != nil {
-			return deleted, false, fmt.Errorf("store: read %s: %w", dir, err)
+			r.Failed++
+			remaining++
+			continue
 		}
-		if busy || now.Sub(last) < idle {
+		if now.Sub(last) < idle {
 			remaining++
 			continue
 		}
 		// DeleteProject checks again for a job queued since.
 		switch err := s.DeleteProject(p.Name()); {
+		case err == nil:
+			r.Deleted++
 		case errors.Is(err, ErrBusy):
 			remaining++
-		case err != nil:
-			return deleted, false, err
 		default:
-			deleted++
+			r.Failed++
+			remaining++
 		}
 	}
-	if remaining > 0 {
-		return deleted, false, nil
+	if remaining == 0 || s.isPurgePending() {
+		purged, err := s.PurgeIfIdle()
+		if err != nil {
+			r.Failed++
+		}
+		r.Purged = purged
 	}
-	// A project created since the listing above may have queued a job.
-	if busy, err := s.Busy(); err != nil || busy {
-		return deleted, false, err
-	}
-	if empty, err := s.cachesEmpty(); err != nil || empty {
-		return deleted, false, err
-	}
-	if err := s.PurgeCaches(); err != nil {
-		return deleted, false, err
-	}
-	return deleted, true, nil
+	return r
 }

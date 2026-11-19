@@ -244,12 +244,12 @@ func sweepEphemeral(ctx context.Context, st *store.Store, idle time.Duration, lo
 		case <-ctx.Done():
 			return
 		case now := <-tick.C:
-			deleted, purged, err := st.SweepEphemeral(idle, now)
-			if err != nil {
-				log.Error("ephemeral sweep", "error", err)
-			}
-			if deleted > 0 || purged {
-				log.Info("ephemeral sweep", "deleted_projects", deleted, "caches_emptied", purged)
+			// Counts only: an error's text can hold a path that names a package.
+			r := st.SweepEphemeral(idle, now)
+			if r.Failed > 0 {
+				log.Error("ephemeral sweep could not erase everything", "failed", r.Failed, "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
+			} else if r.Deleted > 0 || r.Purged {
+				log.Info("ephemeral sweep", "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
 			}
 		}
 	}

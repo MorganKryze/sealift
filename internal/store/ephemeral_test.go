@@ -107,12 +107,8 @@ func TestSweepEphemeral(t *testing.T) {
 	age(fresh, 10*time.Minute)
 	writeCaches(t, s)
 
-	deleted, purged, err := s.SweepEphemeral(time.Hour, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deleted != 1 || purged {
-		t.Errorf("first sweep: deleted %d, purged %v; want 1 and false (a job is in flight)", deleted, purged)
+	if r := s.SweepEphemeral(time.Hour, now); r != (Sweep{Deleted: 1}) {
+		t.Errorf("first sweep = %+v, want 1 deleted and no purge (a job is in flight)", r)
 	}
 	if _, err := os.Stat(old.Dir); !os.IsNotExist(err) {
 		t.Errorf("the idle project survived")
@@ -130,12 +126,8 @@ func TestSweepEphemeral(t *testing.T) {
 	}
 	age(busy, 2*time.Hour)
 	age(fresh, 2*time.Hour)
-	deleted, purged, err = s.SweepEphemeral(time.Hour, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deleted != 2 || !purged {
-		t.Errorf("second sweep: deleted %d, purged %v; want 2 and true", deleted, purged)
+	if r := s.SweepEphemeral(time.Hour, now); r != (Sweep{Deleted: 2, Purged: true}) {
+		t.Errorf("second sweep = %+v, want 2 deleted and the caches purged", r)
 	}
 	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")); !os.IsNotExist(err) {
 		t.Errorf("the tarball cache survived the last project")
@@ -143,7 +135,93 @@ func TestSweepEphemeral(t *testing.T) {
 
 	// Nothing left to erase: the next sweep reports nothing, so the log
 	// stays quiet on an idle instance.
-	if deleted, purged, err := s.SweepEphemeral(time.Hour, now); err != nil || deleted != 0 || purged {
-		t.Errorf("idle sweep: deleted %d, purged %v, err %v; want 0, false, nil", deleted, purged, err)
+	if r := s.SweepEphemeral(time.Hour, now); r != (Sweep{}) {
+		t.Errorf("idle sweep = %+v, want nothing done", r)
+	}
+}
+
+// age sets every modification time under dir to now minus d.
+func age(t *testing.T, dir string, now time.Time, d time.Duration) {
+	t.Helper()
+	err := filepath.WalkDir(dir, func(path string, _ os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(path, now.Add(-d), now.Add(-d))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A project the sweep cannot read is counted and skipped: the other idle
+// projects are still erased.
+func TestSweepEphemeralSkipsAnUnreadableProject(t *testing.T) {
+	s := openTestStore(t)
+	s.SetEphemeral(true)
+	now := time.Now()
+	bad, err := s.CreateProject("bad", []byte(`{"name":"bad"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := s.CreateProject("good", []byte(`{"name":"good"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(bad.Dir, "analyses", "x")
+	if err := os.MkdirAll(locked, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	age(t, bad.Dir, now, 2*time.Hour)
+	age(t, good.Dir, now, 2*time.Hour)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o770) })
+
+	r := s.SweepEphemeral(time.Hour, now)
+	if r.Deleted != 1 || r.Failed != 1 {
+		t.Errorf("sweep = %+v, want 1 deleted and 1 failed", r)
+	}
+	if _, err := os.Stat(good.Dir); !os.IsNotExist(err) {
+		t.Errorf("the readable idle project survived")
+	}
+}
+
+// A purge that a job in flight put off runs at the first sweep that finds
+// the instance idle, even while other projects remain.
+func TestPurgeIfIdlePutsOffAPurgeWhileAJobRuns(t *testing.T) {
+	s := openTestStore(t)
+	s.SetEphemeral(true)
+	other, err := s.CreateProject("other", []byte(`{"name":"other"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := filepath.Join(other.Dir, "exports", "20261119T120000Z.tmp")
+	if err := os.MkdirAll(job, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	writeCaches(t, s)
+	tarball := filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")
+
+	if purged, err := s.PurgeIfIdle(); err != nil || purged {
+		t.Fatalf("PurgeIfIdle with a job in flight = %v, %v; want false, nil", purged, err)
+	}
+	if _, err := os.Stat(tarball); err != nil {
+		t.Fatalf("the caches went while a job ran: %v", err)
+	}
+	// Still busy: the sweep keeps the caches.
+	if r := s.SweepEphemeral(time.Hour, time.Now()); r.Purged {
+		t.Errorf("sweep purged while a job ran")
+	}
+	if err := os.RemoveAll(job); err != nil {
+		t.Fatal(err)
+	}
+	// The project is fresh, so it stays; the put-off purge runs anyway.
+	if r := s.SweepEphemeral(time.Hour, time.Now()); !r.Purged || r.Deleted != 0 {
+		t.Errorf("sweep after the job = %+v, want the put-off purge and no deletion", r)
+	}
+	if _, err := os.Stat(tarball); !os.IsNotExist(err) {
+		t.Errorf("the put-off purge left the tarball cache")
 	}
 }

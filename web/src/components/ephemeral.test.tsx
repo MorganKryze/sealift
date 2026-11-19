@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ProblemError } from "@/api/client"
 import { deleteProject } from "@/api/projects"
 import { getInstance } from "@/api/settings"
 import { EphemeralBanner, EraseProject } from "@/components/ephemeral"
@@ -60,6 +61,28 @@ describe("erase project", () => {
     await waitFor(() => expect(onErased).toHaveBeenCalled())
     expect(deleteProject).toHaveBeenCalledWith("project-abc123")
     expect(sessionStorage.getItem("selection:a1")).toBeNull()
+  })
+
+  it("clears the tab's storage when the delete answered after removing the project", async () => {
+    vi.mocked(getInstance).mockResolvedValue({ ephemeral: true, idleMinutes: 60 })
+    vi.mocked(deleteProject).mockRejectedValue(new ProblemError(500, { type: "about:blank", title: "delete project", status: 500 }))
+    sessionStorage.setItem("selection:a1", '{"lodash":["4.17.21"]}')
+    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
+    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }))
+    await waitFor(() => expect(sessionStorage.getItem("selection:a1")).toBeNull())
+  })
+
+  it("keeps the tab's storage when a running job refused the delete", async () => {
+    vi.mocked(getInstance).mockResolvedValue({ ephemeral: true, idleMinutes: 60 })
+    vi.mocked(deleteProject).mockRejectedValue(new ProblemError(409, { type: "about:blank", title: "delete project", status: 409 }))
+    sessionStorage.setItem("selection:a1", '{"lodash":["4.17.21"]}')
+    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
+    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Erase" }))
+    expect(await screen.findByText("delete project")).toBeInTheDocument()
+    expect(sessionStorage.getItem("selection:a1")).not.toBeNull()
+    sessionStorage.clear()
   })
 
   it("keeps the project when the user steps back", async () => {

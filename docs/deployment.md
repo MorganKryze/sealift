@@ -146,11 +146,13 @@ The overlay sets two variables and mounts `/data/projects` and `/data/cache` in 
 In this mode:
 
 - A project gets a random id, so no line of the container's log names it.
-- **Erase this project now**, under the archive on the export screen, deletes the project: its `package.json`, analyses, logs, reports and archive. When no other job is queued or running, it also empties the shared caches that recorded what it fetched: pnpm's metadata and store, the tarball cache and the resolve directories. The browser tab forgets the version selection it kept.
-- Every minute, sealift deletes each project whose newest file is older than the idle delay and that has no job queued or running, then empties the caches once no project remains.
+- **Erase this project now**, under the archive on the export screen, deletes the project: its `package.json`, analyses, logs, reports and archive. It also empties the shared caches that recorded what it fetched: pnpm's metadata and store, the tarball cache and the resolve directories. When another project's job is queued or running, that purge waits for the first minute the instance is idle. The browser tab forgets the version selection it kept, and API answers carry `Cache-Control: no-store`, so the browser's cache keeps none of them.
+- Every minute, sealift deletes each project whose newest file is older than the idle delay and that has no job queued or running, then empties the caches once no project remains or a purge is waiting. Its log lines carry counts only.
 - Trivy, its vulnerability database, the settings and the signing key stay.
 
-The RAM mounts keep projects and caches off the disk, so a deleted file leaves nothing to recover there, and a restart erases them as well. They cost memory: a large analysis can need 2 to 3 GB, and the overlay caps each mount at 4 GB. Without the overlay, the mode still deletes the files, but the disk may keep their blocks until they are overwritten.
+The RAM mounts keep projects and caches off the disk, and a restart erases them as well. Two conditions hold that promise. The host must have no swap, or an encrypted one, since the kernel can write RAM pages to swap. And the volume must hold no `projects/` or `cache/` from an earlier run without the overlay: the mounts hide that data without erasing it, and the sweep never sees it. Use a fresh volume, or empty both folders before you start with the overlay. The mounts cost memory: a large analysis can need 2 to 3 GB, and the overlay caps each mount at 4 GB. Without the overlay, the mode still deletes the files, but the disk may keep their blocks until they are overwritten.
+
+The mode does not overwrite files, and it leaves the browser's history and download folder alone.
 
 The interface shows a line under the top bar on every screen while the mode is on.
 

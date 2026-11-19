@@ -211,13 +211,9 @@ func (h *Handlers) DeleteProject(_ context.Context, req DeleteProjectRequestObje
 		return DeleteProjectdefaultApplicationProblemPlusJSONResponse(autoProblem("delete project", err)), nil
 	}
 	if h.Ephemeral > 0 {
-		// With a job of another project in flight, the caches stay until the
-		// sweep finds every project idle.
-		busy, err := h.Store.Busy()
-		if err == nil && !busy {
-			err = h.Store.PurgeCaches()
-		}
-		if err != nil {
+		// With a job of another project in flight, the store puts the purge
+		// off and the next sweep that finds the instance idle runs it.
+		if _, err := h.Store.PurgeIfIdle(); err != nil {
 			return DeleteProjectdefaultApplicationProblemPlusJSONResponse(problem(http.StatusInternalServerError, "delete project", fmt.Errorf("the project is deleted, the shared caches are not: %w", err))), nil
 		}
 	}
