@@ -201,8 +201,10 @@ func (r *run) runStep(name string, fn func() error) error {
 	return err
 }
 
-// log writes line to log.txt and emits a matching "log" event.
+// log writes line to log.txt and emits a matching "log" event, after
+// dropping any URL credentials, so no call site has to remember to.
 func (r *run) log(line string) {
+	line = runner.StripURLCredentials(line)
 	fmt.Fprintln(r.logFile, line)
 	r.emit(Event{Kind: "log", Data: mustJSON(logData{Line: line})})
 }
