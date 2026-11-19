@@ -46,7 +46,9 @@ Each value below is found once and used in every place the table names. The char
 | `<secret-name>` | You | `secret.name`, the name in `kubectl create secret` | no |
 | `<pull-secret>` | You | `imagePullSecrets`, the name in `kubectl create secret` for a Harbor pull credential | no |
 | `<import-tls-secret>` | Administrators | `ingress.tls.secretName`, the name in `kubectl create secret tls`, the `/oauth2` Ingress's `secretName` | no |
-| `<test-repository>` | Administrators | the probe's hosted npm repository in [the `latest` tag](#the-latest-tag) check, a repository other than the shared one | no |
+| `<test-repository>` | Administrators | the probe's hosted npm repository in [the `latest` tag](#the-latest-tag) check, a repository other than the shared one, in no group | no |
+| `<probe-user>` | Administrators | the account that uploads the probe, never the import's user | no |
+| Probe password | Administrators | the prompt of `curl` in the same check | yes |
 | `<public-key-pem>` | The connected side | `publicKey.pem`, from sealift's Settings | no |
 | `<ca-pem>` | Administrators | `ca.pem`, one file for every internal certificate authority | no |
 | `<storage-class>` | Administrators | `persistence.storageClass`, empty for the cluster default | no |
@@ -198,7 +200,7 @@ The values name it in `ingress.tls.secretName`. Without that key, the Ingress as
 
 The `/oauth2` Ingress of [the route of `/oauth2/`](#the-route-of-oauth2) names `<import-tls-secret>` as its `secretName`. An Ingress reads a Secret from its own namespace only, so create the same Secret in `<oauth2-proxy-namespace>`, with the same command and `-n <oauth2-proxy-namespace>`.
 
-A controller that serves a default certificate for `<import-host>` is the alternative. Set `ingress.tls.enabled: false`, so that the Ingress has no `tls` block, drop the `tls` block of the `/oauth2` Ingress, and add `nginx.ingress.kubernetes.io/ssl-redirect: "true"` to `ingress.annotations`, since ingress-nginx redirects to HTTPS on its own only for an Ingress with a `tls` block. The install notes then print an `http://` address: open it as `https://`.
+A controller that serves a default certificate for `<import-host>` is the alternative. Set `ingress.tls.enabled: false`, so that the Ingress has no `tls` block, remove `ingress.tls.secretName` from the values, drop the `tls` block of the `/oauth2` Ingress, and add `nginx.ingress.kubernetes.io/force-ssl-redirect: "true"` to `ingress.annotations`, since ingress-nginx redirects to HTTPS on its own only for an Ingress with a `tls` block. The install notes then print an `http://` address: open it as `https://`.
 
 ## The values in Git
 
@@ -391,9 +393,11 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
 | 7. The trusted key | The Settings sheet's `Public key sha256` equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
-| 8. The network policy | Run the command under this table from a pod in another namespace. The pod starts and prints `blocked: TimeoutError` or `blocked: TypeError` | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
+| 8. The network policy | Run the command under this table from a pod in another namespace. The pod starts and prints a line that begins `blocked: TimeoutError`. No other line passes | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
+| | | `blocked: TypeError ENOTFOUND` | The address is wrong: the name `sealift.<namespace>.svc` did not resolve. The check proved nothing. Correct `<namespace>` and run it again |
+| | | `blocked: TypeError ECONNREFUSED` | A host answered with a refusal, so no packet was dropped. Run `kubectl -n <namespace> get endpoints sealift`: with no address, the service has no ready pod and the check proved nothing. With an address, the policy does not drop the traffic: ask the administrators whether the plugin enforces NetworkPolicy and how it treats a denied connection |
 | | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
-| 9. A forged header | Through the ingress, send your session cookie and a forged `X-Auth-Request-Access-Token` and `X-Access-Token`: the answer is for you, the signed-in user | The answer is for the forged value, or a 200 without a cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
+| 9. A forged header | Run the commands under this table. The first answers 200 with your user name. The second, with forged headers added, answers 200 with the same name | Any 401, a name other than yours, or a 200 without the cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
 | 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`. The import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
 | | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
 | 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | Nexus does not hold it. Look for an import that is not `Complete`, a version that an administrator removed since (see [the rollback list](#the-rollback-list)), a lockfile that names a package the archive did not carry, or a registry address other than `<nexus-url>/repository/<nexus-repository>/` |
@@ -407,12 +411,34 @@ Step 8 needs a network plugin that enforces NetworkPolicy. Without it, any pod o
 ```sh
 kubectl -n <other-namespace> run reach-check --rm -i --restart=Never \
   --image=<harbor-host>/<harbor-project>/sealift:0.6.0 \
-  --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name))'
+  --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name,e.cause&&e.cause.code))'
 ```
 
-The expected result is one printed line, `blocked: TimeoutError` (the packet was dropped) or `blocked: TypeError` (the connection was refused). A `reached 200` line means the policy is not enforced.
+The expected result is one printed line that begins `blocked: TimeoutError`: the packet was dropped, so the policy is enforced. A `reached 200` line means the policy is not enforced. Any `blocked: TypeError` line, with `ENOTFOUND` or `ECONNREFUSED` after it, is not a pass: the table says what each means.
 
 A pod that never starts proves nothing, and kubectl then ends with `timed out waiting for the condition`, which looks like a timeout. Open `kubectl -n <other-namespace> get pod reach-check` in a second terminal. If the pod is in `ErrImagePull` or `ImagePullBackOff`, the other namespace lacks the pull secret: create `<pull-secret>` there as [the Secret](#the-secret) shows, and add `--overrides='{"spec":{"imagePullSecrets":[{"name":"<pull-secret>"}]}}'`. A namespace that enforces the `restricted` standard refuses the pod at once, with a message that names the rule: take a namespace that does not.
+
+That copy of the pull credential must not stay in a namespace that is not yours. Delete it when the check is done:
+
+<!-- illustrative -->
+```sh
+kubectl -n <other-namespace> delete secret <pull-secret>
+```
+
+The command prints `secret "<pull-secret>" deleted`. An error `not found` means that no copy was left.
+
+### Step 9, the forged header check
+
+Sign in in a browser, open the developer tools and copy the session cookie of `<import-host>`: its name starts with `<cookie-name>`, and a session that does not fit one cookie is split into `<cookie-name>_0`, `<cookie-name>_1` and so on. Send every part. Run the baseline first, then the forged request:
+
+<!-- illustrative -->
+```sh
+curl --cacert ca.pem -s -w '\n%{http_code}\n' -H 'Cookie: <cookie-name>=<session-cookie>' https://<import-host>/api/me
+curl --cacert ca.pem -s -w '\n%{http_code}\n' -H 'Cookie: <cookie-name>=<session-cookie>' \
+  -H 'X-Auth-Request-Access-Token: forged' -H 'X-Access-Token: forged' https://<import-host>/api/me
+```
+
+Each prints a JSON body with `"user"` and then `200`. Both must name you. If the baseline fails, the cookie is wrong and the check proved nothing: fix it first. In the forged request, any `401` is a failure: it shows that the service received the forged value, and answers 401 because the value is not a token. A stronger form forges with a valid token of a second test user, which the administrators can issue for the test: put it in both headers. The answer must still name you. An answer that names the second user means the ingress passes the client's header on.
 
 ## Checking that no import runs
 
@@ -507,16 +533,29 @@ The import publishes into the npm hosted repository that Package Pusher writes t
 
 The import writes no dist-tag. It uploads tarballs through Nexus's component upload and nothing else. A lab run on 2026-11-19 on Nexus 3.96.5 showed what Nexus does with `latest` on such an upload: uploading 2.0.0, then 1.0.0, then 1.5.0 kept `latest` at 2.0.0; a prerelease 3.0.0-beta.1 kept it at 2.0.0; a newer stable 2.1.0 moved it to 2.1.0. So an upload never moves `latest` backward or to a prerelease, and moves it forward when it carries a newer stable version than the repository holds. A bare `npm install <name>` then gets that version. An install from a lockfile or a range does not change. The run did not cover `npm publish`, which Package Pusher uses.
 
-Where the target Nexus is another version, this is not proven there. Before the first import, run the check on a hosted npm repository other than the shared one. Upload a probe package at `2.0.0`, `1.0.0`, `1.5.0`, `3.0.0-beta.1` and `2.1.0` in that order, and read the tag after each upload:
+Where the target Nexus is another version, this is not proven there. Before the first import, run the check on a hosted npm repository other than the shared one. Three choices keep it from touching production:
+
+- The repository `<test-repository>` is in no group. A group that serves it would hand the probe to every project that reads the group.
+- The package is named `@sealift-probe/latest-check`, a scoped name that no registry in front of Nexus can hold, so nothing real can answer for it.
+- The account `<probe-user>` is an administrator's or a probe account of its own, never the import's user, whose credential must not leave the service.
+
+Upload the probe at `2.0.0`, `1.0.0`, `1.5.0`, `3.0.0-beta.1` and `2.1.0` in that order, and read the tag after each upload. `ca.pem` is the authority bundle of the values. `curl` asks for the password each time:
 
 <!-- illustrative -->
 ```sh
-npm pack ./probe
-curl -u <nexus-user> -F "npm.asset=@probe-2.0.0.tgz" "<nexus-url>/service/rest/v1/components?repository=<test-repository>"
-curl -s <nexus-url>/repository/<test-repository>/probe | node -e 'process.stdin.on("data",d=>console.log(JSON.parse(d)["dist-tags"]))'
+mkdir probe && cd probe
+for v in 2.0.0 1.0.0 1.5.0 3.0.0-beta.1 2.1.0; do
+  printf '{"name":"@sealift-probe/latest-check","version":"%s"}\n' "$v" > package.json
+  npm pack --silent
+  curl --cacert ../ca.pem -s -o /dev/null -w 'upload %{http_code}\n' -u <probe-user> \
+    -F "npm.asset=@sealift-probe-latest-check-$v.tgz" \
+    "<nexus-url>/service/rest/v1/components?repository=<test-repository>"
+  curl --cacert ../ca.pem -s -u <probe-user> "<nexus-url>/repository/<test-repository>/@sealift-probe%2flatest-check" \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d)["dist-tags"]))'
+done
 ```
 
-`latest` must stay at `2.0.0` through the second, third and fourth upload and move to `2.1.0` on the last. Remove the probe afterwards.
+Each round prints `upload 204`, then the tags. Any other code is a failed upload: stop. A JSON error, `undefined` or a missing line means the read failed, and the round proved nothing. The tags must read `{ latest: '2.0.0' }` after the first four uploads (2.0.0, 1.0.0, 1.5.0 and 3.0.0-beta.1) and `{ latest: '2.1.0' }` after the last. Then delete the component `@sealift-probe/latest-check` in Nexus under **Browse**, and the folder `probe`.
 
 ### The rollback list
 

@@ -92,6 +92,7 @@ Ask for these items where you do not already hold them:
 | A Harbor project `<harbor-project>`, with a robot account that pushes and one that pulls | The image and the chart cross the USB key into Harbor | The cluster cannot pull the image or the chart |
 | Network access from the namespace to Keycloak, MinIO and Nexus | The service calls the three | The pod starts and every call fails |
 | The name of the ingress controller's namespace | The NetworkPolicy admits that namespace only | The ingress cannot reach the pod, with timeouts |
+| A scratch hosted npm repository `<test-repository>` that no group serves, and an account `<probe-user>` that writes there | The `latest` check uploads a probe package, and must not touch the shared repository | The check runs on production or does not run |
 | Whether the cluster's network plugin enforces NetworkPolicy | The policy keeps other pods from calling the service around the sign-in | Any pod can call the service, which still checks every token |
 | The Nexus version | The `latest` behaviour is proven on 3.96.5 only | The check on another version is left to the runbook |
 | Whether ingress-nginx refuses ExternalName backends and snippet annotations | An Ingress that a user of the cluster writes could route traffic to the service around the sign-in | The service still checks every token, but a client then chooses the header's value |
