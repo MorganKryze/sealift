@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/MorganKryze/sealift/internal/importer"
@@ -17,6 +18,11 @@ func result(name string, state importer.State, kind importer.Kind) importer.Resu
 	}
 	return r
 }
+
+var clock = regexp.MustCompile(`\d{4}-\d\d-\d\dT[0-9:.]+(Z|[+-]\d\d:\d\d)`)
+
+// stamps replaces the times a store writes, which a test cannot predict.
+func stamps(out []byte) string { return clock.ReplaceAllString(string(out), "<time>") }
 
 func TestPublishedListReadsStoredRecords(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -82,9 +88,15 @@ func TestPublishedListReadsStoredRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("node: %v", err)
 	}
-	want := "Published by this import:\na@1.0.0\n@scope/e@1.0.0\n\nPossibly published, check each in Nexus first:\nb@1.0.0\n"
-	if string(out) != want {
-		t.Errorf("output:\n%q\nwant:\n%q", out, want)
+	want := "Published by this import:\na@1.0.0\n@scope/e@1.0.0\n\n" +
+		"Possibly published, check each in Nexus first:\nb@1.0.0\n" +
+		"  attempt 1: state=failed kind=nexus reason=\"failed\" started=<time> ended=<time>\n" +
+		"  attempt 2: state=present kind=- reason=- started=<time> ended=<time>\n\n" +
+		"Never uploaded, nothing to remove:\nd@1.0.0\n" +
+		"  attempt 1: state=failed kind=conflict reason=\"failed\" started=<time> ended=<time>\n" +
+		"  attempt 2: state=failed kind=conflict reason=\"failed\" started=<time> ended=<time>\n"
+	if got := stamps(out); got != want {
+		t.Errorf("output:\n%q\nwant:\n%q", got, want)
 	}
 
 	t.Run("an interrupted package stays possible when a retry finds it present", func(t *testing.T) {
@@ -119,9 +131,16 @@ func TestPublishedListReadsStoredRecords(t *testing.T) {
 		if err != nil {
 			t.Fatalf("node: %v", err)
 		}
-		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\ng@1.0.0\nh@1.0.0\n"
-		if string(out) != want {
-			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		want := "Published by this import:\n\n" +
+			"Possibly published, check each in Nexus first:\ng@1.0.0\n" +
+			"  attempt 1: state=failed kind=interrupted reason=\"failed\" started=<time> ended=<time>\n" +
+			"  attempt 2: state=present kind=- reason=- started=<time> ended=<time>\n" +
+			"h@1.0.0\n" +
+			"  attempt 1: state=failed kind=interrupted reason=\"interrupted\" started=<time> ended=<time>\n" +
+			"  attempt 2: state=present kind=- reason=- started=<time> ended=<time>\n\n" +
+			"Never uploaded, nothing to remove:\n"
+		if got := stamps(out); got != want {
+			t.Errorf("output:\n%q\nwant:\n%q", got, want)
 		}
 	})
 
@@ -148,9 +167,16 @@ func TestPublishedListReadsStoredRecords(t *testing.T) {
 		if err != nil {
 			t.Fatalf("node: %v", err)
 		}
-		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\np@1.0.0\nl@1.0.0\nn@1.0.0\n"
-		if string(out) != want {
-			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		want := "Published by this import:\n\n" +
+			"Possibly published, check each in Nexus first:\n" +
+			"p@1.0.0\n  attempt 1: state=pending kind=- reason=- started=<time> ended=-\n" +
+			"l@1.0.0\n  attempt 1: state=failed kind=local reason=\"failed\" started=<time> ended=-\n" +
+			"n@1.0.0\n  attempt 1: state=pending kind=- reason=- started=<time> ended=-\n\n" +
+			"Never uploaded, nothing to remove:\n" +
+			"m@1.0.0\n  attempt 1: state=failed kind=mismatch reason=\"failed\" started=<time> ended=-\n" +
+			"s@1.0.0\n  attempt 1: state=failed kind=source reason=\"failed\" started=<time> ended=-\n"
+		if got := stamps(out); got != want {
+			t.Errorf("output:\n%q\nwant:\n%q", got, want)
 		}
 	})
 
@@ -166,9 +192,48 @@ func TestPublishedListReadsStoredRecords(t *testing.T) {
 		if err != nil {
 			t.Fatalf("node: %v", err)
 		}
-		want := "Published by this import:\n\nPossibly published, check each in Nexus first:\no@1.0.0\nq@1.0.0\n"
-		if string(out) != want {
-			t.Errorf("output:\n%q\nwant:\n%q", out, want)
+		want := "Published by this import:\n\n" +
+			"Possibly published, check each in Nexus first:\n" +
+			"o@1.0.0\n  attempt 1: state=failed kind=- reason=\"interrupted\" started=- ended=-\n" +
+			"q@1.0.0\n  attempt 1: state=failed kind=- reason=\"upload failed: 502\" started=- ended=-\n\n" +
+			"Never uploaded, nothing to remove:\n"
+		if got := string(out); got != want {
+			t.Errorf("output:\n%q\nwant:\n%q", got, want)
+		}
+	})
+
+	t.Run("a package whose every attempt failed before the upload is never uploaded", func(t *testing.T) {
+		rec := `{"formatVersion":1,"attempts":[` +
+			`{"n":1,"status":"ended","startedAt":"2026-11-19T08:00:00Z","endedAt":"2026-11-19T08:01:00Z","report":{"packages":[` +
+			`{"name":"r","version":"1.0.0","state":"failed","kind":"nexus","reason":"repository check failed: 503"},` +
+			`{"name":"u","version":"1.0.0","state":"failed","kind":"nexus","reason":"repository check failed: 503"},` +
+			`{"name":"w","version":"1.0.0","state":"failed","kind":"nexus","reason":"upload failed: 502"}]}},` +
+			`{"n":2,"status":"ended","startedAt":"2026-11-19T09:00:00Z","endedAt":"2026-11-19T09:02:00Z","report":{"packages":[` +
+			`{"name":"r","version":"1.0.0","state":"failed","kind":"nexus","reason":"repository check failed: timeout"},` +
+			`{"name":"u","version":"1.0.0","state":"failed","kind":"nexus","reason":"upload failed: 502"},` +
+			`{"name":"w","version":"1.0.0","state":"failed","kind":"nexus","reason":"repository check failed: 503"}]}}]}`
+		file := filepath.Join(t.TempDir(), "import.json")
+		if err := os.WriteFile(file, []byte(rec), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(node, script, file).Output()
+		if err != nil {
+			t.Fatalf("node: %v", err)
+		}
+		want := "Published by this import:\n\n" +
+			"Possibly published, check each in Nexus first:\n" +
+			"u@1.0.0\n" +
+			"  attempt 1: state=failed kind=nexus reason=\"repository check failed: 503\" started=2026-11-19T08:00:00Z ended=2026-11-19T08:01:00Z\n" +
+			"  attempt 2: state=failed kind=nexus reason=\"upload failed: 502\" started=2026-11-19T09:00:00Z ended=2026-11-19T09:02:00Z\n" +
+			"w@1.0.0\n" +
+			"  attempt 1: state=failed kind=nexus reason=\"upload failed: 502\" started=2026-11-19T08:00:00Z ended=2026-11-19T08:01:00Z\n" +
+			"  attempt 2: state=failed kind=nexus reason=\"repository check failed: 503\" started=2026-11-19T09:00:00Z ended=2026-11-19T09:02:00Z\n\n" +
+			"Never uploaded, nothing to remove:\n" +
+			"r@1.0.0\n" +
+			"  attempt 1: state=failed kind=nexus reason=\"repository check failed: 503\" started=2026-11-19T08:00:00Z ended=2026-11-19T08:01:00Z\n" +
+			"  attempt 2: state=failed kind=nexus reason=\"repository check failed: timeout\" started=2026-11-19T09:00:00Z ended=2026-11-19T09:02:00Z\n"
+		if got := string(out); got != want {
+			t.Errorf("output:\n%q\nwant:\n%q", got, want)
 		}
 	})
 

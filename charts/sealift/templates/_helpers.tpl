@@ -6,8 +6,8 @@
 {{- fail (printf "%s is required" $key) -}}
 {{- end -}}
 {{- $s := toString $v -}}
-{{- if regexMatch "<[^<>]+>" $s -}}
-{{- fail (printf "%s still holds its placeholder %s" $key (regexFind "<[^<>]+>" $s)) -}}
+{{- if regexMatch "<[a-zA-Z0-9-]+>" $s -}}
+{{- fail (printf "%s still holds its placeholder %s" $key (regexFind "<[a-zA-Z0-9-]+>" $s)) -}}
 {{- end -}}
 {{- $s -}}
 {{- end -}}
@@ -56,6 +56,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (include "sealift.fullname" .) .Values.persistence.existingClaim -}}
 {{- end -}}
 
+{{/* sealift.image is the image the pod runs, pinned by digest when one is given. */}}
+{{- define "sealift.image" -}}
+{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ end }}
+{{- end -}}
+
 {{/* sealift.publicKeySHA256 is the fingerprint the service shows: the sha256 of the key's DER encoding. */}}
 {{- define "sealift.publicKeySHA256" -}}
 {{- regexReplaceAll "-----[A-Z ]+-----|\\s" .Values.publicKey.pem "" | b64dec | sha256sum -}}
@@ -75,8 +80,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "sealift.scan" (list (printf "%s[%d]" $path $i) $x) -}}
 {{- end -}}
 {{- else if eq $kind "string" -}}
-{{- if regexMatch "<[^<>]+>" $v -}}
-{{- fail (printf "%s still holds its placeholder %s" $path (regexFind "<[^<>]+>" $v)) -}}
+{{- if regexMatch "<[a-zA-Z0-9-]+>" $v -}}
+{{- fail (printf "%s still holds its placeholder %s" $path (regexFind "<[a-zA-Z0-9-]+>" $v)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

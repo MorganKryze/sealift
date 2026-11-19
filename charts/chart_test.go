@@ -345,6 +345,40 @@ func TestChartRefusesUnfilledValues(t *testing.T) {
 	})
 }
 
+func TestChartRequiresHTTPSForKeycloak(t *testing.T) {
+	for _, key := range []string{"keycloak.realmUrl", "keycloak.keySetUrl"} {
+		t.Run(key+" over http is refused", func(t *testing.T) {
+			_, err := render(t, "--set", key+"=http://sso.example.internal/realms/example")
+			want := key + " must be an https address"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("err = %v, want %q", err, want)
+			}
+		})
+	}
+	t.Run("a mixed-case scheme is refused too", func(t *testing.T) {
+		_, err := render(t, "--set", "keycloak.keySetUrl=HTTP://sso.example.internal/certs")
+		if err == nil || !strings.Contains(err.Error(), "keycloak.keySetUrl must be an https address") {
+			t.Errorf("err = %v, want the https refusal", err)
+		}
+	})
+	t.Run("https renders", func(t *testing.T) {
+		mustRender(t, "--set", "keycloak.keySetUrl=https://sso.example.internal/certs")
+	})
+	t.Run("the notes warn about an http Nexus or MinIO and still render", func(t *testing.T) {
+		notes := installNotes(t, "--set", "nexus.url=http://nexus.example.internal", "--set", "minio.url=http://minio.example.internal")
+		for _, want := range []string{"nexus.url uses http", "minio.url uses http", "https is expected"} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("notes lack %q:\n%s", want, notes)
+			}
+		}
+	})
+	t.Run("the notes stay quiet with https", func(t *testing.T) {
+		if notes := installNotes(t); strings.Contains(notes, "uses http") {
+			t.Errorf("notes warn with https addresses:\n%s", notes)
+		}
+	})
+}
+
 // TestChartRefusesPlaceholdersInEveryValue leaves one runbook placeholder in
 // each value the chart renders without a check of its own.
 func TestChartRefusesPlaceholdersInEveryValue(t *testing.T) {
@@ -368,6 +402,15 @@ func TestChartRefusesPlaceholdersInEveryValue(t *testing.T) {
 			}
 		})
 	}
+	t.Run("an address between angle brackets is not a placeholder", func(t *testing.T) {
+		mustRender(t, "-f", writeValues(t, "ingress:\n  annotations:\n    example.com/owner: Ops <ops@example.internal>\n"))
+	})
+	t.Run("a name between angle brackets is", func(t *testing.T) {
+		_, err := render(t, "-f", writeValues(t, "ingress:\n  annotations:\n    example.com/owner: Ops <ops-team>\n"))
+		if err == nil || !strings.Contains(err.Error(), "ingress.annotations.example.com/owner still holds its placeholder <ops-team>") {
+			t.Errorf("err = %v, want a refusal naming <ops-team>", err)
+		}
+	})
 	t.Run("a value with no placeholder renders", func(t *testing.T) {
 		mustRender(t, "-f", writeValues(t, "imagePullSecrets:\n  - name: harbor-pull\nca:\n  pem: |\n    "+strings.ReplaceAll(strings.TrimSpace(testCA), "\n", "\n    ")+"\n"))
 	})
@@ -571,6 +614,7 @@ func TestChartNotes(t *testing.T) {
 		"sealift-import",
 		"nexus-password", "minio-access-key", "minio-secret-key",
 		"Trusted key",
+		"Public key sha256",
 	} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
@@ -582,6 +626,9 @@ func TestChartNotes(t *testing.T) {
 	}
 	if want := archive.PublicKeySHA256(pub); !strings.Contains(notes, want) {
 		t.Errorf("notes lack the key's sha256 %s:\n%s", want, notes)
+	}
+	if strings.Contains(notes, "Trusted key sha256") {
+		t.Errorf("notes use a label the Settings sheet does not show:\n%s", notes)
 	}
 	if strings.Contains(notes, "emptyDir") {
 		t.Error("notes warn about an emptyDir while persistence is on")
@@ -628,9 +675,9 @@ func TestChartSettingsLoad(t *testing.T) {
 			"https://sso.example.internal/realms/example/protocol/openid-connect/certs",
 			"sealift-import", "X-Auth-Request-Access-Token"},
 		{"explicit issuer, audience and key set",
-			[]string{"--set", "keycloak.issuer=https://public.example.internal/realms/example", "--set", "keycloak.audience=other", "--set", "keycloak.keySetUrl=http://keycloak.example.internal/certs"},
+			[]string{"--set", "keycloak.issuer=https://public.example.internal/realms/example", "--set", "keycloak.audience=other", "--set", "keycloak.keySetUrl=https://keycloak.example.internal/certs"},
 			"https://public.example.internal/realms/example",
-			"http://keycloak.example.internal/certs",
+			"https://keycloak.example.internal/certs",
 			"other", "X-Auth-Request-Access-Token"},
 		{"another header", []string{"--set", "token.header=x-other-token"},
 			"https://sso.example.internal/realms/example",
@@ -838,6 +885,13 @@ func TestChartNetworkPolicy(t *testing.T) {
 			t.Errorf("notes lack the warning:\n%s", notes)
 		}
 	})
+	t.Run("the reach check runs the pinned image", func(t *testing.T) {
+		const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		notes := installNotes(t, "--set", "image.digest="+digest)
+		if want := "--image=ghcr.io/morgankryze/sealift:0.6.0@" + digest + " "; !strings.Contains(notes, want) {
+			t.Errorf("notes lack %q:\n%s", want, notes)
+		}
+	})
 	t.Run("the notes give the reach check when on", func(t *testing.T) {
 		notes := installNotes(t)
 		for _, want := range []string{
@@ -847,10 +901,18 @@ func TestChartNetworkPolicy(t *testing.T) {
 			"AbortSignal.timeout(5000)",
 			"http://rel-sealift.default.svc:8080/healthz",
 			"proves nothing",
+			`["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")`,
+			`"blocked: TimeoutError" is the only line`,
+			"ENOTFOUND",
+			"ECONNREFUSED",
+			"get endpoints rel-sealift",
 		} {
 			if !strings.Contains(notes, want) {
 				t.Errorf("notes lack %q:\n%s", want, notes)
 			}
+		}
+		if strings.Contains(notes, `"blocked: TypeError" means the policy holds`) {
+			t.Errorf("notes accept a TypeError as proof:\n%s", notes)
 		}
 		if strings.Contains(notes, "<curl-image>") {
 			t.Errorf("notes name an image the kit never brings:\n%s", notes)
