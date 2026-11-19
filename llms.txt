@@ -8,6 +8,7 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 
 ## Docs
 
+- [Overview](docs/overview.md): the two roles, context and crossing diagrams, the collection and import pipelines, what each check proves, the /data layout, a glossary
 - [Getting started](docs/getting-started.md): docker run, the setup screen, a first archive from a five-dependency project
 - [Workflow](docs/workflow.md): each screen of a session with every button label
 - [How sealift chooses](docs/how-sealift-chooses.md): CVE vectors by severity, tie-breaks, the eight signals, the minimum release age, the review groups

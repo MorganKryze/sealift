@@ -4,6 +4,7 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 
 ## First steps
 
+- [Overview](overview.md): what sealift is, the two sides, one crossing end to end, the checks and the state on disk.
 - [Getting started](getting-started.md): from nothing to a first archive in ten minutes.
 - [Workflow](workflow.md): each screen of a session, and every button on it.
 
