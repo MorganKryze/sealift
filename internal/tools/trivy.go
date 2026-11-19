@@ -319,7 +319,7 @@ func (m *Manager) trivyDBDate() time.Time {
 }
 
 func (m *Manager) latestTrivyRelease(ctx context.Context) (ghRelease, error) {
-	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/latest")
+	data, err := m.fetchAPI(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/latest")
 	if err != nil {
 		return ghRelease{}, err
 	}
@@ -338,7 +338,7 @@ func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRele
 	if !strings.HasPrefix(tag, "v") {
 		tag = "v" + tag
 	}
-	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/tags/"+tag)
+	data, err := m.fetchAPI(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/tags/"+tag)
 	if err != nil {
 		return ghRelease{}, err
 	}
@@ -355,7 +355,7 @@ func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRele
 // on an older line can come out after a newer release, so the version
 // number decides. ok is false when none qualifies.
 func (m *Manager) recommendedTrivyRelease(ctx context.Context, minAge time.Duration) (rel ghRelease, ok bool, err error) {
-	data, err := m.fetchBytes(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases")
+	data, err := m.fetchAPI(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases")
 	if err != nil {
 		return ghRelease{}, false, err
 	}
@@ -397,10 +397,25 @@ const checksumsSizeLimit = 1 << 20
 // body to disk.
 const assetSizeLimit = 512 << 20
 
+// fetchAPI fetches a GitHub API URL. It is the only request that carries
+// the GitHub token: release assets come from other addresses and get none.
+func (m *Manager) fetchAPI(ctx context.Context, url string) ([]byte, error) {
+	return m.get(ctx, url, m.GitHubToken)
+}
+
 func (m *Manager) fetchBytes(ctx context.Context, url string) ([]byte, error) {
+	return m.get(ctx, url, "")
+}
+
+// get never puts the token in an error: the messages carry the URL and the
+// status only.
+func (m *Manager) get(ctx context.Context, url, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := m.http.Do(req)
 	if err != nil {

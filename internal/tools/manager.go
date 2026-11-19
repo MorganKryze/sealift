@@ -51,6 +51,9 @@ type Manager struct {
 	// GitHubAPI overrides the GitHub API base URL. Empty uses the public
 	// API; tests point it at an httptest server.
 	GitHubAPI string
+	// GitHubToken authenticates the release lookups against the GitHub
+	// API, to lift the anonymous rate limit. Empty sends no credentials.
+	GitHubToken string
 	// Arch overrides the host CPU architecture used to pick the Trivy
 	// release asset. Empty uses runtime.GOARCH.
 	Arch string

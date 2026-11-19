@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -469,5 +470,27 @@ func TestServerStopsOnADamagedSigningKey(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != string(damaged) {
 		t.Errorf("the damaged file was replaced by %q", got)
+	}
+}
+
+// TestNewToolsManagerReadsGitHubToken proves SEALIFT_GITHUB_TOKEN reaches the
+// tools manager's release lookups.
+func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
+	var got atomic.Value
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.Header.Get("Authorization"))
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(gh.Close)
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	t.Setenv("SEALIFT_GITHUB_TOKEN", "token-for-test")
+
+	m, err := newToolsManager(nil, gh.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = m.UpdateTrivy(context.Background(), "", false)
+	if v, _ := got.Load().(string); v != "Bearer token-for-test" {
+		t.Errorf("Authorization = %q, want the bearer token", v)
 	}
 }
