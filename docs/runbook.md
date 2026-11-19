@@ -324,7 +324,7 @@ kubectl -n <namespace> get pods -w
 kubectl -n <namespace> logs deploy/sealift
 ```
 
-The chart's notes print the address, the log command, the Secret to create and the key sha256 to compare.
+Argo CD renders the chart with `helm template` and shows no install notes. This page holds what the notes would print: the log command, the Secret, the key check and the network policy check.
 
 ## The checklist
 
@@ -344,14 +344,28 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
 | 7. The trusted key | The Settings sheet's `Public key sha256` equals the one from step 3 of [the connected side](#the-connected-side) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
-| 8. The network policy | From a pod in another namespace, the command in the chart's notes times out | The pod answers | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
+| 8. The network policy | Run the command under this table from a pod in another namespace. The pod starts and prints `blocked: TimeoutError` or `blocked: TypeError` | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
+| | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
 | 9. A forged header | Through the ingress, send your session cookie and a forged `X-Auth-Request-Access-Token` and `X-Access-Token`: the answer is for you, the signed-in user | The answer is for the forged value, or a 200 without a cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
 | 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`. The import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
 | | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
 | 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | The import is not `Complete`, or the repository is not the one in the settings |
 | 12. Memory | After step 10, `kubectl -n <namespace> top pod` shows the peak. Write it down | An `OOMKilled` pod | Raise `resources.limits.memory`. The attempt ended `interrupted`, and a retry continues it |
 
-Step 8 needs a network plugin that enforces NetworkPolicy. Without it, any pod of the cluster can reach the service, which still checks every token.
+### Step 8, the network policy check
+
+Step 8 needs a network plugin that enforces NetworkPolicy. Without it, any pod of the cluster can reach the service, which still checks every token. The check runs the sealift image that Harbor already serves, so no other image crosses. `<other-namespace>` is any namespace that is neither `<namespace>` nor `<ingress-namespace>`. The service is named `sealift` after the Application:
+
+<!-- illustrative -->
+```sh
+kubectl -n <other-namespace> run reach-check --rm -i --restart=Never \
+  --image=<harbor-host>/<harbor-project>/sealift:0.6.0 \
+  --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name))'
+```
+
+The expected result is one printed line, `blocked: TimeoutError` (the packet was dropped) or `blocked: TypeError` (the connection was refused). A `reached 200` line means the policy is not enforced.
+
+A pod that never starts proves nothing, and kubectl then ends with `timed out waiting for the condition`, which looks like a timeout. Open `kubectl -n <other-namespace> get pod reach-check` in a second terminal. If the pod is in `ErrImagePull` or `ImagePullBackOff`, the other namespace lacks the pull secret: create `<pull-secret>` there as [the Secret](#the-secret) shows, and add `--overrides='{"spec":{"imagePullSecrets":[{"name":"<pull-secret>"}]}}'`. A namespace that enforces the `restricted` standard refuses the pod at once, with a message that names the rule: take a namespace that does not.
 
 ## Upgrades
 

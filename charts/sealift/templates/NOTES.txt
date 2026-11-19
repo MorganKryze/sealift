@@ -26,8 +26,9 @@ The ingress is off. The service {{ include "sealift.fullname" . }} listens on po
 {{- end }}
 {{- if .Values.networkPolicy.enabled }}
 
-Network policy: check that the cluster enforces it. From a namespace other than {{ .Values.networkPolicy.ingressNamespace }}, this must time out:
-  kubectl run reach-check --rm -it --restart=Never --image=<curl-image> -- curl -m 5 http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz
+Network policy: check that the cluster enforces it. From a pod in a namespace other than {{ .Release.Namespace }} and {{ .Values.networkPolicy.ingressNamespace }}, the request below must time out or be refused. The pod runs this release's own image, so no other image is needed. Where Harbor asks for credentials, that namespace needs the pull secret too.
+  kubectl -n <other-namespace> run reach-check --rm -i --restart=Never --image={{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }} --command -- node -e 'fetch("http://{{ include "sealift.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name))'
+The pod must start and print one line. "blocked: TimeoutError" or "blocked: TypeError" means the policy holds. "reached 200" means the network plugin ignores the policy. A pod that never starts (ErrImagePull, Pending) or a kubectl that ends with "timed out waiting for the condition" proves nothing.
 {{- else }}
 
 Warning: the network policy is off. Any pod of the cluster can reach the service. The service still checks every token.

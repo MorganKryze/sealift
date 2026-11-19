@@ -811,8 +811,21 @@ func TestChartNetworkPolicy(t *testing.T) {
 		}
 	})
 	t.Run("the notes give the reach check when on", func(t *testing.T) {
-		if notes := installNotes(t); !strings.Contains(notes, "kubectl run") || !strings.Contains(notes, "curl -m 5") {
-			t.Errorf("notes lack the reach check:\n%s", notes)
+		notes := installNotes(t)
+		for _, want := range []string{
+			"kubectl -n <other-namespace> run reach-check",
+			"--image=ghcr.io/morgankryze/sealift:",
+			"--command -- node -e",
+			"AbortSignal.timeout(5000)",
+			"http://rel-sealift.default.svc:8080/healthz",
+			"proves nothing",
+		} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("notes lack %q:\n%s", want, notes)
+			}
+		}
+		if strings.Contains(notes, "<curl-image>") {
+			t.Errorf("notes name an image the kit never brings:\n%s", notes)
 		}
 	})
 }

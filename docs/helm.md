@@ -87,14 +87,14 @@ The NetworkPolicy admits traffic from the ingress controller's namespace only, n
 
 ## The install notes
 
-`helm install` and an Argo CD sync print notes with:
+`helm install` prints notes. An Argo CD sync does not: it renders the chart with `helm template`, and the runbook holds the same commands for that case. The notes hold:
 
 - the address, or the annotations for a hand-written Ingress;
 - the command for the service's logs;
 - the Secret to create, with its three keys;
 - the public key's sha256, to compare with the collection's Settings;
 - a warning when persistence is off;
-- the command that checks the network policy, or a warning when the policy is off.
+- the command that checks the network policy, which runs the release's own image in another namespace and prints one line, or a warning when the policy is off.
 
 ## Rollback list
 
