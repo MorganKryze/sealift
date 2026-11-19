@@ -36,7 +36,10 @@ func TestConnectedCompose(t *testing.T) {
 				Test []string
 			}
 		}
-		Volumes map[string]any
+		Volumes map[string]struct {
+			External bool
+			Name     string
+		}
 	}
 	load(t, "connected/compose.yaml", &c)
 	if len(c.Services) != 1 {
@@ -78,8 +81,10 @@ func TestConnectedCompose(t *testing.T) {
 		}
 		if data == "" {
 			t.Errorf("%s: no volume mounted at /data", name)
-		} else if _, ok := c.Volumes[data]; !ok {
+		} else if v, ok := c.Volumes[data]; !ok {
 			t.Errorf("%s: /data source %q is not a named volume", name, data)
+		} else if !v.External || v.Name != "sealift-data" {
+			t.Errorf("%s: volume %q = %+v, want external and named sealift-data, so a volume from a docker run install is kept", name, data, v)
 		}
 		if !strings.Contains(strings.Join(s.Healthcheck.Test, " "), "/healthz") {
 			t.Errorf("%s: healthcheck = %v, want /healthz", name, s.Healthcheck.Test)

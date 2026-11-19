@@ -30,16 +30,16 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 | `image.digest` | empty | When set, the pod pulls this digest |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | Secrets that let the pod pull from Harbor |
-| `nexus.url` | required | The Nexus address |
+| `nexus.url` | required | The Nexus address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `nexus.repository` | required | The npm hosted repository the import publishes into |
 | `nexus.user` | required | The import's Nexus user |
-| `keycloak.realmUrl` | required | The realm's address |
+| `keycloak.realmUrl` | required | The realm's address. The chart refuses `http://` and names the key |
 | `keycloak.clientId` | required | The client of the import's oauth2-proxy, and the token's audience |
 | `keycloak.issuer` | empty | Empty means `realmUrl` |
 | `keycloak.audience` | empty | Empty means `clientId` |
-| `keycloak.keySetUrl` | empty | Empty means `<realmUrl>/protocol/openid-connect/certs` |
+| `keycloak.keySetUrl` | empty | Empty means `<realmUrl>/protocol/openid-connect/certs`. The chart refuses `http://` and names the key |
 | `token.header` | `X-Auth-Request-Access-Token` | The one request header the service reads the token from. The chart writes the same value into the Ingress's `auth-response-headers` |
-| `minio.url` | required | The MinIO address |
+| `minio.url` | required | The MinIO address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `minio.region` | `us-east-1` | |
 | `secret.name` | required | A Secret you create, with the keys `nexus-password`, `minio-access-key` and `minio-secret-key` |
 | `publicKey.pem` | required unless a ConfigMap is named | The collection's public key as one PEM block |
@@ -73,7 +73,7 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 
 ## Storage
 
-Persistence is on by default. The chart creates a claim with `helm.sh/resource-policy: keep` and the Argo CD sync options `Prune=false,Delete=false`, so `helm uninstall`, and a prune or delete by Argo CD, leave the claim and its records in place. A claim left behind after a planned removal is deleted by hand. The service writes to it as group 2000.
+Persistence is on by default. The chart creates a claim with `helm.sh/resource-policy: keep` and the Argo CD sync options `Prune=false,Delete=false`, so `helm uninstall`, and a prune or delete by Argo CD, leave the claim and its records in place. A claim left behind after a planned removal is deleted by hand, after a backup of its records: [the runbook](runbook.md#backup-and-restore) shows how, and how to restore. Take one before each upgrade as well. The service writes to it as group 2000.
 
 With `persistence.enabled: false`, `/data` is an `emptyDir`. Import records, and an import that is running, are lost when the pod is replaced. The install notes say so.
 
