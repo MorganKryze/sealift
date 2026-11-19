@@ -411,7 +411,7 @@ Step 8 needs a network plugin that enforces NetworkPolicy. Without it, any pod o
 ```sh
 kubectl -n <other-namespace> run reach-check --rm -i --restart=Never \
   --image=<harbor-host>/<harbor-project>/sealift:0.6.0 \
-  --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log("blocked:",e.name,e.cause&&e.cause.code))'
+  --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log(["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")))'
 ```
 
 The expected result is one printed line that begins `blocked: TimeoutError`: the packet was dropped, so the policy is enforced. A `reached 200` line means the policy is not enforced. Any `blocked: TypeError` line, with `ENOTFOUND` or `ECONNREFUSED` after it, is not a pass: the table says what each means.
@@ -574,8 +574,8 @@ The output has three parts:
 | Part | What it holds |
 | --- | --- |
 | `Published by this import:` | One `name@version` per package that an attempt uploaded |
-| `Possibly published, check each in Nexus first:` | Each package that may have landed, followed by one line for every attempt that touched it: the attempt's number, its failure kind, its reason, and the times it started and ended |
-| Never uploaded | Each package whose every attempt failed before any upload: the reason starts with `repository check failed:`, or the kind is `conflict`, `mismatch` or `source` |
+| `Possibly published, check each in Nexus first:` | Each package that may have landed, followed by one line for every attempt that touched it, in the form `attempt <n>: state=<state> kind=<kind> reason=<reason> started=<time> ended=<time>`, with `-` for a value the record does not hold |
+| `Never uploaded, nothing to remove:` | Each package whose every attempt failed before any upload: the reason starts with `repository check failed:`, or the kind is `conflict`, `mismatch` or `source` |
 
 An import that ended `Complete` has the first part only. A line `<path> is not an import record` on stderr, or a usage line, means the path is wrong and nothing was listed.
 
