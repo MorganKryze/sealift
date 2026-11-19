@@ -120,7 +120,7 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 
 // Ready reports whether an analysis or export can run without sealift
 // installing anything on its own: an active Trivy, a vulnerability
-// database and a signature key, all already on the data volume. It never
+// database, both already on the data volume. It never
 // reaches the network: what an analysis needs is what is already there,
 // not what GitHub currently offers.
 func (m *Manager) Ready() (ready bool, missing []string) {
@@ -130,9 +130,6 @@ func (m *Manager) Ready() (ready bool, missing []string) {
 	}
 	if m.trivyDBDate().IsZero() {
 		missing = append(missing, "trivy-db")
-	}
-	if m.vol.Settings().SignatureKey == "" {
-		missing = append(missing, "signature-key")
 	}
 	return len(missing) == 0, missing
 }

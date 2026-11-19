@@ -22,9 +22,6 @@ import (
 )
 
 const (
-	testKey      = "test-key"
-	otherKey     = "other-key-value"
-	sameLenKey   = "test-kez"
 	alphaBody    = "alpha"
 	betaBody     = "beta"
 	alphaFile    = "alpha-1.0.0.tgz"
@@ -47,7 +44,6 @@ func baseItems() []item {
 		{name: "out/", typeflag: tar.TypeDir},
 		reg("out/"+alphaFile, alphaBody),
 		reg("out/"+betaFile, betaBody),
-		reg("out/signature.key", testKey),
 	}
 }
 
@@ -107,7 +103,7 @@ func newFixture(t *testing.T, items []item) fixture {
 	return fixture{
 		data: data,
 		m: Manifest{
-			FormatVersion: 1, ToolVersion: "0.3.0", AnalysisID: "a1", CreatedAt: "2026-09-23T12:04:24Z",
+			FormatVersion: 2, ToolVersion: "0.3.0", AnalysisID: "a1", CreatedAt: "2026-09-23T12:04:24Z",
 			Target:  Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
 			Archive: Summary{SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))},
 			Packages: []Package{
@@ -115,7 +111,7 @@ func newFixture(t *testing.T, items []item) fixture {
 				{Name: "alpha", Version: "1.0.0", File: alphaFile, OriginalIntegrity: sri(alphaBody), ShippedSHA512: shipped(alphaBody)},
 			},
 		},
-		opts: VerifyOptions{SignatureKey: []byte(testKey), Dir: t.TempDir()},
+		opts: VerifyOptions{Dir: t.TempDir()},
 	}
 }
 
@@ -169,36 +165,6 @@ func TestVerifyRefuses(t *testing.T) {
 			reason: alphaFile + " does not match its original integrity",
 		},
 		{
-			name:   "key absent",
-			items:  func() []item { return without(baseItems(), "out/signature.key") },
-			reason: "signature.key is absent",
-		},
-		{
-			name:   "key differs",
-			items:  func() []item { return replace(baseItems(), "out/signature.key", reg("out/signature.key", otherKey)) },
-			reason: "signature.key differs",
-		},
-		{
-			name:   "key of the same length",
-			items:  func() []item { return replace(baseItems(), "out/signature.key", reg("out/signature.key", sameLenKey)) },
-			reason: "signature.key differs",
-		},
-		{
-			name: "key longer than the expected key",
-			items: func() []item {
-				return replace(baseItems(), "out/signature.key", reg("out/signature.key", testKey+"\n"))
-			},
-			reason: "signature.key differs",
-		},
-		{
-			name: "key over 64 KiB",
-			items: func() []item {
-				return replace(baseItems(), "out/signature.key", reg("out/signature.key", strings.Repeat("k", 64<<10+1)))
-			},
-			reason: "signature.key is larger than",
-		},
-		{name: "no expected key", edit: func(f *fixture) { f.opts.SignatureKey = nil }, reason: "no expected signature key"},
-		{
 			name:   "not an archive",
 			items:  func() []item { return nil },
 			edit:   func(f *fixture) { f.data = []byte("plain text"); f.m.Archive = digestOf(f.data) },
@@ -222,7 +188,6 @@ func TestVerifyRefuses(t *testing.T) {
 			}
 			_, err := f.verify()
 			assertRefusal(t, err, tt.reason)
-			assertNoKey(t, err)
 		})
 	}
 }
@@ -230,15 +195,6 @@ func TestVerifyRefuses(t *testing.T) {
 func digestOf(data []byte) Summary {
 	sum := sha256.Sum256(data)
 	return Summary{SHA256: hex.EncodeToString(sum[:]), Size: int64(len(data))}
-}
-
-func assertNoKey(t *testing.T, err error) {
-	t.Helper()
-	for _, secret := range []string{testKey, otherKey, sameLenKey, base64.StdEncoding.EncodeToString([]byte(testKey)), hex.EncodeToString([]byte(testKey))} {
-		if strings.Contains(err.Error(), secret) {
-			t.Errorf("a refusal repeats a key value")
-		}
-	}
 }
 
 func TestVerifyRefusesEntries(t *testing.T) {
@@ -282,7 +238,7 @@ func TestVerifyRefusesEntries(t *testing.T) {
 		{
 			name: "symlink under a listed name",
 			items: func() []item {
-				return replace(baseItems(), "out/"+alphaFile, item{name: "out/" + alphaFile, typeflag: tar.TypeSymlink, link: "/etc/passwd"})
+				return replace(baseItems(), "out/"+betaFile, item{name: "out/" + betaFile, typeflag: tar.TypeSymlink, link: "/etc/passwd"})
 			},
 			reason: "not a regular file",
 		},
@@ -294,11 +250,9 @@ func TestVerifyRefusesEntries(t *testing.T) {
 			reason: "not a regular file",
 		},
 		{
-			name: "symlink under the key name",
-			items: func() []item {
-				return replace(baseItems(), "out/signature.key", item{name: "out/signature.key", typeflag: tar.TypeSymlink, link: "/etc/passwd"})
-			},
-			reason: "not a regular file",
+			name:   "out/signature.key is not listed",
+			items:  func() []item { return append(baseItems(), reg("out/signature.key", "k")) },
+			reason: "out/signature.key is not listed",
 		},
 		{
 			name:   "directory other than out",
@@ -315,8 +269,8 @@ func TestVerifyRefusesEntries(t *testing.T) {
 			items:  func() []item { return append(baseItems(), item{name: "out/", typeflag: tar.TypeDir}) },
 			reason: "appears twice",
 		},
-		{name: "entries", items: baseItems, limits: Limits{Entries: 3}, reason: "more than 3 entries"},
-		{name: "unpacked", items: baseItems, limits: Limits{Unpacked: 10}, reason: "more than 10 bytes unpacked"},
+		{name: "entries", items: baseItems, limits: Limits{Entries: 2}, reason: "more than 2 entries"},
+		{name: "unpacked", items: baseItems, limits: Limits{Unpacked: 4}, reason: "more than 4 bytes unpacked"},
 		{name: "name bytes", items: baseItems, limits: Limits{NameBytes: 10}, reason: "longer than 10 bytes"},
 		{
 			name:   "name bytes by default",
@@ -330,7 +284,6 @@ func TestVerifyRefusesEntries(t *testing.T) {
 			f.opts.Limits = tt.limits
 			_, err := f.verify()
 			assertRefusal(t, err, tt.reason)
-			assertNoKey(t, err)
 		})
 	}
 }
@@ -564,11 +517,10 @@ func TestVerifyRefusesMetaHeadersBeyondTheBound(t *testing.T) {
 			if _, err := f.verify(); err != nil {
 				t.Fatalf("Verify under the default limits: %v", err)
 			}
-			f.opts.Limits = Limits{Entries: 4, Unpacked: 1 << 10}
+			f.opts.Limits = Limits{Entries: 3, Unpacked: 1 << 10}
 			f.opts.Dir = t.TempDir()
 			_, err := f.verify()
 			assertRefusal(t, err, "bytes of tar data")
-			assertNoKey(t, err)
 		})
 	}
 }
@@ -580,7 +532,7 @@ func TestVerifyAcceptsTarFramingWithinTheBound(t *testing.T) {
 	items := replace(baseItems(), "out/"+alphaFile, reg("out/"+name, alphaBody))
 	f := newFixture(t, items)
 	f.m.Packages[1].File = name
-	f.opts.Limits = Limits{Entries: 4, Unpacked: int64(len(alphaBody) + len(betaBody) + len(testKey)), NameBytes: 255}
+	f.opts.Limits = Limits{Entries: 3, Unpacked: int64(len(alphaBody) + len(betaBody)), NameBytes: 255}
 	if _, err := f.verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -607,7 +559,6 @@ func TestReadFailuresKeepTheirReason(t *testing.T) {
 		{"other error", broken, "could not read the archive: disk gone"},
 	}
 	reads := map[string]func(r io.Reader) error{
-		"signature key": func(r io.Reader) error { return checkKey(r, []byte(testKey)) },
 		"tarball": func(r io.Reader) error {
 			_, err := copyPackage(r, &pending{pkg: Package{File: alphaFile}}, t.TempDir())
 			return err

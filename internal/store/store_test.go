@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenCreatesLayoutModes(t *testing.T) {
@@ -67,7 +68,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestSettingsRoundTripKeepsSignatureKey(t *testing.T) {
+func TestSettingsRoundTripKeepsLimits(t *testing.T) {
 	root := t.TempDir()
 	s, err := Open(root)
 	if err != nil {
@@ -75,7 +76,6 @@ func TestSettingsRoundTripKeepsSignatureKey(t *testing.T) {
 	}
 
 	want := defaultSettings
-	want.SignatureKey = "top-secret-key"
 	want.MinReleaseAgeDays = 21
 	if err := s.SaveSettings(want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
@@ -84,13 +84,83 @@ func TestSettingsRoundTripKeepsSignatureKey(t *testing.T) {
 		t.Fatalf("Settings() in memory = %+v, want %+v", got, want)
 	}
 
-	// Reopen to prove the signature key survived on disk, not just in memory.
 	reopened, err := Open(root)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 	if got := reopened.Settings(); got != want {
 		t.Fatalf("Settings() after reopen = %+v, want %+v", got, want)
+	}
+}
+
+func TestOpenRewritesA04Settings(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "private"), privateMode); err != nil {
+		t.Fatalf("mkdir private: %v", err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("testdata", "settings-v0.4.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	path := filepath.Join(root, "private", "settings.json")
+	if err := os.WriteFile(path, fixture, settingsMode); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
+
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	want := Settings{
+		Target:              Target{OS: "linux", CPU: "arm64", Libc: "musl", Node: "20.19.0", PnpmVer: "10.30.1"},
+		MinReleaseAgeDays:   30,
+		ResolveParallelism:  6,
+		DownloadParallelism: 8,
+	}
+	if got := s.Settings(); got != want {
+		t.Fatalf("Settings() = %+v, want %+v", got, want)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	if jsonHasKey(t, raw, "signatureKey") || strings.Contains(string(raw), "lab-signature-key") {
+		t.Fatalf("settings.json still holds the key: %s", raw)
+	}
+	var onDisk Settings
+	if err := json.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("decode settings.json: %v", err)
+	}
+	if onDisk != want {
+		t.Fatalf("settings.json holds %+v, want %+v", onDisk, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != settingsMode {
+		t.Errorf("settings.json mode = %o, want %o", info.Mode().Perm(), settingsMode)
+	}
+
+	// A file already clean is left alone.
+	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	second, err := Open(root)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	if got := second.Settings(); got != want {
+		t.Fatalf("second Open Settings() = %+v, want %+v", got, want)
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if !info.ModTime().Equal(old) {
+		t.Errorf("second Open rewrote settings.json (mtime %v)", info.ModTime())
 	}
 }
 
@@ -115,11 +185,10 @@ func TestSaveSettingsRefusesEmptyTargetField(t *testing.T) {
 
 // TestSettingsJSONMatchesTheContract proves settings.json holds the field
 // names api/openapi.yaml declares (target, os, cpu, libc, node, pnpmVer,
-// signatureKey, minReleaseAgeDays, resolveParallelism, downloadParallelism)
+// minReleaseAgeDays, resolveParallelism, downloadParallelism)
 // instead of the exported Go field names.
 func TestSettingsJSONMatchesTheContract(t *testing.T) {
 	settings := defaultSettings
-	settings.SignatureKey = "top-secret-key"
 
 	data, err := json.Marshal(settings)
 	if err != nil {
@@ -130,7 +199,7 @@ func TestSettingsJSONMatchesTheContract(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal into map: %v", err)
 	}
-	wantKeys := []string{"target", "signatureKey", "minReleaseAgeDays", "resolveParallelism", "downloadParallelism"}
+	wantKeys := []string{"target", "minReleaseAgeDays", "resolveParallelism", "downloadParallelism"}
 	if len(got) != len(wantKeys) {
 		t.Fatalf("Settings JSON keys = %v, want exactly %v", got, wantKeys)
 	}
@@ -165,7 +234,6 @@ func TestSettingsJSONFileRoundTrip(t *testing.T) {
 	}
 
 	want := defaultSettings
-	want.SignatureKey = "top-secret-key"
 	if err := s.SaveSettings(want); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
@@ -174,7 +242,7 @@ func TestSettingsJSONFileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read settings.json: %v", err)
 	}
-	if !jsonHasKey(t, raw, "signatureKey") || !jsonHasKey(t, raw, "minReleaseAgeDays") {
+	if !jsonHasKey(t, raw, "minReleaseAgeDays") {
 		t.Fatalf("settings.json = %s, want contract field names", raw)
 	}
 

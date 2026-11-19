@@ -3,17 +3,19 @@ package service
 import (
 	"context"
 	"errors"
+	"path"
 
 	"github.com/MorganKryze/sealift/internal/importer/s3"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
-// remove deletes the archive and then its manifest from the user's bucket. It
-// runs only after an attempt that put every package in Nexus. Both objects are
-// headed first and each must still carry the ETag the import recorded; if
-// either differs or cannot be read, nothing is deleted and the reason says
-// which. The archive goes first: a manifest left alone does no harm, an
-// archive left without its manifest would be listed as not importable.
+// remove deletes the archive, then its manifest, then its signature from the
+// user's bucket. It runs only after an attempt that put every package in
+// Nexus. The objects are headed first and each must still carry the ETag the
+// import recorded; if one differs or cannot be read, nothing is deleted and
+// the reason says which. The archive goes first: a manifest or a signature
+// left alone does no harm, an archive left without them would be listed as
+// not importable.
 //
 // The check and the delete are two requests. An object replaced in the few
 // milliseconds between them is deleted anyway; MinIO's conditional delete
@@ -23,10 +25,7 @@ func (h *Handlers) remove(ctx context.Context, bucket string, imp imports.Import
 	defer cancel()
 	kept := func(reason string) *imports.Removal { return &imports.Removal{Reason: cleanText(reason)} }
 
-	for _, o := range []struct {
-		what string
-		obj  imports.Object
-	}{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}} {
+	for _, o := range recorded(imp) {
 		got, err := h.objects.Head(ctx, bucket, o.obj.Key)
 		switch {
 		case errors.Is(err, s3.ErrNotFound):
@@ -48,6 +47,14 @@ func (h *Handlers) remove(ctx context.Context, bucket string, imp imports.Import
 		why := minioText(err)
 		h.log.Warn("could not remove a manifest", "id", imp.ID, "error", why)
 		return &imports.Removal{Removed: true, Reason: cleanText("the archive was removed, but the manifest could not be and stays in the folder: " + why)}
+	}
+	// A record of sealift 0.4 holds no signature, and none is deleted for it.
+	if sig := sigOf(imp); sig.Key != "" {
+		if err := h.objects.Delete(ctx, bucket, sig.Key); err != nil {
+			why := minioText(err)
+			h.log.Warn("could not remove a signature", "id", imp.ID, "error", why)
+			return &imports.Removal{Removed: true, Reason: cleanText("the archive and the manifest were removed, but " + path.Base(sig.Key) + " could not be and stays in the folder: " + why)}
+		}
 	}
 	return &imports.Removal{Removed: true}
 }

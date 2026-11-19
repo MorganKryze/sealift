@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MorganKryze/sealift/archive"
 )
 
 // runFixture is one archive, one fake Nexus and the settings that point at it.
@@ -23,9 +25,9 @@ func newRunFixture(t *testing.T) *runFixture {
 	f := newFakeNexus(t)
 	u, _ := url.Parse(f.srv.URL)
 	dir := t.TempDir()
-	arch, manifest := testArchive(t, dir, testKey, [3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"})
+	arch, manifest := testArchive(t, dir, [3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"})
 	return &runFixture{f: f, archives: dir, opts: Options{
-		Settings: Settings{NexusURL: u, Repository: testRepo, User: "sealift-import", Password: Secret(testPassword), SignatureKey: Secret(testKey)},
+		Settings: Settings{NexusURL: u, Repository: testRepo, User: "sealift-import", Password: Secret(testPassword), PublicKey: testPub, PublicKeySHA256: testPubSHA},
 		Archive:  arch, Manifest: manifest, ImportVersion: "0.3.0",
 	}}
 }
@@ -56,7 +58,7 @@ func TestRunRemovesTempDir(t *testing.T) {
 	}{
 		"complete":   {func(r *runFixture) { r.serveUploads() }, "complete"},
 		"incomplete": {func(r *runFixture) { r.f.postStatus = 500 }, "incomplete"},
-		"refused":    {func(r *runFixture) { r.opts.Settings.SignatureKey = Secret("other-key") }, "refused"},
+		"refused":    {func(r *runFixture) { r.opts.ExpectedSHA256 = wrongSHA256 }, "refused"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRunFixture(t)
@@ -83,7 +85,10 @@ func TestRefusedArchivePublishesNothing(t *testing.T) {
 		change func(t *testing.T, r *runFixture)
 		reason string
 	}{
-		"wrong key": {func(_ *testing.T, r *runFixture) { r.opts.Settings.SignatureKey = Secret("other-key") }, "signature.key differs from the expected value"},
+		"another key": {func(_ *testing.T, r *runFixture) {
+			other, _ := newTestKey()
+			r.opts.Settings.PublicKey, r.opts.Settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		}, "the manifest is signed by another key, public key sha256 " + testPubSHA},
 		"damaged archive": {func(t *testing.T, r *runFixture) {
 			b, _ := os.ReadFile(r.opts.Archive)
 			b[len(b)/2] ^= 0xff
@@ -93,9 +98,10 @@ func TestRefusedArchivePublishesNothing(t *testing.T) {
 		}, "archive"},
 		"expected sha256": {func(_ *testing.T, r *runFixture) { r.opts.ExpectedSHA256 = strings.Repeat("ab", 32) }, "differs from the expected sha256"},
 		"manifest missing fields": {func(t *testing.T, r *runFixture) {
-			if err := os.WriteFile(r.opts.Manifest, []byte(`{"formatVersion":1}`), 0o600); err != nil {
+			if err := os.WriteFile(r.opts.Manifest, []byte(`{"formatVersion":2}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			signManifest(t, r.opts.Manifest)
 		}, "toolVersion is missing"},
 		"archive absent": {func(_ *testing.T, r *runFixture) { r.opts.Archive = filepath.Join(r.archives, "absent.tar.gz") }, "could not check the archive:"},
 	} {
@@ -126,7 +132,7 @@ func TestRunLeavesInputUntouched(t *testing.T) {
 		t.Fatal("the archive changed")
 	}
 	left, _ := filepath.Glob(filepath.Join(r.archives, "*"))
-	if len(left) != 2 {
+	if len(left) != 3 {
 		t.Fatalf("directory holds %v", left)
 	}
 }
@@ -148,6 +154,7 @@ func TestRunNotesStrippedPublishConfig(t *testing.T) {
 	if err := os.WriteFile(r.opts.Manifest, []byte(s), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	signManifest(t, r.opts.Manifest)
 	r.serveUploads()
 	rep := r.run(t)
 	if rep.Outcome != "complete" || !strings.Contains(rep.Packages[0].Note, "publishConfig") {
@@ -172,6 +179,7 @@ func TestRunKeepsNoteFromPublish(t *testing.T) {
 			if err := os.WriteFile(r.opts.Manifest, []byte(s), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			signManifest(t, r.opts.Manifest)
 			fake := func(_ context.Context, _ Publisher, pkgs []Package, _ string) []Result {
 				out := make([]Result, len(pkgs))
 				for i, p := range pkgs {
@@ -198,7 +206,7 @@ func TestRunKeepsNoteFromPublish(t *testing.T) {
 func newInterruptFixture(t *testing.T) (r *runFixture, held chan struct{}) {
 	t.Helper()
 	r = newRunFixture(t)
-	arch, manifest := testArchive(t, r.archives, testKey,
+	arch, manifest := testArchive(t, r.archives,
 		[3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"}, [3]string{"right-pad", "1.0.0", "right body"})
 	r.opts.Archive, r.opts.Manifest = arch, manifest
 	held, release := make(chan struct{}), make(chan struct{})

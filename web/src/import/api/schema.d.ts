@@ -115,6 +115,8 @@ export interface components {
             bucket: string;
             /** @description The folder of the bucket the service lists, reads and deletes in */
             folder: string;
+            /** @description The sha256 of the public key every archive's signature must verify with, as the settings file names it */
+            publicKeySha256: string;
         };
         ArchiveList: {
             minioConfigured: boolean;
@@ -172,6 +174,7 @@ export interface components {
             createdAt: string;
             archive: components["schemas"]["Object"];
             manifest: components["schemas"]["Object"];
+            signature?: components["schemas"]["Object"];
             expectedSha256: string;
             /** @description The latest attempt's outcome, or queued or running while it has none */
             outcome: string;
@@ -215,6 +218,8 @@ export interface components {
             packages: components["schemas"]["ReportPackage"][];
             /** @description True when the archive passed its checks against the manifest and the signature key, false when the attempt ended or stands before they passed. Absent in a report written by sealift 0.4.0 or earlier. */
             archiveChecked?: boolean;
+            /** @description The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier. */
+            publicKeySha256?: string;
         };
         ReportArchive: {
             file: string;

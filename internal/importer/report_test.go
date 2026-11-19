@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,7 +96,7 @@ func TestReportMarksUnencrypted(t *testing.T) {
 		t.Run(tc.scheme, func(t *testing.T) {
 			r := newRunFixture(t)
 			r.opts.Settings.NexusURL, _ = url.Parse(tc.scheme + "://nexus.example.internal")
-			r.opts.Settings.SignatureKey = Secret("other-key") // refused before any connection
+			r.opts.ExpectedSHA256 = wrongSHA256 // refused before any connection
 			rep := r.run(t)
 			if rep.Unencrypted != tc.want {
 				t.Errorf("unencrypted = %v", rep.Unencrypted)
@@ -110,7 +112,7 @@ func TestReportMarksUnencrypted(t *testing.T) {
 
 func TestRefusedReport(t *testing.T) {
 	r := newRunFixture(t)
-	r.opts.Settings.SignatureKey = Secret("other-key")
+	r.opts.ExpectedSHA256 = wrongSHA256
 	rep := r.run(t)
 	b, _ := json.Marshal(rep)
 	var doc struct {
@@ -125,7 +127,7 @@ func TestRefusedReport(t *testing.T) {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.Outcome != "refused" || !strings.Contains(doc.Reason, "signature.key differs from the expected value") {
+	if doc.Outcome != "refused" || !strings.Contains(doc.Reason, "differs from the expected sha256") {
 		t.Errorf("outcome %q reason %q", doc.Outcome, doc.Reason)
 	}
 	if doc.Counts["published"]+doc.Counts["present"]+doc.Counts["failed"] != 0 {
@@ -153,4 +155,68 @@ func TestExitCode(t *testing.T) {
 			t.Errorf("%s: %d, want %d", outcome, got, want)
 		}
 	}
+}
+
+func TestReportNamesTheTrustedKey(t *testing.T) {
+	check := func(t *testing.T, rep Report, outcome string) {
+		t.Helper()
+		if rep.Outcome != outcome {
+			t.Fatalf("outcome %q (%s), want %q", rep.Outcome, rep.Reason, outcome)
+		}
+		b, _ := json.Marshal(rep)
+		var doc struct {
+			PublicKeySha256 string `json:"publicKeySha256"`
+		}
+		if err := json.Unmarshal(b, &doc); err != nil || doc.PublicKeySha256 != testPubSHA {
+			t.Errorf("json publicKeySha256 %q (%v), want %q:\n%s", doc.PublicKeySha256, err, testPubSHA, b)
+		}
+		var text bytes.Buffer
+		_ = rep.WriteText(&text)
+		if !strings.Contains("\n"+text.String(), "\npublic key sha256: "+testPubSHA+"\n") {
+			t.Errorf("text has no public key sha256 line:\n%s", text.String())
+		}
+		lines := strings.Split(text.String(), "\n")
+		for i, l := range lines {
+			if strings.HasPrefix(l, "import version: ") && !strings.HasPrefix(lines[i+1], "public key sha256: ") {
+				t.Errorf("the key line does not follow the import version line:\n%s", text.String())
+			}
+		}
+	}
+	t.Run("complete", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		check(t, r.run(t), OutcomeComplete)
+	})
+	t.Run("incomplete", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.f.postStatus = 500
+		check(t, r.run(t), OutcomeIncomplete)
+	})
+	t.Run("refused", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.opts.ExpectedSHA256 = wrongSHA256
+		check(t, r.run(t), OutcomeRefused)
+	})
+	t.Run("refused as unsigned", func(t *testing.T) {
+		r := newRunFixture(t)
+		if err := os.Remove(r.opts.Manifest + ".sig"); err != nil {
+			t.Fatal(err)
+		}
+		check(t, r.run(t), OutcomeRefused)
+	})
+	t.Run("the early failure", func(t *testing.T) {
+		r := newRunFixture(t)
+		t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "absent"))
+		check(t, r.run(t), OutcomeRefused)
+	})
+	t.Run("a record from 0.4 has no field", func(t *testing.T) {
+		var rep Report
+		if err := json.Unmarshal([]byte(`{"outcome":"complete","archiveChecked":true}`), &rep); err != nil || rep.PublicKeySHA256 != "" {
+			t.Fatalf("got %+v, %v", rep, err)
+		}
+		b, _ := json.Marshal(rep)
+		if strings.Contains(string(b), "publicKeySha256") {
+			t.Errorf("an empty key is written: %s", b)
+		}
+	})
 }

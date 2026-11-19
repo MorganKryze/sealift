@@ -105,6 +105,7 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
+	handlers.ListenAddr = addr
 
 	static, err := web.Static()
 	if err != nil {

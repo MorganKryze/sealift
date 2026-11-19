@@ -20,7 +20,10 @@ func fileSource(opts Options) Source {
 	open := func(path string) func(context.Context) (io.ReadCloser, error) {
 		return func(context.Context) (io.ReadCloser, error) { return os.Open(path) }
 	}
-	return Source{Name: "packages_npm.tar.gz", Manifest: open(opts.Manifest), Archive: open(opts.Archive)}
+	return Source{
+		Name: "packages_npm.tar.gz", SignatureName: "manifest.json.sig",
+		Manifest: open(opts.Manifest), Signature: open(opts.Manifest + ".sig"), Archive: open(opts.Archive),
+	}
 }
 
 // attemptOf builds an attempt over the fixture's files with a fresh directory.
@@ -146,7 +149,7 @@ func TestRunAttemptRemovesWorkFiles(t *testing.T) {
 	}{
 		"complete":   {func(r *runFixture, _ *Attempt) { r.serveUploads() }, OutcomeComplete},
 		"incomplete": {func(r *runFixture, _ *Attempt) { r.f.postStatus = 500 }, OutcomeIncomplete},
-		"refused":    {func(_ *runFixture, a *Attempt) { a.Settings.SignatureKey = Secret("other-key") }, OutcomeRefused},
+		"refused":    {func(_ *runFixture, a *Attempt) { a.ExpectedSHA256 = wrongSHA256 }, OutcomeRefused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRunFixture(t)
@@ -238,7 +241,7 @@ func TestRunAttemptReportsUnencrypted(t *testing.T) {
 	r := newRunFixture(t)
 	a := r.attemptOf(t)
 	a.Unencrypted = true
-	a.Settings.SignatureKey = Secret("other-key") // refused: no Nexus needed
+	a.ExpectedSHA256 = wrongSHA256 // refused: no Nexus needed
 	rep := r.runAttempt(t, a)
 	if !rep.Unencrypted || rep.Archive.File != "packages_npm.tar.gz" {
 		t.Fatalf("got %+v", rep)
@@ -286,4 +289,138 @@ func TestRunAttemptCutsReasonsAtAThousandCharacters(t *testing.T) {
 			}
 		}
 	})
+}
+
+// counts holds how often an attempt opened each object. countOpens makes the
+// manifest opener serve later on every call after the first, to show that a
+// second read would see other bytes.
+type counts struct{ manifest, signature, archive int }
+
+func countOpens(a *Attempt, later []byte) *counts {
+	n := &counts{}
+	manifest, signature, arch := a.Source.Manifest, a.Source.Signature, a.Source.Archive
+	a.Source.Manifest = func(ctx context.Context) (io.ReadCloser, error) {
+		n.manifest++
+		if n.manifest > 1 && later != nil {
+			return io.NopCloser(bytes.NewReader(later)), nil
+		}
+		return manifest(ctx)
+	}
+	a.Source.Signature = func(ctx context.Context) (io.ReadCloser, error) { n.signature++; return signature(ctx) }
+	a.Source.Archive = func(ctx context.Context) (io.ReadCloser, error) { n.archive++; return arch(ctx) }
+	return n
+}
+
+func TestAttemptVerifiesBeforeParsing(t *testing.T) {
+	other, _ := newTestKey()
+	for name, tc := range map[string]struct {
+		setup   func(t *testing.T, r *runFixture, a *Attempt)
+		later   []byte // what a second read of the manifest would return
+		outcome string
+		reason  string
+		want    counts
+		checked bool
+	}{
+		"verifies, then a wrong sha256": {func(_ *testing.T, _ *runFixture, a *Attempt) { a.ExpectedSHA256 = wrongSHA256 },
+			nil, OutcomeRefused, "differs from the expected sha256", counts{1, 1, 1}, false},
+		"another key": {func(_ *testing.T, _ *runFixture, a *Attempt) {
+			a.Settings.PublicKey, a.Settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		}, nil, OutcomeRefused, "the manifest is signed by another key, public key sha256 " + testPubSHA, counts{1, 1, 0}, false},
+		"a broken manifest with a stale signature": {func(t *testing.T, r *runFixture, _ *Attempt) {
+			if err := os.WriteFile(r.opts.Manifest, []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, nil, OutcomeRefused, "the signature does not match the manifest", counts{1, 1, 0}, false},
+		"a broken manifest, signed": {func(t *testing.T, r *runFixture, _ *Attempt) {
+			if err := os.WriteFile(r.opts.Manifest, []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			signManifest(t, r.opts.Manifest)
+		}, nil, OutcomeRefused, "the manifest is not valid JSON", counts{1, 1, 0}, false},
+		"the verified bytes are the parsed bytes": {func(_ *testing.T, r *runFixture, _ *Attempt) { r.serveUploads() },
+			[]byte("{"), OutcomeComplete, "", counts{1, 1, 1}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRunFixture(t)
+			a := r.attemptOf(t)
+			tc.setup(t, r, &a)
+			n := countOpens(&a, tc.later)
+			rep := r.runAttempt(t, a)
+			if rep.Outcome != tc.outcome || !strings.Contains(rep.Reason, tc.reason) {
+				t.Fatalf("outcome %q reason %q, want %q containing %q", rep.Outcome, rep.Reason, tc.outcome, tc.reason)
+			}
+			if *n != tc.want {
+				t.Errorf("opened manifest %d, signature %d, archive %d times; want %+v", n.manifest, n.signature, n.archive, tc.want)
+			}
+			if rep.ArchiveChecked == nil || *rep.ArchiveChecked != tc.checked {
+				t.Errorf("archiveChecked %v, want %v", rep.ArchiveChecked, tc.checked)
+			}
+			if tc.outcome == OutcomeRefused && tc.want.archive == 0 && (rep.ToolVersion != "" || rep.AnalysisID != "" || rep.Archive.SHA256 != "") {
+				t.Errorf("a refusal before the manifest is parsed reports manifest values: %+v", rep)
+			}
+		})
+	}
+}
+
+// overrun serves spaces and fails once a reader asks for a byte past the
+// first limit, so only a bounded read ends before the failure.
+type overrun struct{ served, limit int }
+
+func (o *overrun) Read(p []byte) (int, error) {
+	if o.served >= o.limit {
+		return 0, errors.New("read past the bound")
+	}
+	n := min(len(p), o.limit-o.served)
+	for i := range n {
+		p[i] = ' '
+	}
+	o.served += n
+	return n, nil
+}
+
+func (o *overrun) Close() error { return nil }
+
+func TestAttemptReadsAtMostOneByteOverTheSignatureBound(t *testing.T) {
+	r := newRunFixture(t)
+	a := r.attemptOf(t)
+	body := &overrun{limit: archive.MaxSignatureSize + 1}
+	a.Source.Signature = func(context.Context) (io.ReadCloser, error) { return body, nil }
+	rep := r.runAttempt(t, a)
+	if rep.Outcome != OutcomeRefused || !strings.Contains(rep.Reason, "it is larger than 4096 bytes") {
+		t.Fatalf("outcome %q reason %q, want a refusal naming the 4096 bytes", rep.Outcome, rep.Reason)
+	}
+	if body.served > archive.MaxSignatureSize+1 {
+		t.Errorf("read %d bytes of the signature, want at most %d", body.served, archive.MaxSignatureSize+1)
+	}
+}
+
+func TestAttemptSignatureRefusals(t *testing.T) {
+	for name, tc := range map[string]struct {
+		signature func(context.Context) (io.ReadCloser, error)
+		outcome   string
+		reason    string
+	}{
+		"unsigned": {func(context.Context) (io.ReadCloser, error) { return nil, ErrUnsigned }, OutcomeRefused,
+			"the archive is unsigned: manifest.json.sig is missing beside the manifest"},
+		"unreadable": {func(context.Context) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("not json")), nil }, OutcomeRefused,
+			"manifest.json.sig is not a signature this import reads: it is not a JSON object"},
+		"over 4 KiB": {func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(strings.Repeat(" ", archive.MaxSignatureSize+1))), nil
+		}, OutcomeRefused, "it is larger than 4096 bytes"},
+		"the source failed": {func(context.Context) (io.ReadCloser, error) { return nil, fmt.Errorf("%w: gone", ErrSource) }, OutcomeIncomplete,
+			"gone"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRunFixture(t)
+			a := r.attemptOf(t)
+			a.Source.Signature = tc.signature
+			rep := r.runAttempt(t, a)
+			if rep.Outcome != tc.outcome || !strings.Contains(rep.Reason, tc.reason) {
+				t.Fatalf("outcome %q reason %q, want %q containing %q", rep.Outcome, rep.Reason, tc.outcome, tc.reason)
+			}
+			if r.built != 0 || len(r.f.requests) != 0 {
+				t.Errorf("publisher built %d times, %d requests", r.built, len(r.f.requests))
+			}
+		})
+	}
 }

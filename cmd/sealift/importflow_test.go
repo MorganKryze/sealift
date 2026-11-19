@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,27 +28,31 @@ import (
 const (
 	flowArchiveKey  = "packages/npm/a/packages_npm.tar.gz"
 	flowManifestKey = "packages/npm/a/manifest.json"
+	flowSigKey      = "packages/npm/a/manifest.json.sig"
 	flowSecret      = "test-minio-secret"
 )
 
-// flowMinIO serves alice's two objects. When hold is set, the archive read
+// flowMinIO serves alice's three objects. When hold is set, the archive read
 // sends one byte, signals gotArchive and blocks until its request ends.
 type flowMinIO struct {
-	srv                   *httptest.Server
-	archive, manifest     []byte
-	hold                  bool
-	gotArchive            chan struct{}
-	archiveETag, manifETg string
+	srv                             *httptest.Server
+	archive, manifest, signature    []byte
+	hold                            bool
+	gotArchive                      chan struct{}
+	archiveETag, manifETg, signETag string
 }
 
 func newFlowMinIO(t *testing.T, f importFixture, hold bool) *flowMinIO {
 	t.Helper()
-	m := &flowMinIO{hold: hold, gotArchive: make(chan struct{}, 1), archiveETag: `"archive-etag"`, manifETg: `"manifest-etag"`}
+	m := &flowMinIO{hold: hold, gotArchive: make(chan struct{}, 1), archiveETag: `"archive-etag"`, manifETg: `"manifest-etag"`, signETag: `"signature-etag"`}
 	var err error
 	if m.archive, err = os.ReadFile(f.archive); err != nil {
 		t.Fatal(err)
 	}
 	if m.manifest, err = os.ReadFile(f.manifest); err != nil {
+		t.Fatal(err)
+	}
+	if m.signature, err = os.ReadFile(f.signature); err != nil {
 		t.Fatal(err)
 	}
 	m.srv = httptest.NewServer(http.HandlerFunc(m.handle))
@@ -59,8 +64,10 @@ func (m *flowMinIO) handle(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("list-type") == "2" {
 		_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`+
 			`<Contents><Key>%s</Key><LastModified>2026-11-06T10:00:00.000Z</LastModified><ETag>%s</ETag><Size>%d</Size></Contents>`+
+			`<Contents><Key>%s</Key><LastModified>2026-11-06T10:00:00.000Z</LastModified><ETag>%s</ETag><Size>%d</Size></Contents>`+
 			`<Contents><Key>%s</Key><LastModified>2026-11-06T10:00:00.000Z</LastModified><ETag>%s</ETag><Size>%d</Size></Contents></ListBucketResult>`,
-			flowArchiveKey, "&#34;archive-etag&#34;", len(m.archive), flowManifestKey, "&#34;manifest-etag&#34;", len(m.manifest))
+			flowArchiveKey, "&#34;archive-etag&#34;", len(m.archive), flowManifestKey, "&#34;manifest-etag&#34;", len(m.manifest),
+			flowSigKey, "&#34;signature-etag&#34;", len(m.signature))
 		return
 	}
 	var body []byte
@@ -70,6 +77,8 @@ func (m *flowMinIO) handle(w http.ResponseWriter, r *http.Request) {
 		body, etag = m.archive, m.archiveETag
 	case "/user-alice/" + flowManifestKey:
 		body, etag = m.manifest, m.manifETg
+	case "/user-alice/" + flowSigKey:
+		body, etag = m.signature, m.signETag
 	default:
 		http.NotFound(w, r)
 		return
@@ -220,7 +229,7 @@ func TestImportServerRunsAnImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{flowSecret, importPassword, importKey, token, "test-access-id"} {
+	for _, secret := range []string{flowSecret, importPassword, hex.EncodeToString(f.priv.Seed()), token, "test-access-id"} {
 		if strings.Contains(seen, secret) {
 			t.Errorf("the log or a file under -data holds %q", secret)
 		}

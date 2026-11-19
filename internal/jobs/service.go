@@ -191,9 +191,6 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	}
 
 	settings := s.store.Settings()
-	if settings.SignatureKey == "" {
-		return store.ExportInfo{}, ErrSignatureKeyMissing
-	}
 	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
 		return store.ExportInfo{}, ErrNothingToExport
 	}

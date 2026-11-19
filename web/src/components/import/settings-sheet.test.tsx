@@ -37,8 +37,10 @@ function renderSheet(answer: () => Promise<Response>) {
   )
 }
 
+const KEY = "9f".repeat(32)
+
 const meAnswer = () =>
-  Promise.resolve(new Response(JSON.stringify({ user: "alice", minioConfigured: true, bucket: "user-alice", folder: "packages/npm/" }), { headers: { "Content-Type": "application/json" } }))
+  Promise.resolve(new Response(JSON.stringify({ user: "alice", minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", publicKeySha256: KEY }), { headers: { "Content-Type": "application/json" } }))
 
 describe("SettingsSheet", () => {
   it("offers System, Light and Dark as a segmented control", () => {
@@ -49,6 +51,16 @@ describe("SettingsSheet", () => {
     fireEvent.click(within(group).getByRole("radio", { name: "Dark" }))
     expect(within(group).getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true")
     expect(document.documentElement).toHaveClass("dark")
+  })
+
+  it("shows the trusted key's sha256 in full, with a copy control and what it is for", async () => {
+    renderSheet(meAnswer)
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    const sheet = screen.getByRole("dialog", { name: "Settings" })
+    expect(await within(sheet).findByText(KEY)).toBeInTheDocument()
+    expect(within(sheet).getByText("Public key sha256")).toBeInTheDocument()
+    expect(within(sheet).getByRole("button", { name: "Copy public key sha256" })).toBeInTheDocument()
+    expect(within(sheet).getByText("Archives must be signed by the key with this sha256. Compare it with the one in sealift's Settings on the connected side.")).toBeInTheDocument()
   })
 
   it("shows the bucket and the folder, read only", async () => {
@@ -64,7 +76,7 @@ describe("SettingsSheet", () => {
     renderSheet(() => Promise.reject(new TypeError("Failed to fetch")))
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     const sheet = screen.getByRole("dialog", { name: "Settings" })
-    expect(await within(sheet).findAllByText("Not read")).toHaveLength(2)
+    expect(await within(sheet).findAllByText("Not read")).toHaveLength(3)
   })
 
   it("Escape closes the sheet and focus returns to Settings", () => {

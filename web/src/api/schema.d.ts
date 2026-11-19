@@ -270,11 +270,48 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get settings, with signatureKey masked */
+        /** Get settings */
         get: operations["getSettings"];
         /** Update settings */
         put: operations["updateSettings"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/signing-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The public half of the key that signs exports */
+        get: operations["getSigningKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/signing-key/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace the signing key with a new pair
+         * @description Answers 403 for a Host or an Origin that is not this server's own, for Sec-Fetch-Site cross-site, and for a body that is not application/json. The old key stays in use when the new one cannot be written.
+         */
+        post: operations["regenerateSigningKey"];
         delete?: never;
         options?: never;
         head?: never;
@@ -407,11 +444,16 @@ export interface components {
         /** @description Every value the interface can change. */
         Settings: {
             target: components["schemas"]["Target"];
-            /** @description Masked on read, never logged */
-            signatureKey: string;
             minReleaseAgeDays: number;
             resolveParallelism: number;
             downloadParallelism: number;
+        };
+        /** @description The public half of the key that signs exports. The private half is never served. */
+        SigningKey: {
+            /** @description One PKIX PUBLIC KEY PEM block */
+            publicKeyPem: string;
+            /** @description Lowercase hex sha256 of the key's DER SubjectPublicKeyInfo */
+            publicKeySha256: string;
         };
         /** @description One row of the projects list. */
         ProjectSummary: {
@@ -547,7 +589,7 @@ export interface components {
             latestSizeBytes: number;
             /** @description Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age */
             trivyRecommended?: string;
-            /** @description Whether trivy, its database and a signature key are all in place */
+            /** @description Whether trivy and its database are both in place */
             ready: boolean;
             /** @description Names of what ready needs and does not have yet */
             missing: string[];
@@ -1073,7 +1115,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated settings, with signatureKey masked */
+            /** @description Updated settings */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1082,6 +1124,54 @@ export interface operations {
                     "application/json": components["schemas"]["Settings"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getSigningKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The public key in PEM form and its public key sha256 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKey"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    regenerateSigningKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The new public key and its public key sha256 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKey"];
+                };
+            };
+            403: components["responses"]["Problem"];
+            500: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };

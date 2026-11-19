@@ -11,13 +11,13 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 ## Using sealift
 
 - [How sealift chooses](how-sealift-chooses.md): the proposal, the signals, the minimum release age.
-- [Settings](settings.md): the target platform, the signature key, the limits.
-- [The air gap](air-gap.md): what crosses the kiosk, what to check, what the import side receives.
-- [Importing](importing.md): the Archives, Imports and import screens of the import service, with every state.
+- [Settings](settings.md): the target platform, the signing key, the limits.
+- [The air gap](air-gap.md): what crosses the kiosk, the signature and the trusted key, what to check, what the import side receives.
+- [Importing](importing.md): the Archives, Imports and import screens of the import service, the trusted key and every state.
 
 ## Deploying
 
-- [Deployment](deployment.md): Compose, reverse proxy, the data volume, upgrades and backups.
+- [Deployment](deployment.md): Compose, reverse proxy, the data volume, the key the import trusts, upgrades and backups.
 
 ## Reference
 

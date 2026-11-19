@@ -2,6 +2,7 @@ package importer
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/MorganKryze/sealift/archive"
 )
 
 const (
@@ -48,17 +51,26 @@ func (Secret) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redacted) }
 
 // Settings are the values the import reads from its settings file.
 type Settings struct {
-	NexusURL     *url.URL
-	Repository   string
-	User         string
-	Password     Secret
-	CAFile       string
-	SignatureKey Secret
+	NexusURL   *url.URL
+	Repository string
+	User       string
+	Password   Secret
+	CAFile     string
+	// PublicKey is the only key a manifest signature may verify with, and
+	// PublicKeySHA256 its fingerprint, as the reports and the screens show it.
+	PublicKey       ed25519.PublicKey
+	PublicKeySHA256 string
 	// Token is the realm the import service checks tokens against; nil when the file has no token section.
 	Token *TokenSettings
 	// MinIO is the store the import service lists; nil when the file has no minio section.
 	MinIO *MinIOSettings
+	// Files names the settings file and every file it points to, as the
+	// field that names each: a command must not write over any of them.
+	Files []NamedFile
 }
+
+// NamedFile is a path and the settings field that names it.
+type NamedFile struct{ Field, Path string }
 
 // MinIOSettings name the MinIO endpoint the import service reads and the service key it signs with.
 type MinIOSettings struct {
@@ -101,8 +113,8 @@ type rawSettings struct {
 		PasswordFile string `yaml:"passwordFile"`
 		CAFile       string `yaml:"caFile"`
 	} `yaml:"nexus"`
-	SignatureKeyFile string `yaml:"signatureKeyFile"`
-	Token            *struct {
+	PublicKeyFile string `yaml:"publicKeyFile"`
+	Token         *struct {
 		KeySetURL string `yaml:"keySetUrl"`
 		Issuer    string `yaml:"issuer"`
 		Audience  string `yaml:"audience"`
@@ -136,7 +148,7 @@ func LoadSettings(path string) (Settings, error) {
 	}
 	for _, r := range []struct{ field, value string }{
 		{"nexus.url", raw.Nexus.URL}, {"nexus.repository", raw.Nexus.Repository}, {"nexus.user", raw.Nexus.User},
-		{"nexus.passwordFile", raw.Nexus.PasswordFile}, {"signatureKeyFile", raw.SignatureKeyFile},
+		{"nexus.passwordFile", raw.Nexus.PasswordFile}, {"publicKeyFile", raw.PublicKeyFile},
 	} {
 		if r.value == "" {
 			return Settings{}, settingsErr(r.field, "is required")
@@ -154,15 +166,20 @@ func LoadSettings(path string) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	key, err := readSecret("signatureKeyFile", resolve(dir, raw.SignatureKeyFile))
+	key, err := readPublicKey(resolve(dir, raw.PublicKeyFile))
 	if err != nil {
 		return Settings{}, err
 	}
-	s := Settings{NexusURL: u, Repository: raw.Nexus.Repository, User: raw.Nexus.User, Password: password, SignatureKey: key}
+	s := Settings{
+		Files:    []NamedFile{{"the settings file", path}, {"nexus.passwordFile", resolve(dir, raw.Nexus.PasswordFile)}, {"publicKeyFile", resolve(dir, raw.PublicKeyFile)}},
+		NexusURL: u, Repository: raw.Nexus.Repository, User: raw.Nexus.User, Password: password,
+		PublicKey: key, PublicKeySHA256: archive.PublicKeySHA256(key),
+	}
 	if raw.Nexus.CAFile != "" {
 		if s.CAFile, err = certFile("nexus.caFile", dir, raw.Nexus.CAFile); err != nil {
 			return Settings{}, err
 		}
+		s.Files = append(s.Files, NamedFile{"nexus.caFile", s.CAFile})
 	}
 	if raw.Token != nil {
 		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile); err != nil {
@@ -173,6 +190,15 @@ func LoadSettings(path string) (Settings, error) {
 		m := raw.MinIO
 		if s.MinIO, err = loadMinIO(dir, m.URL, m.Region, m.AccessKeyFile, m.SecretKeyFile, m.CAFile); err != nil {
 			return Settings{}, err
+		}
+	}
+	if s.Token != nil && s.Token.CAFile != "" {
+		s.Files = append(s.Files, NamedFile{"token.caFile", s.Token.CAFile})
+	}
+	if s.MinIO != nil {
+		s.Files = append(s.Files, NamedFile{"minio.accessKeyFile", resolve(dir, raw.MinIO.AccessKeyFile)}, NamedFile{"minio.secretKeyFile", resolve(dir, raw.MinIO.SecretKeyFile)})
+		if s.MinIO.CAFile != "" {
+			s.Files = append(s.Files, NamedFile{"minio.caFile", s.MinIO.CAFile})
 		}
 	}
 	return s, nil
@@ -275,6 +301,21 @@ func readSecret(field, path string) (Secret, error) {
 		return nil, settingsErr(field, "points to an empty file")
 	}
 	return Secret(data), nil
+}
+
+// readPublicKey reads the trusted key file. Its error names the field and the
+// problem, never the file's content.
+func readPublicKey(path string) (ed25519.PublicKey, error) {
+	const field = "publicKeyFile"
+	data, err := readBounded(path, archive.MaxPublicKeySize)
+	if err != nil {
+		return nil, readError(field, err)
+	}
+	key, err := archive.ParsePublicKeyPEM(data)
+	if err != nil {
+		return nil, settingsErr(field, "is not one Ed25519 PUBLIC KEY PEM block: "+err.Error())
+	}
+	return key, nil
 }
 
 // readBounded reads a file of at most limit bytes.

@@ -11,11 +11,6 @@ import (
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
-// maskedSignatureKey is what GetSettings returns for a non-empty
-// signatureKey, and what UpdateSettings reads as "keep the current value":
-// the setting is never echoed back in the clear once it has been set.
-const maskedSignatureKey = "********"
-
 // manifestSizeLimit bounds an uploaded package.json: real ones run a few
 // kilobytes at most, so this only guards against a client sending far more
 // than a manifest ever needs to be.
@@ -25,10 +20,13 @@ const manifestSizeLimit = 1 << 20
 // every operation reads or writes through Store, Service or Tools.
 type Handlers struct {
 	*EventsHandler
-	Store   *store.Store
-	Service *jobs.Service
-	Tools   *tools.Manager
-	Trivy   runner.Trivy
+	// ListenAddr is the address the server listens on; its host may send a
+	// regenerate of the signing key.
+	ListenAddr string
+	Store      *store.Store
+	Service    *jobs.Service
+	Tools      *tools.Manager
+	Trivy      runner.Trivy
 }
 
 // problemBody is the shape every operation's default response carries.
@@ -49,14 +47,14 @@ func problem(status int, title string, err error) problemBody {
 
 // statusFor picks the HTTP status a plain error (not a validation failure,
 // which callers build their own Problem for) maps to: a sentinel the
-// caller could have avoided by asking first (a missing signature key, an
-// analysis not done yet, a release too young) gets its own status rather
-// than the 500 an unexpected failure gets.
+// caller could have avoided by asking first (an analysis not done yet, a
+// release too young) gets its own status rather than the 500 an
+// unexpected failure gets.
 func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrSignatureKeyMissing), errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion):
+	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict
@@ -93,11 +91,11 @@ func manifestProblem(problems []manifestValidationEntry) problemBody {
 }
 
 // toolsMissingProblem builds the 409 response for an operation that
-// needs trivy, its database or a signature key before it can queue
+// needs trivy and its database before it can queue
 // anything: the same list tools.Manager.Ready reports on GET /tools, so
 // the web and the API agree on what "ready" means.
 func toolsMissingProblem(missing []string) problemBody {
-	p := NewProblem(http.StatusConflict, "tools not ready", "trivy, its database or the signature key are not installed yet")
+	p := NewProblem(http.StatusConflict, "tools not ready", "trivy or its database is not installed yet")
 	p.Type = ptr("tools-missing")
 	m := missing
 	p.Missing = &m
@@ -168,15 +166,10 @@ func targetFromAPI(t Target) store.Target {
 	return store.Target{OS: t.Os, CPU: t.Cpu, Libc: t.Libc, Node: t.Node, PnpmVer: t.PnpmVer}
 }
 
-// settingsToAPI converts settings for a response, masking signatureKey.
+// settingsToAPI converts settings for a response.
 func settingsToAPI(s store.Settings) Settings {
-	key := ""
-	if s.SignatureKey != "" {
-		key = maskedSignatureKey
-	}
 	return Settings{
 		Target:              targetToAPI(s.Target),
-		SignatureKey:        key,
 		MinReleaseAgeDays:   s.MinReleaseAgeDays,
 		ResolveParallelism:  s.ResolveParallelism,
 		DownloadParallelism: s.DownloadParallelism,

@@ -16,7 +16,7 @@ beforeAll(() => {
 
 afterEach(() => vi.restoreAllMocks())
 
-const me = { user: "alice", minioConfigured: true, bucket: "user-alice", folder: "packages/npm/" }
+const me = { user: "alice", minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", publicKeySha256: "9f".repeat(32) }
 
 async function renderAt(path: string) {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(me), { headers: { "Content-Type": "application/json" } }))

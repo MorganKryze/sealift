@@ -32,12 +32,13 @@ On the connected side, from a project's `package.json`:
 - proposes, for each dependency, the oldest version that fixes the most CVEs, and holds back any release younger than 14 days;
 - flags what deserves a second look: a major jump, a lost provenance, a new publisher, an added install script;
 - lets you review the proposal, change any version, or keep the current one;
-- downloads every package the selection needs, checks each one against the registry's sha512, and packs a reproducible archive.
+- downloads every package the selection needs, checks each one against the registry's sha512, packs a reproducible archive, and signs its manifest with an Ed25519 key.
 
 On the air-gapped side, the team receives:
 
-- `packages_npm.tar.gz`, with every package the new versions need and the `signature.key` the Nexus import checks;
+- `packages_npm.tar.gz`, with every package the new versions need, for the Nexus import;
 - `manifest.json`, with the hashes of every package and of the archive;
+- `manifest.json.sig`, the Ed25519 signature of the manifest, which the import checks with a public key you carry once;
 - `summary.md` and `findings.csv`, with the CVEs before and after, and what remains;
 - a CycloneDX SBOM and Trivy's raw report.
 
@@ -45,10 +46,10 @@ On the air-gapped side, the team receives:
 
 | | |
 | --- | --- |
-| ![The setup screen, listing Trivy, its vulnerability database and the signature key](docs/assets/setup.png) | ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) |
-| **Setup.** sealift lists Trivy, its database and the signature key, with their sizes, and downloads nothing until you press Install. | **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. |
-| ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) | ![Archive ready: the archive with its sha256, and five reports](docs/assets/export-done.png) |
-| **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, then shows its sha256 and the reports. |
+| ![The setup screen, listing Trivy, its vulnerability database and the signing key](docs/assets/setup.png) | ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) |
+| **Setup.** sealift lists Trivy, its database and the signing key it generated, with their sizes, and downloads nothing until you press Install. | **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. |
+| ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) | ![Archive ready: the archive with its sha256, and six files](docs/assets/export-done.png) |
+| **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, signs the manifest, then shows the sha256, the key that signed and the reports. |
 
 ## Quickstart
 
@@ -74,7 +75,7 @@ Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks t
 - npm only. Python packages and Docker images are not handled.
 - The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
 - sealift proposes new versions for direct dependencies. Transitive packages change through them, and the minimum release age does not apply to them.
-- `signature.key` is a shared value in plain text, not a cryptographic signature.
+- The signature shows that a manifest came from the holder of sealift's private key. It does not show who asked for the export, how old it is, or anything about the reports. A regenerated key, or a lost volume, means carrying a new public key to the import side.
 - A malicious package with no published CVE passes the scan.
 - sealift has no login: keep it on `127.0.0.1` or behind an authenticating proxy.
 

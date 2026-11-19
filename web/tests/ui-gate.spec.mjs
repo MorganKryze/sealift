@@ -19,6 +19,11 @@ export const UI = {
     "/sessions/demo/export",
     "/sessions/missing/review",
   ],
+  // A page with a control pressed first: the state is checked as a route is. `opens` names the role
+  // and name the pressed control must bring up.
+  states: [
+    { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
@@ -60,6 +65,7 @@ export const IMPORT = {
     { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
     { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
     { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
     { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
     { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
     { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
@@ -80,6 +86,10 @@ export const IMPORT = {
     { path: "/imports", user: "alice", open: { role: "button", name: "Settings" }, ready: "Waiting its turn" },
   ],
 }
+
+// A copy button shows "Copy" and keeps its full name for assistive technology. Without the
+// stylesheet's `.sr-only` rule in the import bundle, the full name prints beside the visible word.
+const COPY_BUTTONS = "button:has(> .sr-only)"
 
 // Collection routes the import pages must never call.
 const COLLECTION_API = /^\/api\/(projects|settings|tools|jobs)(\/|$)/
@@ -301,6 +311,26 @@ for (const route of UI.routes) {
   }
 }
 
+for (const state of UI.states) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${state.path} ${state.open.name} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${state.path} · ${state.open.name} · ${width}px · ${theme}`,
+          url: new URL(state.path, UI.baseURL).href,
+          width,
+          theme,
+          ready: async (p) => {
+            await p.getByRole(state.open.role, { name: state.open.name }).click()
+            await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+          },
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
 for (const route of IMPORT.routes) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
@@ -354,8 +384,16 @@ for (const route of IMPORT.routes) {
           },
           extra: async (p) => {
             const violations = await p.evaluate(() => window.__violations)
+            const shown = await p.evaluate((selector) =>
+              [...document.querySelectorAll(selector)]
+                .filter((b) => b.getBoundingClientRect().width > 0 && b.querySelector(":scope > .sr-only").getBoundingClientRect().width > 1)
+                .map((b) => b.innerText.replace(/\s+/g, " ").trim()), COPY_BUTTONS)
             release()
-            return [...stray, ...violations.map((v) => `${where} · content security policy: ${v}`)]
+            return [
+              ...stray,
+              ...violations.map((v) => `${where} · content security policy: ${v}`),
+              ...shown.map((t) => `${where} · button "${t}": the hidden label is visible, so the stylesheet lacks .sr-only`),
+            ]
           },
         })
         release()

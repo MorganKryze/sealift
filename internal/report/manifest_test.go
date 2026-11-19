@@ -55,7 +55,7 @@ func TestManifestJSONFields(t *testing.T) {
 	if err := json.Unmarshal(data, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back.FormatVersion != 1 || back.Packages[0].Name != "left-pad" || !back.Packages[0].PublishConfigStripped {
+	if back.FormatVersion != 2 || back.Packages[0].Name != "left-pad" || !back.Packages[0].PublishConfigStripped {
 		t.Errorf("round trip = %+v", back)
 	}
 }

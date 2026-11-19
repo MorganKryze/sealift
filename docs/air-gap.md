@@ -4,14 +4,15 @@ This page covers what crosses from the connected side to the air-gapped side: th
 
 ## What crosses
 
-One export produces six files. The import needs two of them, the archive and `manifest.json`, and refuses to start without the manifest. The four reports tell the import side what it receives.
+One export produces seven files. The import needs three of them, the archive, `manifest.json` and `manifest.json.sig`, side by side, and refuses an archive that lacks the manifest or the signature. The four reports tell the import side what it receives.
 
 The archive holds the new versions and the packages they pull in, nothing else. A dependency kept at its current version is not packed, and neither is the rest of the current project: the import side must already hold those packages in Nexus, from earlier imports.
 
 | File | For |
 | --- | --- |
-| `packages_npm.tar.gz` | The packages and `signature.key`, for the Nexus import |
+| `packages_npm.tar.gz` | The packages, for the Nexus import |
 | `manifest.json` | Every package with its hashes, and the archive's own sha256 |
+| `manifest.json.sig` | The Ed25519 signature of `manifest.json`, and the key that made it |
 | `summary.md` | CVEs before and after, the updated dependencies, what remains |
 | `findings.csv` | Every CVE, one row each, for a spreadsheet or a ticket |
 | `report.cdx.json` | A CycloneDX SBOM of the selection |
@@ -19,7 +20,7 @@ The archive holds the new versions and the packages they pull in, nothing else. 
 
 ## The archive
 
-`packages_npm.tar.gz` holds one folder, `out/`, with one npm tarball per package and the key:
+`packages_npm.tar.gz` holds one folder, `out/`, with one npm tarball per package and nothing else:
 
 ```
 out/
@@ -27,7 +28,6 @@ out/accepts-2.0.0.tgz
 out/asynckit-0.4.0.tgz
 out/axios-0.33.0.tgz
 ...
-out/signature.key
 ...
 out/wrappy-1.0.2.tgz
 ```
@@ -36,15 +36,32 @@ The tarballs are the ones the npm registry serves, byte for byte, with one excep
 
 The archive is reproducible. Entries are sorted by name, dated at the Unix epoch and owned by user 0, so the same selection built by the same sealift gives the same bytes and the same sha256.
 
-## The signature key
+## The signature and the trusted key
 
-`out/signature.key` holds the key saved in the settings, as plain text. The import project compares it with the value it expects, and refuses an archive that does not match.
+sealift signs `manifest.json` with an Ed25519 key it generated for its volume, and writes the signature to `manifest.json.sig`. The manifest names the archive's sha256 and size and the sha512 of every package, so one signature covers every byte the import publishes. The archive carries no key and no signature: it depends on the selection and the build alone, so the same selection gives the same sha256 whatever key signs it.
 
-The key is a shared value: anyone who knows it can build an archive the import accepts. It shows that the archive came from a sealift your team configured. It does not prove that the archive was not altered on the way; the sha256 below does that.
+`manifest.json.sig` is a small JSON file: the algorithm (`ed25519`), the sha256 of the public key that signed (`publicKeySha256`) and the signature. [Archive format](dev/archive-format.md#manifestjsonsig) gives the fields.
+
+The import side checks the signature with a public key you carry to it once. Do it before your first crossing:
+
+1. On the connected side, open Settings, section Signing key. Press **Download** for `sealift-public-key.pem`, or **Copy**.
+2. Carry the file to the import side over a channel you trust, not the kiosk the archives cross.
+3. Name it in the import's settings, as `publicKeyFile` below shows.
+4. Compare the Public key sha256 on both sides: sealift's Settings shows one, the import's Settings sheet shows the other, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
+
+The import trusts that one key and no other. It ignores any key an archive, a manifest or the signature file names, and uses the name only to word a refusal. A key carried with the archive would give nothing: whoever forges the archive forges the key.
+
+What a valid signature shows: the manifest was made by the holder of the private key, which stays in the connected sealift's volume, and it has not changed since. What it does not show:
+
+- Who pressed Export. Anyone who reaches sealift's port can have any selection signed.
+- Freshness. An old archive with a valid signature stays importable until you regenerate the key.
+- Anything about the four reports, which are not signed.
+
+A regenerate in Settings, or a lost volume, gives sealift a new key. The import side then refuses every new archive, and every archive exported before, until it holds the new public key. [Troubleshooting](troubleshooting.md#import) gives each refusal and its fix.
 
 ## Before the kiosk
 
-The export screen shows the archive's sha256 with **Copy**. `manifest.json` carries the same value under `archive.sha256`. Check the file you downloaded against it:
+The export screen shows the archive's sha256 with **Copy**, and which key signed it. `manifest.json` carries the same value under `archive.sha256`. Carry the archive, `manifest.json` and `manifest.json.sig` together. Check the file you downloaded against the sha256:
 
 <!-- illustrative -->
 ```sh
@@ -78,14 +95,14 @@ Each entry of `manifest.json`'s `packages` describes one tarball:
 
 ## The import
 
-`sealift import` runs on the air-gapped side. It checks the archive against its manifest and `signature.key`, then publishes each tarball of `out/` to the npm hosted repository in Nexus and reads each one back. It publishes nothing unless every check passes. [Archive format](dev/archive-format.md) lists the checks, the report and the exit codes.
+`sealift import` runs on the air-gapped side. It checks the manifest's signature, then the archive against its manifest, then publishes each tarball of `out/` to the npm hosted repository in Nexus and reads each one back. It publishes nothing unless every check passes. [Archive format](dev/archive-format.md) lists the checks, the report and the exit codes.
 
 <!-- illustrative -->
 ```sh
 sealift import -settings /import/settings.yaml -sha256 <sha256 received separately> -report report.json packages_npm.tar.gz
 ```
 
-The command reads `manifest.json` from the archive's directory; `-manifest <file>` names another. `-sha256` is optional and compares the archive with the value you received by a separate channel. The exit code is 0 for a complete import, 1 when a package failed, 2 for a usage or settings error and 3 for a refused archive.
+The command reads `manifest.json` from the archive's directory, and `manifest.json.sig` beside the manifest; `-manifest <file>` and `-signature <file>` name others. `-sha256` is optional and compares the archive with the value you received by a separate channel. The exit code is 0 for a complete import, 1 when a package failed, 2 for a usage or settings error and 3 for a refused archive.
 
 The settings file is YAML. Each secret lives in its own file, and a relative path resolves from the settings file's directory:
 
@@ -97,10 +114,10 @@ nexus:
   user: sealift-import
   passwordFile: nexus-password
   caFile: nexus-ca.pem          # optional, added to the system roots
-signatureKeyFile: signature-key
+publicKeyFile: public-key.pem
 ```
 
-`signatureKeyFile` holds the key saved in the sealift settings of the connected side. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
+`publicKeyFile` holds the public key from sealift's Settings on the connected side: one `PUBLIC KEY` PEM block of at most 4 KiB. The import and the service refuse to start without it, with exit code 2. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
 
 Give the import its own Nexus user, with these privileges on the npm hosted repository and no others: `nx-repository-view-npm-<repository>-browse`, `-read`, `-add` and `-edit`, and `nx-component-upload`. Nexus refuses an upload without the edit privilege, so the user's rights do not stop an overwrite. The repository's deployment policy does: set it to **Disable redeploy**. The import checks each version before it uploads and fails one that holds other bytes, and the policy makes Nexus refuse the overwrite itself.
 
@@ -113,13 +130,13 @@ pnpm install --registry https://nexus.example.internal/repository/npm-hosted/
 
 ## The import through the service
 
-Where `sealift import-server` runs, users import without a shell on the air-gapped side. Each user uploads the archive and `manifest.json` into their own MinIO bucket, `user-<name>`, under `packages/npm/`, with the manifest next to the archive. The archive may sit in one folder below, such as `packages/npm/second/`. The service lists the archives of the signed-in user and no one else's: another user's bucket answered an empty list in the lab.
+Where `sealift import-server` runs, users import without a shell on the air-gapped side. Each user uploads the archive, `manifest.json` and `manifest.json.sig` into their own MinIO bucket, `user-<name>`, under `packages/npm/`, with the manifest and its signature next to the archive. The archive may sit in one folder below, such as `packages/npm/second/`. The service lists the archives of the signed-in user and no one else's: another user's bucket answered an empty list in the lab.
 
 An import takes the archive through the same checks as `sealift import`, then publishes to Nexus with the service's own Nexus user. Imports run one at a time. The result for each package is stored as it ends:
 
 | Outcome | Meaning | The archive in MinIO |
 | --- | --- | --- |
-| `complete` | Every package is published or already in Nexus | Removed, with its manifest, after both are checked unchanged |
+| `complete` | Every package is published or already in Nexus | Removed, with its manifest and signature, after all three are checked unchanged |
 | `incomplete` | At least one package failed, such as a version Nexus holds with other bytes | Kept |
 | `interrupted` | The service stopped during the import | Kept |
 | `refused` | A check failed before anything was published | Kept |
@@ -143,6 +160,7 @@ Commit the lockfile the first install produces on the air-gapped side, and insta
 sealift checks:
 
 - every downloaded tarball against the sha512 the registry published;
+- the manifest of each export with an Ed25519 signature, which the import checks against the public key you carried;
 - Trivy against the sha256 of its release;
 - that no proposed version of a direct dependency is younger than the minimum release age, and that neither are the packages it pulls in;
 - that nothing downloads before you press Install, Analyse or Confirm and build the archive.
@@ -150,4 +168,4 @@ sealift checks:
 It does not:
 
 - detect a malicious package that has no known CVE yet: Trivy knows only published vulnerabilities;
-- sign the archive: `signature.key` is a shared value, and the sha256 is only as trustworthy as the channel that carries it.
+- sign the reports, or tell a fresh archive from an old one: the signature covers `manifest.json` and nothing else, and the sha256 is only as trustworthy as the channel that carries it.

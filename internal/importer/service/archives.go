@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer/s3"
 )
 
@@ -22,6 +23,7 @@ const (
 
 	archiveSuffix = ".tar.gz"
 	manifestName  = "manifest.json"
+	signatureName = archive.SignatureFile
 	// maxKeyBytes is S3's limit on an object key: 1,024 bytes.
 	maxKeyBytes = 1024
 	// maxTextChars caps text from MinIO that reaches an answer: 300 characters.
@@ -29,9 +31,10 @@ const (
 	// maxFolderDepth is how many folders may sit between Folder and an archive.
 	maxFolderDepth = 1
 
-	reasonName       = "its name cannot be imported"
-	reasonSeveral    = "the folder holds more than one archive"
-	reasonNoManifest = "no manifest.json in its folder"
+	reasonName        = "its name cannot be imported"
+	reasonSeveral     = "the folder holds more than one archive"
+	reasonNoManifest  = "no manifest.json in its folder"
+	reasonNoSignature = "no " + signatureName + " in its folder"
 )
 
 // Objects is the MinIO the service reads. It lists, heads, reads and deletes; it never writes.
@@ -120,12 +123,13 @@ func folderOf(key string) (folder, name string, ok bool) {
 	return folder, name, depth <= maxFolderDepth
 }
 
-// pair turns a listing into archives, each matched with the manifest.json of
-// its own folder. Other objects, and anything deeper than one folder, are ignored.
+// pair turns a listing into archives, each matched with the manifest.json and
+// the manifest.json.sig of its own folder. Other objects, and anything deeper than one folder, are ignored.
 func pair(objects []s3.Object) []Archive {
 	type folder struct {
-		archives []s3.Object
-		manifest bool
+		archives  []s3.Object
+		manifest  bool
+		signature bool
 	}
 	folders := map[string]*folder{}
 	at := func(name string) *folder {
@@ -140,6 +144,8 @@ func pair(objects []s3.Object) []Archive {
 		case !ok || !strings.HasPrefix(o.Key, Folder):
 		case name == manifestName:
 			at(dir).manifest = true
+		case name == signatureName:
+			at(dir).signature = true
 		case strings.HasSuffix(name, archiveSuffix):
 			f := at(dir)
 			f.archives = append(f.archives, o)
@@ -157,6 +163,8 @@ func pair(objects []s3.Object) []Archive {
 				reason = reasonSeveral
 			case !f.manifest:
 				reason = reasonNoManifest
+			case !f.signature:
+				reason = reasonNoSignature
 			}
 			if reason != "" {
 				a.Importable, a.Reason = false, &reason
@@ -202,9 +210,10 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest
-// import of the objects now in MinIO: the same archive and manifest keys with
-// the same ETags. Folders reuse their names from one export to the next, so an
-// import of an earlier upload must not stand for this one. A store that cannot
+// import of the objects now in MinIO: the same archive key with the same
+// archive, manifest and signature ETags. Folders reuse their names from one
+// export to the next, so an import of an earlier upload must not stand for
+// this one. A store that cannot
 // be read leaves the list as it is.
 func (h *Handlers) addLatestImports(user string, archives []Archive, listed []s3.Object) {
 	if h.store == nil {
@@ -219,16 +228,16 @@ func (h *Handlers) addLatestImports(user string, archives []Archive, listed []s3
 	for _, o := range listed {
 		etags[o.Key] = o.ETag
 	}
-	type objects struct{ archive, manifest, key string }
+	type objects struct{ archive, manifest, signature, key string }
 	latest := map[objects]LatestImport{}
 	for i := len(imps) - 1; i >= 0; i-- { // oldest first, so the newest wins
 		imp := imps[i]
-		at := objects{imp.Archive.ETag, imp.Manifest.ETag, imp.Archive.Key}
+		at := objects{imp.Archive.ETag, imp.Manifest.ETag, sigOf(imp).ETag, imp.Archive.Key}
 		latest[at] = LatestImport{Id: imp.ID, Outcome: imp.Outcome()}
 	}
 	for i := range archives {
 		key := archives[i].Key
-		at := objects{etags[key], etags[path.Dir(key)+"/"+manifestName], key}
+		at := objects{etags[key], etags[path.Dir(key)+"/"+manifestName], etags[path.Dir(key)+"/"+signatureName], key}
 		if li, ok := latest[at]; ok {
 			archives[i].LatestImport = &li
 		}

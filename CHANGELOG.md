@@ -8,15 +8,24 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- sealift generates an Ed25519 signing key on first start and keeps it in its data volume. Settings shows the public key and its public key sha256, copies and downloads the public key, and regenerates the pair behind a confirmation. `GET /api/signing-key` and `POST /api/signing-key/regenerate` serve it; the private key never leaves the volume, and a regenerate from another site is refused.
 - The import screens, served by `sealift import-server` behind the gateway: Archives lists the archives in your MinIO folder and starts an import, Imports lists the imports you started, and an import shows its stages, its report per package, how it ended and a retry card that says what each failure needs. [Importing](docs/importing.md) describes them.
 - `sealift import-server` serves its own screens: Archives at `/`, Imports at `/imports` and an import at `/imports/<id>`, with the header and the Settings sheet. The files need no token, every other path outside `/api` and `/healthz` answers 404, and every answer carries a Content-Security-Policy and framing headers.
+- The import screens show the trusted public key sha256 in Settings and on each import, and the signature's ETag beside the archive's and the manifest's.
 - A failed package names its kind (`conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`), and the report says whether the archive passed its checks (`archiveChecked`), in the import service and in `sealift import -report`. A report written by 0.4.0 has neither field.
+- `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
 
 ### Changed
 
+- `sealift import` and `sealift import-server` refuse an archive unless its manifest carries a valid Ed25519 signature by the key in `publicKeyFile`. `signatureKeyFile` is gone from the settings, `sealift import` takes `-signature`, and archives from 0.4 are refused as unsigned. The import report names the trusted key as `publicKeySha256`.
+- Every export writes `manifest.json.sig`, an Ed25519 signature of `manifest.json`, and the archive no longer carries `signature.key`. The done screen says which key signed the export.
 - A refused import no longer blocks a new import of the same archive, so a mistyped sha256 can be corrected by starting again. An import that is queued, running, incomplete or interrupted still does, whatever refused imports of that archive come after it.
+- The import service lists an archive as importable only beside its `manifest.json` and `manifest.json.sig`, guards all three objects against a change in MinIO and removes all three after a complete import.
 - `GET /api/me` on the import service also names the user's `bucket` and `folder`.
-- `SEALIFT_GITHUB_API` sets the GitHub API address the Trivy release lookup uses. Unset keeps `https://api.github.com`. sealift refuses to start on an address that is not `https` (or `http` on localhost) or that carries credentials.
+
+### Removed
+
+- The signature key setting: the Settings section and the setup field are gone, and an export no longer needs a key typed in. A `settings.json` from 0.4 loses its `signatureKey` on the first start.
 
 ### Fixed
 
@@ -26,6 +35,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - The analysis log no longer shows the user and password of a URL that pnpm prints.
 - An analysis refuses a pnpm lockfile whose package names or versions are not safe to use in a path.
+- An archive is no longer trusted for carrying a key of its own: the import side checks the manifest against the public key it was given, so a copy of the archive that someone altered on the way is refused.
 
 ## [0.4.0] - 2026-11-06
 

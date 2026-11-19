@@ -106,7 +106,7 @@ func TestQueueExportRefusesAnAnalysisNotDone(t *testing.T) {
 	}
 }
 
-func TestQueueExportRefusesAnEmptySignatureKey(t *testing.T) {
+func TestQueueExportNeedsNoKey(t *testing.T) {
 	svc, st := newTestService(t)
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
@@ -124,10 +124,11 @@ func TestQueueExportRefusesAnEmptySignatureKey(t *testing.T) {
 		t.Fatalf("write ranking.json: %v", err)
 	}
 
-	// The store's own settings still hold the empty default signatureKey.
-	if _, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}}); !errors.Is(err, ErrSignatureKeyMissing) {
-		t.Fatalf("QueueExport with an empty signatureKey = %v, want ErrSignatureKeyMissing", err)
+	info, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err != nil {
+		t.Fatalf("QueueExport with no setting beyond the defaults: %v", err)
 	}
+	waitForTerminal(t, svc, project.ID, "export", info.ID)
 }
 
 func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
@@ -135,11 +136,6 @@ func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
-	}
-	settings := st.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := st.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
 	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
@@ -170,11 +166,6 @@ func TestQueueExportRefusesAnUnknownSelectionEntry(t *testing.T) {
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
-	}
-	settings := st.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := st.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
 	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
 		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
@@ -580,11 +571,6 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
-	}
-	settings := st.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := st.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
 	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")

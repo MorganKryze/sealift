@@ -5,6 +5,7 @@ import { createContext, useContext, useState, type ReactNode } from "react"
 
 import { getSettings } from "@/api/settings"
 import { SettingsForm } from "@/components/settings/settings-form"
+import { SigningKeySection } from "@/components/settings/signing-key-section"
 import { ToolsPanel } from "@/components/settings/tools-panel"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useReturnFocus } from "@/hooks/use-return-focus"
@@ -39,6 +40,12 @@ export function SettingsPanelProvider({ children }: { children: ReactNode }) {
           <DialogPrimitive.Overlay className="animate-fade fixed inset-0 z-40 bg-black/50" />
           <DialogPrimitive.Content
             aria-describedby={undefined}
+            // Escape inside a confirmation answers that confirmation; the panel stays open.
+            onEscapeKeyDown={(event) => {
+              if (event.target instanceof Element && event.target.closest("[role=alertdialog]")) {
+                event.preventDefault()
+              }
+            }}
             onCloseAutoFocus={returnFocus.onCloseAutoFocus}
             // Focus the panel itself on open: Radix would focus the close button, which reads as the main action.
             onOpenAutoFocus={(event) => {
@@ -89,6 +96,7 @@ function SettingsPanelBody() {
       ) : (
         <>
           <SettingsForm settings={settingsQuery.data} />
+          <SigningKeySection />
           <ToolsPanel minReleaseAgeDays={settingsQuery.data.minReleaseAgeDays} pnpmVersion={settingsQuery.data.target.pnpmVer} />
         </>
       )}

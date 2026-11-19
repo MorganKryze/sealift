@@ -242,11 +242,6 @@ func TestQueueExportInvalidSelectionReturns400WithEveryEntry(t *testing.T) {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
 		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
@@ -306,11 +301,6 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
 		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
@@ -347,51 +337,6 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 	}
 	if got := *(*problem.Errors)[0].Name; got != "left-pad@9.9.9" {
 		t.Fatalf("problem.Errors[0].Name = %q, want %q", got, "left-pad@9.9.9")
-	}
-}
-
-// TestQueueExportMissingSignatureKeyAnswers400 proves the fix for G2:
-// jobs.ErrSignatureKeyMissing is the caller's own mistake, forgetting to
-// configure the setting exports sign with, not a server failure.
-func TestQueueExportMissingSignatureKeyAnswers400(t *testing.T) {
-	srv, h := newTestServer(t)
-	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("CreateProject status = %d", resp.StatusCode)
-	}
-
-	// Creating the project needed a signature key (the readiness gate);
-	// clear it back to empty to put settings in the state this test is
-	// actually about.
-	settings := h.Store.Settings()
-	settings.SignatureKey = ""
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
-	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
-	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
-	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
-		t.Fatalf("write status.json: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
-		t.Fatalf("write ranking.json: %v", err)
-	}
-
-	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
-	resp2, err := http.Post(
-		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
-		"application/json", bytes.NewReader(body),
-	)
-	if err != nil {
-		t.Fatalf("POST queueExport: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusBadRequest {
-		data, _ := io.ReadAll(resp2.Body)
-		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
 	}
 }
 
@@ -544,11 +489,6 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
 		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
@@ -623,11 +563,6 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
 	}
 
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],` +
 		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"candidates":[{"version":"1.3.1","vector":[0,0,0,0,0],"signals":[],"key":true,"resolved":true}]}],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
@@ -798,11 +733,6 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	const analysisID = "20260917T101502Z"
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", analysisID)
@@ -861,25 +791,31 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 	}
 }
 
-func TestSettingsRoundTripMasksSignatureKey(t *testing.T) {
-	srv, _ := newTestServer(t)
+func TestSettingsHaveNoSignatureKey(t *testing.T) {
+	srv, h := newTestServer(t)
+
+	read := func(resp *http.Response) map[string]any {
+		t.Helper()
+		defer resp.Body.Close()
+		var got map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("decode settings: %v", err)
+		}
+		return got
+	}
 
 	getResp, err := http.Get(srv.URL + "/api/settings")
 	if err != nil {
 		t.Fatalf("GET /api/settings: %v", err)
 	}
-	var settings Settings
-	if err := json.NewDecoder(getResp.Body).Decode(&settings); err != nil {
-		t.Fatalf("decode settings: %v", err)
-	}
-	getResp.Body.Close()
-	if settings.SignatureKey != maskedSignatureKey {
-		t.Fatalf("SignatureKey = %q, want the mask %q: the fixture seeds one so CreateProject clears the readiness gate", settings.SignatureKey, maskedSignatureKey)
+	got := read(getResp)
+	if _, ok := got["signatureKey"]; ok {
+		t.Fatalf("GET /api/settings = %v, want no signatureKey", got)
 	}
 
-	settings.SignatureKey = "top-secret"
-	settings.MinReleaseAgeDays = 14
-	body, _ := json.Marshal(settings)
+	got["signatureKey"] = "top-secret"
+	got["minReleaseAgeDays"] = 21
+	body, _ := json.Marshal(got)
 	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build PUT: %v", err)
@@ -889,41 +825,23 @@ func TestSettingsRoundTripMasksSignatureKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PUT /api/settings: %v", err)
 	}
-	var updated Settings
-	if err := json.NewDecoder(putResp.Body).Decode(&updated); err != nil {
-		t.Fatalf("decode updated settings: %v", err)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", putResp.StatusCode)
 	}
-	putResp.Body.Close()
-	if updated.SignatureKey != maskedSignatureKey {
-		t.Fatalf("SignatureKey after update = %q, want the mask %q", updated.SignatureKey, maskedSignatureKey)
+	updated := read(putResp)
+	if _, ok := updated["signatureKey"]; ok {
+		t.Fatalf("PUT answer = %v, want no signatureKey", updated)
+	}
+	if updated["minReleaseAgeDays"] != float64(21) {
+		t.Errorf("minReleaseAgeDays = %v, want 21", updated["minReleaseAgeDays"])
 	}
 
-	// Sending the mask back keeps the real key, proving a client that only
-	// changes another field never has to know the real key.
-	updated.MinReleaseAgeDays = 21
-	body, _ = json.Marshal(updated)
-	putReq2, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
-	putReq2.Header.Set("Content-Type", "application/json")
-	putResp2, err := http.DefaultClient.Do(putReq2)
+	saved, err := os.ReadFile(filepath.Join(h.Store.Root(), "private", "settings.json"))
 	if err != nil {
-		t.Fatalf("second PUT: %v", err)
+		t.Fatalf("read settings.json: %v", err)
 	}
-	putResp2.Body.Close()
-
-	getResp2, err := http.Get(srv.URL + "/api/settings")
-	if err != nil {
-		t.Fatalf("GET after second PUT: %v", err)
-	}
-	var final Settings
-	if err := json.NewDecoder(getResp2.Body).Decode(&final); err != nil {
-		t.Fatalf("decode final settings: %v", err)
-	}
-	getResp2.Body.Close()
-	if final.MinReleaseAgeDays != 21 {
-		t.Errorf("MinReleaseAgeDays = %d, want 21 (the second update applied)", final.MinReleaseAgeDays)
-	}
-	if final.SignatureKey != maskedSignatureKey {
-		t.Errorf("SignatureKey = %q, want it to still read as set", final.SignatureKey)
+	if strings.Contains(string(saved), "signatureKey") || strings.Contains(string(saved), "top-secret") {
+		t.Fatalf("settings.json = %s, want no signatureKey", saved)
 	}
 }
 
@@ -1140,11 +1058,6 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
 	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
@@ -1218,11 +1131,6 @@ func TestCancelExportLiveExportSucceeds(t *testing.T) {
 	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
-	}
-	settings := h.Store.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := h.Store.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
 	}
 	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
 	analysisDir := filepath.Join(h.Store.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
@@ -1529,13 +1437,6 @@ func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	// A signature key alone must not be enough: missing must name only
-	// what trivy itself still lacks.
-	settings := st.Settings()
-	settings.SignatureKey = "top-secret"
-	if err := st.SaveSettings(settings); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
 	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
@@ -1576,7 +1477,6 @@ func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
 	srv, h := newTestServer(t)
 	settings := h.Store.Settings()
 	settingsAPI := settingsToAPI(settings)
-	settingsAPI.SignatureKey = maskedSignatureKey
 	settingsAPI.Target.Os = ""
 
 	body, _ := json.Marshal(settingsAPI)

@@ -64,10 +64,18 @@ type Store struct {
 
 	mu       sync.RWMutex
 	settings Settings
+	// signing is a pointer: fmt prints a nested pointer as an address, so
+	// printing a Store never reaches the private key.
+	signing *SigningKey
+
+	// regenerating serializes key replacements, so the file and the key in
+	// use always come from the same call.
+	regenerating sync.Mutex
 }
 
 // Open creates the data volume layout under root when it is missing, then
-// loads private/settings.json or writes the defaults there.
+// loads private/settings.json or writes the defaults there, then loads
+// private/signing-key.pem or generates the key pair.
 //
 // It also sets the process umask to 002. A container's default umask of 022
 // would strip the group write bit from every file this package creates
@@ -108,11 +116,41 @@ func Open(root string) (*Store, error) {
 		if err := readJSONFile(settingsPath, &loaded); err != nil {
 			return nil, fmt.Errorf("store: read settings: %w", err)
 		}
+		if err := dropSignatureKey(settingsPath, loaded); err != nil {
+			return nil, err
+		}
 		s.mu.Lock()
 		s.settings = loaded
 		s.mu.Unlock()
 	}
+
+	key, err := loadSigningKey(s.signingKeyPath())
+	if err != nil {
+		return nil, err
+	}
+	s.signing = &key
 	return s, nil
+}
+
+// dropSignatureKey rewrites a settings.json from a 0.4 volume without its
+// shared "signatureKey", which the signing key replaced. A file without the
+// field is left as it is.
+func dropSignatureKey(path string, loaded Settings) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("store: read settings: %w", err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return fmt.Errorf("store: read settings: %w", err)
+	}
+	if _, ok := keys["signatureKey"]; !ok {
+		return nil
+	}
+	if err := writeJSONFile(path, loaded, settingsMode); err != nil {
+		return fmt.Errorf("store: rewrite settings: %w", err)
+	}
+	return nil
 }
 
 // Root returns the directory the store is rooted at.

@@ -53,8 +53,9 @@ func openStore(t *testing.T, root string) (*Store, *logBuffer) {
 }
 
 var (
-	testArchiveObject  = Object{Key: "packages/npm/a/packages_npm.tar.gz", ETag: `"abc123"`, Size: 123456}
-	testManifestObject = Object{Key: "packages/npm/a/manifest.json", ETag: `"def456"`}
+	testArchiveObject   = Object{Key: "packages/npm/a/packages_npm.tar.gz", ETag: `"abc123"`, Size: 123456}
+	testManifestObject  = Object{Key: "packages/npm/a/manifest.json", ETag: `"def456"`}
+	testSignatureObject = Object{Key: "packages/npm/a/manifest.json.sig", ETag: `"0a1b2c"`, Size: 321}
 )
 
 func pendingResults() []importer.Result {
@@ -123,10 +124,31 @@ func TestValidID(t *testing.T) {
 	}
 }
 
+func TestCreateRecordsTheSignature(t *testing.T) {
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	imp, err := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "alice", imp.ID, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct{ Signature *Object }
+	if err := json.Unmarshal(b, &doc); err != nil || doc.Signature == nil || *doc.Signature != testSignatureObject {
+		t.Errorf("record holds signature %+v (%v), want %+v:\n%s", doc.Signature, err, testSignatureObject, b)
+	}
+	got, err := s.Get("alice", imp.ID)
+	if err != nil || got.Signature == nil || *got.Signature != testSignatureObject {
+		t.Errorf("read back %+v, %v", got.Signature, err)
+	}
+}
+
 func TestStoreRoundTrip(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, err := s.Create("alice", testArchiveObject, testManifestObject, "abcd")
+	imp, err := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "abcd")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +231,7 @@ func TestStoreRoundTrip(t *testing.T) {
 func TestSlicesAreNeverWrittenNull(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, err := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, err := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +356,7 @@ func TestStoreReadsV1Fixture(t *testing.T) {
 func TestImportOfAnotherUser(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, err := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, err := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +381,7 @@ func TestImportOfAnotherUser(t *testing.T) {
 	if _, _, err := s.Begin("bob", imp.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Begin by another user: %v, want ErrNotFound", err)
 	}
-	if _, err := s.Create("../x", testArchiveObject, testManifestObject, ""); err == nil {
+	if _, err := s.Create("../x", testArchiveObject, testManifestObject, &testSignatureObject, ""); err == nil {
 		t.Error("Create accepted a bad user")
 	}
 }
@@ -367,7 +389,7 @@ func TestImportOfAnotherUser(t *testing.T) {
 func TestEndedWritesEachPackage(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if _, _, err := s.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +443,7 @@ func TestEndedWritesEachPackage(t *testing.T) {
 
 func TestStateChangesAreChecked(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
-	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if err := s.Listed("alice", imp.ID, 1, listedReport()); err == nil {
 		t.Error("Listed on a queued attempt succeeded")
 	}
@@ -449,7 +471,7 @@ func TestStateChangesAreChecked(t *testing.T) {
 func TestListSkipsDamaged(t *testing.T) {
 	root := testRoot(t)
 	s, logs := openStore(t, root)
-	good, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	good, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	truncated := plantFixture(t, root, "alice", func(m map[string]any) { m["id"] = "20261106T090000Z-aaaaaaaa" })
 	if err := os.WriteFile(filepath.Join(truncated, "import.json"), []byte(`{"formatVersion": 1, "id": "2026`), 0o600); err != nil {
 		t.Fatal(err)
@@ -518,6 +540,9 @@ func TestStoreReadsV040Fixture(t *testing.T) {
 	if rep.ArchiveChecked != nil {
 		t.Errorf("archiveChecked = %v, want absent", *rep.ArchiveChecked)
 	}
+	if got.Signature != nil || rep.PublicKeySHA256 != "" {
+		t.Errorf("signature %+v, report key %q, want both absent", got.Signature, rep.PublicKeySHA256)
+	}
 	if len(rep.Packages) != 4 || rep.Counts.Failed != 3 || got.Outcome() != importer.OutcomeIncomplete {
 		t.Fatalf("report %+v", rep)
 	}
@@ -541,7 +566,8 @@ func TestStoreReadsV040Fixture(t *testing.T) {
 	if bytes.Contains(b, []byte("null")) {
 		t.Errorf("record rewritten from a v0.4.0 one holds null:\n%s", b)
 	}
-	if bytes.Contains(b, []byte(`"archiveChecked"`)) || bytes.Contains(b, []byte(`"kind"`)) {
+	if bytes.Contains(b, []byte(`"archiveChecked"`)) || bytes.Contains(b, []byte(`"kind"`)) ||
+		bytes.Contains(b, []byte(`"signature"`)) || bytes.Contains(b, []byte(`"publicKeySha256"`)) {
 		t.Errorf("the store invented a field on an old record:\n%s", b)
 	}
 	again, err := s.Get("alice", got.ID)
@@ -553,7 +579,7 @@ func TestStoreReadsV040Fixture(t *testing.T) {
 func TestStoreListedKeepsTheReport(t *testing.T) {
 	root := testRoot(t)
 	s, _ := openStore(t, root)
-	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if _, _, err := s.Begin("alice", imp.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +611,7 @@ func TestStoreListedKeepsTheReport(t *testing.T) {
 	}
 
 	// A list of no package is stored as an empty list.
-	other, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	other, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if _, _, err := s.Begin("alice", other.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +626,7 @@ func TestStoreListedKeepsTheReport(t *testing.T) {
 
 func TestStoreChecked(t *testing.T) {
 	s, _ := openStore(t, testRoot(t))
-	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, "")
+	imp, _ := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, "")
 	if err := s.Checked("alice", imp.ID, 1); err == nil {
 		t.Error("Checked on a queued attempt succeeded")
 	}

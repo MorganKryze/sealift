@@ -38,13 +38,13 @@ volumes:
 
 This setup was checked with an analysis and an export. The root filesystem is read-only; sealift writes only to `/data` and `/tmp`.
 
-sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second user, `tools` (uid 10001), so neither they nor any package they handle can read `private/settings.json`. Switching users needs `SETUID` and `SETGID`, and stopping a cancelled job needs `KILL`. Every other capability can go.
+sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second user, `tools` (uid 10001), so neither they nor any package they handle can read `private/`, which holds the settings and the signing key. Switching users needs `SETUID` and `SETGID`, and stopping a cancelled job needs `KILL`. Every other capability can go.
 
 Do not add `no-new-privileges`. It stops the switch to the `tools` user, and every analysis fails with `fork/exec /usr/local/bin/node: operation not permitted`.
 
 ## Access
 
-sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and change the signature key. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
+sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts); no other route checks the Host. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
 
 <!-- illustrative -->
 ```sh
@@ -108,12 +108,13 @@ Everything sealift keeps lives under `/data`:
 
 ```
 /data
-  private/settings.json    settings, signature key included (app only)
+  private/settings.json    settings (app only)
+  private/signing-key.pem  the private signing key, mode 0600 (app only)
   projects/<session>/
     project.json           the session: name, target, the manifest's sha256
     package.json           the manifest as dropped
     analyses/<id>/         each analysis: its result, its log, the resolved project
-    exports/<id>/          each export: the archive and its five reports
+    exports/<id>/          each export: the archive, its manifest, the manifest's signature and four reports
   tools/trivy/<version>/   every Trivy installed; tools/trivy/current is the active one
   tools/pnpm/<version>/    pnpm, downloaded on the first analysis
   trivy-cache/db/          the vulnerability database, about 1.4 GB
@@ -121,7 +122,26 @@ Everything sealift keeps lives under `/data`:
   home/                    the home directory of pnpm and Trivy
 ```
 
-`cache/` can be deleted while sealift is stopped; the next export downloads again. Deleting `private/settings.json` resets the settings and removes the key.
+`cache/` can be deleted while sealift is stopped; the next export downloads again. Deleting `private/settings.json` resets the settings. Deleting `private/signing-key.pem` makes the next start generate a new key.
+
+## The key the import trusts
+
+sealift generates its Ed25519 signing key on the first start of a volume and keeps it in `private/signing-key.pem`. The file is mode 0600 in a 0700 directory that the `tools` user cannot read. The API and the screens show the public key only.
+
+The import side holds no key of its own. Carry the public key once, over a channel you trust that is not the kiosk the archives cross, and name the file in the import settings:
+
+<!-- illustrative -->
+```yaml
+publicKeyFile: public-key.pem
+```
+
+Take the key from **Download**, or **Copy**, in sealift's Settings, or from `GET /api/signing-key`. The file holds one `PUBLIC KEY` PEM block, at most 4 KiB, with LF or CRLF line endings. `sealift import` and `sealift import-server` exit with code 2 and name `publicKeyFile` when it is absent or unreadable. A relative path resolves from the settings file's directory. Then compare the Public key sha256: sealift's Settings shows it, and the import's Settings sheet and every report show the one the import trusts. Carrying the key through the kiosk with the archive weakens the check, because whoever can forge the archive there can forge the key.
+
+A lost volume means a new key. Stop sealift, restore `private/signing-key.pem` from a backup to keep the old one, give the file to the user the image runs as (`app`, uid 10000) with mode 0600 inside `private/` at mode 0700, and start again. A file left with the wrong owner or mode stops sealift with `cannot be read`; fix the owner or mode, and keep the file. Without a backup, sealift generates another key on the next start, and the import side refuses every archive until it receives the new public key, the archives exported before included. The key has no import: a key pair made elsewhere cannot be loaded.
+
+A backup of the volume holds the private key. Keep it as you keep the volume.
+
+A regenerate in Settings replaces the key, with the same consequence for the import side. The `POST /api/signing-key/regenerate` route refuses a request whose `Host` is not the server's own host (`localhost`, `127.0.0.1`, `::1` or the host of its listen address) with 403, so a page on another site cannot reach it by DNS rebinding. Behind a reverse proxy that passes a public name as `Host`, press **Regenerate key** through `localhost` or an SSH tunnel to `127.0.0.1:8080`. No other route checks the `Host`.
 
 ## The import service
 
@@ -149,7 +169,7 @@ services:
 
 ### Settings
 
-The service reads the same YAML file as `sealift import`, with two more sections. Each secret lives in its own file, resolved from the settings file's directory.
+The service reads the same YAML file as `sealift import`, `publicKeyFile` included, with two more sections. Each secret lives in its own file, resolved from the settings file's directory.
 
 <!-- illustrative -->
 ```yaml
@@ -212,7 +232,7 @@ docker rm -f sealift
 docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.io/morgankryze/sealift:0.2.2
 ```
 
-With Compose, change the tag and run `docker compose up -d`. Sessions, archives and settings carry over. A job running during the upgrade is discarded: its session shows its previous state, and you start the job again.
+With Compose, change the tag and run `docker compose up -d`. Sessions, archives, settings and the signing key carry over. A job running during the upgrade is discarded: its session shows its previous state, and you start the job again.
 
 ## Backing up
 
@@ -226,4 +246,4 @@ docker run --rm -v sealift-data:/data:ro -v "$PWD":/backup alpine \
 docker start sealift
 ```
 
-The two excluded folders are downloads: after a restore, the setup screen downloads the database again. Restore by extracting the archive into an empty volume before the first start.
+The archive holds `private/signing-key.pem`. The two excluded folders are downloads: after a restore, the setup screen downloads the database again. Restore by extracting the archive into an empty volume before the first start.

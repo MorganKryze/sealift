@@ -109,6 +109,12 @@ func (s *Store) WriteJSON(path string, v any) error {
 	return writeJSONFile(path, v, fileMode)
 }
 
+// WriteFile atomically writes data to path, mode 0664, so a reader never
+// observes a partial file.
+func (s *Store) WriteFile(path string, data []byte) error {
+	return atomicWriteFile(path, data, fileMode)
+}
+
 // ReadJSON unmarshals the JSON file at path into v.
 func (s *Store) ReadJSON(path string, v any) error {
 	return readJSONFile(path, v)

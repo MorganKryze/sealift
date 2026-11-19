@@ -368,3 +368,106 @@ func TestRunRefusesAnUnsafeGitHubAPI(t *testing.T) {
 		t.Fatal("run accepted an http mirror on a non-loopback host")
 	}
 }
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func TestServerServesItsSigningKey(t *testing.T) {
+	localGitHub(t)
+	addr := freeAddr(t)
+	root := filepath.Join(t.TempDir(), "data")
+	done := make(chan error, 1)
+	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+
+	var resp *http.Response
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if resp, err = http.Get("http://" + addr + "/api/signing-key"); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("the signing key was never served: %v", err)
+	}
+	defer resp.Body.Close()
+	var key struct{ PublicKeyPem, PublicKeySha256 string }
+	if err := json.NewDecoder(resp.Body).Decode(&key); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(key.PublicKeyPem, "-----BEGIN PUBLIC KEY-----") || len(key.PublicKeySha256) != 64 {
+		t.Errorf("status %d, key %+v: want 200 and a public key with its sha256", resp.StatusCode, key)
+	}
+	info, err := os.Stat(filepath.Join(root, "private", "signing-key.pem"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("key file: %v, mode %v, want 0600", err, info)
+	}
+
+	// The listen address's own host may regenerate, a foreign Host may not.
+	post := func(host string) int {
+		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/api/signing-key/regenerate", strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Host = host
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if got := post("evil.example:1"); got != http.StatusForbidden {
+		t.Errorf("a foreign Host got status %d, want 403", got)
+	}
+	if got := post(addr); got != http.StatusOK {
+		t.Errorf("the listen address got status %d, want 200", got)
+	}
+
+	p, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("run returned %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run did not return after SIGTERM")
+	}
+}
+
+func TestServerStopsOnADamagedSigningKey(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	private := filepath.Join(root, "private")
+	if err := os.MkdirAll(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(private, "signing-key.pem")
+	damaged := []byte("not a key")
+	if err := os.WriteFile(path, damaged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	err := run(freeAddr(t), root, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err == nil {
+		t.Fatal("run started on a damaged signing key")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "is not a PEM private key") {
+		t.Errorf("error %q does not name the file and the problem", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(damaged) {
+		t.Errorf("the damaged file was replaced by %q", got)
+	}
+}

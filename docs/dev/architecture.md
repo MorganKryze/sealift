@@ -30,12 +30,12 @@ flowchart LR
 | `cmd/sealift` | Flags (`-addr`, `-data`), wiring, the tools user from `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` |
 | `internal/api` | Handlers for the strict server generated from `api/openapi.yaml`, problem responses, the event stream |
 | `internal/jobs` | `Service`, `Queue`, the analysis and export jobs |
-| `internal/store` | Every read and write under `/data`, settings validation |
+| `internal/store` | Every read and write under `/data`, settings validation, the signing key pair (`signing.go`: load or generate at start, sign, regenerate) |
 | `internal/tools` | Trivy install and activation, pnpm install, hash checks |
 | `internal/runner` | pnpm and Trivy command lines, run as the tools user in their own process group |
 | `npm` | `package.json` parsing and validation, the registry client, pnpm lockfiles, version order |
 | `rank` | Finding sets, severity vectors, signals, `Best`, `KeyVersions`, `Diff` |
-| `archive` | The reproducible `tar.gz` writer |
+| `archive` | The reproducible `tar.gz` writer, the manifest, the signature file and its check, the key encodings. The public core: it imports no HTTP, storage or job state, so the importer shares the check with the exporter. |
 | `sbom`, `internal/report` | CycloneDX, `summary.md`, `findings.csv` |
 
 ## Requests and jobs
@@ -79,10 +79,10 @@ A failing step stops the job. Its id and message go into `status.json` as the fa
 | `package-list` | List the packages to export | Merges the lockfiles the analysis wrote for each selected version, adds the project's own when `includeProject` is set, and keeps the packages for the target platform |
 | `download` | Download and verify each package | Fetches each tarball, `downloadParallelism` at a time, checks it against the lockfile's sha512, fills the shared cache |
 | `strip` | Strip publishConfig | Rewrites the tarballs whose `package.json` holds `publishConfig` |
-| `archive` | Pack and sign the archive | Writes `out/*.tgz` and `out/signature.key` with `archive.WriteTarGz` |
-| `reports` | Write the reports | `manifest.json`, `summary.md`, `findings.csv`, and Trivy's `report.cdx.json` and `report.trivy.json` |
+| `archive` | Pack the archive | Writes `out/*.tgz` with `archive.WriteTarGz`; the archive holds no key and no signature |
+| `reports` | Sign the manifest and write the reports | `manifest.json` and `manifest.json.sig`, `summary.md`, `findings.csv`, and Trivy's `report.cdx.json` and `report.trivy.json` |
 
-The export refuses a selection that names a version the analysis did not resolve (`ErrInvalidSelection`) and one that packs nothing (`ErrNothingToExport`). A tarball that does not match its integrity stops the export: nothing is packed from a file sealift could not verify. [Archive format](archive-format.md) describes the output.
+The export refuses a selection that names a version the analysis did not resolve (`ErrInvalidSelection`) and one that packs nothing (`ErrNothingToExport`). A tarball that does not match its integrity stops the export: nothing is packed from a file sealift could not verify. The export takes the signing key once, when it starts running, and signs the exact bytes it writes as `manifest.json`, so a regenerate during the run changes nothing in it. A failure to sign fails the `reports` step. The private key reaches no event, log line or exported file. [Archive format](archive-format.md) describes the output.
 
 ## The import role
 
@@ -91,7 +91,7 @@ The same binary runs a second role. `sealift import` publishes one archive from 
 | Package | Role |
 | --- | --- |
 | `cmd/sealift` | `import-server`: flags, settings, the sweep, the HTTP server with its header bounds, shutdown on SIGINT and SIGTERM |
-| `internal/importer` | The run and the settings file. It imports no HTTP server and no store. |
+| `internal/importer` | The run and the settings file, which names the trusted `publicKeyFile`. It checks the signature with `archive` before it parses the manifest, and imports no HTTP server and no store. |
 | `internal/importer/token` | Checks a token against the realm's signing keys. It imports nothing from sealift. |
 | `internal/importer/service` | The handlers for the strict server generated from `api/import.yaml`, and the middleware that turns a checked token into a user |
 | `internal/store/imports` | The records of each import and its package states, one folder per user |
@@ -104,7 +104,8 @@ The role adds a boundary to the threat model: other users on the air-gapped netw
 
 ```
 /data
-  private/settings.json          settings and the signature key, mode 0600, app only
+  private/settings.json          settings, mode 0600, app only
+  private/signing-key.pem        the private signing key (PKCS#8 PEM), mode 0600, app only
   projects/<project>/
     project.json                 name, target, the manifest's sha256
     package.json                 the manifest as dropped
@@ -117,7 +118,7 @@ The role adds a boundary to the threat model: other users on the air-gapped netw
       candidates/, candidates.json, candidates.trivy.json
       ranking.json               the result the review reads
       combined/, combined.trivy.json
-    exports/<id>/                the archive and its five reports
+    exports/<id>/                the archive, manifest.json, manifest.json.sig and four reports
   tools/trivy/<version>/, tools/trivy/current
   tools/pnpm/<version>/
   trivy-cache/db/

@@ -1,0 +1,13 @@
+{
+  "target": {
+    "os": "linux",
+    "cpu": "arm64",
+    "libc": "musl",
+    "node": "20.19.0",
+    "pnpmVer": "10.30.1"
+  },
+  "signatureKey": "lab-signature-key",
+  "minReleaseAgeDays": 30,
+  "resolveParallelism": 6,
+  "downloadParallelism": 8
+}

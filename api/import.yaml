@@ -197,11 +197,16 @@ components:
         folder:
           type: string
           description: The folder of the bucket the service lists, reads and deletes in
+        publicKeySha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The sha256 of the public key every archive's signature must verify with, as the settings file names it
       required:
         - user
         - minioConfigured
         - bucket
         - folder
+        - publicKeySha256
     ArchiveList:
       type: object
       properties:
@@ -322,6 +327,8 @@ components:
           $ref: "#/components/schemas/Object"
         manifest:
           $ref: "#/components/schemas/Object"
+        signature:
+          $ref: "#/components/schemas/Object"
         expectedSha256:
           type: string
         outcome:
@@ -421,6 +428,10 @@ components:
             True when the archive passed its checks against the manifest and
             the signature key, false when the attempt ended or stands before
             they passed. Absent in a report written by sealift 0.4.0 or earlier.
+        publicKeySha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
       required:
         - outcome
         - reason

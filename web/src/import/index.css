@@ -3,6 +3,7 @@
 /* The build's root is web/import, so Tailwind finds no class unless told where to look. */
 @source "./";
 @source "../components/import";
+@source "../components/copy-control.tsx";
 @source "../components/ui";
 @source "../components/brand";
 @source "../components/theme-toggle.tsx";

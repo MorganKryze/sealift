@@ -15,7 +15,7 @@ import (
 	"github.com/MorganKryze/sealift/npm"
 )
 
-// MaxManifestSize is the largest manifest.json ParseManifest reads: 16 MiB.
+// MaxManifestSize is the largest manifest.json ReadManifest reads: 16 MiB.
 const MaxManifestSize = 16 << 20
 
 // maxTextBytes is the longest free-text field of a manifest: 256 bytes, the
@@ -114,16 +114,23 @@ type rawTarget struct {
 	PnpmVer string  `json:"pnpmVer"`
 }
 
-// ParseManifest reads and checks a manifest.json. Any problem comes back as a
-// *Refusal.
-func ParseManifest(r io.Reader) (Manifest, error) {
+// ReadManifest reads a manifest.json within MaxManifestSize bytes. A larger
+// one is a *Refusal; a read failure is returned as it is.
+func ReadManifest(r io.Reader) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, MaxManifestSize+1))
 	if err != nil {
-		return Manifest{}, fmt.Errorf("read the manifest: %w", err)
+		return nil, fmt.Errorf("read the manifest: %w", err)
 	}
 	if len(data) > MaxManifestSize {
-		return Manifest{}, refuse("the manifest is larger than %d bytes", MaxManifestSize)
+		return nil, refuse("the manifest is larger than %d bytes", MaxManifestSize)
 	}
+	return data, nil
+}
+
+// ParseManifest checks a manifest.json of formatVersion 2. It trusts nothing
+// in data: callers verify the manifest's signature first. Any problem comes
+// back as a *Refusal.
+func ParseManifest(data []byte) (Manifest, error) {
 	var doc rawManifest
 	dec := json.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(&doc); err != nil {
@@ -136,8 +143,8 @@ func ParseManifest(r io.Reader) (Manifest, error) {
 }
 
 func checkManifest(raw rawManifest) (Manifest, error) {
-	if raw.FormatVersion == nil || *raw.FormatVersion != 1 {
-		return Manifest{}, refuse("formatVersion is missing or not 1, the only version this import reads")
+	if raw.FormatVersion == nil || *raw.FormatVersion != 2 {
+		return Manifest{}, refuse("formatVersion is missing or not 2, the only version this import reads")
 	}
 	for _, f := range []struct{ name, value string }{
 		{"toolVersion", raw.ToolVersion},
@@ -202,7 +209,7 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 		return Manifest{}, refuse("archive.size is missing or not positive")
 	}
 	m := Manifest{
-		FormatVersion: 1, ToolVersion: raw.ToolVersion, AnalysisID: raw.AnalysisID, CreatedAt: raw.CreatedAt,
+		FormatVersion: 2, ToolVersion: raw.ToolVersion, AnalysisID: raw.AnalysisID, CreatedAt: raw.CreatedAt,
 		Target:  Target{OS: target.OS, CPU: target.CPU, Libc: libc, Node: target.Node, PnpmVer: target.PnpmVer},
 		Archive: Summary{SHA256: raw.Archive.SHA256, Size: *raw.Archive.Size},
 	}

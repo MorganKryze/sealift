@@ -346,7 +346,7 @@ paths:
       operationId: getSettings
       tags:
         - settings
-      summary: Get settings, with signatureKey masked
+      summary: Get settings
       responses:
         "200":
           description: Settings
@@ -369,11 +369,56 @@ paths:
               $ref: "#/components/schemas/Settings"
       responses:
         "200":
-          description: Updated settings, with signatureKey masked
+          description: Updated settings
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Settings"
+        default:
+          $ref: "#/components/responses/Problem"
+  /signing-key:
+    get:
+      operationId: getSigningKey
+      tags:
+        - settings
+      summary: The public half of the key that signs exports
+      responses:
+        "200":
+          description: The public key in PEM form and its public key sha256
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SigningKey"
+        default:
+          $ref: "#/components/responses/Problem"
+  /signing-key/regenerate:
+    post:
+      operationId: regenerateSigningKey
+      tags:
+        - settings
+      summary: Replace the signing key with a new pair
+      description: >-
+        Answers 403 for a Host or an Origin that is not this server's own, for
+        Sec-Fetch-Site cross-site, and for a body that is not application/json.
+        The old key stays in use when the new one cannot be written.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Empty. The body exists so that a cross-site form post cannot send this request.
+      responses:
+        "200":
+          description: The new public key and its public key sha256
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SigningKey"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "500":
+          $ref: "#/components/responses/Problem"
         default:
           $ref: "#/components/responses/Problem"
   /tools:
@@ -589,9 +634,6 @@ components:
       properties:
         target:
           $ref: "#/components/schemas/Target"
-        signatureKey:
-          type: string
-          description: Masked on read, never logged
         minReleaseAgeDays:
           type: integer
         resolveParallelism:
@@ -600,10 +642,23 @@ components:
           type: integer
       required:
         - target
-        - signatureKey
         - minReleaseAgeDays
         - resolveParallelism
         - downloadParallelism
+    SigningKey:
+      type: object
+      description: The public half of the key that signs exports. The private half is never served.
+      properties:
+        publicKeyPem:
+          type: string
+          description: One PKIX PUBLIC KEY PEM block
+        publicKeySha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: Lowercase hex sha256 of the key's DER SubjectPublicKeyInfo
+      required:
+        - publicKeyPem
+        - publicKeySha256
     ProjectSummary:
       type: object
       description: One row of the projects list.
@@ -895,7 +950,7 @@ components:
             release age
         ready:
           type: boolean
-          description: Whether trivy, its database and a signature key are all in place
+          description: Whether trivy and its database are both in place
         missing:
           type: array
           description: Names of what ready needs and does not have yet

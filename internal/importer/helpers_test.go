@@ -4,30 +4,81 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/npm"
 )
 
+// testPub and testPriv are the key pair of this test run: every fixture is
+// signed with testPriv and every settings value trusts testPub.
+var testPub, testPriv = newTestKey()
+
+var testPubSHA = archive.PublicKeySHA256(testPub)
+
+// testPrivPEM is testPriv as a PKCS#8 PEM block, and privateKeyBody its base64 line:
+// no error or report may repeat either.
+var testPrivPEM, privateKeyBody = func() ([]byte, string) {
+	der, err := x509.MarshalPKCS8PrivateKey(testPriv)
+	if err != nil {
+		panic(err)
+	}
+	text := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	return text, strings.Split(string(text), "\n")[1]
+}()
+
+// wrongSHA256 is a well-formed sha256 no archive of these tests has.
+const wrongSHA256 = "abababababababababababababababababababababababababababababababab"
+
+func newTestKey() (ed25519.PublicKey, ed25519.PrivateKey) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return pub, priv
+}
+
+// signManifest writes manifestPath+".sig" for the file's current bytes. A test
+// that edits a manifest calls it again, or its edit would show as a changed
+// signature instead of the refusal it provokes.
+func signManifest(t *testing.T, manifestPath string) {
+	t.Helper()
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := archive.SignatureFor(testPubSHA, ed25519.Sign(testPriv, data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath+".sig", sig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func jsonOf(v any) (string, error) {
 	b, err := json.Marshal(v)
 	return string(b), err
 }
 
-// testArchive writes packages_npm.tar.gz and manifest.json for the given
+// testArchive writes packages_npm.tar.gz, manifest.json and its signature for the given
 // name@version to body pairs and returns their paths.
-func testArchive(t *testing.T, dir, key string, pkgs ...[3]string) (arch, manifest string) {
+func testArchive(t *testing.T, dir string, pkgs ...[3]string) (arch, manifest string) {
 	t.Helper()
-	entries := []archive.Entry{{Name: "signature.key", Size: int64(len(key)), Open: opener(key)}}
+	var entries []archive.Entry
 	var listed []map[string]any
 	for _, p := range pkgs {
 		name, version := p[0], p[1]
@@ -48,7 +99,7 @@ func testArchive(t *testing.T, dir, key string, pkgs ...[3]string) (arch, manife
 	}
 	digest := sha256.Sum256(buf.Bytes())
 	doc := map[string]any{
-		"formatVersion": 1, "toolVersion": "0.3.0", "analysisId": "20260923T120255Z", "createdAt": "2026-09-23T12:04:24Z",
+		"formatVersion": 2, "toolVersion": "0.3.0", "analysisId": "20260923T120255Z", "createdAt": "2026-09-23T12:04:24Z",
 		"target":   map[string]any{"os": "linux", "cpu": "x64", "libc": "glibc", "node": "22.17.1", "pnpmVer": "10.34.5"},
 		"archive":  map[string]any{"sha256": hex.EncodeToString(digest[:]), "size": buf.Len()},
 		"packages": listed,
@@ -61,6 +112,7 @@ func testArchive(t *testing.T, dir, key string, pkgs ...[3]string) (arch, manife
 	if err := os.WriteFile(manifest, mb, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	signManifest(t, manifest)
 	return arch, manifest
 }
 

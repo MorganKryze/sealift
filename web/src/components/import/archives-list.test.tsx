@@ -95,6 +95,8 @@ describe("ArchivesList", () => {
     renderList(() => json(folderList([])))
     expect(await screen.findByRole("heading", { name: "No archive in your folder" })).toBeInTheDocument()
     expect(screen.getByText("manifest.json")).toBeInTheDocument()
+    expect(screen.getByText("manifest.json.sig")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "No archive in your folder" }).parentElement).toHaveTextContent(/an archive, its manifest\.json and its manifest\.json\.sig side by side/)
     expect(screen.getByText("user-alice/packages/npm/")).toBeInTheDocument()
     expect(screen.getByText(/side by side/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument()
@@ -103,6 +105,7 @@ describe("ArchivesList", () => {
   it("gives the API's message when the bucket is missing", async () => {
     renderList(() => json(folderList([], { bucketMissing: true, message: "MinIO has no bucket user-alice yet: nothing to list" })))
     expect(await screen.findByText(/MinIO has no bucket user-alice yet: nothing to list/)).toBeInTheDocument()
+    expect(screen.getByText("manifest.json.sig")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument()
   })
 

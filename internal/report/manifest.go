@@ -10,7 +10,7 @@ import (
 
 // ManifestFormatVersion is the current schema version of manifest.json. It
 // changes only when a field is added, removed or reinterpreted.
-const ManifestFormatVersion = 1
+const ManifestFormatVersion = 2
 
 // Manifest is the content of an export's manifest.json: what the archive
 // holds and what it was built from.

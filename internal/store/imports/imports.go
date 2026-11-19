@@ -84,12 +84,15 @@ type Attempt struct {
 
 // Import is the record of one archive and its attempts.
 type Import struct {
-	FormatVersion  int       `json:"formatVersion"`
-	ID             string    `json:"id"`
-	User           string    `json:"user"`
-	CreatedAt      time.Time `json:"createdAt"`
-	Archive        Object    `json:"archive"`
-	Manifest       Object    `json:"manifest"`
+	FormatVersion int       `json:"formatVersion"`
+	ID            string    `json:"id"`
+	User          string    `json:"user"`
+	CreatedAt     time.Time `json:"createdAt"`
+	Archive       Object    `json:"archive"`
+	Manifest      Object    `json:"manifest"`
+	// Signature is nil only in an import recorded by sealift 0.4.x, which
+	// signed nothing.
+	Signature      *Object   `json:"signature,omitempty"`
 	ExpectedSHA256 string    `json:"expectedSha256"`
 	Attempts       []Attempt `json:"attempts"`
 }
@@ -148,7 +151,7 @@ func (s *Store) clock() time.Time { return s.now().UTC().Truncate(time.Second) }
 func (s *Store) dir(user, id string) string { return filepath.Join(s.root, user, id) }
 
 // Create records a new import with its first attempt queued.
-func (s *Store) Create(user string, archive, manifest Object, expectedSHA256 string) (Import, error) {
+func (s *Store) Create(user string, archive, manifest Object, signature *Object, expectedSHA256 string) (Import, error) {
 	if !ValidUser(user) {
 		return Import{}, errors.New("imports: invalid user")
 	}
@@ -172,7 +175,7 @@ func (s *Store) Create(user string, archive, manifest Object, expectedSHA256 str
 		}
 		imp := Import{
 			FormatVersion: FormatVersion, ID: id, User: user, CreatedAt: now,
-			Archive: archive, Manifest: manifest, ExpectedSHA256: expectedSHA256,
+			Archive: archive, Manifest: manifest, Signature: signature, ExpectedSHA256: expectedSHA256,
 			Attempts: []Attempt{{N: 1, Status: StatusQueued, QueuedAt: &now}},
 		}
 		if err := s.write(imp); err != nil {

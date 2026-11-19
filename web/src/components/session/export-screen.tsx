@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { apiFetch, ApiError } from "@/api/client"
+import { getSigningKey } from "@/api/settings"
 import { cancelExport, queueExport, type Analysis, type DependencyResult, type Export, type Project } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
 import { ProblemNotice } from "@/components/problem-notice"
@@ -233,14 +234,15 @@ const EXPORT_STEP_LABELS: Record<string, string> = {
   "package-list": "List the packages to export",
   download: "Download and verify each package",
   strip: "Strip publishConfig",
-  archive: "Pack and sign the archive",
-  reports: "Write the reports",
+  archive: "Pack the archive",
+  reports: "Sign the manifest and write the reports",
 }
 
 const REPORT_DESCRIPTIONS: Record<string, string> = {
   "summary.md": "Readable summary: before, after, remaining CVEs",
   "findings.csv": "Every CVE, one row each",
-  "manifest.json": "Every package with its sha512",
+  "manifest.json": "Every package with its sha512. The import needs it.",
+  "manifest.json.sig": "The manifest's signature. The import needs it.",
   "report.cdx.json": "CycloneDX SBOM",
   "report.trivy.json": "Raw Trivy output",
 }
@@ -254,6 +256,62 @@ interface ExportManifest {
     size: number
   }
   packages: unknown[]
+}
+
+// manifest.json.sig's shape is not in the OpenAPI schema either; the screen
+// reads only the key it names.
+interface SignatureFile {
+  publicKeySha256?: string
+}
+
+/** What the done screen says about an export's signature, from the file and the key now in use. */
+type SignedBy = { state: "current" | "replaced"; sha: string } | { state: "unsigned" } | { state: "unreadable" }
+
+function useSignedBy(projectId: string, exportId: string, files: string[]): SignedBy | undefined {
+  const listed = files.includes("manifest.json.sig")
+  const signatureQuery = useQuery({
+    queryKey: ["export-signature", projectId, exportId],
+    queryFn: () => apiFetch<SignatureFile>(`/projects/${projectId}/exports/${exportId}/files/manifest.json.sig`),
+    enabled: listed,
+  })
+  const keyQuery = useQuery({ queryKey: ["signing-key"], queryFn: getSigningKey, enabled: listed })
+
+  if (!listed) {
+    return { state: "unsigned" }
+  }
+  if (signatureQuery.isError || keyQuery.isError) {
+    return { state: "unreadable" }
+  }
+  if (!signatureQuery.data || !keyQuery.data) {
+    return undefined
+  }
+  const sha = signatureQuery.data.publicKeySha256
+  if (typeof sha !== "string" || sha === "") {
+    return { state: "unreadable" }
+  }
+  return { state: sha === keyQuery.data.publicKeySha256 ? "current" : "replaced", sha }
+}
+
+function SignedByLine({ signedBy }: { signedBy: SignedBy }) {
+  switch (signedBy.state) {
+    case "current":
+      return <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">{`Signed with this sealift's key, public key sha256 ${signedBy.sha}.`}</p>
+    case "replaced":
+      return (
+        <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">
+          Signed with a key replaced since, public key sha256 {signedBy.sha}. The import refuses this archive once it trusts the current key:
+          export the selection again.
+        </p>
+      )
+    case "unsigned":
+      return (
+        <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">
+          Not signed: sealift 0.4.0 or earlier exported this archive, and the import refuses it. Export the selection again.
+        </p>
+      )
+    case "unreadable":
+      return <p className="mt-2.5 text-sm text-severity-critical-fg">Could not read manifest.json.sig.</p>
+  }
 }
 
 interface ArchiveDoneProps {
@@ -270,6 +328,7 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
     queryKey: ["export-manifest", projectId, exportId],
     queryFn: () => apiFetch<ExportManifest>(`/projects/${projectId}/exports/${exportId}/files/manifest.json`),
   })
+  const signedBy = useSignedBy(projectId, exportId, files)
   const [copied, setCopied] = useState(false)
   const archiveFile = files.find((name) => name === "packages_npm.tar.gz")
   const reportFiles = files.filter((name) => name !== archiveFile)
@@ -296,7 +355,8 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
         <div className="mb-6">
           <h1 className="text-2xl font-bold tracking-tight text-ink">Archive ready</h1>
           <p className="mt-1.5 max-w-[62ch] text-muted">
-            Carry this file through the kiosk. The reports travel with it for whoever imports it.
+            Carry the archive, manifest.json and manifest.json.sig through the kiosk, side by side: the import refuses the archive without
+            the other two. The reports travel with them.
           </p>
         </div>
       ) : null}
@@ -322,6 +382,7 @@ function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession
                   {copied ? "Copied" : "Copy"}
                 </Button>
               </div>
+              {signedBy ? <SignedByLine signedBy={signedBy} /> : null}
               {archiveFile ? (
                 <div className="mt-3.5">
                   <Button size="lg" asChild>

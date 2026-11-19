@@ -1,7 +1,6 @@
 package report
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -43,7 +42,7 @@ func checkManifestParses(t *testing.T, libc string) {
 		t.Fatal(err)
 	}
 
-	got, err := archive.ParseManifest(bytes.NewReader(data))
+	got, err := archive.ParseManifest(data)
 	if err != nil {
 		t.Fatalf("ParseManifest: %v", err)
 	}

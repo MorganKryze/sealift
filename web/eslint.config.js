@@ -43,7 +43,7 @@ export default tseslint.config(
                 "@/components/severity-counts",
                 "@/hooks/use-job-events",
               ],
-              message: "The import screens share only the ui, brand, theme toggle, return-focus and utils modules with the collection.",
+              message: "The import screens share only the ui, brand, copy control, theme toggle, return-focus and utils modules with the collection.",
             },
           ],
         },

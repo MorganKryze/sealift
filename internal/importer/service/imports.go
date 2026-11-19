@@ -88,7 +88,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	}
 
 	bucket := bucketOf(user)
-	archive, manifest, refusal := h.checkArchive(ctx, bucket, key)
+	archive, manifest, signature, refusal := h.checkArchive(ctx, bucket, key)
 	if refusal != nil {
 		if refusal.status == 409 {
 			return conflict(*refusal.body.Detail, nil), nil
@@ -105,8 +105,8 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	// Every match is read, newest first: records made in one second have no
 	// reliable order, so a refused import must not hide an unfinished one.
 	for _, imp := range existing {
-		// A replaced manifest makes another import: a refusal for it must not block the objects now in MinIO.
-		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag {
+		// A replaced manifest or signature makes another import: a refusal for it must not block the objects now in MinIO.
+		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag || sigOf(imp).ETag != signature.ETag {
 			continue
 		}
 		switch imp.Outcome() {
@@ -116,7 +116,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 			return conflict("this archive already has an import that has not completed; read it or retry it", &imp.ID), nil
 		}
 	}
-	imp, err := h.store.Create(user, archive, manifest, expected)
+	imp, err := h.store.Create(user, archive, manifest, &signature, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -131,10 +131,11 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 }
 
 // checkArchive confirms that the key is an importable archive in the user's
-// folder and returns it and its manifest as MinIO describes them now.
-func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archive, manifest imports.Object, refusal *problem) {
-	fail := func(p problem) (imports.Object, imports.Object, *problem) {
-		return imports.Object{}, imports.Object{}, &p
+// folder and returns it, its manifest and the manifest's signature as MinIO
+// describes them now.
+func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archive, manifest, signature imports.Object, refusal *problem) {
+	fail := func(p problem) (imports.Object, imports.Object, imports.Object, *problem) {
+		return imports.Object{}, imports.Object{}, imports.Object{}, &p
 	}
 	ctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
 	defer cancel()
@@ -159,9 +160,8 @@ func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archiv
 	case !found.Importable:
 		return fail(problem{status: 409, body: newProblem(409, "Cannot start this import", *found.Reason)})
 	}
-	manifestKey := folder + manifestName
-	var objs [2]imports.Object
-	for i, k := range []string{key, manifestKey} {
+	var objs [3]imports.Object
+	for i, k := range []string{key, folder + manifestName, folder + signatureName} {
 		o, err := h.objects.Head(ctx, bucket, k)
 		switch {
 		case errors.Is(err, s3.ErrNotFound):
@@ -173,7 +173,7 @@ func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archiv
 		}
 		objs[i] = imports.Object{Key: k, ETag: o.ETag, Size: o.Size}
 	}
-	return objs[0], objs[1], nil
+	return objs[0], objs[1], objs[2], nil
 }
 
 // ListImports lists the user's imports, newest first.
@@ -223,6 +223,30 @@ func toImport(imp imports.Import) (Import, error) {
 	}
 	out.Outcome, out.ArchiveRemoved = imp.Outcome(), imp.ArchiveRemoved()
 	return out, nil
+}
+
+// sigOf is the signature an import recorded: the zero Object for a record of
+// sealift 0.4, which signed nothing.
+func sigOf(imp imports.Import) imports.Object {
+	if imp.Signature == nil {
+		return imports.Object{}
+	}
+	return *imp.Signature
+}
+
+type recordedObject struct {
+	what string
+	obj  imports.Object
+}
+
+// recorded lists an import's objects in the order they are checked and
+// removed. A record of sealift 0.4 has no signature to list.
+func recorded(imp imports.Import) []recordedObject {
+	out := []recordedObject{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}}
+	if sig := sigOf(imp); sig.Key != "" {
+		out = append(out, recordedObject{"the signature", sig})
+	}
+	return out
 }
 
 // stopping answers 503 for work the closed queue will not run, after ending
@@ -293,23 +317,22 @@ func (h *Handlers) stopped(imp imports.Import, outcome, reason string) importer.
 	return importer.Report{
 		Outcome: outcome, Reason: reason,
 		Unencrypted: len(h.links) > 0, ImportVersion: h.importVersion,
-		Archive:  importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
-		Nexus:    importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
-		Packages: []importer.Result{},
+		Archive: importer.ArchiveInfo{File: cleanText(path.Base(imp.Archive.Key))},
+		// The trusted key's name, though no signature was checked.
+		PublicKeySHA256: h.settings.PublicKeySHA256,
+		Nexus:           importer.NexusInfo{URL: h.settings.NexusURL.String(), Repository: h.settings.Repository},
+		Packages:        []importer.Result{},
 		// No object was read, so no check ran.
 		ArchiveChecked: &unchecked,
 	}
 }
 
-// unchanged heads both objects and compares their ETags with those recorded.
+// unchanged heads the archive, the manifest and the signature and compares their ETags with those recorded.
 // It returns the report of an attempt that must not go on, or nil.
 func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Import) *importer.Report {
 	ctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
 	defer cancel()
-	for _, o := range []struct {
-		what string
-		obj  imports.Object
-	}{{"the archive", imp.Archive}, {"the manifest", imp.Manifest}} {
+	for _, o := range recorded(imp) {
 		got, err := h.objects.Head(ctx, bucket, o.obj.Key)
 		if err == nil && got.ETag == o.obj.ETag {
 			continue
@@ -334,10 +357,10 @@ func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Imp
 	return nil
 }
 
-// RunAttempt runs one attempt of imp: it checks both objects against the
+// RunAttempt runs one attempt of imp: it checks the three objects against the
 // recorded ETags, reads them from the user's bucket and imports them as
-// `sealift import` does. A complete attempt then removes the archive and its
-// manifest from MinIO, when both are unchanged; it returns that removal as a
+// `sealift import` does. A complete attempt then removes the archive, its
+// manifest and its signature from MinIO, when all are unchanged; it returns that removal as a
 // function for the queue to call once the end is stored. It keeps its files in a
 // directory of its own below dir and removes it.
 func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {

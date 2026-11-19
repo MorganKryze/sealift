@@ -25,8 +25,11 @@ type Report struct {
 	Nexus         NexusInfo   `json:"nexus"`
 	Counts        Counts      `json:"counts"`
 	Packages      []Result    `json:"packages"`
+	// PublicKeySHA256 is the fingerprint of the key the attempt checked the
+	// signature with. A record written by sealift 0.4.x lacks it.
+	PublicKeySHA256 string `json:"publicKeySha256,omitempty"`
 	// ArchiveChecked says whether the archive passed its checks against the
-	// manifest and the signature key. It is nil only in a record written by
+	// manifest and the signature. It is nil only in a record written by
 	// sealift 0.4.0 or earlier.
 	ArchiveChecked *bool `json:"archiveChecked,omitempty"`
 }
@@ -74,7 +77,7 @@ func (r Report) ExitCode() int {
 }
 
 // WriteText prints the report for a person: a summary line, the archive, the
-// import's own version, the manifest and the Nexus repository, then one line
+// import's own version, the trusted key, the manifest and the Nexus repository, then one line
 // per package with its file.
 func (r Report) WriteText(w io.Writer) error {
 	mark := ""
@@ -95,6 +98,9 @@ func (r Report) WriteText(w io.Writer) error {
 	}
 	p.linef("%s", archive)
 	p.linef("import version: %s", r.ImportVersion)
+	if r.PublicKeySHA256 != "" {
+		p.linef("public key sha256: %s", r.PublicKeySHA256)
+	}
 	if r.ToolVersion != "" || r.AnalysisID != "" {
 		t := r.Target
 		p.linef("manifest: sealift %s, analysis %s, target %s %s %s, node %s, pnpm %s", r.ToolVersion, r.AnalysisID, t.OS, t.CPU, t.Libc, t.Node, t.PnpmVer)

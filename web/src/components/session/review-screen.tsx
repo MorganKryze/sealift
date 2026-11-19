@@ -11,7 +11,6 @@ import { AnalysisWarnings } from "@/components/session/analysis-warnings"
 import { SeverityCounts } from "@/components/severity-counts"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Badge } from "@/components/ui/badge"
-import { useSettingsPanel } from "@/components/settings/settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { useSelection } from "@/hooks/use-selection"
@@ -47,7 +46,6 @@ const SEVERITY_DOT: Record<string, string> = {
 }
 
 export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreenProps) {
-  const settingsPanel = useSettingsPanel()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
@@ -101,8 +99,6 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     },
   })
   const confirmError = confirmMutation.error instanceof ProblemError ? confirmMutation.error : null
-  const missingSignatureKey =
-    confirmError?.status === 400 && !confirmError.problem?.errors?.length && confirmError.problem?.detail?.includes("signatureKey")
 
   const steps = sessionSteps({ project, current: "review", onNavigate: onNavigateStep })
 
@@ -274,13 +270,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         </div>
         {confirmError ? (
           <div className="mx-auto w-full max-w-240 px-5 pb-3.5">
-            <ProblemNotice status={confirmError.status} problem={confirmError.problem}>
-              {missingSignatureKey ? (
-                <button type="button" onClick={settingsPanel.open} className="mt-2 inline-block text-accent underline">
-                  Open settings
-                </button>
-              ) : null}
-            </ProblemNotice>
+            <ProblemNotice status={confirmError.status} problem={confirmError.problem} />
           </div>
         ) : null}
       </div>

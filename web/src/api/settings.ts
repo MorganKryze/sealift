@@ -3,6 +3,7 @@ import type { components } from "./schema"
 
 export type Settings = components["schemas"]["Settings"]
 export type ToolsState = components["schemas"]["ToolsState"]
+export type SigningKey = components["schemas"]["SigningKey"]
 
 export function getSettings(): Promise<Settings> {
   return apiFetch<Settings>("/settings")
@@ -27,4 +28,13 @@ export function activateTrivy(version: string): Promise<ToolsState> {
 
 export function updateTrivyDB(): Promise<ToolsState> {
   return apiFetchProblem<ToolsState>("/tools/trivy/db/update", { method: "POST" })
+}
+
+export function getSigningKey(): Promise<SigningKey> {
+  return apiFetch<SigningKey>("/signing-key")
+}
+
+/** Replaces the key pair. The body is an empty JSON object: the server refuses any other kind of body. */
+export function regenerateSigningKey(): Promise<SigningKey> {
+  return apiFetchProblem<SigningKey>("/signing-key/regenerate", { method: "POST", body: "{}" })
 }

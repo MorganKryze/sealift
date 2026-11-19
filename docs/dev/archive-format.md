@@ -1,6 +1,6 @@
 # Archive format
 
-This page is the contract between sealift's export and the tool that imports it on the air-gapped side: the layout of `packages_npm.tar.gz`, the fields of `manifest.json`, and the reports. It describes `formatVersion` 1. [The air gap](../air-gap.md) covers the same files for operators.
+This page is the contract between sealift's export and the tool that imports it on the air-gapped side: the layout of `packages_npm.tar.gz`, the fields of `manifest.json`, and the reports. It describes `formatVersion` 2. [The air gap](../air-gap.md) covers the same files for operators.
 
 ## packages_npm.tar.gz
 
@@ -10,7 +10,8 @@ A gzip-compressed tar with one top-level directory, `out/`:
 | --- | --- |
 | `out/` | Mode 0755 |
 | `out/<file>.tgz` | One npm package tarball per package, mode 0644 |
-| `out/signature.key` | The signature key from the settings, as plain text with no trailing newline, mode 0644 |
+
+`out/` holds the package tarballs and nothing else. The archive carries no key and no signature: both travel beside it (see below), so the archive depends on the selection and the build alone, whatever key signs the manifest.
 
 `archive.WriteTarGz` writes the entries sorted by name, with the Unix epoch as every timestamp and 0 as owner and group. The same entries give the same bytes, so the same selection exported twice by the same build of sealift has the same sha256.
 
@@ -20,7 +21,7 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "toolVersion": "dev",
   "analysisId": "20260923T120255Z",
   "createdAt": "2026-09-23T12:04:24.410131126Z",
@@ -50,7 +51,7 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 | Field | Meaning |
 | --- | --- |
-| `formatVersion` | The version of this format, 1 today |
+| `formatVersion` | The version of this format, 2 today. Version 1 belongs to 0.4 and earlier, and an import refuses it |
 | `toolVersion` | The sealift release that built the archive; `dev` for a build without a version, as in this example |
 | `analysisId` | The analysis the selection came from |
 | `createdAt` | When the export ran, RFC 3339, UTC |
@@ -64,14 +65,46 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 `manifest.json` travels next to the archive, not inside it: the archive's sha256 cannot be part of its own content.
 
+## manifest.json.sig
+
+An export writes `manifest.json.sig` beside `manifest.json`. It holds an Ed25519 signature (RFC 8032, pure, no context and no prehash) over the exact bytes of `manifest.json` as written. Carry the archive, `manifest.json` and `manifest.json.sig` together.
+
+```json
+{
+  "algorithm": "ed25519",
+  "publicKeySha256": "6fefb059722cdef03cce92287e46148905131e1056bcf9a31e910ee0225f1c26",
+  "signature": "<standard base64 of the 64 signature bytes>"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `algorithm` | `ed25519` |
+| `publicKeySha256` | Lowercase hex sha256 of the DER SubjectPublicKeyInfo of the key that signed |
+| `signature` | Standard base64, with padding, of the 64-byte signature |
+
+The file is indented JSON with a trailing newline, at most 4 KiB, and a reader ignores fields it does not know. An export signs with the key in use when it starts running, so a regenerate during the run changes nothing in it, and `publicKeySha256` names that key. The key signs manifests and nothing else. The manifest binds the archive's sha256 and size and each package's digests, so one signature covers every byte of the export. The reports are not signed.
+
+The export step that writes `manifest.json` and its signature is named `reports` in the job's events. An export that cannot sign fails at that step and offers no file for download: a failed or cancelled export keeps only its `status.json`.
+
 ## What `sealift import` checks
 
-`sealift import` reads the archive once and publishes nothing unless every check passes. The first problem found ends the run with its reason, except that a wrong size or sha256 is named before any other problem. The archive and the manifest are opened read-only.
+`sealift import` reads the archive once and publishes nothing unless every check passes. The first problem found ends the run with its reason, except that a wrong size or sha256 is named before any other problem. The archive, the manifest and the signature are opened read-only.
+
+The import trusts one key, the Ed25519 public key in the file named by `publicKeyFile` in its settings: one PKIX `PUBLIC KEY` PEM block, at most 4 KiB, LF or CRLF line endings, blank space around it allowed. The settings file has no `signatureKeyFile` any more.
+
+The signature, checked before anything else is parsed:
+
+1. The manifest is read once, within 16 MiB, and `manifest.json.sig` once, within 4 KiB. With `-signature`, the file is the one named; otherwise it is the manifest's path plus `.sig`.
+2. The signature verifies over those exact manifest bytes with the trusted key. The verdict comes from the Ed25519 check alone: the `publicKeySha256` the file names only chooses the wording of the refusal.
+3. Only then is the same manifest bytes parsed. A manifest edited after signing is refused by the signature, not by a manifest rule.
+
+A refusal here opens with one of four phrases: `the archive is unsigned` (no signature file), `manifest.json.sig is not a signature this import reads` (unreadable, too large or malformed file), `the manifest is signed by another key` (the file names another key and the check fails), `the signature does not match the manifest` (the file names the trusted key and the check fails). A script matches these opening words and nothing after them. The refusal never quotes the file.
 
 The manifest:
 
 1. It is at most 16 MiB, and valid JSON with nothing after the document.
-2. `formatVersion` is 1. Every field in the table above is present: a missing field refuses the manifest. `target.libc` must be present but may be empty, as older versions let a project save it empty. `packages` is not empty.
+2. `formatVersion` is 2. Every field in the table above is present: a missing field refuses the manifest. `target.libc` must be present but may be empty, as older versions let a project save it empty. `packages` is not empty.
 3. Each `file` is a plain file name of at most 255 bytes that starts with a letter, a digit or `_`, holds only letters, digits and `._~+-`, and ends in `.tgz`. No two packages share a `file` or a name and version.
 4. Each `name` is a valid npm package name and each `version` an exact version of at most 256 bytes, as sealift's own checks read them. `shippedSha512` is 128 lowercase hex digits and `originalIntegrity` a usable integrity string of at most 4 KiB.
 5. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters. A control character, a bidirectional override or any other format character refuses the manifest, so a report that prints these values cannot be made to write escape sequences. The refusal does not repeat the value.
@@ -83,9 +116,8 @@ The archive:
 2. Entry names are exactly `out/` and `out/<file>`. An absolute path, a `..`, a `./out/` prefix, a path outside `out/`, a subdirectory, a directory other than `out/`, a link, a sparse file, anything but a regular file and a name that appears twice are refused.
 3. The archive holds at most 10,000 entries and 10 GiB of unpacked content, counted from each entry's declared size before the entry is read, and no entry name passes 255 bytes. The inflated tar data is capped as well: the content bound, plus 4 KiB and the name bound for each entry, plus the 1 KiB end marker. Repeated extended or long-name headers before an entry count against that cap.
 4. After the tar end marker, the archive holds at most 16 KiB of zero bytes. The gzip checksum is verified, and anything appended, a second entry or a second gzip member included, is refused without being inflated further.
-5. Every file under `out/` other than `signature.key` is listed in `packages[].file`, and every listed file is present.
+5. Every file under `out/` is listed in `packages[].file`, and every listed file is present.
 6. Each file's sha512 matches `shippedSha512`. When `publishConfigStripped` is `false`, it also matches `originalIntegrity`. When it is `true`, sealift rewrote the file, so `originalIntegrity` no longer describes it and is not compared.
-7. `out/signature.key` is present, at most 64 KiB, and equals the expected value byte for byte. The comparison takes constant time, and a refusal prints neither value.
 
 Only then does the import publish each tarball to the npm hosted repository.
 
@@ -106,7 +138,8 @@ Only then does the import publish each tarball to the npm hosted repository.
 | `packages[].name`, `.version`, `.file` | The package, as the manifest lists it |
 | `packages[].state` | `published`, `present` or `failed` |
 | `packages[].reason` | Why a package failed; empty otherwise |
-| `archiveChecked` | `true` when the archive passed its checks against the manifest and the signature key, `false` when the run was refused or stopped before they passed. A report written by 0.4.0 or earlier has no such field |
+| `publicKeySha256` | The sha256 fingerprint of the trusted public key, as the settings name it. A report written by 0.4.0 or earlier has no such field |
+| `archiveChecked` | `true` when the signature verified and the archive passed its checks against the manifest, `false` when the run was refused or stopped before they passed. A report written by 0.4.0 or earlier has no such field |
 | `packages[].kind` | Set on a failed package only, one of the six kinds below. A report written by 0.4.0 or earlier has no `kind` on any package |
 | `packages[].note` | Empty for a failed package. For a package whose manifest entry has `publishConfigStripped`, the note the publish step set, or `sealift removed publishConfig at export` when it set none |
 
@@ -127,7 +160,7 @@ Before it looks at Nexus, the import reads each tarball: its `package.json` must
 
 A package is `present` when Nexus already serves the same bytes. For a package with `publishConfigStripped`, it is also `present` when Nexus serves other bytes with the same content, noted `same content, packed differently`. Same content means the same entry names, types, modes, link targets and file bytes, as written. Owners, times and entry order do not count. The `package.json` compares as decoded JSON once `publishConfig` is removed from both. A tarball that holds a name twice never matches, nor does one with data after its end-of-archive marker other than zero padding, which pnpm refuses. Any other difference is `failed`, naming both sha512 digests; a copy that cannot be read for the comparison is `failed` with the reason instead.
 
-A package is `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or the signature key.
+A package is `published` when the upload was read back and matched the shipped sha512, and `failed` otherwise. The report never holds the Nexus password, an `Authorization` header or any key.
 
 The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> present, <n> failed`. A warning line follows for an unencrypted connection, then `reason:` when there is one, the archive line, `import version: <importVersion>`, the manifest and Nexus lines, and one line per package: `<name>@<version> <state> <file>[: <reason>][ (<note>)]`.
 
@@ -135,8 +168,8 @@ The text form starts with `import <outcome>[ (unencrypted)]: <n> published, <n> 
 | --- | --- |
 | 0 | Complete |
 | 1 | Incomplete: at least one package failed, or the JSON report could not be written |
-| 2 | Usage or settings error: one line on stderr, no report |
-| 3 | Refused: nothing was published |
+| 2 | Usage or settings error: one line on stderr, no report. `-report` naming the archive, the manifest or the signature is one |
+| 3 | Refused, an unsigned or wrongly signed archive included: nothing was published |
 
 The archive and the manifest are opened read-only. The command writes the JSON report and one private temporary directory, which it removes on every exit.
 
