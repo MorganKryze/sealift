@@ -12,6 +12,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+- Activating a Trivy version refused nothing but an uninstalled one, so a request could point the active Trivy at another directory. A version must now be a release number.
 - The image no longer carries the npm, npx, corepack and yarn that its Node base bundles. sealift never called them, and their dependencies held fixable high-severity CVEs. Each image build now fails on a fixable high or critical CVE.
 
 ## [0.6.0] - 2026-11-19

@@ -213,6 +213,24 @@ func TestActivateTrivyRefusesUninstalledVersion(t *testing.T) {
 	}
 }
 
+// A version is a path element: one that is not a release number could
+// point the active link at any directory, inside the volume or out of it.
+func TestActivateTrivyRefusesAPathAsVersion(t *testing.T) {
+	srv, _ := trivyRelease(t, time.Now(), false)
+	m, root := newTestManager(t, srv)
+	if err := os.MkdirAll(filepath.Join(root, "elsewhere"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{"../../elsewhere", "/tmp", "0.76.2/../../../elsewhere"} {
+		if err := m.ActivateTrivy(v); !errors.Is(err, ErrInvalidTrivyVersion) {
+			t.Errorf("ActivateTrivy(%q) = %v, want ErrInvalidTrivyVersion", v, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, "tools", "trivy", "current")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the active link exists after refused versions: %v", err)
+	}
+}
+
 func TestTrivyStateReportsDBDate(t *testing.T) {
 	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
 	m, root := newTestManager(t, srv)
