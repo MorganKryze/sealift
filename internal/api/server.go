@@ -3,6 +3,7 @@ package api
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/runner"
@@ -53,5 +54,20 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 		http.NotFound(w, r)
 	})
 	mux.Handle("/", SPA(static))
-	return refuseCrossSite(mux, allowedHosts(h.ListenAddr))
+	routes := refuseCrossSite(mux, allowedHosts(h.ListenAddr))
+	if h.Ephemeral > 0 {
+		return noStore(routes)
+	}
+	return routes
+}
+
+// noStore keeps the browser from writing API answers, reports and archives
+// included, to its disk cache, where an erase on the server cannot reach.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }

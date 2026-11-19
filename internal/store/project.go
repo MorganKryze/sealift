@@ -76,6 +76,9 @@ var randomHexFunc = randomHex
 // nothing.
 func (s *Store) CreateProject(name string, manifest []byte) (Project, error) {
 	base := slug(name)
+	if s.isEphemeral() {
+		base = "project"
+	}
 	if base == "" {
 		return Project{}, fmt.Errorf("store: %q has no usable characters for a project id", name)
 	}

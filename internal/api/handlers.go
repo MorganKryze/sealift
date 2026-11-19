@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/runner"
@@ -27,6 +28,9 @@ type Handlers struct {
 	Service    *jobs.Service
 	Tools      *tools.Manager
 	Trivy      runner.Trivy
+	// Ephemeral is the idle delay of ephemeral mode, zero when the mode is
+	// off. In that mode, deleting a project also empties the shared caches.
+	Ephemeral time.Duration
 }
 
 // problemBody is the shape every operation's default response carries.

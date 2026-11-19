@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -50,10 +51,15 @@ func main() {
 }
 
 func run(addr, root string, log *slog.Logger) error {
+	idle, err := ephemeralConfig(os.Getenv("SEALIFT_EPHEMERAL"), os.Getenv("SEALIFT_EPHEMERAL_IDLE"))
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(root)
 	if err != nil {
 		return err
 	}
+	st.SetEphemeral(idle > 0)
 	swept, err := st.MarkRunningInterrupted()
 	if err != nil {
 		return err
@@ -110,6 +116,7 @@ func run(addr, root string, log *slog.Logger) error {
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 	handlers.ListenAddr = addr
+	handlers.Ephemeral = idle
 
 	static, err := web.Static()
 	if err != nil {
@@ -128,7 +135,10 @@ func run(addr, root string, log *slog.Logger) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
 
-	log.Info("listening", "addr", addr, "data", root)
+	log.Info("listening", "addr", addr, "data", root, "ephemeral", idle > 0)
+	if idle > 0 {
+		go sweepEphemeral(ctx, st, idle, log)
+	}
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -199,6 +209,50 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// ephemeralConfig reads SEALIFT_EPHEMERAL and SEALIFT_EPHEMERAL_IDLE. It
+// returns the idle delay after which a project is erased, zero when the
+// mode is off, and refuses any value it does not understand rather than
+// guess: an erase the operator did not mean, or one that never happens,
+// both cost more than a refused start.
+func ephemeralConfig(on, idle string) (time.Duration, error) {
+	switch on {
+	case "", "0":
+		return 0, nil
+	case "1":
+	default:
+		return 0, fmt.Errorf("SEALIFT_EPHEMERAL must be 1 or 0, not %q", on)
+	}
+	if idle == "" {
+		return time.Hour, nil
+	}
+	minutes, err := strconv.Atoi(idle)
+	if err != nil || minutes <= 0 {
+		return 0, fmt.Errorf("SEALIFT_EPHEMERAL_IDLE must be a positive number of minutes, not %q", idle)
+	}
+	return time.Duration(minutes) * time.Minute, nil
+}
+
+// sweepEphemeral erases idle projects, then the caches once none remains,
+// every minute until ctx ends. Its log lines carry counts, never an id.
+func sweepEphemeral(ctx context.Context, st *store.Store, idle time.Duration, log *slog.Logger) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			// Counts only: an error's text can hold a path that names a package.
+			r := st.SweepEphemeral(idle, now)
+			if r.Failed > 0 {
+				log.Error("ephemeral sweep could not erase everything", "failed", r.Failed, "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
+			} else if r.Deleted > 0 || r.Purged {
+				log.Info("ephemeral sweep", "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
+			}
+		}
+	}
 }
 
 // noNewPrivs reports whether a /proc/<pid>/status text has the

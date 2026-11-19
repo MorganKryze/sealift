@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -208,6 +209,13 @@ func (h *Handlers) GetProject(_ context.Context, req GetProjectRequestObject) (G
 func (h *Handlers) DeleteProject(_ context.Context, req DeleteProjectRequestObject) (DeleteProjectResponseObject, error) {
 	if err := h.Store.DeleteProject(req.ProjectId); err != nil {
 		return DeleteProjectdefaultApplicationProblemPlusJSONResponse(autoProblem("delete project", err)), nil
+	}
+	if h.Ephemeral > 0 {
+		// With a job of another project in flight, the store puts the purge
+		// off and the next sweep that finds the instance idle runs it.
+		if _, err := h.Store.PurgeIfIdle(); err != nil {
+			return DeleteProjectdefaultApplicationProblemPlusJSONResponse(problem(http.StatusInternalServerError, "delete project", fmt.Errorf("the project is deleted, the shared caches are not: %w", err))), nil
+		}
 	}
 	return DeleteProject204Response{}, nil
 }

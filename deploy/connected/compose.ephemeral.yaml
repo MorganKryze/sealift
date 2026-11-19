@@ -1,0 +1,17 @@
+# Ephemeral mode, on top of compose.yaml:
+#   docker compose -f compose.yaml -f compose.ephemeral.yaml up -d
+# A project and the caches it filled are erased after SEALIFT_EPHEMERAL_IDLE
+# minutes without activity, or when it is erased from its archive screen.
+# Projects and caches live in RAM, and a restart erases them too. That
+# keeps them off the disk only on a host with no swap or an encrypted one,
+# and only on a volume with no projects/ or cache/ from an earlier run
+# (the mounts hide that data without erasing it). A large analysis can
+# need 2 to 3 GB of RAM there.
+services:
+  sealift:
+    environment:
+      SEALIFT_EPHEMERAL: "1"
+      SEALIFT_EPHEMERAL_IDLE: "60"
+    tmpfs:
+      - /data/projects:size=4g,uid=10000,gid=2000,mode=0770
+      - /data/cache:size=4g,uid=10000,gid=2000,mode=0770

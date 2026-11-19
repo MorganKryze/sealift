@@ -173,3 +173,44 @@ func TestArgoCDExamples(t *testing.T) {
 		t.Errorf("syncOptions = %v, want CreateNamespace=true", app.Spec.SyncPolicy.SyncOptions)
 	}
 }
+
+// The ephemeral overlay turns the mode on and keeps the working data in
+// RAM, owned by the app user and the data group so the tools user can write.
+func TestConnectedEphemeralCompose(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Tmpfs       []string
+		}
+	}
+	load(t, "connected/compose.ephemeral.yaml", &c)
+	s, ok := c.Services["sealift"]
+	if !ok || len(c.Services) != 1 {
+		t.Fatalf("services = %v, want sealift alone", c.Services)
+	}
+	if s.Environment["SEALIFT_EPHEMERAL"] != "1" {
+		t.Errorf("SEALIFT_EPHEMERAL = %q, want 1", s.Environment["SEALIFT_EPHEMERAL"])
+	}
+	for _, dir := range []string{"/data/projects", "/data/cache"} {
+		found := false
+		for _, m := range s.Tmpfs {
+			path, opts, _ := strings.Cut(m, ":")
+			if path != dir {
+				continue
+			}
+			found = true
+			for _, want := range []string{"uid=10000", "gid=2000", "mode=0770", "size="} {
+				if !strings.Contains(opts, want) {
+					t.Errorf("tmpfs %s lacks %s: %q", dir, want, opts)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("no tmpfs on %s in %v", dir, s.Tmpfs)
+		}
+	}
+	// compose merges tmpfs lists: a second /tmp would clash with the base file's.
+	if slices.ContainsFunc(s.Tmpfs, func(m string) bool { return strings.HasPrefix(m, "/tmp") }) {
+		t.Errorf("the overlay repeats /tmp, which compose.yaml already mounts")
+	}
+}

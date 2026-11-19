@@ -32,8 +32,11 @@ Include the version, what an attacker needs, and the steps that show the problem
 - The service reads the access token from the one header that `token.header` names, and from no other: not `Authorization`, not a cookie, not `X-Access-Token` when another name is set. An absent or empty header answers 401 with the check `absent`. It refuses to start on a header named `Authorization`, `Cookie` or `Host`.
 - The chart's NetworkPolicy admits the pod only from the ingress controller's namespace, only on the service's port. The chart refuses to render an Ingress without its sign-in annotations.
 - Tokens (the GitHub token included), the MinIO secret key, the Nexus password and the private signing key stay out of logs, responses and stored records.
+- In ephemeral mode (`SEALIFT_EPHEMERAL=1`), a project's id does not derive from its name, so no log line names the project, and the sweep logs counts only. Erasing a project deletes its directory, then the shared caches that recorded what it fetched as soon as no job is in flight. Every project idle for the configured delay is erased the same way. API answers carry `Cache-Control: no-store`, and the erase control clears the tab's stored selection.
 
 ## What it does not
+
+- Ephemeral mode deletes files: it does not overwrite them. Without the overlay's RAM mounts, the disk can keep a deleted file's blocks. With them, a host with unencrypted swap can still write those pages to disk. The mode leaves the browser's history, its download folder and other tabs' storage alone, and it keeps Trivy, its database, the settings, the signing key and pnpm's update state under `home/`.
 
 - The Trivy release lookup trusts the address in `SEALIFT_GITHUB_API` when you set it: that server supplies the release date, the checksums and the download address, so a mirror you do not control defeats the sha256 check and the minimum release age for Trivy. sealift accepts only `https`, or `http` on a loopback host. `SEALIFT_GITHUB_TOKEN` goes to that same address, so a mirror receives the token.
 - The signature shows that the manifest came from the holder of the private key. It does not show who asked for the export: anyone who reaches sealift's port can have any selection signed.

@@ -410,7 +410,7 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downlo
 		return downloadedPackage{}, false, fmt.Errorf("jobs: download %s@%s: %w", p.Name, p.Version, err)
 	}
 	cachePath := filepath.Join(e.Store.Root(), "cache", "tarballs", sha512Hex+".tgz")
-	if err := os.Rename(tmpPath, cachePath); err != nil {
+	if err := moveFile(tmpPath, cachePath); err != nil {
 		return downloadedPackage{}, false, fmt.Errorf("jobs: cache %s@%s: %w", p.Name, p.Version, err)
 	}
 	return downloadedPackage{LockPackage: p, CachePath: cachePath, SHA512: sha512Hex}, false, nil

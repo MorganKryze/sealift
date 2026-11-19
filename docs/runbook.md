@@ -131,7 +131,7 @@ Everything before the key happens on the connected side. Nothing here was run en
    shasum -a 256 sealift-0.6.1.tgz sealift-0.6.1.image.tar
    ```
 
-   `index.json` must name one manifest, the amd64 digest of step 1. A save without `--platform` writes every platform present, about twice the size. `--platform` needs Docker 28 or later.
+   `index.json` must name the amd64 digest of step 1 and no other platform. A second entry without a platform is that image's build attestation. A save without `--platform` writes every platform present, about twice the size. `--platform` needs Docker 28 or later.
 
    The first `helm push` of a release creates the package `ghcr.io/morgankryze/charts/sealift`, and GHCR can make a new package private. If the pull is refused, check on GitHub that the package is public, or run `helm registry login ghcr.io` first. An Argo CD that reads GHCR directly needs the package public as well.
 3. Carry the two files through the key and send the recorded values by [another channel](#values-that-cross-by-another-channel). No other image crosses: oauth2-proxy and ingress-nginx are your team's.

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- An ephemeral mode for the collection side. With `SEALIFT_EPHEMERAL=1`, a project and the caches it filled are erased from the export screen, or after `SEALIFT_EPHEMERAL_IDLE` minutes without activity (60 by default). Project ids no longer name the project, and `deploy/connected/compose.ephemeral.yaml` keeps projects and caches in RAM. [Deployment](docs/deployment.md#ephemeral-mode) describes it.
+
 ## [0.6.1] - 2026-11-19
 
 ### Fixed
