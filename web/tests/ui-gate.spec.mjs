@@ -30,9 +30,10 @@ export const UI = {
 }
 
 import { spawn } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { createServer } from "node:http"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
@@ -107,6 +108,8 @@ function settle() {
 
 let binary = ""
 let scratch = ""
+let github = null
+let startedCollection = false
 let fixtures = null
 const children = []
 
@@ -117,6 +120,23 @@ const spawnServer = (command, args, options) => {
   children.push(child)
   return child
 }
+
+// A stand-in for api.github.com: the collection server looks up the latest Trivy release when a page asks
+// for the tools, and the gate keeps that lookup on this machine. The release is old enough to need no
+// recommendation, so the server asks for nothing else. `paths` records what it was asked.
+const startFakeGitHub = () =>
+  new Promise((done, fail) => {
+    const paths = []
+    const server = createServer((req, res) => {
+      paths.push(req.url)
+      const release = { tag_name: "v0.74.0", draft: false, prerelease: false, published_at: "2026-01-01T00:00:00Z", assets: [] }
+      res.setHeader("content-type", "application/json")
+      if (req.url === "/repos/aquasecurity/trivy/releases/latest") res.end(JSON.stringify(release))
+      else { res.statusCode = 404; res.end("{}") }
+    })
+    server.on("error", fail)
+    server.listen(0, "127.0.0.1", () => done({ url: `http://127.0.0.1:${server.address().port}`, paths, close: () => new Promise((end) => { server.close(end); server.closeAllConnections() }) }))
+  })
 
 const run = (command, args) =>
   new Promise((done, fail) => {
@@ -149,14 +169,19 @@ const stop = async (child) => {
 test.beforeAll(async () => {
   test.setTimeout((POLLS + 30) * 1000 + 240_000)
   scratch = mkdtempSync(join(tmpdir(), "sealift-gate-"))
-  binary = join(scratch, "sealift")
+  // One fixed path, so a firewall that asks per program sees the same file on every run.
+  const out = resolve("test-results", "gate")
+  mkdirSync(out, { recursive: true })
+  binary = join(out, "sealift")
+  github = await startFakeGitHub()
   // The binary embeds web/dist, so the build comes first and the binary is built once for both roles.
   await run("pnpm", ["run", "build"])
   await run("go", ["build", "-o", binary, "../cmd/sealift"])
 
   if (!(await answers(UI.baseURL))) {
     if (!UI.start) throw new Error(`nothing answers at ${UI.baseURL} and UI.start is empty`)
-    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary } })
+    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: github.url } })
+    startedCollection = true
     await waitFor(UI.baseURL, "the collection server", collection)
   }
 
@@ -170,6 +195,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await Promise.all(children.splice(0).map(stop))
   if (fixtures) await fixtures.close()
+  if (github) await github.close()
+  github = null
   fixtures = null
   if (scratch) rmSync(scratch, { recursive: true, force: true })
   scratch = ""
@@ -350,3 +377,9 @@ for (const route of IMPORT.routes) {
     }
   }
 }
+
+test("the collection server looked up Trivy through the local stand-in, not api.github.com", () => {
+  // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
+  if (!startedCollection) return
+  expect(github.paths).toContain("/repos/aquasecurity/trivy/releases/latest")
+})

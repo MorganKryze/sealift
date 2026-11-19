@@ -99,7 +99,7 @@ export function EndState({ imp }: { imp: Import }) {
         <p className="[overflow-wrap:anywhere]">{reason || "Not recorded"}</p>
         <p>This attempt published nothing and read no package.</p>
         <div className="mt-2">
-          <Link to="/" className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-background outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">
+          <Link to="/" className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 text-sm font-medium text-background outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">
             <Archive aria-hidden className="size-4" />
             Go to archives
           </Link>
