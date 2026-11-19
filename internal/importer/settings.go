@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +18,9 @@ import (
 
 	"github.com/MorganKryze/sealift/archive"
 )
+
+// DefaultTokenHeader is the header the access token is read from when the settings name none.
+const DefaultTokenHeader = "X-Access-Token"
 
 const (
 	// maxSettingsBytes is the largest settings file LoadSettings reads: 64 KiB.
@@ -29,6 +33,8 @@ const (
 var (
 	repositoryName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	unknownField   = regexp.MustCompile(`field (\w+) not found`)
+	// headerName holds the token characters of RFC 9110.
+	headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 )
 
 // Secret is a credential. It prints as "[redacted]" however it is formatted.
@@ -85,6 +91,7 @@ type TokenSettings struct {
 	KeySetURL        *url.URL
 	Issuer, Audience string
 	CAFile           string
+	Header           string // canonical; DefaultTokenHeader when the file names none
 }
 
 // CheckService returns a *SettingsError naming what the import service needs
@@ -115,10 +122,11 @@ type rawSettings struct {
 	} `yaml:"nexus"`
 	PublicKeyFile string `yaml:"publicKeyFile"`
 	Token         *struct {
-		KeySetURL string `yaml:"keySetUrl"`
-		Issuer    string `yaml:"issuer"`
-		Audience  string `yaml:"audience"`
-		CAFile    string `yaml:"caFile"`
+		KeySetURL string  `yaml:"keySetUrl"`
+		Issuer    string  `yaml:"issuer"`
+		Audience  string  `yaml:"audience"`
+		CAFile    string  `yaml:"caFile"`
+		Header    *string `yaml:"header"`
 	} `yaml:"token"`
 	MinIO *struct {
 		URL           string `yaml:"url"`
@@ -182,7 +190,7 @@ func LoadSettings(path string) (Settings, error) {
 		s.Files = append(s.Files, NamedFile{"nexus.caFile", s.CAFile})
 	}
 	if raw.Token != nil {
-		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile); err != nil {
+		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile, raw.Token.Header); err != nil {
 			return Settings{}, err
 		}
 	}
@@ -231,7 +239,7 @@ func loadMinIO(dir, rawURL, region, accessKeyFile, secretKeyFile, caFile string)
 	return m, nil
 }
 
-func loadToken(dir, keySetURL, issuer, audience, caFile string) (*TokenSettings, error) {
+func loadToken(dir, keySetURL, issuer, audience, caFile string, header *string) (*TokenSettings, error) {
 	for _, r := range []struct{ field, value string }{
 		{"token.keySetUrl", keySetURL}, {"token.issuer", issuer}, {"token.audience", audience},
 	} {
@@ -243,13 +251,34 @@ func loadToken(dir, keySetURL, issuer, audience, caFile string) (*TokenSettings,
 	if err != nil {
 		return nil, err
 	}
-	t := &TokenSettings{KeySetURL: u, Issuer: issuer, Audience: audience}
+	t := &TokenSettings{KeySetURL: u, Issuer: issuer, Audience: audience, Header: DefaultTokenHeader}
+	if header != nil {
+		if t.Header, err = tokenHeader(*header); err != nil {
+			return nil, err
+		}
+	}
 	if caFile != "" {
 		if t.CAFile, err = certFile("token.caFile", dir, caFile); err != nil {
 			return nil, err
 		}
 	}
 	return t, nil
+}
+
+// tokenHeader returns the canonical form of a header name the token may travel in.
+func tokenHeader(name string) (string, error) {
+	switch {
+	case name == "":
+		return "", settingsErr("token.header", "is empty")
+	case !headerName.MatchString(name):
+		return "", settingsErr("token.header", "is not a valid header name")
+	}
+	canonical := http.CanonicalHeaderKey(name)
+	switch canonical {
+	case "Authorization", "Cookie", "Host":
+		return "", settingsErr("token.header", "cannot be Authorization, Cookie or Host")
+	}
+	return canonical, nil
 }
 
 // certFile resolves a CA file path and checks that it opens.

@@ -400,3 +400,38 @@ func TestLoadSettingsMinIOSection(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadSettingsTokenHeader(t *testing.T) {
+	ok := []struct{ name, line, want string }{
+		{"absent reads the default", "", "X-Access-Token"},
+		{"kept in canonical form", "  header: x-auth-request-access-token\n", "X-Auth-Request-Access-Token"},
+	}
+	for _, tt := range ok {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := LoadSettings(writeSettings(t, validSetting+tokenSection+tt.line))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Token.Header != tt.want {
+				t.Errorf("Header = %q, want %q", s.Token.Header, tt.want)
+			}
+		})
+	}
+	refused := []struct{ name, value, reason string }{
+		{"empty", `""`, "is empty"},
+		{"space", `"X Access Token"`, "is not a valid header name"},
+		{"colon", `"X-Token:"`, "is not a valid header name"},
+		{"Authorization", "Authorization", "cannot be Authorization, Cookie or Host"},
+		{"cookie", "cookie", "cannot be Authorization, Cookie or Host"},
+		{"HOST", "HOST", "cannot be Authorization, Cookie or Host"},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadSettings(writeSettings(t, validSetting+tokenSection+"  header: "+tt.value+"\n"))
+			var se *SettingsError
+			if !errors.As(err, &se) || se.Field != "token.header" || se.Reason != tt.reason {
+				t.Fatalf("got %v, want token.header %s", err, tt.reason)
+			}
+		})
+	}
+}

@@ -8,6 +8,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- The settings file's `token` section takes an optional `header`, the header that carries the access token behind a gateway. It defaults to `X-Access-Token`. `Authorization`, `Cookie` and `Host` are refused, and the service reads that one header only.
 - sealift generates an Ed25519 signing key on first start and keeps it in its data volume. Settings shows the public key and its public key sha256, copies and downloads the public key, and regenerates the pair behind a confirmation. `GET /api/signing-key` and `POST /api/signing-key/regenerate` serve it; the private key never leaves the volume, and a regenerate from another site is refused.
 - The import screens, served by `sealift import-server` behind the gateway: Archives lists the archives in your MinIO folder and starts an import, Imports lists the imports you started, and an import shows its stages, its report per package, how it ended and a retry card that says what each failure needs. [Importing](docs/importing.md) describes them.
 - `sealift import-server` serves its own screens: Archives at `/`, Imports at `/imports` and an import at `/imports/<id>`, with the header and the Settings sheet. The files need no token, every other path outside `/api` and `/healthz` answers 404, and every answer carries a Content-Security-Policy and framing headers.

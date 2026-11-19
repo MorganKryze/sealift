@@ -9,12 +9,13 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/token"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
-// TokenHeader carries the access token the gateway forwards. No other header is read.
-const TokenHeader = "X-Access-Token"
+// TokenHeader is the header that carries the access token unless the settings name another.
+const TokenHeader = importer.DefaultTokenHeader
 
 // MaxBodyBytes caps a request body at 64 KiB.
 const MaxBodyBytes = 64 << 10
@@ -44,12 +45,20 @@ func limitBody(next http.Handler) http.Handler {
 	})
 }
 
+// tokenHeader names the one header that carries the token.
+func (h *Handlers) tokenHeader() string {
+	if t := h.settings.Token; t != nil && t.Header != "" {
+		return t.Header
+	}
+	return TokenHeader
+}
+
 // authenticate lets a request through only when its token passes Verify and
 // its preferred_username can name a user folder. The user comes from the
 // claim alone and is put in the request's context.
 func (h *Handlers) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, err := h.verifier.Verify(r.Context(), r.Header.Get(TokenHeader))
+		claims, err := h.verifier.Verify(r.Context(), r.Header.Get(h.tokenHeader()))
 		var rejected *token.Rejected
 		var unavailable *token.Unavailable
 		switch {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/token"
 )
 
@@ -177,5 +178,38 @@ func TestNewWarnsOnUnencryptedKeySet(t *testing.T) {
 	}
 	if quiet := newRig(t, fakeVerifier{}); quiet.logs.Len() != 0 {
 		t.Errorf("a service with nothing unencrypted logged %q", quiet.logs.String())
+	}
+}
+
+func TestAuthReadsOnlyTheNamedHeader(t *testing.T) {
+	const namedHeader = "X-Auth-Request-Access-Token"
+	verifier := fakeVerifier{claims: map[string]token.Claims{testToken: named("alice"), "other": named("bob")}}
+	h := New(Config{Verifier: verifier, Settings: importer.Settings{Token: &importer.TokenSettings{Header: namedHeader}}})
+	tests := []struct {
+		name     string
+		headers  map[string]string
+		wantCode int
+		wantUser string
+		wantBody string
+	}{
+		{"the named header", map[string]string{namedHeader: testToken}, http.StatusOK, "alice", ""},
+		{"the default header alone", map[string]string{TokenHeader: testToken}, http.StatusUnauthorized, "", "absent"},
+		{"Authorization alone", map[string]string{"Authorization": "Bearer " + testToken}, http.StatusUnauthorized, "", "absent"},
+		{"both headers", map[string]string{namedHeader: testToken, TokenHeader: "other"}, http.StatusOK, "alice", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = userFrom(r.Context()) })
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			h.authenticate(next).ServeHTTP(rec, req)
+			if rec.Code != tt.wantCode || got != tt.wantUser || !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("status %d, user %q, body %q; want %d, %q, naming %q", rec.Code, got, rec.Body.String(), tt.wantCode, tt.wantUser, tt.wantBody)
+			}
+		})
 	}
 }

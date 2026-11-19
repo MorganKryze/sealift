@@ -5,7 +5,8 @@ info:
   description: >
     Tells a signed-in user who the service acts for, lists the archives in
     the user's MinIO folder, and starts and follows imports. Every operation
-    needs the access token the gateway forwards in the X-Access-Token header.
+    needs the access token the gateway forwards in the header the settings
+    name in token.header, X-Access-Token by default.
 servers:
   - url: /api
 tags:
