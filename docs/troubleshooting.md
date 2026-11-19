@@ -101,7 +101,7 @@ pnpm could not install the project as dropped. The message carries pnpm's reason
 
 ### fork/exec /usr/local/bin/node: operation not permitted
 
-sealift could not start pnpm as its `tools` user. The container runs with `no-new-privileges`, or without the `SETUID` and `SETGID` capabilities. [Deployment](deployment.md#compose) has a setup that works.
+sealift could not start pnpm as its `tools` user. The container runs with `no-new-privileges`, set by the Compose file or by the Docker daemon for every container, or without the `SETUID` and `SETGID` capabilities. `docker exec <container> grep NoNewPrivs /proc/1/status` must print `0`. [Deployment](deployment.md#compose) has a setup that works.
 
 ### An analysis shows Analysis interrupted after a restart
 

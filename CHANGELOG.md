@@ -8,6 +8,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- On a host whose Docker daemon sets `no-new-privileges` for every container, analyses and the Trivy database install failed with `operation not permitted`. `deploy/connected/compose.yaml` now turns the option off by name, and sealift logs an error at startup when it runs with the flag set.
+- A failed request whose answer carried no readable detail, such as one a proxy rewrote, showed only "Request failed". The notice now gives the HTTP status and points to the container's log.
 - `summary.md` printed the analysis' own picks as its After row, even when the export selected other versions. It now prints three rows: the whole project before, the project once the selection applies, and the packages in the archive. With the project tree included, the archive also holds the old versions, so its row can match Before.
 
 ### Security

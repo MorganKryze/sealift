@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -89,6 +90,9 @@ func run(addr, root string, log *slog.Logger) error {
 	target := st.Settings().Target
 	asUser := toolsCredential()
 	log.Info("child processes", "runs_as_tools_account", asUser != nil)
+	if status, err := os.ReadFile("/proc/self/status"); asUser != nil && err == nil && noNewPrivs(string(status)) {
+		log.Error("child processes cannot switch to the tools account: the container runs with no-new-privileges, so every analysis and the Trivy database install fail; set security_opt: [no-new-privileges=false], which also overrides a daemon.json default")
+	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
 	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), asUser)
 	// Empty keeps npm.DefaultRegistry, the only path production takes. The
@@ -195,6 +199,17 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// noNewPrivs reports whether a /proc/<pid>/status text has the
+// no_new_privs flag set, which blocks the setuid switch to the tools user.
+func noNewPrivs(status string) bool {
+	for line := range strings.Lines(status) {
+		if v, ok := strings.CutPrefix(line, "NoNewPrivs:"); ok {
+			return strings.TrimSpace(v) == "1"
+		}
+	}
+	return false
 }
 
 func toolsCredential() *runner.Credential {

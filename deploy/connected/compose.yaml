@@ -15,14 +15,17 @@ services:
     tmpfs:
       - /tmp
     # pnpm and Trivy run as a second user, which needs SETUID and SETGID.
-    # KILL stops a cancelled job. Do not add no-new-privileges: it blocks
-    # that switch and every analysis fails.
+    # KILL stops a cancelled job. no-new-privileges blocks that switch and
+    # every analysis fails; a daemon.json can set it for every container,
+    # so this service turns it off by name.
     cap_drop:
       - ALL
     cap_add:
       - SETUID
       - SETGID
       - KILL
+    security_opt:
+      - no-new-privileges=false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

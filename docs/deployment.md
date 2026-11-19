@@ -13,7 +13,7 @@ The image holds the sealift binary, the web interface and Node 22. The rest land
 ```yaml
 services:
   sealift:
-    image: ghcr.io/morgankryze/sealift:0.2.2
+    image: ghcr.io/morgankryze/sealift:0.6.0
     restart: unless-stopped
     ports:
       - 127.0.0.1:8080:8080
@@ -28,6 +28,8 @@ services:
       - SETUID
       - SETGID
       - KILL
+    security_opt:
+      - no-new-privileges=false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -40,7 +42,7 @@ This setup was checked with an analysis and an export. The root filesystem is re
 
 sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second user, `tools` (uid 10001), so neither they nor any package they handle can read `private/`, which holds the settings and the signing key. Switching users needs `SETUID` and `SETGID`, and stopping a cancelled job needs `KILL`. Every other capability can go.
 
-Do not add `no-new-privileges`. It stops the switch to the `tools` user, and every analysis fails with `fork/exec /usr/local/bin/node: operation not permitted`.
+`no-new-privileges` stops the switch to the `tools` user, and every analysis fails with `fork/exec ... operation not permitted`. A Docker daemon can set it for every container through `"no-new-privileges": true` in `daemon.json`, so the Compose file turns it off by name with `security_opt: [no-new-privileges=false]`. Leaving the option out is not enough on such a host. `docker inspect` shows `SecurityOpt: null` either way; `docker exec <container> grep NoNewPrivs /proc/1/status` shows what applies, and it must print `0`. sealift also logs an error at startup when it finds the flag set.
 
 ## Access
 
