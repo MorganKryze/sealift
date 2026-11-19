@@ -17,7 +17,7 @@ The chart runs one container, sealift's, and ships no gateway: no nginx, no oaut
 
 The pod runs as a non-root user, with a read-only root filesystem, every capability dropped, no privilege escalation and the `RuntimeDefault` seccomp profile. A namespace that enforces the Kubernetes `restricted` standard admits it. The chart needs Kubernetes 1.25 or later.
 
-The chart's version and `appVersion` both equal the release: version 0.6.0 runs the image `ghcr.io/morgankryze/sealift:0.6.0`.
+The chart's version and `appVersion` both equal the release: version 0.6.1 runs the image `ghcr.io/morgankryze/sealift:0.6.1`.
 
 ## Values
 

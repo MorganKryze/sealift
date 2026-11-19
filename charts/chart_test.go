@@ -206,7 +206,7 @@ func TestChartRunsOneImportService(t *testing.T) {
 	if n := len(at(d, "spec", "template", "spec", "containers").([]any)); n != 1 {
 		t.Errorf("containers = %d, want 1", n)
 	}
-	if got := at(c, "image"); got != "ghcr.io/morgankryze/sealift:0.6.0" {
+	if got := at(c, "image"); got != "ghcr.io/morgankryze/sealift:0.6.1" {
 		t.Errorf("image = %v, want the image at appVersion", got)
 	}
 	wantArgs := []any{"sealift", "import-server", "-settings", "/etc/sealift/config/settings.yaml", "-addr", "0.0.0.0:8080", "-data", "/data"}
@@ -291,7 +291,7 @@ func TestChartImageDigestAndPullSecrets(t *testing.T) {
 		wantImage string
 	}{
 		{"a tag", []string{"--set", "image.repository=harbor.example.internal/team/sealift", "--set", "image.tag=0.6.1"}, "harbor.example.internal/team/sealift:0.6.1"},
-		{"a digest", []string{"--set", "image.digest=" + digest}, "ghcr.io/morgankryze/sealift:0.6.0@" + digest},
+		{"a digest", []string{"--set", "image.digest=" + digest}, "ghcr.io/morgankryze/sealift:0.6.1@" + digest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -904,7 +904,7 @@ func TestChartNetworkPolicy(t *testing.T) {
 	t.Run("the reach check runs the pinned image", func(t *testing.T) {
 		const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 		notes := installNotes(t, "--set", "image.digest="+digest)
-		if want := "--image=ghcr.io/morgankryze/sealift:0.6.0@" + digest + " "; !strings.Contains(notes, want) {
+		if want := "--image=ghcr.io/morgankryze/sealift:0.6.1@" + digest + " "; !strings.Contains(notes, want) {
 			t.Errorf("notes lack %q:\n%s", want, notes)
 		}
 	})
