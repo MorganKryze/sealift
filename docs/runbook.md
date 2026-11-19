@@ -106,29 +106,32 @@ The volume `sealift-data` holds the private signing key. A lost volume means a n
 
 ## Values that cross by another channel
 
-Five values prove that what arrives is what left: the public key and its `Public key sha256`, the archive's sha256, the image id, and the sha256 of the chart tgz and of the image tar. Send them by a channel that is neither the kiosk nor the USB key: a ticket, a call, a printed sheet. A copy that crosses on the key proves nothing, since whoever swaps a file swaps the value beside it. Every comparison below uses the copy you received by that channel: the key's fingerprint at step 7 of [the checklist](#the-checklist), the archive's sha256 in `Expected sha256 (optional)`, and the image id and the two sha256 lines at the Harbor step.
+Five values prove that what arrives is what left: the public key and its `Public key sha256`, the archive's sha256, the image's amd64 manifest digest, and the sha256 of the chart tgz and of the image tar. Send them by a channel that is neither the kiosk nor the USB key: a ticket, a call, a printed sheet. A copy that crosses on the key proves nothing, since whoever swaps a file swaps the value beside it. Every comparison below uses the copy you received by that channel: the key's fingerprint at step 7 of [the checklist](#the-checklist), the archive's sha256 in `Expected sha256 (optional)`, and the two sha256 lines at the Harbor step.
 
 ## From GHCR through the key into Harbor
 
 Everything before the key happens on the connected side. Nothing here was run end to end before the first install: it is the first run of this path, and the checks below are its test.
 
-1. Pull the image for `linux/amd64`. Check that its architecture is `amd64`, since a pull on an arm64 Mac gives arm64 by default. Record the digest of the pull and the image id:
+1. Pull the image for `linux/amd64` and record the digest of its amd64 manifest:
 
    <!-- illustrative -->
    ```sh
    docker pull --platform linux/amd64 ghcr.io/morgankryze/sealift:0.6.0
-   docker image inspect --format '{{.Architecture}} {{.Id}} {{index .RepoDigests 0}}' ghcr.io/morgankryze/sealift:0.6.0
+   docker buildx imagetools inspect ghcr.io/morgankryze/sealift:0.6.0
    ```
 
-   The first word must be `amd64`. Write down the id (`sha256:` and 64 digits) and the digest. The digest names the manifest at GHCR. A copy pushed to Harbor can get another manifest digest, so the id is the value that you compare after the key.
-2. Save the image and pull the chart:
+   Write down the digest on the `Platform: linux/amd64` line. Docker Desktop keeps every platform it pulled under one tag, so `docker image inspect` on a Mac can print `arm64` even after this pull: the save below picks the platform.
+2. Save the amd64 image alone, pull the chart, and check what the tar holds:
 
    <!-- illustrative -->
    ```sh
-   docker save ghcr.io/morgankryze/sealift:0.6.0 -o sealift-0.6.0.image.tar
+   docker save --platform linux/amd64 ghcr.io/morgankryze/sealift:0.6.0 -o sealift-0.6.0.image.tar
    helm pull oci://ghcr.io/morgankryze/charts/sealift --version 0.6.0
+   tar -xOf sealift-0.6.0.image.tar index.json
    shasum -a 256 sealift-0.6.0.tgz sealift-0.6.0.image.tar
    ```
+
+   `index.json` must name one manifest, the amd64 digest of step 1. A save without `--platform` writes every platform present, about twice the size. `--platform` needs Docker 28 or later.
 
    The first `helm push` of a release creates the package `ghcr.io/morgankryze/charts/sealift`, and GHCR can make a new package private. If the pull is refused, check on GitHub that the package is public, or run `helm registry login ghcr.io` first. An Argo CD that reads GHCR directly needs the package public as well.
 3. Carry the two files through the key and send the recorded values by [another channel](#values-that-cross-by-another-channel). No other image crosses: oauth2-proxy and ingress-nginx are your team's.
@@ -138,10 +141,10 @@ Everything before the key happens on the connected side. Nothing here was run en
    ```sh
    shasum -a 256 sealift-0.6.0.tgz sealift-0.6.0.image.tar
    docker load -i sealift-0.6.0.image.tar
-   docker image inspect --format '{{.Architecture}} {{.Id}}' ghcr.io/morgankryze/sealift:0.6.0
+   docker image inspect --format '{{.Architecture}}' ghcr.io/morgankryze/sealift:0.6.0
    ```
 
-   The architecture must be `amd64` and the id must equal the one you received by the other channel. Stop on any difference.
+   The architecture must be `amd64`. The two sha256 lines prove the files; the id depends on the host's image store, so it is not compared. Stop on any difference.
 5. Push the image into `<harbor-host>/<harbor-project>` and the chart into a path apart, so that an image and a chart both named `sealift` at one version never overwrite each other:
 
    <!-- illustrative -->
