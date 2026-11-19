@@ -828,25 +828,16 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 		}
 	}
 
-	critical, high, err := e.remainingFindings()
+	after, critical, high, err := e.exportedFindings()
 	if err != nil {
 		return err
 	}
-
-	// e.Analysis.Result.After is nil when the analysis' own step 9
-	// (check-combined) never measured it: report.Summary keeps that
-	// distinction rather than printing a vector of zeros that would read
-	// as a clean bill of health.
-	var after *rank.Vector
-	if e.Analysis.Result.After != nil {
-		v := rank.Vector(*e.Analysis.Result.After)
-		after = &v
-	}
+	projected := e.projected()
 
 	s := report.Summary{
 		AnalysisDate: status.CreatedAt, TrivyDBDate: status.TrivyDBDate, TrivyVersion: status.TrivyVersion,
 		ToolVersion: ToolVersion, Target: e.Project.Target,
-		Before: rank.Vector(e.Analysis.Result.Before), After: after,
+		Before: rank.Vector(e.Analysis.Result.Before), Projected: projected, After: &after,
 		Dependencies: deps, RemainingCritical: critical, RemainingHigh: high,
 		Signals: signals, ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(shipped),
 	}
@@ -871,18 +862,41 @@ func findCandidate(cands []Candidate, version string) (Candidate, bool) {
 	return Candidate{}, false
 }
 
-// remainingFindings reads the export's own just-written report.trivy.json,
-// so "remaining" reflects the vulnerabilities of the set actually shipped.
-func (e *Export) remainingFindings() (critical, high []rank.Finding, err error) {
-	f, err := os.Open(filepath.Join(e.Dir, "report.trivy.json"))
+// projected estimates the project once the selection applies, from the
+// analysis' own project scan. A scan it cannot read leaves the row out of
+// summary.md rather than failing the export over a report.
+func (e *Export) projected() *rank.Vector {
+	path := filepath.Join(e.Analysis.Dir, "project.trivy.json")
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("jobs: read report.trivy.json: %w", err)
+		slog.Warn("jobs: no project scan for summary.md", "path", path, "error", err)
+		return nil
 	}
 	defer f.Close()
 	findings, err := rank.ReadTrivyJSON(f)
 	if err != nil {
-		return nil, nil, fmt.Errorf("jobs: parse report.trivy.json: %w", err)
+		slog.Warn("jobs: unreadable project scan for summary.md", "path", path, "error", err)
+		return nil
 	}
+	v := projectedVector(findings, e.Analysis.Result.Dependencies, e.Request.Selection)
+	return &v
+}
+
+// exportedFindings reads the export's own just-written report.trivy.json,
+// so the After row and the remaining lists describe the set actually
+// shipped, not the analysis' own picks. The row counts distinct
+// vulnerabilities, the most serious severity winning, as the analysis does.
+func (e *Export) exportedFindings() (after rank.Vector, critical, high []rank.Finding, err error) {
+	f, err := os.Open(filepath.Join(e.Dir, "report.trivy.json"))
+	if err != nil {
+		return after, nil, nil, fmt.Errorf("jobs: read report.trivy.json: %w", err)
+	}
+	defer f.Close()
+	findings, err := rank.ReadTrivyJSON(f)
+	if err != nil {
+		return after, nil, nil, fmt.Errorf("jobs: parse report.trivy.json: %w", err)
+	}
+	after = rank.VectorOf(rank.Index{"export": findings}.Set([]string{"export"}))
 	for _, fnd := range findings {
 		switch fnd.Severity {
 		case rank.Critical:
@@ -891,7 +905,7 @@ func (e *Export) remainingFindings() (critical, high []rank.Finding, err error) 
 			high = append(high, fnd)
 		}
 	}
-	return critical, high, nil
+	return after, critical, high, nil
 }
 
 // sortedKeys returns m's keys sorted, whatever the value type: it sorts

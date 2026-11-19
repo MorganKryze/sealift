@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- `summary.md` printed the analysis' own picks as its After row, even when the export selected other versions. It now prints three rows: the whole project before, the project once the selection applies, and the packages in the archive. With the project tree included, the archive also holds the old versions, so its row can match Before.
+
 ### Security
 
 - The image no longer carries the npm, npx, corepack and yarn that its Node base bundles. sealift never called them, and their dependencies held fixable high-severity CVEs. Each image build now fails on a fixable high or critical CVE.

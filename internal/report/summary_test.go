@@ -18,6 +18,7 @@ func TestWriteSummary(t *testing.T) {
 		ToolVersion:  "0.1.0",
 		Target:       store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"},
 		Before:       rank.Vector{2, 3, 1, 0, 0},
+		Projected:    &rank.Vector{0, 2, 1, 0, 0},
 		After:        &rank.Vector{0, 1, 1, 0, 0},
 		Dependencies: []DependencyChange{
 			{Name: "lodash", CurrentVersion: "4.17.20", SelectedVersion: "4.17.21", Before: rank.Vector{2, 1, 0, 0, 0}, After: rank.Vector{0, 0, 0, 0, 0}},
@@ -50,8 +51,9 @@ func TestWriteSummary(t *testing.T) {
 
 | | Critical | High | Medium | Low | Unknown |
 | --- | --- | --- | --- | --- | --- |
-| Before | 2 | 3 | 1 | 0 | 0 |
-| After | 0 | 1 | 1 | 0 | 0 |
+| Before (whole project) | 2 | 3 | 1 | 0 | 0 |
+| After (project with this selection) | 0 | 2 | 1 | 0 | 0 |
+| In the archive | 0 | 1 | 1 | 0 | 0 |
 
 ## Updated dependencies
 
@@ -102,7 +104,7 @@ func TestWriteSummaryNilAfterSaysCheckDidNotRun(t *testing.T) {
 	if !bytes.Contains(buf.Bytes(), []byte(want)) {
 		t.Errorf("summary.md missing %q in:\n%s", want, buf.String())
 	}
-	if bytes.Contains(buf.Bytes(), []byte("| After | 0 | 0 | 0 | 0 | 0 |")) {
+	if bytes.Contains(buf.Bytes(), []byte("| In the archive | 0 | 0 | 0 | 0 | 0 |")) {
 		t.Error("summary.md printed a zero vector for After, want the did-not-run note instead")
 	}
 }

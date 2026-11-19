@@ -177,7 +177,7 @@ The archive and the manifest are opened read-only. The command writes the JSON r
 
 | File | Format | Content |
 | --- | --- | --- |
-| `summary.md` | Markdown | Analysis date, Trivy and database versions, target; CVE counts before and after; the updated dependencies; the remaining critical and high CVEs; the non-blocking signals on the selected versions; the archive's size, sha256 and package count |
+| `summary.md` | Markdown | Analysis date, Trivy and database versions, target; CVE counts for the whole project before, for the project once the selection applies (estimated from the analysis' per-dependency scans), and for the packages in the archive; the updated dependencies; the remaining critical and high CVEs; the non-blocking signals on the selected versions; the archive's size, sha256 and package count |
 | `findings.csv` | CSV with a header | One row per CVE and package: `dependency`, `current_version`, `selected_version`, `package`, `package_version`, `vulnerability_id`, `severity`, `status` (`fixed`, `remaining` or `introduced`), `fixed_version`, `title` |
 | `report.cdx.json` | CycloneDX JSON | The SBOM of the exported packages, from Trivy |
 | `report.trivy.json` | Trivy JSON, schema 2 | Trivy's scan of the exported packages |
