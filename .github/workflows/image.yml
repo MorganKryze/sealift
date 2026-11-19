@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   smoke-test:
@@ -44,6 +43,9 @@ jobs:
 
   build:
     name: build (${{ matrix.arch }}, native)
+    permissions:
+      contents: read
+      packages: write
     needs: smoke-test
     strategy:
       matrix:
@@ -86,6 +88,9 @@ jobs:
 
   merge-manifest:
     name: merge into one multi-arch manifest
+    permissions:
+      contents: read
+      packages: write
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
