@@ -8,7 +8,7 @@ import { useImports, useMe } from "@/import/api/queries"
 import { ImportRow } from "./import-row"
 
 const choose =
-  "inline-flex h-9 items-center rounded-md bg-accent px-4 text-sm font-medium text-background outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+  "inline-flex h-9 items-center rounded-md bg-accent px-4 text-sm font-medium text-background outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 
 function plural(n: number, one: string, many: string) {
   return n === 1 ? one : many
