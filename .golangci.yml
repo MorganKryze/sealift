@@ -4,13 +4,35 @@ linters:
   enable:
     - errorlint
     - gocritic
+    - gosec
     - misspell
     - revive
     - unconvert
     - unparam
+  settings:
+    gosec:
+      excludes:
+        # Paths join a store id, which the store checks against its id
+        # pattern before any join.
+        - G304
+        - G703
+        # /data is shared with the tools account through group 2000, so
+        # directories and files the tools read keep group permissions.
+        - G301
+        - G302
+        - G306
+        # The runner starts pnpm and Trivy by design, with arguments it builds.
+        - G204
+        # Close on a read-only handle or an error path; errcheck covers the rest.
+        - G104
   exclusions:
     presets:
       - std-error-handling
+    rules:
+      # Tests write fixtures and start fake servers on purpose.
+      - path: _test\.go
+        linters:
+          - gosec
 
 formatters:
   enable:
