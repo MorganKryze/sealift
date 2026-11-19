@@ -723,6 +723,16 @@ func TestChartIngress(t *testing.T) {
 			t.Errorf("auth-url = %v", got)
 		}
 	})
+	t.Run("a null annotations map still renders", func(t *testing.T) {
+		values := writeValues(t, "ingress:\n  annotations:\n")
+		docs, err := render(t, append([]string{"-f", values}, ingressValues...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := at(find(t, docs, "Ingress", ""), "metadata", "annotations", "nginx.ingress.kubernetes.io/auth-url"); got != "https://auth.example.internal/oauth2/auth" {
+			t.Errorf("auth-url = %v", got)
+		}
+	})
 	for _, key := range []string{"ingress.auth.url", "ingress.auth.signin", "ingress.host"} {
 		t.Run(key+" empty is refused", func(t *testing.T) {
 			_, err := render(t, append(ingressValues, "--set", key+"=")...)
