@@ -65,3 +65,8 @@ docs:
 # Build the web app for production.
 web-build:
     pnpm -C web run build
+
+# Lint the Helm chart and run its render tests; they fail instead of skipping without helm.
+chart:
+    helm lint --strict charts/sealift -f charts/testdata/values.yaml
+    SEALIFT_CHART=1 go test -count=1 ./charts/

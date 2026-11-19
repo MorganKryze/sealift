@@ -1,0 +1,15 @@
+The import service {{ include "sealift.fullname" . }} runs in namespace {{ .Release.Namespace }}.
+
+Logs:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "sealift.fullname" . }}
+
+Secret: the pod needs the Secret {{ .Values.secret.name }} in this namespace, with three keys: nexus-password, minio-access-key and minio-secret-key. The chart never creates it. Without it the pod stays in ContainerCreating and its events name the Secret.
+
+Public key: open the service's Settings sheet and compare the Trusted key sha256 with the one in the collection's Settings.
+{{- if not .Values.publicKey.existingConfigMap }}
+The key given in the values has the sha256 {{ include "sealift.publicKeySHA256" . }}.
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+Warning: persistence is off. /data lives in an emptyDir. The import records, and an import that is running, are lost when the pod is replaced.
+{{- end }}

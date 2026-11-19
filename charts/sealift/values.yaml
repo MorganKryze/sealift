@@ -1,0 +1,102 @@
+# Values of the import service. Every empty value below is a drop-in: the
+# chart refuses to render until it is filled, and names the key it lacks.
+# No value holds a credential. The Nexus password and the MinIO keys come
+# from the Secret that secret.name names.
+
+image:
+  repository: ghcr.io/morgankryze/sealift
+  # Empty means the chart's appVersion.
+  tag: ""
+  # Optional. When set, the pod pulls this digest.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nexus:
+  # The npm hosted repository the import publishes into.
+  url: ""
+  repository: ""
+  user: ""
+
+keycloak:
+  # The realm's address, such as https://<host>/realms/<realm>.
+  realmUrl: ""
+  # The client of the import's oauth2-proxy. It is also the token's audience.
+  clientId: ""
+  # Each of the three derives from realmUrl and clientId when empty.
+  issuer: ""
+  audience: ""
+  keySetUrl: ""
+
+token:
+  # The one request header the service reads the access token from. The
+  # ingress must set it on every request.
+  header: X-Auth-Request-Access-Token
+
+minio:
+  url: ""
+  region: us-east-1
+
+secret:
+  # A Secret of the release's namespace that you create. The chart never
+  # creates it. Keys: nexus-password, minio-access-key, minio-secret-key.
+  name: ""
+
+publicKey:
+  # The collection's public key as one PEM block.
+  pem: ""
+  # Or a ConfigMap that holds it under the key public-key.pem.
+  existingConfigMap: ""
+
+ca:
+  # One PEM file the service trusts, besides the system roots, for Nexus,
+  # MinIO and Keycloak. Leave both empty when their certificates are public.
+  pem: ""
+  # Or a ConfigMap that holds it under the key ca.pem.
+  existingConfigMap: ""
+
+persistence:
+  # Off keeps /data in an emptyDir that the next pod replacement erases.
+  enabled: true
+  # A claim you created. Empty makes the chart create one.
+  existingClaim: ""
+  storageClass: ""
+  size: 20Gi
+  accessMode: ReadWriteOnce
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Requests and a memory limit; no CPU limit. Not measured on a real archive.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10000
+  runAsGroup: 2000
+  fsGroup: 2000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: [ALL]
+  seccompProfile:
+    type: RuntimeDefault
+
+# The copy of the image kept in Harbor holds linux/amd64 only.
+nodeSelector:
+  kubernetes.io/arch: amd64
+tolerations: []
+affinity: {}
+podAnnotations: {}
