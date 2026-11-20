@@ -9,6 +9,9 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `sealift import` publishes a pip archive to the pypi hosted repository that `nexus.pip` names. It checks each wheel's signed digests, its `METADATA` and its file name, uploads only the wheels Nexus lacks, and reads each upload back. Without `nexus.pip` in the settings, it refuses a pip archive before reading it. [Archive format](docs/dev/archive-format.md#importing-a-pip-archive) describes the checks and the report.
+- The import service lists and imports archives from `packages/pip/` beside `packages/npm/`, and refuses an archive whose manifest belongs to the other folder. The MinIO service user needs list, read and delete on `packages/pip/` too; with the old policy, every list shows that `packages/pip/` could not be listed.
+- The chart takes `nexus.pipRepository` and an optional `nexus.pipUser`. With `nexus.pipUser` set, the Secret also holds `nexus-pip-password`.
+- The import screens show a pip archive's Python version and glibc.
 
 ## [0.6.2] - 2026-11-19
 

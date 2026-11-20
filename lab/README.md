@@ -131,7 +131,7 @@ Until the connected side exports pip, a test packs a lab archive from wheels you
 ```sh
 # from the repository root, with .whl files for linux x86_64 and CPython 3.11 in <dir>
 SEALIFT_LAB_PIP_WHEELS=<dir> SEALIFT_LAB_PIP_OUT=$PWD/lab/transfer/pip-lab \
-  go test -count=1 -run TestPackLabPipArchive ./internal/importtest/
+  go test -v -count=1 -run TestPackLabPipArchive ./internal/importtest/
 ```
 
 `SEALIFT_LAB_PIP_OUT` takes an absolute path: `go test` runs in the package's directory. The test writes the three files and the run's `public-key.pem` there, and prints its sha256. The manifest's target is Python 3.11.2 on linux x86_64 with glibc 2.28. Copy `import/public-key.pem` aside, put `transfer/pip-lab/public-key.pem` in its place, and start the lab. To go back to the connected sealift's key afterwards, copy yours back or run `node scripts/carry-key.mjs`, then restart `import-server`.
