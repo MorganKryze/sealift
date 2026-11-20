@@ -63,12 +63,14 @@ describe("SettingsSheet", () => {
     expect(within(sheet).getByText("Archives must be signed by the key with this sha256. Compare it with the one in sealift's Settings on the connected side.")).toBeInTheDocument()
   })
 
-  it("shows the bucket and the folder, read only", async () => {
+  it("shows the bucket and both folders, read only", async () => {
     renderSheet(meAnswer)
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     const sheet = screen.getByRole("dialog", { name: "Settings" })
     expect(await within(sheet).findByText("user-alice")).toBeInTheDocument()
-    expect(within(sheet).getByText("packages/npm/")).toBeInTheDocument()
+    expect(within(sheet).getByText("npm archives")).toBeInTheDocument()
+    expect((within(sheet).getByText("npm archives").nextElementSibling as HTMLElement).textContent).toBe("packages/npm/")
+    expect((within(sheet).getByText("pip archives").nextElementSibling as HTMLElement).textContent).toBe("packages/pip/")
     expect(within(sheet).queryByRole("textbox")).not.toBeInTheDocument()
   })
 
@@ -76,7 +78,9 @@ describe("SettingsSheet", () => {
     renderSheet(() => Promise.reject(new TypeError("Failed to fetch")))
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
     const sheet = screen.getByRole("dialog", { name: "Settings" })
-    expect(await within(sheet).findAllByText("Not read")).toHaveLength(3)
+    expect(await within(sheet).findAllByText("Not read")).toHaveLength(2)
+    expect(within(sheet).getByText("packages/npm/")).toBeInTheDocument()
+    expect(within(sheet).getByText("packages/pip/")).toBeInTheDocument()
   })
 
   it("Escape closes the sheet and focus returns to Settings", () => {

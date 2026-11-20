@@ -5,6 +5,7 @@ import { CopyControl } from "@/components/copy-control"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { useReturnFocus } from "@/hooks/use-return-focus"
 import { useMe } from "@/import/api/queries"
+import { FOLDERS } from "@/import/lib/outcome"
 
 interface SettingsSheetProps {
   open: boolean
@@ -88,8 +89,8 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
         </section>
         <section className="flex flex-col gap-4">
           <div>
-            <h3 className="text-base font-semibold text-ink">Your MinIO folder</h3>
-            <p className="mt-0.5 text-sm text-muted">Archives are read from here. The administrator sets it from your user name.</p>
+            <h3 className="text-base font-semibold text-ink">Your MinIO folders</h3>
+            <p className="mt-0.5 text-sm text-muted">Archives are read from these folders of your bucket. The administrator sets the bucket from your user name.</p>
           </div>
           <dl className="grid gap-3 text-sm">
             <div>
@@ -97,8 +98,12 @@ export function SettingsSheet({ open, onClose }: SettingsSheetProps) {
               <dd className="mt-0.5 font-mono [overflow-wrap:anywhere]">{value(me.data?.bucket)}</dd>
             </div>
             <div>
-              <dt className="text-muted">Folder</dt>
-              <dd className="mt-0.5 font-mono [overflow-wrap:anywhere]">{value(me.data?.folder)}</dd>
+              <dt className="text-muted">npm archives</dt>
+              <dd className="mt-0.5 font-mono [overflow-wrap:anywhere]">{FOLDERS[0]}</dd>
+            </div>
+            <div>
+              <dt className="text-muted">pip archives</dt>
+              <dd className="mt-0.5 font-mono [overflow-wrap:anywhere]">{FOLDERS[1]}</dd>
             </div>
           </dl>
         </section>
