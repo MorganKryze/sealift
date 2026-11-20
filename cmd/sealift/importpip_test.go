@@ -77,6 +77,21 @@ type pipReport struct {
 	Ecosystem string
 	Nexus     struct{ Repository string }
 	Packages  []struct{ Name, State, Kind, Reason string }
+	Counts    pipCounts
+}
+
+type pipCounts struct{ Published, Present, Failed int }
+
+// checkCounts asserts the counts the report keeps and the summary line that
+// opens stdout.
+func checkCounts(t *testing.T, run string, rep pipReport, out string, want pipCounts, line string) {
+	t.Helper()
+	if rep.Counts != want {
+		t.Errorf("%s: counts %+v, want %+v", run, rep.Counts, want)
+	}
+	if !strings.HasPrefix(out, line+"\n") {
+		t.Errorf("%s: stdout does not open with %q:\n%s", run, line, out)
+	}
 }
 
 func (p pipImport) readReport(t *testing.T) pipReport {
@@ -123,12 +138,14 @@ func TestImportPipArchiveExitCodes(t *testing.T) {
 		if !strings.Contains(out, "target linux x86_64, python 3.11.2, glibc 2.28\n") {
 			t.Errorf("stdout has no pip target:\n%s", out)
 		}
+		checkCounts(t, "first run", rep, out, pipCounts{Published: 2}, "import complete (unencrypted): 2 published, 0 present, 0 failed")
 
 		code, out, _ = p.run(t)
 		rep = p.readReport(t)
 		if code != 0 || !slices.Equal(rep.states(), []string{"six present", "idna present"}) || n.Uploads() != 2 {
 			t.Errorf("second run: exit %d, states %v, uploads %d:\n%s", code, rep.states(), n.Uploads(), out)
 		}
+		checkCounts(t, "second run", rep, out, pipCounts{Present: 2}, "import complete (unencrypted): 0 published, 2 present, 0 failed")
 	})
 
 	t.Run("a planted conflict, then the missing wheel alone", func(t *testing.T) {
@@ -145,6 +162,7 @@ func TestImportPipArchiveExitCodes(t *testing.T) {
 		if !strings.HasPrefix(rep.Packages[1].Reason, "nexus holds this file with other bytes: ") {
 			t.Errorf("conflict reason %q", rep.Packages[1].Reason)
 		}
+		checkCounts(t, "first run", rep, out, pipCounts{Published: 1, Failed: 1}, "import incomplete (unencrypted): 1 published, 0 present, 1 failed")
 
 		// The fake cannot delete a file, so the plant's removal is a Nexus
 		// that holds only what the first run published.
@@ -156,6 +174,7 @@ func TestImportPipArchiveExitCodes(t *testing.T) {
 		if code != 0 || !slices.Equal(rep.states(), []string{"six present", "idna published"}) || cleared.Uploads() != 1 {
 			t.Errorf("third run: exit %d, states %v, uploads %d:\n%s", code, rep.states(), cleared.Uploads(), out)
 		}
+		checkCounts(t, "third run", rep, out, pipCounts{Published: 1, Present: 1}, "import complete (unencrypted): 1 published, 1 present, 0 failed")
 	})
 
 	t.Run("a wheel whose METADATA names another version", func(t *testing.T) {
