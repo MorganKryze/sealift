@@ -700,6 +700,7 @@ func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
 		{"trivy exits with an error", &cannedTrivy{scanErr: errors.New("exit status 1")}, "exit status 1"},
 		{"the report is not Trivy's schema", &cannedTrivy{report: `{"SchemaVersion":1,"Results":[]}`}, "schema version 1"},
 		{"the report is not JSON", &cannedTrivy{report: "FATAL"}, "read trivy report"},
+		{"the report is larger than its bound", &cannedTrivy{report: pipTrivyReport() + strings.Repeat(" ", trivyReportLimit)}, "project.trivy.json is larger than 64 MiB"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -719,6 +720,37 @@ func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json")); !os.IsNotExist(err) {
 				t.Errorf("a failed scan left pip-result.json: %v", err)
+			}
+		})
+	}
+}
+
+func TestReadTrivyReportBound(t *testing.T) {
+	const limit = 1 << 20
+	report := pipTrivyReport([5]string{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"})
+	cases := []struct {
+		name    string
+		size    int
+		wantErr string
+	}{
+		{"a report at the bound is read", limit, ""},
+		{"a report one byte over the bound is refused", limit + 1, "project.trivy.json is larger than 1 MiB"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "project.trivy.json")
+			if err := os.WriteFile(path, []byte(report+strings.Repeat(" ", c.size-len(report))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			findings, err := readTrivyReport(path, limit)
+			if c.wantErr == "" {
+				if err != nil || len(findings) != 1 {
+					t.Errorf("findings = %+v, err = %v, want the one finding", findings, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("err = %v, want %q", err, c.wantErr)
 			}
 		})
 	}
