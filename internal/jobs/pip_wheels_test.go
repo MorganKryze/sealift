@@ -259,8 +259,8 @@ func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {
 func TestChooseWheelsNamesEveryBlockedPackage(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
-	ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0"})
-	ix.Add(piptest.Dist{Name: "zeta", Version: "2.0.0", Tag: "cp311-cp311-win_amd64"})
+	ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0", Uploaded: released})
+	ix.Add(piptest.Dist{Name: "zeta", Version: "2.0.0", Tag: "cp311-cp311-win_amd64", Uploaded: released})
 	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "omega==1.0.0\n"))
 	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0", "theta", "3.0.0", "zeta", "2.0.0")}
 
@@ -345,7 +345,7 @@ func TestPipAnalysisRecordsOneWheelPerPackage(t *testing.T) {
 	native := ix.Add(piptest.Dist{Name: "numpy", Version: "2.1.0", Tag: "cp311-cp311-manylinux_2_17_x86_64"})
 	ix.Add(piptest.Dist{Name: "numpy", Version: "2.1.0", Tag: "cp312-cp312-manylinux_2_17_x86_64"})
 	ix.Add(piptest.Dist{Name: "numpy", Version: "2.1.0"})
-	certifi := ix.Add(piptest.Dist{Name: "certifi", Version: "2024.8.30", Tag: "py3-none-any"})
+	certifi := ix.Add(piptest.Dist{Name: "certifi", Version: "2024.8.30", Tag: "py3-none-any", Uploaded: released})
 	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "numpy==2.1.0\n"))
 	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("certifi", "2024.8.30", "numpy", "2.1.0")}
 
@@ -431,13 +431,120 @@ func TestYoungPinWarns(t *testing.T) {
 	}
 }
 
+// uv resolves a package no pin fixes among the files uploaded before the
+// minimum release age, so a wheel added to an old release afterwards must
+// not be the one recorded. A pin, from either kind of file, stays exempt.
+func TestChooseWheelsHoldsUnpinnedPackagesToTheReleaseAge(t *testing.T) {
+	now := time.Now().UTC()
+	old, young := now.Add(-60*24*time.Hour), now.Add(-time.Hour)
+	youngWarning := "eps==1.0.0 was uploaded on " + young.Format(time.DateOnly) + ", within the 14-day minimum release age"
+	cases := []struct {
+		name        string
+		constraint  string // constraints.txt, empty for none
+		dists       []piptest.Dist
+		wantFile    string // the recorded wheel; empty when choose-wheels refuses
+		wantWarning []string
+		wantBlock   PipBlocking
+	}{
+		{
+			name: "a wheel added to an old release",
+			dists: []piptest.Dist{
+				{Name: "eps", Version: "1.0.0", Tag: "py3-none-any", Uploaded: old},
+				{Name: "eps", Version: "1.0.0", Tag: "cp311-cp311-manylinux_2_17_x86_64", Uploaded: young},
+			},
+			wantFile: "eps-1.0.0-py3-none-any.whl",
+		},
+		{
+			name: "a wheel with no upload date",
+			dists: []piptest.Dist{
+				{Name: "eps", Version: "1.0.0", Tag: "py3-none-any", Uploaded: old},
+				{Name: "eps", Version: "1.0.0", Tag: "cp311-cp311-manylinux_2_17_x86_64"},
+			},
+			wantFile: "eps-1.0.0-py3-none-any.whl",
+		},
+		{
+			name: "an old source distribution beside young wheels",
+			dists: []piptest.Dist{
+				{Name: "eps", Version: "1.0.0", Uploaded: old},
+				{Name: "eps", Version: "1.0.0", Tag: "py3-none-any"},
+				{Name: "eps", Version: "1.0.0", Tag: "cp311-cp311-manylinux_2_17_x86_64", Uploaded: young},
+			},
+			wantBlock: PipBlocking{Name: "eps", Version: "1.0.0", Kind: "source-only",
+				Detail: "source distribution only, counting only the files uploaded more than 14 days ago"},
+		},
+		{
+			name: "young files only",
+			dists: []piptest.Dist{
+				{Name: "eps", Version: "1.0.0", Tag: "py3-none-any", Uploaded: young},
+			},
+			wantBlock: PipBlocking{Name: "eps", Version: "1.0.0", Kind: "no-files",
+				Detail: "no files on the index, counting only the files uploaded more than 14 days ago"},
+		},
+		{
+			name:       "a constraint keeps its young wheel and warns",
+			constraint: "eps==1.0.0\n",
+			dists: []piptest.Dist{
+				{Name: "eps", Version: "1.0.0", Tag: "py3-none-any", Uploaded: old},
+				{Name: "eps", Version: "1.0.0", Tag: "cp311-cp311-manylinux_2_17_x86_64", Uploaded: young},
+			},
+			wantFile:    "eps-1.0.0-cp311-cp311-manylinux_2_17_x86_64.whl",
+			wantWarning: []string{youngWarning},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ix := piptest.NewIndex(t)
+			ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+			for _, d := range c.dists {
+				ix.Add(d)
+			}
+			files := []store.RequirementsFile{reqFile("requirements.txt", "omega==1.0.0\n")}
+			if c.constraint != "" {
+				files = []store.RequirementsFile{
+					reqFile("requirements.txt", "omega==1.0.0\n-c constraints.txt\n"),
+					reqFile("constraints.txt", c.constraint),
+				}
+			}
+			a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, files...)
+			a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0")}
+
+			err := a.Run(context.Background(), func(Event) {})
+			status, _ := readStatus(t, st, a)
+			res, _ := readPipResult(t, st, a)
+			if c.wantFile != "" {
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
+				if i < 0 || res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
+					t.Errorf("packages = %+v, want eps recorded as %s", res.Packages, c.wantFile)
+				}
+				if !slices.Equal(res.Warnings, c.wantWarning) {
+					t.Errorf("warnings = %q, want %q", res.Warnings, c.wantWarning)
+				}
+				return
+			}
+			want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
+			if err == nil || !slices.Equal(stepNames(status.Steps), want) {
+				t.Fatalf("Run = %v, steps %v, want %v", err, stepNames(status.Steps), want)
+			}
+			if !strings.Contains(status.Steps[4].Error, "eps==1.0.0: "+c.wantBlock.Detail) {
+				t.Errorf("choose-wheels error = %q, want %q", status.Steps[4].Error, c.wantBlock.Detail)
+			}
+			if !slices.Equal(res.Blocking, []PipBlocking{c.wantBlock}) {
+				t.Errorf("blocking = %+v, want %+v", res.Blocking, c.wantBlock)
+			}
+		})
+	}
+}
+
 func TestChooseWheelsFetchesNoFile(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	files := []string{
 		ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"}).Filename,
 		ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3"}).Filename,
-		ix.Add(piptest.Dist{Name: "idna", Version: "3.10", Tag: "py3-none-any"}).Filename,
-		ix.Add(piptest.Dist{Name: "idna", Version: "3.10"}).Filename,
+		ix.Add(piptest.Dist{Name: "idna", Version: "3.10", Tag: "py3-none-any", Uploaded: released}).Filename,
+		ix.Add(piptest.Dist{Name: "idna", Version: "3.10", Uploaded: released}).Filename,
 	}
 	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
 	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("idna", "3.10", "requests", "2.32.3")}

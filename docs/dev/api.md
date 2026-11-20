@@ -94,7 +94,7 @@ A pip analysis runs these steps:
 | `prepare-tools` | Installs the target's uv from the package index, held to the minimum release age, and refreshes the Trivy database. |
 | `check-pins` | Reads the index page of every requirement the target installs. It fails when a requirement has no wheel the target can install, or none its `--hash` options list, and names every such requirement. |
 | `resolve` | Resolves every file together with uv, at the target's exact Python version and platform, with `--no-build`, and writes `project/requirements.lock`. The files' pins keep their versions; every other package is held to the minimum release age. |
-| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256. It reads index pages only and downloads no file. |
+| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256. It reads index pages only and downloads no file. For a package no file pins, it chooses among the files uploaded before the minimum release age, as uv does. A wheel added later to an older release, or a file with no upload date, is never recorded. |
 | `scan` | Scans the set for known CVEs with Trivy. |
 
 A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in place of `pnpmVersion`:
@@ -104,7 +104,7 @@ A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in
 | `target` | The target the set was resolved for. |
 | `files` | The requirements files the set comes from. |
 | `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). |
-| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. |
+| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
 | `warnings` | A yanked release with the index's reason, a pin uploaded within the minimum release age, a database that could not be refreshed, and findings Trivy reported for packages outside the set. |
 
 An analysis that stops on packages with no wheel fails at `check-pins`, `resolve` or `choose-wheels`, and still carries `pipResult`: `blocking` lists every such package and `packages` is empty.

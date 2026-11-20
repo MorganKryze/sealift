@@ -107,6 +107,13 @@ type pipRun struct {
 
 func (r *pipRun) resultPath() string { return filepath.Join(r.a.Dir, "pip-result.json") }
 
+// releaseCut is the upload time a package no pin fixes is held to: uv
+// resolves it, and choose-wheels picks its wheel, among the files uploaded
+// before it.
+func (r *pipRun) releaseCut() time.Time {
+	return r.start.Add(-time.Duration(r.a.Settings.MinReleaseAgeDays) * 24 * time.Hour)
+}
+
 // Run validates the project's files, installs the target's uv, checks
 // that every pin has a wheel, resolves the files together, records one
 // wheel per package and scans the set. Like the npm analysis, it always commits the
@@ -279,7 +286,6 @@ func (r *pipRun) stepResolve() error {
 			exempt = append(exempt, p.Key)
 		}
 		slices.Sort(exempt)
-		age := time.Duration(r.a.Settings.MinReleaseAgeDays) * 24 * time.Hour
 		res, err := r.a.Uv.Compile(r.ctx, runner.CompileInput{
 			Bin:          r.uvBin,
 			Dir:          dir,
@@ -287,7 +293,7 @@ func (r *pipRun) stepResolve() error {
 			Constraints:  r.set.ConstraintsTxt(),
 			Target:       r.a.Project.PipTarget,
 			Index:        r.a.Index.Index,
-			ExcludeNewer: r.start.Add(-age),
+			ExcludeNewer: r.releaseCut(),
 			Exempt:       slices.Compact(exempt),
 			ExemptUntil:  r.start,
 		})

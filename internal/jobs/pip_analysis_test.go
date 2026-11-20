@@ -121,9 +121,14 @@ func newPipAnalysis(t *testing.T, index string, target store.PipTarget, files ..
 	}, st
 }
 
+// released is an upload time older than any minimum release age the
+// settings allow, so a wheel uploaded then counts for any package.
+var released = time.Date(2024, time.September, 1, 0, 0, 0, 0, time.UTC)
+
 // serveWheels points a at a fake index that publishes one py3-none-any
-// wheel for every pin of the project's files and every package of set, so
-// check-pins and choose-wheels find a wheel for each.
+// wheel, uploaded on released, for every pin of the project's files and
+// every package of set, so check-pins and choose-wheels find a wheel for
+// each.
 func serveWheels(t *testing.T, a *PipAnalysis, set []runner.Resolved) *piptest.Index {
 	t.Helper()
 	stored, err := a.Store.ProjectRequirements(a.Project.ID)
@@ -147,7 +152,7 @@ func serveWheels(t *testing.T, a *PipAnalysis, set []runner.Resolved) *piptest.I
 			continue
 		}
 		published[key] = append(published[key], p.Version)
-		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any"})
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
 	}
 	a.Index = &pip.Client{Index: ix.URL}
 	return ix

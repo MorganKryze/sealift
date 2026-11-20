@@ -53,7 +53,8 @@ func (r *pipRun) stepCheckPins() error {
 
 // stepChooseWheels records, for every package of the resolved set, the
 // wheel the target's installer prefers, with the index's sha256. A yanked
-// wheel, or one uploaded within the minimum release age, gets a warning.
+// wheel, or a pin's wheel uploaded within the minimum release age, gets a
+// warning.
 func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 	return r.runStep("choose-wheels", func() error {
 		choices, err := r.chooseWheels("choose-wheels", resolved)
@@ -61,7 +62,7 @@ func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 			return err
 		}
 		days := r.a.Settings.MinReleaseAgeDays
-		cut := r.start.Add(-time.Duration(days) * 24 * time.Hour)
+		cut := r.releaseCut()
 		var blocking []PipBlocking
 		r.wheels = make(map[string]PipWheel, len(choices))
 		for i, c := range choices {
@@ -99,7 +100,10 @@ type wheelChoice struct {
 }
 
 // chooseWheels chooses a wheel for each package, in order. A page read
-// once in this run is not read again.
+// once in this run is not read again. A package no pin of the target fixes
+// chooses among the files uploaded before the minimum release age, the
+// files uv resolved it from, so a wheel added to an old release later is
+// never recorded.
 func (r *pipRun) chooseWheels(step string, pkgs []runner.Resolved) ([]wheelChoice, error) {
 	var missing []runner.Resolved
 	for _, p := range pkgs {
@@ -120,9 +124,22 @@ func (r *pipRun) chooseWheels(step string, pkgs []runner.Resolved) ([]wheelChoic
 		r.indexFiles[p.Name+"@"+p.Version] = fetched[i]
 	}
 	platform := platformOfPip(r.a.Project.PipTarget)
+	cut := r.releaseCut()
 	choices := make([]wheelChoice, len(pkgs))
 	for i, p := range pkgs {
-		file, blocking := chooseWheel(p, r.indexFiles[p.Name+"@"+p.Version], platform, r.hashesOf(p.Name), r.set.FilesOf(p.Name))
+		files := r.indexFiles[p.Name+"@"+p.Version]
+		heldBack := false
+		if !slices.ContainsFunc(r.pins, func(pin pip.Pin) bool { return pin.Key == p.Name }) {
+			// uv drops a file with no upload time as well.
+			old := slices.DeleteFunc(slices.Clone(files), func(f pip.IndexFile) bool {
+				return f.UploadTime.IsZero() || !f.UploadTime.Before(cut)
+			})
+			heldBack, files = len(old) < len(files), old
+		}
+		file, blocking := chooseWheel(p, files, platform, r.hashesOf(p.Name), r.set.FilesOf(p.Name))
+		if blocking != nil && heldBack {
+			blocking.Detail += fmt.Sprintf(", counting only the files uploaded more than %d days ago", r.a.Settings.MinReleaseAgeDays)
+		}
 		choices[i] = wheelChoice{file: file, blocking: blocking}
 	}
 	return choices, nil
