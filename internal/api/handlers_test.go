@@ -1717,6 +1717,56 @@ func TestCreatePipProjectRefusesOversizeFile(t *testing.T) {
 	}
 }
 
+func TestCreatePipProjectRefusesUnusableFileNames(t *testing.T) {
+	names := map[string]string{
+		"long":       strings.Repeat("a", 4<<10) + ".txt",
+		"format":     "a\u202eb.txt",
+		"hidden":     ".hidden",
+		"with space": "my file.txt",
+	}
+	// Refused lines make the answer repeat the file name once per line, unless the name is refused first.
+	refusedLines := strings.Repeat("--index-url https://example.com/simple\n", 200)
+	for label, name := range names {
+		t.Run(label, func(t *testing.T) {
+			srv, h := newTestServer(t)
+			status, data := postParts(t, srv, pipParts("proj", requirementsPart(name, refusedLines)))
+			p := decodeBadRequest(t, status, data)
+			if !strings.Contains(deref(p.Detail), "128") {
+				t.Errorf("detail = %q, want the 128 character bound named", deref(p.Detail))
+			}
+			if len(data) > 2<<10 {
+				t.Errorf("answer is %d bytes, want it independent of the name's length", len(data))
+			}
+			if strings.ContainsRune(string(data), '\u202e') {
+				t.Errorf("answer carries a raw U+202E: %s", data)
+			}
+			if projects, _ := h.Store.Projects(); len(projects) != 0 {
+				t.Errorf("a refused name created %d projects", len(projects))
+			}
+		})
+	}
+}
+
+func TestCreatePipProjectCapsTheRefusalList(t *testing.T) {
+	srv, _ := newTestServer(t)
+	file := strings.Repeat("--index-url https://example.com/simple\n", 1000)
+	status, data := postParts(t, srv, pipParts("proj", requirementsPart("requirements.txt", file)))
+	p := decodeBadRequest(t, status, data)
+	if p.Errors == nil || len(*p.Errors) != maxRequirementsProblems {
+		t.Fatalf("errors = %d entries, want %d", len(deref2(p.Errors)), maxRequirementsProblems)
+	}
+	if !strings.Contains(deref(p.Detail), "1000") {
+		t.Errorf("detail = %q, want the total of 1000 refusals", deref(p.Detail))
+	}
+}
+
+func deref2(e *[]ProblemDetail) []ProblemDetail {
+	if e == nil {
+		return nil
+	}
+	return *e
+}
+
 func deref(s *string) string {
 	if s == nil {
 		return ""

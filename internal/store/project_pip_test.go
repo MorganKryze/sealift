@@ -255,3 +255,17 @@ func TestPipProjectFilesSurviveStartupSweep(t *testing.T) {
 		t.Errorf("files after the sweep = %+v, want both files kept", got)
 	}
 }
+
+func TestValidRequirementsName(t *testing.T) {
+	bad := []string{"", ".hidden", "a/b.txt", "a..b", strings.Repeat("a", 129), "a\u202eb.txt", "a b.txt"}
+	for _, name := range bad {
+		if err := ValidRequirementsName(name); !errors.Is(err, ErrInvalidRequirements) {
+			t.Errorf("ValidRequirementsName(%q) = %v, want ErrInvalidRequirements", name, err)
+		}
+	}
+	for _, name := range []string{"requirements.txt", "requirements-dev.txt", strings.Repeat("a", 128)} {
+		if err := ValidRequirementsName(name); err != nil {
+			t.Errorf("ValidRequirementsName(%q) = %v, want nil", name, err)
+		}
+	}
+}

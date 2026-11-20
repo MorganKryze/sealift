@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -98,7 +99,12 @@ func manifestProblem(problems []manifestValidationEntry) problemBody {
 // requirementsProblem builds the 400 response for refused requirements
 // files, one entry per problem with its file, line, text and reason.
 func requirementsProblem(problems []pip.Problem) problemBody {
-	p := NewProblem(http.StatusBadRequest, "invalid requirements files", "the requirements files have lines sealift cannot analyze")
+	detail := "the requirements files have lines sealift cannot analyze"
+	if len(problems) > maxRequirementsProblems {
+		detail = fmt.Sprintf("%s: %d refusals, the first %d are listed", detail, len(problems), maxRequirementsProblems)
+		problems = problems[:maxRequirementsProblems]
+	}
+	p := NewProblem(http.StatusBadRequest, "invalid requirements files", detail)
 	details := make([]ProblemDetail, len(problems))
 	for i, pr := range problems {
 		details[i] = ProblemDetail{Field: pr.File, Reason: pr.Reason}

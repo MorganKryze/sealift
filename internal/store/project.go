@@ -125,14 +125,23 @@ var requirementsNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`
 // ErrInvalidRequirements means the files given for a pip project cannot be stored.
 var ErrInvalidRequirements = errors.New("invalid requirements files")
 
+// ValidRequirementsName refuses a requirements file name the store cannot
+// keep. The refusal never quotes the name, which may be of any length.
+func ValidRequirementsName(name string) error {
+	if !requirementsNameRE.MatchString(name) || strings.Contains(name, "..") {
+		return fmt.Errorf("%w: a file name is 1 to 128 characters, letters, digits, dots, dashes and underscores, starting with a letter or digit, with no two dots in a row", ErrInvalidRequirements)
+	}
+	return nil
+}
+
 func validRequirementsNames(files []RequirementsFile) error {
 	if len(files) == 0 {
 		return fmt.Errorf("%w: a pip project needs at least one file", ErrInvalidRequirements)
 	}
 	seen := map[string]bool{}
 	for _, f := range files {
-		if !requirementsNameRE.MatchString(f.Name) || strings.Contains(f.Name, "..") {
-			return fmt.Errorf("%w: %q is not a usable file name", ErrInvalidRequirements, f.Name)
+		if err := ValidRequirementsName(f.Name); err != nil {
+			return err
 		}
 		lower := strings.ToLower(f.Name)
 		if seen[lower] {

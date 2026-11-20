@@ -98,9 +98,11 @@ func (h *Handlers) ListProjects(_ context.Context, req ListProjectsRequestObject
 
 // Bounds on a project creation request.
 const (
-	maxCreateParts    = 40
-	pipTargetLimit    = 4 << 10
-	requirementsField = "requirements"
+	maxCreateParts = 40
+	// maxRequirementsProblems bounds the refusal list of one answer.
+	maxRequirementsProblems = 100
+	pipTargetLimit          = 4 << 10
+	requirementsField       = "requirements"
 )
 
 // createParts is what a project creation request holds.
@@ -223,6 +225,9 @@ func readCreatePart(part *multipart.Part, out *createParts) error {
 	case requirementsField:
 		if len(out.files) >= pip.MaxFiles {
 			return fmt.Errorf("a project takes at most %d files", pip.MaxFiles)
+		}
+		if err := store.ValidRequirementsName(part.FileName()); err != nil {
+			return err
 		}
 		data, err := io.ReadAll(io.LimitReader(part, pip.MaxFileBytes+1))
 		if err != nil {
