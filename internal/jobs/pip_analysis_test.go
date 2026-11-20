@@ -673,8 +673,11 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 	if keys := slices.Sorted(maps.Keys(top)); !slices.Equal(keys, []string{"blocking", "files", "packages", "target", "warnings"}) {
 		t.Errorf("pip-result.json keys = %v", keys)
 	}
-	if string(top["blocking"]) != "[]" || string(top["warnings"]) != "[]" {
-		t.Errorf("blocking = %s, warnings = %s, want empty lists", top["blocking"], top["warnings"])
+	if string(top["blocking"]) != "[]" {
+		t.Errorf("blocking = %s, want an empty list", top["blocking"])
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "requests@2.31.0") {
+		t.Errorf("warnings = %q, want one naming the finding for requests 2.31.0", res.Warnings)
 	}
 	var rows []map[string]json.RawMessage
 	if err := json.Unmarshal(top["packages"], &rows); err != nil {
@@ -730,6 +733,91 @@ func TestPipScanFindsADottedName(t *testing.T) {
 			}
 			if len(res.Warnings) != 0 {
 				t.Errorf("warnings = %q, want none", res.Warnings)
+			}
+		})
+	}
+}
+
+func TestPipScanWarnsOnFindingsOutsideTheSet(t *testing.T) {
+	cases := []struct {
+		name    string
+		rows    [][5]string
+		want    []string // texts the one warning holds; none means no warning
+		notWant []string
+	}{
+		{"every finding on a package", [][5]string{
+			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+		}, nil, nil},
+		{"one package outside", [][5]string{
+			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+			{"jinja2", "3.1.1", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+			{"jinja2", "3.1.1", "CVE-2024-34064", "MEDIUM", "3.1.4"},
+		}, []string{"2 Trivy findings matched no package of the resolved set: jinja2@3.1.1"}, []string{"more"}},
+		{"five packages outside", [][5]string{
+			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+			{"e", "1.0", "CVE-2024-00005", "LOW", ""},
+			{"d", "1.0", "CVE-2024-00004", "LOW", ""},
+			{"c", "1.0", "CVE-2024-00003", "LOW", ""},
+			{"b", "1.0", "CVE-2024-00002", "LOW", ""},
+			{"a", "1.0", "CVE-2024-00001", "LOW", ""},
+		}, []string{"5 Trivy findings matched no package of the resolved set: a@1.0, b@1.0, c@1.0, and 2 more in the log"}, []string{"d@1.0", "e@1.0"}},
+		{"a finding under both spellings of a package counts once", [][5]string{
+			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+			{"zope.event", "9.9", "CVE-2024-00009", "LOW", ""},
+			{"zope-event", "9.9", "CVE-2024-00009", "LOW", ""},
+		}, []string{"1 Trivy finding matched no package of the resolved set: zope-event@9.9"}, []string{"zope.event"}},
+		{"a name with control characters, cut to its bound", [][5]string{
+			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
+			{"evil\u202e\n" + strings.Repeat("x", 300), "1.0", "CVE-2024-00001", "LOW", ""},
+		}, []string{"1 Trivy finding matched no package of the resolved set: evil" + strings.Repeat("x", shownNameLimit-4) + "..."}, []string{"\u202e", "\n", strings.Repeat("x", shownNameLimit)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var logged []string
+			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+			a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+			a.Trivy = &cannedTrivy{report: pipTrivyReport(c.rows...)}
+			emit := func(e Event) {
+				var d logData
+				if e.Kind == "log" && json.Unmarshal(e.Data, &d) == nil {
+					logged = append(logged, d.Line)
+				}
+			}
+
+			if err := a.Run(context.Background(), emit); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			res, raw := readPipResult(t, st, a)
+			if len(res.Packages) == 0 || len(res.Packages[0].CVEs) != 1 {
+				t.Errorf("packages = %+v, want jinja2 3.1.2 to keep its finding", res.Packages)
+			}
+			if c.want == nil {
+				if !strings.Contains(string(compactJSON(t, raw)), `"warnings":[]`) {
+					t.Errorf("pip-result.json = %s, want an empty warnings list", raw)
+				}
+				return
+			}
+			if len(res.Warnings) != 1 {
+				t.Fatalf("warnings = %q, want one", res.Warnings)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(res.Warnings[0], w) {
+					t.Errorf("warning = %q, want %q", res.Warnings[0], w)
+				}
+			}
+			for _, w := range c.notWant {
+				if strings.Contains(res.Warnings[0], w) {
+					t.Errorf("warning = %q, holds %q", res.Warnings[0], w)
+				}
+			}
+			for _, r := range c.rows {
+				if r[1] == "3.1.2" {
+					continue
+				}
+				key := cleanName(pip.Normalize(r[0]) + "@" + r[1])
+				if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, key) }) {
+					t.Errorf("log = %v, misses %s", logged, key)
+				}
 			}
 		})
 	}

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -84,8 +85,8 @@ type PipBlocking struct {
 	Detail  string `json:"detail"`
 }
 
-// shownProblems bounds the requirements problems a validate failure names;
-// the log lists every one.
+// shownProblems bounds the items a failure or a warning names: requirements
+// problems, or packages outside the resolved set. The log lists every one.
 const shownProblems = 3
 
 // pipRun holds the state one PipAnalysis.Run call threads through its
@@ -340,13 +341,55 @@ func (r *pipRun) stepScan() error {
 				CVEs:    pipFindingsOf(index.Set([]string{key})),
 			})
 		}
-		for key, list := range index {
-			if !matched[key] {
-				r.log(fmt.Sprintf("trivy reported %d %s for %s, which is not in the set", len(list), plural(len(list), "finding", "findings"), key))
+		var outside []string
+		outsideFindings := 0
+		for _, key := range slices.Sorted(maps.Keys(index)) {
+			if matched[key] {
+				continue
 			}
+			n := len(index.Set([]string{key}))
+			name := cleanName(key)
+			r.log(fmt.Sprintf("trivy reported %d %s for %s, which is not in the set", n, plural(n, "finding", "findings"), name))
+			outside = append(outside, name)
+			outsideFindings += n
+		}
+		if len(outside) > 0 {
+			result.Warnings = append(result.Warnings, outsideWarning(outsideFindings, outside))
 		}
 		return r.a.Store.WriteJSON(filepath.Join(r.a.Dir, "pip-result.json"), result)
 	})
+}
+
+// outsideWarning tells how many findings matched no package of the set,
+// and names the first shownProblems of the packages they name, as
+// name@version.
+func outsideWarning(findings int, names []string) string {
+	shown := names[:min(len(names), shownProblems)]
+	msg := fmt.Sprintf("%d Trivy %s matched no package of the resolved set: %s",
+		findings, plural(findings, "finding", "findings"), strings.Join(shown, ", "))
+	if more := len(names) - len(shown); more > 0 {
+		msg += fmt.Sprintf(", and %d more in the log", more)
+	}
+	return msg
+}
+
+// shownNameLimit bounds, in runes, a package name from Trivy's report that
+// the log or a warning quotes.
+const shownNameLimit = 100
+
+// cleanName drops control and format characters from a name Trivy
+// reported and cuts it to shownNameLimit runes.
+func cleanName(s string) string {
+	runes := []rune(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s))
+	if len(runes) <= shownNameLimit {
+		return string(runes)
+	}
+	return string(runes[:shownNameLimit]) + "..."
 }
 
 // scanComponents writes components as a CycloneDX SBOM beside outPath,
