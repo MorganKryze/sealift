@@ -1201,6 +1201,54 @@ func TestPipExportFailsWhenAWheelChangesBeforeTheArchive(t *testing.T) {
 	}
 }
 
+// A change to the bytes moves both digests at once, so a recorded digest
+// that differs is the only way to show that each one fails the read alone.
+func TestCachedWheelFailsOnEitherDigest(t *testing.T) {
+	data := []byte("the bytes the download checked")
+	path := filepath.Join(t.TempDir(), "cached.whl")
+	if err := os.WriteFile(path, data, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	sum512 := sha512.Sum512(data)
+	good256, good512 := sha256Hex(data), hex.EncodeToString(sum512[:])
+	other := func(digest string) string { return strings.Repeat("0", len(digest)) }
+	tests := []struct {
+		name           string
+		sha256, sha512 string
+		changed        bool
+	}{
+		{"both digests of the bytes", good256, good512, false},
+		{"another sha256, the same sha512", other(good256), good512, true},
+		{"the same sha256, another sha512", good256, other(good512), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := pipWheelFile{
+				PipPackage: PipPackage{Name: "demo", Version: "1.0", Wheel: &PipWheel{
+					File: "demo-1.0-py3-none-any.whl", Sha256: tc.sha256, Size: int64(len(data)),
+				}},
+				CachePath: path,
+				SHA512:    tc.sha512,
+			}
+			r, err := openCachedWheel(w)
+			if err != nil {
+				t.Fatalf("openCachedWheel: %v", err)
+			}
+			got, err := io.ReadAll(r)
+			_ = r.Close()
+			if !tc.changed {
+				if err != nil || !bytes.Equal(got, data) {
+					t.Fatalf("read = %q, %v; want the cached bytes", got, err)
+				}
+				return
+			}
+			if want := w.Wheel.File + " changed after its download"; err == nil || err.Error() != want {
+				t.Fatalf("read error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 func TestPipExportCancelled(t *testing.T) {
 	f := donePipAnalysis(t, piptest.NewIndex(t))
 	e := f.newPipExport(t)
