@@ -165,7 +165,7 @@ The service answers `GET /healthz` without a token. Every route of the contract 
 | Route | Purpose |
 | --- | --- |
 | `GET /api/me` | The user the checked token stands for, whether the settings file has a `minio` section, the user's `bucket` and `folder`, and `publicKeySha256`, the sha256 of the public key every signature must verify with: `{"user":"alice","minioConfigured":true,"bucket":"user-alice","folder":"packages/npm/","publicKeySha256":"9f2c…"}`. The bucket and the folder are named whether or not the settings file has a `minio` section. |
-| `GET /api/archives` | The archives in the user's MinIO folder. |
+| `GET /api/archives` | The archives in the user's MinIO folders, `packages/npm/` and `packages/pip/`. |
 | `POST /api/imports` | Queue an import of one of those archives. |
 | `GET /api/imports` | The user's imports, newest first. |
 | `GET /api/imports/{importId}` | One import with its attempts. |
@@ -185,25 +185,30 @@ Request headers get 10 seconds to arrive and are capped at 64 KiB.
 
 ### Listing archives
 
-`GET /api/archives` lists the objects under `packages/npm/` in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call reads at most 1,000 keys. The list reads no manifest and no signature.
+`GET /api/archives` lists the objects under `packages/npm/`, then under `packages/pip/`, in the bucket `user-<name>`, where `<name>` is the checked user. The request carries no bucket, prefix or user: a query parameter or header that names one is ignored. One MinIO call per folder reads at most 1,000 keys. The list reads no signature and no archive.
 
-The answer holds `minioConfigured`, `bucket`, `folder`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. Each archive has `key`, `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key made from the archive, manifest and signature now in MinIO. An import counts only when the ETags of all three match, so an upload that replaces the archive, its manifest or its signature under the same name shows no `latestImport` until it is imported.
+The answer holds `minioConfigured`, `bucket`, `folder`, `folders`, `bucketMissing`, `truncated`, `unencrypted` and `archives`. `folders` is `["packages/npm/","packages/pip/"]`. `folder` stays `packages/npm/` for clients written for sealift 0.6. Each archive has `key`, `ecosystem` (`npm` or `pip`, its folder's), `size`, `modified`, `importable` and, when it cannot be imported, a `reason`. An archive the user has already imported also has `latestImport`, the `id` and `outcome` of the newest import of that key made from the archive, manifest and signature now in MinIO. An import counts only when the ETags of all three match, so an upload that replaces the archive, its manifest or its signature under the same name shows no `latestImport` until it is imported.
 
-An archive pairs with the `manifest.json` and the `manifest.json.sig` in its own folder, at the root of `packages/npm/` or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive, a `manifest.json` nor a `manifest.json.sig`.
+An archive pairs with the `manifest.json` and the `manifest.json.sig` in its own folder, at the root of `packages/npm/` or `packages/pip/`, or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive, a `manifest.json` nor a `manifest.json.sig`. A folder pairs only its own objects: a signature under `packages/npm/` never completes a folder under `packages/pip/`.
+
+For each archive that passes the rules below, the list reads its `manifest.json` with the listed ETag, within 16 MiB, and looks at `formatVersion` and `ecosystem` alone. A manifest of the other ecosystem marks the archive as not importable. The mark is a hint: a manifest that cannot be read or parsed leaves the archive importable, and the import checks the ecosystem again after the signature. The service keeps each manifest's ecosystem by its ETag, up to 4,096 ETags, and reads at most 50 manifests it has not read before in one list. Past 50, the remaining archives are marked at the next list.
 
 | Reason | When |
 | --- | --- |
-| `its name cannot be imported` | The key is not under `packages/npm/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment (also once percent-decoded), holds a control character, is not UTF-8 or is over 1,024 bytes. |
+| `its name cannot be imported` | The key is not under `packages/npm/` or `packages/pip/`, does not end in `.tar.gz`, has an empty, `.` or `..` segment (also once percent-decoded, and then under the same folder), holds a control character, is not UTF-8 or is over 1,024 bytes. |
 | `the folder holds more than one archive` | Its folder holds two or more archives. Each one is listed with this reason. |
 | `no manifest.json in its folder` | Its folder holds no `manifest.json`. |
 | `no manifest.json.sig in its folder` | Its folder holds a `manifest.json` and no `manifest.json.sig`. |
+| `its manifest is a pip archive's: keep the three files under packages/pip/` | The archive sits under `packages/npm/` and its manifest describes a pip archive. |
+| `its manifest is an npm archive's: keep the three files under packages/npm/` | The archive sits under `packages/pip/` and its manifest describes an npm archive. |
 
 | Case | Answer |
 | --- | --- |
 | No `minio` section in the settings file | 200, `minioConfigured` false, no archive. The service calls no MinIO. |
 | MinIO has no bucket for the user | 200, `bucketMissing` true, no archive, and a `message` that names the bucket. |
-| More than 1,000 objects under the folder | 200, `truncated` true, with the archives found in the first 1,000. |
-| MinIO is unreachable or refuses the call | 502. `detail` holds MinIO's reason with control characters removed, cut to 300 characters. |
+| More than 1,000 objects under a folder | 200, `truncated` true, with the archives found in the first 1,000 of that folder. |
+| MinIO refuses the list of one folder | 200 with the other folder's archives, and a `message` that names the folder and MinIO's reason: `MinIO could not list packages/pip/: ...`, control characters removed, cut to 300 characters. A MinIO policy that does not cover `packages/pip/` yet gives this answer. |
+| MinIO is unreachable or refuses the list of both folders | 502. `detail` holds MinIO's reason with control characters removed, cut to 300 characters. |
 
 `unencrypted` names each link that runs over plain `http`: `keySet`, `minio`, `nexus`.
 
@@ -211,7 +216,7 @@ An archive pairs with the `manifest.json` and the `manifest.json.sig` in its own
 
 `POST /api/imports` takes `{"archive": "<key>", "expectedSha256": "<hex>"}`. `expectedSha256` is optional: 64 hex digits received through another channel, and a different archive is refused. A malformed value answers 400 and creates nothing.
 
-The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason. For a valid key the service lists the archive's folder, reads the description of the archive, its manifest and its signature, and records the key, the ETag and the size of each. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
+The key must pass the same rule as the list. Any key that fails it, lies outside `packages/npm/` and `packages/pip/` or names an object that is not there answers 404, and a key that fails the rule causes no MinIO request. A key that names an archive the list marks as not importable answers 409 with the list's reason, except for the manifest's ecosystem: the start reads no manifest. The attempt checks the ecosystem after the signature and ends `refused` with `the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/`, or `the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/`. For a valid key the service lists the archive's folder, reads the description of the archive, its manifest and its signature, and records the key, the ETag and the size of each. The answer is 202 with the import as `GET /api/imports/{importId}` gives it.
 
 The service reads every earlier import of the same objects, not only the newest, and answers 409 for the first one it finds that is queued, running, `incomplete` or `interrupted`. A `complete` import and a `refused` one do not block a new start. A refused latest attempt published nothing and removed nothing, so starting again, with a corrected `expectedSha256` or none, is the way out of a mistyped digest. An earlier attempt of the same import may have published packages: the new import finds them present. The refused import keeps its attempts and its outcome, and the list then holds both.
 
@@ -243,6 +248,8 @@ An attempt reads the manifest, the signature and the archive from MinIO once eac
 Before it reads anything, each attempt, the first included, heads the archive, the manifest and the signature and compares their ETags with the ones recorded. A difference ends the attempt `refused` with the reason above and publishes nothing; an object that is gone or cannot be described ends it `incomplete` (`the signature is no longer in MinIO` for the signature). An import recorded by sealift 0.4 holds no signature, so its attempt heads two objects and then ends `refused` as unsigned.
 
 A `report` is marked `unencrypted` when Nexus, MinIO or the key set is reached over plain `http`.
+
+A report always carries `ecosystem`, `target.python` and `target.glibc`. `ecosystem` is the manifest's once the attempt has read it, and the archive's folder's before. A pip report fills `target.python` and `target.glibc`, leaves `libc`, `node` and `pnpmVer` empty, and names the pip repository under `nexus.repository`. An npm report sends `python` and `glibc` empty. A pip archive whose settings file has no `nexus.pip` section ends `refused` with `the settings name no pip repository: set nexus.pip.repository`, and nothing is read from the archive.
 
 The report carries three fields that `sealift import -report` writes too, described in [The import report](archive-format.md#the-import-report). `publicKeySha256` is the sha256 of the public key the attempt checked the signature with. `archiveChecked` is `true` once the archive passed its checks and `false` before, or when the attempt ended without passing them. Each failed package has a `kind`: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. A client reads the kind to tell what to do next and reads `reason` for the words. An attempt that ended before it read the archive because an object changed in MinIO has `archiveChecked` false and no package. An import recorded by sealift 0.4.0 or earlier has none of them, and the service serves it as it is, without a `kind`, without `archiveChecked` and without `publicKeySha256`.
 
