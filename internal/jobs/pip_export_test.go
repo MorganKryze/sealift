@@ -1348,3 +1348,34 @@ func TestPipExportRefusesAnEmptySet(t *testing.T) {
 		t.Errorf("export directory holds %v, want only status.json", names)
 	}
 }
+
+// The export directory is group-writable, so the tools account can plant a
+// link where the archive goes, aimed at a file only the server may write.
+func TestPipExportNeverWritesTheArchiveThroughALink(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	victim := filepath.Join(t.TempDir(), "signing-key.pem")
+	const held = "a file the server owns"
+	if err := os.WriteFile(victim, []byte(held), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.beforeArchive = func() {
+		if err := os.Symlink(victim, filepath.Join(e.Dir, archive.PipArchiveFile)); err != nil {
+			t.Error(err)
+		}
+	}
+	rec, err := runPipExport(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), "create the archive") {
+		t.Fatalf("Run = %v, want the archive's creation refused", err)
+	}
+	if got := string(readFile(t, victim)); got != held {
+		t.Errorf("the link's target now holds %d bytes, want it untouched", len(got))
+	}
+	last := rec.steps[len(rec.steps)-1]
+	if last.Name != "archive" || last.State != string(store.Failed) {
+		t.Errorf("last step = %+v, want archive failed", last)
+	}
+	if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+		t.Errorf("export directory holds %v, want only status.json", names)
+	}
+}

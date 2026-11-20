@@ -381,7 +381,10 @@ func (e *PipExport) writeArchive(ctx context.Context, emit func(Event), wheels [
 	}
 
 	path := filepath.Join(e.Dir, archive.PipArchiveFile)
-	f, err := os.Create(path)
+	// The tools account can write the export directory. O_EXCL and
+	// O_NOFOLLOW refuse a link planted where the archive goes, so the
+	// archive never overwrites the file such a link names.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 	if err != nil {
 		return fail(fmt.Errorf("jobs: create the archive: %w", withoutPath(err)))
 	}
