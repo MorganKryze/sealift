@@ -377,7 +377,7 @@ type Problem struct {
 	// Detail A human-readable explanation specific to this occurrence
 	Detail *string `json:"detail,omitempty"`
 
-	// Errors Every offending entry, for a validation failure
+	// Errors The offending entries of a validation failure, at most 100; the detail gives the total when there are more
 	Errors *[]ProblemDetail `json:"errors,omitempty"`
 
 	// Instance A URI identifying this specific occurrence

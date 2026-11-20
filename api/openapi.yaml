@@ -630,7 +630,9 @@ components:
           description: A URI identifying this specific occurrence
         errors:
           type: array
-          description: Every offending entry, for a validation failure
+          description: >-
+            The offending entries of a validation failure, at most 100; the
+            detail gives the total when there are more
           items:
             $ref: "#/components/schemas/ProblemDetail"
         missing:
