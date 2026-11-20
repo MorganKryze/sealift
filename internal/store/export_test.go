@@ -2,9 +2,12 @@ package store
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // writeExportDir creates projects/proj-1/exports/<id> with the given files
@@ -148,6 +151,63 @@ func TestExportFileServesOneFileAndRefusesEscape(t *testing.T) {
 		if _, err := s.ExportFile("proj-1", "20260917T101502Z", name); !errors.Is(err, ErrNotFound) {
 			t.Errorf("ExportFile(%q): err = %v, want ErrNotFound", name, err)
 		}
+	}
+}
+
+// The tools account can write an export directory, so any of its names can
+// turn into a link, a FIFO or a directory between the export and a download.
+func TestExportFileServesOnlyARegularFile(t *testing.T) {
+	plants := []struct {
+		name  string
+		plant func(t *testing.T, s *Store, path string)
+	}{
+		{"a link to the signing key", func(t *testing.T, s *Store, path string) {
+			if err := os.Symlink(filepath.Join(s.Root(), "private", "signing-key.pem"), path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		// No process writes to the FIFO, so an open that waits for a writer
+		// never returns.
+		{"a FIFO", func(t *testing.T, _ *Store, path string) {
+			if err := syscall.Mkfifo(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a directory", func(t *testing.T, _ *Store, path string) {
+			if err := os.Mkdir(path, dirMode); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range plants {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			writeExportDir(t, s, "20260917T101502Z", map[string]string{"summary.md": "# hello"})
+			tc.plant(t, s, filepath.Join(s.Root(), "projects", "proj-1", "exports", "20260917T101502Z", "manifest.json"))
+
+			type opened struct {
+				f   *os.File
+				err error
+			}
+			done := make(chan opened, 1)
+			go func() {
+				f, err := s.ExportFile("proj-1", "20260917T101502Z", "manifest.json")
+				done <- opened{f, err}
+			}()
+			select {
+			case got := <-done:
+				if got.f != nil {
+					data, _ := io.ReadAll(got.f)
+					_ = got.f.Close()
+					t.Fatalf("ExportFile served %d bytes, want a refusal", len(data))
+				}
+				if !errors.Is(got.err, ErrNotFound) {
+					t.Errorf("ExportFile = %v, want ErrNotFound", got.err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("ExportFile still waits after 5s")
+			}
+		})
 	}
 }
 
