@@ -20,6 +20,24 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for Ecosystem.
+const (
+	Npm Ecosystem = "npm"
+	Pip Ecosystem = "pip"
+)
+
+// Valid indicates whether the value is a known member of the Ecosystem enum.
+func (e Ecosystem) Valid() bool {
+	switch e {
+	case Npm:
+		return true
+	case Pip:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventKind.
 const (
 	EventKindCandidate EventKind = "candidate"
@@ -167,6 +185,9 @@ type DependencyResult struct {
 	Vector Vector `json:"vector"`
 }
 
+// Ecosystem The package manager a project belongs to
+type Ecosystem string
+
 // EndData Payload of the end event, always the last one of a job
 type EndData struct {
 	// State State of a job and of the directory it writes
@@ -241,6 +262,20 @@ type LogData struct {
 	Line string `json:"line"`
 }
 
+// PipTarget The system a pip resolution is prepared for
+type PipTarget struct {
+	// Cpu Only x86_64 for now
+	Cpu string `json:"cpu"`
+
+	// Glibc glibc 2.17 to 2.40
+	Glibc string `json:"glibc"`
+	Os    string `json:"os"`
+
+	// Python Python 3.<minor>.<patch>
+	Python string `json:"python"`
+	UvVer  string `json:"uvVer"`
+}
+
 // Problem RFC 9457 Problem Details for HTTP APIs
 type Problem struct {
 	// Detail A human-readable explanation specific to this occurrence
@@ -267,8 +302,11 @@ type Problem struct {
 
 // ProblemDetail One offending entry inside a validation failure's errors list
 type ProblemDetail struct {
-	// Field package.json field, such as dependencies or pnpm.overrides
+	// Field package.json field, such as dependencies or pnpm.overrides, or the file name of a requirements problem
 	Field string `json:"field"`
+
+	// Line Line of a requirements problem, absent for a problem of the whole file
+	Line *int `json:"line,omitempty"`
 
 	// Name Dependency name, empty for a field-level problem
 	Name   *string `json:"name,omitempty"`
@@ -288,23 +326,31 @@ type ProgressData struct {
 	Total int    `json:"total"`
 }
 
-// Project A project, its target and its analysis and export history.
+// Project A project, its target and its analysis and export history. An npm project has a target, a pip project has a pipTarget.
 type Project struct {
 	Analyses *[]Analysis `json:"analyses,omitempty"`
-	Exports  *[]Export   `json:"exports,omitempty"`
-	Id       string      `json:"id"`
+
+	// Ecosystem The package manager a project belongs to
+	Ecosystem Ecosystem `json:"ecosystem"`
+	Exports   *[]Export `json:"exports,omitempty"`
+	Id        string    `json:"id"`
 
 	// ManifestSha256 sha256 of the uploaded package.json bytes, lowercase hex
 	ManifestSha256 *string `json:"manifestSha256,omitempty"`
 	Name           string  `json:"name"`
 
+	// PipTarget The system a pip resolution is prepared for
+	PipTarget *PipTarget `json:"pipTarget,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
-	Target Target `json:"target"`
+	Target *Target `json:"target,omitempty"`
 }
 
 // ProjectSummary One row of the projects list.
 type ProjectSummary struct {
-	Id string `json:"id"`
+	// Ecosystem The package manager a project belongs to
+	Ecosystem Ecosystem `json:"ecosystem"`
+	Id        string    `json:"id"`
 
 	// LastAnalysis One analysis job and its state.
 	LastAnalysis *Analysis `json:"lastAnalysis,omitempty"`
@@ -313,8 +359,11 @@ type ProjectSummary struct {
 	LastExport *Export `json:"lastExport,omitempty"`
 	Name       string  `json:"name"`
 
+	// PipTarget The system a pip resolution is prepared for
+	PipTarget *PipTarget `json:"pipTarget,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
-	Target Target `json:"target"`
+	Target *Target `json:"target,omitempty"`
 }
 
 // Settings Every value the interface can change.
@@ -410,11 +459,20 @@ type ListProjectsParams struct {
 
 // CreateProjectMultipartBody defines parameters for CreateProject.
 type CreateProjectMultipartBody struct {
-	// Manifest package.json content
-	Manifest openapi_types.File `json:"manifest"`
+	// Ecosystem The package manager a project belongs to
+	Ecosystem *Ecosystem `json:"ecosystem,omitempty"`
 
-	// Name Project name; defaults to the manifest name field
+	// Manifest package.json content, required for an npm project
+	Manifest *openapi_types.File `json:"manifest,omitempty"`
+
+	// Name Project name; an npm project defaults to the manifest name field, a pip project requires it
 	Name *string `json:"name,omitempty"`
+
+	// PipTarget JSON of a PipTarget, at most 4 KiB, unknown fields refused. The default target applies when absent.
+	PipTarget *string `json:"pipTarget,omitempty"`
+
+	// Requirements Requirements files of a pip project, repeated. Each part's filename is the file name.
+	Requirements *[]openapi_types.File `json:"requirements,omitempty"`
 }
 
 // RegenerateSigningKeyJSONBody defines parameters for RegenerateSigningKey.
@@ -606,7 +664,7 @@ type ServerInterface interface {
 	// ListProjects List projects with their last analysis and export
 	// (GET /projects)
 	ListProjects(w http.ResponseWriter, r *http.Request, params ListProjectsParams)
-	// CreateProject Create a project from an uploaded package.json and start an analysis
+	// CreateProject Create a project from an uploaded package.json or requirements files
 	// (POST /projects)
 	CreateProject(w http.ResponseWriter, r *http.Request)
 	// DeleteProject Delete the project directory
@@ -2554,7 +2612,7 @@ type StrictServerInterface interface {
 	// ListProjects List projects with their last analysis and export
 	// (GET /projects)
 	ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error)
-	// CreateProject Create a project from an uploaded package.json and start an analysis
+	// CreateProject Create a project from an uploaded package.json or requirements files
 	// (POST /projects)
 	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
 	// DeleteProject Delete the project directory
