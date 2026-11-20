@@ -194,6 +194,65 @@ func TestPipAnalysisRecordsTheBlockingPackageUvNames(t *testing.T) {
 	}
 }
 
+// uv never sees a constraint's --hash options, so choose-wheels is the only
+// step that holds a constraint reaching the set to them.
+func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+	generic := ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0", Tag: "py3-none-any"})
+	native := ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0", Tag: "cp311-cp311-manylinux_2_17_x86_64"})
+	other := strings.Repeat("ab", 32)
+	cases := []struct {
+		name     string
+		hashes   []string
+		wantFile string // the recorded wheel; empty when choose-wheels refuses
+	}{
+		{"hashes listing no wheel", []string{other}, ""},
+		{"hashes listing only a less preferred wheel", []string{generic.Sha256, other}, generic.Filename},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			line := "eps==1.0.0"
+			for _, h := range c.hashes {
+				line += " --hash=sha256:" + h
+			}
+			a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget,
+				reqFile("requirements.txt", "omega==1.0.0\n-c constraints.txt\n"),
+				reqFile("constraints.txt", line+"\n"))
+			a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0")}
+
+			err := a.Run(context.Background(), func(Event) {})
+			status, _ := readStatus(t, st, a)
+			res, _ := readPipResult(t, st, a)
+			if c.wantFile != "" {
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
+				if i < 0 || res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
+					t.Errorf("packages = %+v, want eps recorded as %s", res.Packages, c.wantFile)
+				}
+				return
+			}
+			want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
+			if err == nil || !slices.Equal(stepNames(status.Steps), want) {
+				t.Fatalf("Run = %v, steps %v, want %v", err, stepNames(status.Steps), want)
+			}
+			for _, want := range []string{"eps==1.0.0 (constraints.txt)", "the --hash options in constraints.txt", native.Filename} {
+				if !strings.Contains(status.Steps[4].Error, want) {
+					t.Errorf("choose-wheels error = %q, want %q", status.Steps[4].Error, want)
+				}
+			}
+			if len(res.Blocking) != 1 || res.Blocking[0].Kind != "hash-mismatch" || res.Blocking[0].Name != "eps" {
+				t.Errorf("blocking = %+v, want eps as a hash mismatch", res.Blocking)
+			}
+			if len(res.Packages) != 0 {
+				t.Errorf("packages = %+v, want none: nothing was scanned", res.Packages)
+			}
+		})
+	}
+}
+
 // uv resolves against every file the index lists, so a transitive package
 // can reach the set with no wheel the target installs. The analysis must
 // fail on it, never finish with a package that has no wheel.
