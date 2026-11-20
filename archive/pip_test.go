@@ -317,6 +317,33 @@ func TestParsePipManifestRefusesUnsafeText(t *testing.T) {
 	}
 }
 
+func TestParsePipManifestRepeatsNoRefusedPackageValue(t *testing.T) {
+	type row struct {
+		name, field, value, reason string
+	}
+	var rows []row
+	for kind, value := range unsafeText {
+		rows = append(rows,
+			row{"file " + kind, "file", "../" + value + ".whl", "packages[0].file is not a plain file name ending in .whl of at most 251 bytes"},
+			row{"name " + kind, "name", value, "packages[0].name is not a normalized package name"},
+			row{"version " + kind, "version", "3.1.6" + value, "packages[0].version is not an exact version"},
+		)
+	}
+	rows = append(rows,
+		row{"file too long", "file", strings.Repeat("owned", 50) + ".whl", "packages[0].file is not a plain file name ending in .whl of at most 251 bytes"},
+		row{"version too long", "version", strings.Repeat("owned", 52), "packages[0].version is longer than 256 bytes"},
+	)
+	for _, tt := range rows {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := pipManifestDoc()
+			pkgOf(doc, 0)[tt.field] = tt.value
+			_, err := ParsePipManifest(encode(t, doc))
+			assertRefusal(t, err, tt.reason)
+			assertRepeatsNoValue(t, err)
+		})
+	}
+}
+
 func TestParsePipManifestRefusesBadDocuments(t *testing.T) {
 	for _, tt := range []struct{ name, data, reason string }{
 		{"not JSON", `{"formatVersion":`, "the manifest is not valid JSON"},
