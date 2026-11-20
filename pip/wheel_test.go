@@ -112,6 +112,14 @@ func TestInspectWheel(t *testing.T) {
 	}
 	const evilWheel = "Wheel-Version: 1.0\nTag: py3-none-any\n"
 
+	// The bound covers the sum: each 60-byte entry fits under it, both do not.
+	var pureBytes int64
+	for _, e := range pure {
+		pureBytes += int64(len(e.body))
+	}
+	sixty := bytes.Repeat([]byte{0}, 60)
+	twoHalves := with(zipEntry{name: "demo_pkg/a.bin", body: sixty}, zipEntry{name: "demo_pkg/b.bin", body: sixty})
+
 	rows := []struct {
 		name    string
 		data    []byte
@@ -134,6 +142,10 @@ func TestInspectWheel(t *testing.T) {
 			reasons: []string{"an entry name is longer than 40 bytes", `"demo_pkg/` + strings.Repeat("b", 91) + `"`}},
 		{name: "declared unpacked bytes over the limit", data: zipOf(t, with(zipEntry{name: "demo_pkg/data.bin", body: bytes.Repeat([]byte{0}, 200)})...), limits: WheelLimits{Unpacked: 100},
 			reasons: []string{"the wheel's entries declare more than 100 unpacked bytes"}},
+		{name: "entries each under the unpacked limit, together over it", data: zipOf(t, twoHalves...), limits: WheelLimits{Unpacked: pureBytes + 100},
+			reasons: []string{fmt.Sprintf("the wheel's entries declare more than %d unpacked bytes", pureBytes+100)}},
+		{name: "entries that together meet the unpacked limit", data: zipOf(t, twoHalves...), limits: WheelLimits{Unpacked: pureBytes + 120},
+			want: WheelInfo{Name: "Demo.Pkg", Version: "1.2"}},
 
 		{name: "an absolute name", data: zipOf(t, with(zipEntry{name: "/etc/cron.d/evil"})...), reasons: []string{`entry "/etc/cron.d/evil" is an absolute path`}},
 		{name: "a drive letter", data: zipOf(t, with(zipEntry{name: "C:/evil.py"})...), reasons: []string{`entry "C:/evil.py" is an absolute path`}},
