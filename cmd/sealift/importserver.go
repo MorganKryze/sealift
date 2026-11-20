@@ -52,7 +52,7 @@ func subcommand(args []string) (name string, rest []string) {
 
 // nexusPublisher builds the Nexus client an import publishes with.
 func nexusPublisher(s importer.Settings) (importer.Publisher, error) {
-	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, User: s.User, Password: s.Password, CAFile: s.CAFile})
+	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, Format: nexus.Format(s.Format), User: s.User, Password: s.Password, CAFile: s.CAFile})
 	if err != nil {
 		return nil, err
 	}
