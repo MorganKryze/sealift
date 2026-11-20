@@ -323,6 +323,41 @@ func TestPipExportPackageListRefusesARecordedValue(t *testing.T) {
 			p[1].Wheel.File = "idna-3.10.tar.gz"
 			return p
 		}, "idna==3.10: pip: file is not a wheel", "idna-3.10.tar.gz"},
+		{"an invalid package name", func(p []PipPackage) []PipPackage {
+			p[1].Name = "idna/../x"
+			return p
+		}, "package 2 of the analysis has no valid name and version", "idna/../x"},
+		{"a version range", func(p []PipPackage) []PipPackage {
+			p[1].Version = ">=3.10"
+			return p
+		}, "package 2 of the analysis has no valid name and version", ">=3.10"},
+		{"a package listed twice", func(p []PipPackage) []PipPackage {
+			dup := p[1]
+			dup.Name = "IDNA"
+			return append(p, dup)
+		}, "jobs: idna is listed twice", ""},
+		{"the wheel of another package", func(p []PipPackage) []PipPackage {
+			w := *p[0].Wheel
+			p[1].Wheel = &w
+			return p
+		}, "idna==3.10: the wheel " + f.ref.Result.Packages[0].Wheel.File + " names another package", ""},
+		{"the wheel of another version", func(p []PipPackage) []PipPackage {
+			p[1].Version = "3.9"
+			return p
+		}, "idna==3.9: the wheel " + idna.File + " names another package", ""},
+		{"a wheel name past the archive's entry name bound", func(p []PipPackage) []PipPackage {
+			// 252 bytes: ParseWheelName takes it, out/ plus it exceeds 255.
+			p[1].Wheel.File = "idna-3.10-1" + strings.Repeat("a", 224) + "-py3-none-any.whl"
+			return p
+		}, "idna==3.10: the wheel name is longer than an archive entry name of 255 bytes allows", strings.Repeat("a", 224)},
+		{"no recorded size", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.Size = 0
+			return p
+		}, "idna==3.10: the wheel " + idna.File + " is recorded at 0 bytes, outside 1 to 4294967296", ""},
+		{"a size above the wheel bound", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.Size = pip.MaxWheelBytes + 1
+			return p
+		}, "idna==3.10: the wheel " + idna.File + " is recorded at 4294967297 bytes, outside 1 to 4294967296", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
