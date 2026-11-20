@@ -606,6 +606,166 @@ func TestPipExportReplacesACacheEntryThatIsNotAFile(t *testing.T) {
 	}
 }
 
+// heldBody serves body at any path: its first half, then the rest once
+// release is called.
+func heldBody(t *testing.T, body []byte) (url string, release func()) {
+	t.Helper()
+	held := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(held) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+		half := len(body) / 2
+		_, _ = w.Write(body[:half])
+		w.(http.Flusher).Flush()
+		select {
+		case <-held:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = w.Write(body[half:])
+	}))
+	t.Cleanup(srv.Close)
+	// Runs before Close, which waits for a held handler.
+	t.Cleanup(release)
+	return srv.URL + "/wheel", release
+}
+
+// The tools account can rename entries in downloads/. A wheel whose .part
+// file it swaps, while the body arrives, for a link to the signing key or
+// for a FIFO fails its download, on one filesystem as across two, and
+// leaves the wheel cache holding regular files only, none of them the key.
+func TestPipExportRefusesAPartFileSwappedDuringTheBody(t *testing.T) {
+	plants := []struct {
+		name  string
+		plant func(t *testing.T, path, key string)
+	}{
+		{"a link to the signing key", func(t *testing.T, path, key string) {
+			if err := os.Symlink(key, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a FIFO", func(t *testing.T, path, _ string) {
+			if err := syscall.Mkfifo(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	moves := []struct {
+		name  string
+		cross bool
+	}{
+		{"on one filesystem", false},
+		{"across filesystems", true},
+	}
+	for _, mv := range moves {
+		for _, pl := range plants {
+			t.Run(pl.name+" "+mv.name, func(t *testing.T) {
+				ix := piptest.NewIndex(t)
+				f := donePipAnalysis(t, ix)
+				if mv.cross {
+					crossFilesystems(t)
+				}
+				keyPath := filepath.Join(f.st.Root(), "private", "signing-key.pem")
+				key, err := os.ReadFile(keyPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				e := f.newPipExport(t)
+				pkgs := clonePipPackages(f.ref.Result.Packages)
+				target := pkgs[0]
+				resp, err := http.Get(target.Wheel.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var release func()
+				target.Wheel.URL, release = heldBody(t, body)
+				e.Analysis.Result.Packages = pkgs
+
+				type outcome struct {
+					wheels []pipWheelFile
+					err    error
+				}
+				rec := &stepRecorder{}
+				done := make(chan outcome, 1)
+				go func() {
+					wheels, err := e.download(t, rec)
+					done <- outcome{wheels, err}
+				}()
+				downloads := filepath.Join(e.Dir, "downloads")
+				part := filepath.Join(downloads, target.Wheel.File+".part")
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					if _, err := os.Lstat(part); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("no .part file appeared within 10s")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if err := os.Remove(part); err != nil {
+					t.Fatal(err)
+				}
+				pl.plant(t, part, keyPath)
+				release()
+
+				cache := filepath.Join(f.st.Root(), "cache", "wheels")
+				var got outcome
+				select {
+				case got = <-done:
+				case <-time.After(10 * time.Second):
+					// An open blocked on the FIFO returns once a writer opens it.
+					for _, p := range []string{part, filepath.Join(downloads, target.Wheel.File), filepath.Join(cache, target.Wheel.Sha256+".whl")} {
+						if w, err := os.OpenFile(p, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+							_ = w.Close()
+						}
+					}
+					<-done
+					t.Fatal("download was still waiting on the swapped file after 10s")
+				}
+
+				if got.err == nil {
+					t.Errorf("download accepted the swapped file, %d wheels", len(got.wheels))
+				} else {
+					for _, want := range []string{target.Name + "==" + target.Version, target.Wheel.File} {
+						if !strings.Contains(got.err.Error(), want) {
+							t.Errorf("download error %q does not name %q", got.err, want)
+						}
+					}
+				}
+				entries, err := os.ReadDir(cache)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, en := range entries {
+					p := filepath.Join(cache, en.Name())
+					st, err := os.Lstat(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !st.Mode().IsRegular() {
+						t.Errorf("cache entry %s has mode %s, want a regular file", en.Name(), st.Mode())
+						continue
+					}
+					if b, err := os.ReadFile(p); err == nil && bytes.Equal(b, key) {
+						t.Errorf("cache entry %s holds the signing key", en.Name())
+					}
+				}
+				if b, err := os.ReadFile(keyPath); err != nil || !bytes.Equal(b, key) {
+					t.Errorf("the signing key changed (%v)", err)
+				}
+			})
+		}
+	}
+}
+
 // tamperFirstWheel serves other bytes of the same length for the first
 // package's wheel, and makes the export download one wheel at a time, so
 // the others are still waiting when it fails.

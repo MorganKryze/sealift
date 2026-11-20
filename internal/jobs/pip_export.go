@@ -216,12 +216,22 @@ func (e *PipExport) downloadOne(ctx context.Context, p PipPackage) (pipWheelFile
 	}
 
 	tmp := filepath.Join(e.Dir, "downloads", w.File)
-	sum, err = e.Index.DownloadFile(ctx, pip.IndexFile{Filename: w.File, URL: w.URL, Sha256: w.Sha256, Size: w.Size}, tmp)
-	if err != nil {
+	if _, err := e.Index.DownloadFile(ctx, pip.IndexFile{Filename: w.File, URL: w.URL, Sha256: w.Sha256, Size: w.Size}, tmp); err != nil {
 		return pipWheelFile{}, false, fmt.Errorf("jobs: %s==%s: %w", p.Name, p.Version, err)
 	}
 	if err := moveFile(tmp, cachePath); err != nil {
 		return pipWheelFile{}, false, fmt.Errorf("jobs: %s==%s: cache %s: %w", p.Name, p.Version, w.File, err)
+	}
+	// The tools account can rename entries in downloads/, so the move may
+	// put a link or a FIFO in the cache in place of the checked download.
+	// checkCachedWheel reads the entry again, and the sha512 comes from
+	// that read.
+	sum, ok, err = checkCachedWheel(cachePath, w)
+	if err != nil {
+		return pipWheelFile{}, false, fmt.Errorf("jobs: %s==%s: check the cached %s: %w", p.Name, p.Version, w.File, err)
+	}
+	if !ok {
+		return pipWheelFile{}, false, fmt.Errorf("jobs: %s==%s: the cache entry for %s does not hold the downloaded wheel", p.Name, p.Version, w.File)
 	}
 	return pipWheelFile{PipPackage: p, CachePath: cachePath, SHA512: sum}, false, nil
 }
