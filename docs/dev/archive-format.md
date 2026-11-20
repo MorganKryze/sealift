@@ -290,3 +290,46 @@ The archive:
 1. Rules 1 to 5 of the npm archive list apply as they are. They cover the size and sha256, the entry names, the bounds of 10,000 entries, 10 GiB unpacked and 255-byte names, and the cap on the inflated tar data. They also cover the zero padding after the end marker, and require every file under `out/` to be listed in `packages[].file` and every listed file to be present.
 2. Each wheel's sha512 matches `shippedSha512`, and its sha256 matches `sha256`. The refusals read `<file> does not match its shipped sha512` and `<file> does not match its sha256`.
 3. As for npm, a wrong size or sha256 of the archive is named before any other problem.
+
+## Importing a pip archive
+
+`sealift import` takes a pip archive as it takes an npm one: give it `packages_pip.tar.gz`, with `manifest.json` and `manifest.json.sig` beside it. Once the signature verifies, the manifest's `formatVersion` and `ecosystem` choose the rules, as [Telling the formats apart](#telling-the-formats-apart) shows. An npm archive goes on exactly as before, whether or not the settings name a pip repository.
+
+A pip archive then goes through these steps, in this order:
+
+1. The manifest is checked by the rules of [What an import checks in a pip archive](#what-an-import-checks-in-a-pip-archive).
+2. The settings must name a pip repository. Without `nexus.pip`, the archive is refused with `the settings name no pip repository: set nexus.pip.repository`.
+3. The import asks Nexus for its repository list, before it reads the archive. A repository Nexus does not list, or lists in another format or type, refuses the archive with `nexus repository "<name>" not found` or `nexus repository "<name>" is <format> <type>, not pypi hosted`. A Nexus that does not answer, or answers with an error such as 401 or 403, ends the import `incomplete`: every wheel fails with kind `nexus` and the reason `repository check failed: ` followed by the error, and the archive is not read.
+4. The archive is checked against the manifest by the rules of the same section.
+5. Each wheel is published in manifest order, one at a time.
+
+For each wheel, the import first reads the wheel itself. It reads the zip directory, `METADATA` and `WHEEL` within bounds: 100,000 entries, 1,024 bytes for an entry name, 16 GiB declared unpacked, 1 MiB for `METADATA` and 64 KiB for `WHEEL`. It refuses an unsafe entry name and a wheel without exactly one `.dist-info` directory. It writes nothing out and runs nothing. `METADATA` and the file name must both name the manifest entry's project and version, compared by normalized name and by PEP 440 equality. A wheel that fails any of this ends `failed` with kind `mismatch`, and the next wheel goes on.
+
+Then the import looks the file up in the repository's simple index, `/repository/<repository>/simple/<name>/`, and reads the file the page links to. It follows a link only below `/repository/<repository>/` on the configured host, and only to a file of the wheel's exact name. The sha512 of what Nexus serves decides the state:
+
+| State | Set when |
+| --- | --- |
+| `present` | Nexus already serves the file with the shipped sha512. Nothing is uploaded |
+| `published` | Nexus did not hold the file. The import uploaded it, read it back through the simple index, and Nexus served the shipped sha512 |
+| `failed` | Any other end, with one kind below |
+
+| Kind | Set when, for a wheel |
+| --- | --- |
+| `conflict` | Nexus serves a file of the same name with other bytes, found before any upload. The reason names both sha512 digests, and the wheel is not uploaded |
+| `nexus` | The repository check failed, Nexus answered a read or the upload with an error, accepted the upload but does not list the file, or served other bytes after the upload |
+| `source` | The import service could not finish reading the archive from MinIO |
+| `interrupted` | The run was stopped before the wheel ended |
+| `mismatch` | The wheel is not a valid wheel within the bounds above, or its `METADATA` or its file name names another project or version than the manifest entry |
+| `local` | The checked wheel cannot be opened or read, it changed after the checks, or the Nexus client cannot be set up |
+
+A second run on the same archive finds the published wheels `present` and uploads only the ones Nexus does not hold.
+
+The report of a pip import has the fields of [The import report](#the-import-report), with three more. `ecosystem` is `pip`. `target.python` and `target.glibc` come from the manifest, and `target.libc`, `.node` and `.pnpmVer` are empty. `nexus.repository` is the pip repository. An npm report has no `ecosystem`, `target.python` or `target.glibc` key, so it keeps the shape 0.6.2 wrote.
+
+The text form prints the manifest line with the Python target in place of Node and pnpm:
+
+```text
+manifest: sealift dev, analysis 20261120T091500Z, target linux x86_64, python 3.11.2, glibc 2.28
+```
+
+The other lines and the exit codes are the npm ones. A package line reads `six@1.16.0 published six-1.16.0-py2.py3-none-any.whl`. The report never holds the pip password.

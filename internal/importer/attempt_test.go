@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +17,8 @@ import (
 	"testing"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/importtest"
+	"github.com/MorganKryze/sealift/internal/nexus"
 )
 
 func fileSource(opts Options) Source {
@@ -420,6 +425,206 @@ func TestAttemptSignatureRefusals(t *testing.T) {
 			}
 			if r.built != 0 || len(r.f.requests) != 0 {
 				t.Errorf("publisher built %d times, %d requests", r.built, len(r.f.requests))
+			}
+		})
+	}
+}
+
+// pipFixture is a signed pip archive of two wheels, a fake pypi Nexus and the
+// settings that point at it.
+type pipFixture struct {
+	n        *importtest.PyPINexus
+	files    importtest.PipFiles
+	settings Settings
+	wheels   []importtest.WheelFile
+	// archiveErr, when set, is what opening the archive returns.
+	archiveErr error
+}
+
+func newPipFixture(t *testing.T) *pipFixture {
+	t.Helper()
+	n := importtest.NewPyPINexus(t, pipRepo)
+	wheels := []importtest.WheelFile{
+		importtest.Wheel(t, "six", "1.16.0", "py2.py3-none-any"),
+		importtest.Wheel(t, "idna", "3.6", "py3-none-any"),
+	}
+	return &pipFixture{
+		n: n, wheels: wheels,
+		files: importtest.PipArchive(t, t.TempDir(), testPriv, wheels...),
+		settings: Settings{
+			NexusURL: n.URL, Repository: testRepo, User: "sealift-import", Password: Secret(testPassword),
+			Pip:       &PipRepository{Repository: pipRepo, User: "sealift-import", Password: Secret(testPassword)},
+			PublicKey: testPub, PublicKeySHA256: testPubSHA,
+		},
+	}
+}
+
+// clientFor builds the real Nexus client for s, as the commands do.
+func clientFor(s Settings) (Publisher, error) {
+	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, Format: nexus.Format(s.Format), User: s.User, Password: s.Password})
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// attempt runs one attempt over p's files and counts the archive's opens.
+func (p *pipFixture) attempt(t *testing.T, folder archive.Ecosystem, opts ...func(*Attempt)) (Report, int) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "work-1")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := Attempt{
+		Settings: p.settings, Ecosystem: folder, ImportVersion: "0.7.0", Dir: dir,
+		Source: fileSource(Options{Archive: p.files.Archive, Manifest: p.files.Manifest}),
+	}
+	a.Source.Name = archive.PipArchiveFile
+	opened := 0
+	open := a.Source.Archive
+	a.Source.Archive = func(ctx context.Context) (io.ReadCloser, error) {
+		opened++
+		if p.archiveErr != nil {
+			return nil, p.archiveErr
+		}
+		return open(ctx)
+	}
+	for _, o := range opts {
+		o(&a)
+	}
+	return RunAttempt(context.Background(), a, clientFor), opened
+}
+
+func TestPipAttemptRefusals(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	gone, err := url.Parse(closed.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		setup   func(t *testing.T, p *pipFixture)
+		folder  archive.Ecosystem
+		outcome string
+		reason  string // the report's reason, or every wheel's when incomplete
+		kind    Kind
+		read    bool // the archive was opened
+	}{
+		"no pip section": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.settings.Pip = nil },
+			outcome: OutcomeRefused, reason: "the settings name no pip repository: set nexus.pip.repository",
+		},
+		"repository listed as npm hosted": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.n.SetRepository("npm", "hosted") },
+			outcome: OutcomeRefused, reason: `nexus repository "pypi" is npm hosted, not pypi hosted`,
+		},
+		"repository absent": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.settings.Pip.Repository = "pypi-elsewhere" },
+			outcome: OutcomeRefused, reason: `nexus repository "pypi-elsewhere" not found`,
+		},
+		"nexus unreachable": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.settings.NexusURL = gone },
+			outcome: OutcomeIncomplete, reason: "repository check failed: ", kind: KindNexus,
+		},
+		"nexus refuses the credentials": {
+			setup: func(_ *testing.T, p *pipFixture) {
+				p.n.SetStatus("/service/rest/v1/repositories", http.StatusUnauthorized)
+			},
+			outcome: OutcomeIncomplete, reason: "repository check failed: nexus answered 401: status 401 from the fake", kind: KindNexus,
+		},
+		"the archive's source fails": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.archiveErr = fmt.Errorf("%w: minio answered 503", ErrSource) },
+			outcome: OutcomeIncomplete, reason: "the archive's source failed: minio answered 503", kind: KindSource, read: true,
+		},
+		"pip manifest in the npm folder": {
+			setup:   func(*testing.T, *pipFixture) {},
+			folder:  archive.NPM,
+			outcome: OutcomeRefused, reason: "the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/",
+		},
+		"npm manifest in the pip folder": {
+			setup: func(t *testing.T, p *pipFixture) {
+				p.files.Archive, p.files.Manifest = testArchive(t, t.TempDir(), [3]string{"left-pad", "1.3.0", "left body"})
+			},
+			folder:  archive.Pip,
+			outcome: OutcomeRefused, reason: "the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPipFixture(t)
+			tc.setup(t, p)
+			rep, opened := p.attempt(t, tc.folder)
+			if rep.Outcome != tc.outcome {
+				t.Fatalf("outcome %q (%s), want %q", rep.Outcome, rep.Reason, tc.outcome)
+			}
+			if (opened > 0) != tc.read {
+				t.Errorf("the archive was opened %d times", opened)
+			}
+			if p.n.Uploads() != 0 {
+				t.Errorf("%d uploads", p.n.Uploads())
+			}
+			if tc.outcome == OutcomeRefused {
+				if rep.Reason != tc.reason {
+					t.Errorf("reason %q, want %q", rep.Reason, tc.reason)
+				}
+				if len(rep.Packages) != 0 || rep.Counts != (Counts{}) {
+					t.Errorf("a refused report lists %+v, counts %+v", rep.Packages, rep.Counts)
+				}
+				return
+			}
+			if len(rep.Packages) != len(p.wheels) || rep.Counts.Failed != len(p.wheels) {
+				t.Fatalf("packages %+v, counts %+v", rep.Packages, rep.Counts)
+			}
+			for i, r := range rep.Packages {
+				if r.State != Failed || r.Kind != tc.kind || !strings.HasPrefix(r.Reason, tc.reason) || r.File != p.wheels[i].File {
+					t.Errorf("wheel %d: %+v, want failed %s %q", i, r, tc.kind, tc.reason)
+				}
+			}
+			if rep.ArchiveChecked == nil || *rep.ArchiveChecked {
+				t.Errorf("archiveChecked %v, want false", rep.ArchiveChecked)
+			}
+		})
+	}
+}
+
+func TestPipAttemptPublishes(t *testing.T) {
+	for _, folder := range []archive.Ecosystem{"", archive.Pip} {
+		t.Run("folder "+string(folder), func(t *testing.T) {
+			p := newPipFixture(t)
+			var listed Report
+			var checked bool
+			var ended []Result
+			rep, opened := p.attempt(t, folder, func(a *Attempt) {
+				a.Progress = Progress{
+					Listed:  func(r Report) { listed = r },
+					Checked: func() { checked = true },
+					Ended:   func(_ int, r Result) { ended = append(ended, r) },
+				}
+			})
+			if rep.Outcome != OutcomeComplete || rep.ExitCode() != 0 {
+				t.Fatalf("outcome %q (%s), packages %+v", rep.Outcome, rep.Reason, rep.Packages)
+			}
+			if opened != 1 || p.n.Uploads() != 2 || rep.Counts != (Counts{Published: 2}) {
+				t.Errorf("opened %d, uploads %d, counts %+v", opened, p.n.Uploads(), rep.Counts)
+			}
+			if rep.Ecosystem != "pip" || rep.Target != (TargetInfo{OS: "linux", CPU: "x86_64", Python: "3.11.2", Glibc: "2.28"}) {
+				t.Errorf("ecosystem %q, target %+v", rep.Ecosystem, rep.Target)
+			}
+			if rep.Nexus.Repository != pipRepo || rep.Archive.File != archive.PipArchiveFile || rep.ToolVersion != "0.7.0" || rep.AnalysisID != "20261120T091500Z" {
+				t.Errorf("nexus %+v, archive %+v, tool %q, analysis %q", rep.Nexus, rep.Archive, rep.ToolVersion, rep.AnalysisID)
+			}
+			if rep.ArchiveChecked == nil || !*rep.ArchiveChecked || !checked {
+				t.Errorf("archiveChecked %v, checked event %v", rep.ArchiveChecked, checked)
+			}
+			if listed.Ecosystem != "pip" || listed.Target.Python != "3.11.2" || len(listed.Packages) != 2 || listed.Packages[0].State != Pending {
+				t.Errorf("listed %+v", listed)
+			}
+			if len(ended) != 2 || ended[0].State != Published || ended[1].State != Published {
+				t.Errorf("ended %+v", ended)
+			}
+			for i, w := range p.wheels {
+				if r := rep.Packages[i]; r.Name != w.Name || r.Version != w.Version || r.File != w.File || r.State != Published {
+					t.Errorf("wheel %d: %+v", i, r)
+				}
 			}
 		})
 	}

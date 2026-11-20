@@ -1,0 +1,93 @@
+{
+  "formatVersion": 1,
+  "id": "20261120T101500Z-4e8b21c7",
+  "user": "alice",
+  "createdAt": "2026-11-20T10:15:00Z",
+  "archive": {
+    "key": "packages/pip/data-tools/packages_pip.tar.gz",
+    "etag": "\"6f1ed002ab5595859014ebf0951522d9\"",
+    "size": 81920
+  },
+  "manifest": {
+    "key": "packages/pip/data-tools/manifest.json",
+    "etag": "\"1f3870be274f6c49b3e31a0c6728957f\"",
+    "size": 1342
+  },
+  "signature": {
+    "key": "packages/pip/data-tools/manifest.json.sig",
+    "etag": "\"c4ca4238a0b923820dcc509a6f75849b\"",
+    "size": 214
+  },
+  "expectedSha256": "",
+  "attempts": [
+    {
+      "n": 1,
+      "status": "ended",
+      "queuedAt": "2026-11-20T10:15:00Z",
+      "startedAt": "2026-11-20T10:15:01Z",
+      "endedAt": "2026-11-20T10:15:09Z",
+      "outcome": "incomplete",
+      "report": {
+        "outcome": "incomplete",
+        "reason": "",
+        "unencrypted": false,
+        "importVersion": "0.7.0",
+        "archive": {
+          "file": "packages_pip.tar.gz",
+          "sha256": "8c2574892063f995fdf756bce07f46c1a5193e54cd52837ed91e32008ccf41ac",
+          "size": 81920
+        },
+        "toolVersion": "0.7.0",
+        "analysisId": "20261120T091500Z",
+        "target": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "libc": "",
+          "node": "",
+          "pnpmVer": "",
+          "python": "3.11.2",
+          "glibc": "2.28"
+        },
+        "nexus": {
+          "url": "https://nexus.example:8443",
+          "repository": "pypi-hosted"
+        },
+        "counts": {
+          "published": 1,
+          "present": 1,
+          "failed": 1
+        },
+        "packages": [
+          {
+            "name": "six",
+            "version": "1.16.0",
+            "file": "six-1.16.0-py2.py3-none-any.whl",
+            "state": "published",
+            "reason": "",
+            "note": ""
+          },
+          {
+            "name": "idna",
+            "version": "3.10",
+            "file": "idna-3.10-py3-none-any.whl",
+            "state": "present",
+            "reason": "",
+            "note": ""
+          },
+          {
+            "name": "certifi",
+            "version": "2024.8.30",
+            "file": "certifi-2024.8.30-py3-none-any.whl",
+            "state": "failed",
+            "reason": "the wheel's METADATA says \"certifi\" \"2024.8.31\", the manifest says certifi 2024.8.30",
+            "note": "",
+            "kind": "mismatch"
+          }
+        ],
+        "publicKeySha256": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "archiveChecked": true,
+        "ecosystem": "pip"
+      }
+    }
+  ]
+}

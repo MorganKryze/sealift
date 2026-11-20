@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/nexus"
 )
 
 // ErrSource marks a failure of the place the archive is read from. RunAttempt
@@ -22,6 +24,9 @@ var ErrUnsigned = errors.New("no signature file")
 
 // maxStoredReason is the longest reason a report keeps: 1,000 characters.
 const maxStoredReason = 1000
+
+// ecosystemPip is Report.Ecosystem for a pip archive.
+const ecosystemPip = string(archive.Pip)
 
 // Source is where an attempt reads the manifest, its signature and the archive. Each opener
 // returns a fresh stream; an error it marks with ErrSource is a failure of the
@@ -51,6 +56,9 @@ type Attempt struct {
 	Dir            string // absolute, existing, private; RunAttempt empties it before returning
 	Unencrypted    bool   // MinIO or the key set is plain http
 	Progress       Progress
+	// Ecosystem is the archive's folder: a manifest of another ecosystem is
+	// refused. Empty accepts either.
+	Ecosystem archive.Ecosystem
 }
 
 type publishEachFunc func(context.Context, Publisher, []Package, string, func(int, Result)) []Result
@@ -92,7 +100,21 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		return rep
 	}
 
-	m, err := readManifest(ctx, a.Source, a.Settings.PublicKey)
+	data, err := readSigned(ctx, a.Source, a.Settings.PublicKey)
+	if err != nil {
+		return stop(err)
+	}
+	eco, err := archive.ManifestEcosystem(data)
+	if err != nil {
+		return stop(err)
+	}
+	if a.Ecosystem != "" && eco != a.Ecosystem {
+		return stop(wrongFolder(eco, a.Ecosystem))
+	}
+	if eco == archive.Pip {
+		return runPip(ctx, a, newPublisher, data, &rep, stop)
+	}
+	m, err := archive.ParseManifest(data)
 	if err != nil {
 		return stop(err)
 	}
@@ -171,23 +193,35 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 	return rep
 }
 
-// readManifest reads the manifest once, whole, then the signature file, checks
-// the signature over those bytes and only then parses them, so no untrusted
-// JSON is parsed before it is authenticated and a read cut short is a failure
-// of the source, never a refusal of the manifest.
-func readManifest(ctx context.Context, src Source, trusted ed25519.PublicKey) (archive.Manifest, error) {
+// readSigned reads the manifest once, whole, then the signature file, and
+// returns the manifest's bytes once the signature over them checks, so no
+// untrusted JSON is parsed before it is authenticated and a read cut short is
+// a failure of the source, never a refusal of the manifest.
+func readSigned(ctx context.Context, src Source, trusted ed25519.PublicKey) ([]byte, error) {
 	data, err := readAll(ctx, src.Manifest, archive.ReadManifest)
 	if err != nil {
-		return archive.Manifest{}, err
+		return nil, err
 	}
 	sig, err := readSignature(ctx, src)
 	if err != nil {
-		return archive.Manifest{}, err
+		return nil, err
 	}
 	if err := archive.CheckSignature(data, sig, trusted); err != nil {
-		return archive.Manifest{}, err
+		return nil, err
 	}
-	return archive.ParseManifest(data)
+	return data, nil
+}
+
+// wrongFolder refuses a manifest of ecosystem got found in a folder that takes want.
+func wrongFolder(got, want archive.Ecosystem) error {
+	article := func(e archive.Ecosystem) string {
+		if e == archive.NPM {
+			return "an"
+		}
+		return "a"
+	}
+	return &archive.Refusal{Reason: fmt.Sprintf("the manifest describes %s %s archive, and this folder takes %s archives: move the three files to packages/%s/",
+		article(got), got, want, got)}
 }
 
 func readSignature(ctx context.Context, src Source) ([]byte, error) {
@@ -241,6 +275,129 @@ func verify(ctx context.Context, a Attempt, m archive.Manifest) ([]archive.Check
 	}
 	defer rc.Close()
 	return archive.Verify(ctxReader{ctx, rc}, m, archive.VerifyOptions{
+		ExpectedSHA256: a.ExpectedSHA256,
+		Dir:            a.Dir,
+	})
+}
+
+// runPip goes on with a pip manifest whose signature checked. rep is the
+// attempt's report, the one stop fills. The settings and the repository are
+// checked before the archive is read, so a deployment that cannot take wheels
+// refuses the archive without reading it.
+func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), data []byte, rep *Report, stop func(error) Report) Report {
+	rep.Ecosystem = ecosystemPip
+	rep.Nexus.Repository = ""
+	if a.Settings.Pip != nil {
+		rep.Nexus.Repository = a.Settings.Pip.Repository
+	}
+	m, err := archive.ParsePipManifest(data)
+	if err != nil {
+		return stop(err)
+	}
+	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
+	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Python: m.Target.Python, Glibc: m.Target.Glibc}
+	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
+
+	listed := make([]Result, len(m.Packages))
+	for i, w := range m.Packages {
+		listed[i] = Result{Name: w.Name, Version: w.Version, File: w.File, State: Pending}
+	}
+	if a.Progress.Listed != nil {
+		snap := *rep
+		snap.Outcome, snap.Reason = "", ""
+		snap.Packages = append([]Result(nil), listed...)
+		snap.ArchiveChecked = ptr(false)
+		a.Progress.Listed(snap)
+	}
+	ended := func(i int, r Result) Result {
+		r.Reason = cut(r.Reason)
+		if a.Progress.Ended != nil {
+			a.Progress.Ended(i, r)
+		}
+		return r
+	}
+	// failAll ends every listed wheel with one reason, or as interrupted
+	// once ctx is done.
+	failAll := func(kind Kind, reason string) Report {
+		rep.Outcome, rep.Reason = OutcomeIncomplete, ""
+		rep.Packages = make([]Result, len(listed))
+		for i, r := range listed {
+			rep.Packages[i] = ended(i, failedOr(ctx, Package{Name: r.Name, Version: r.Version, File: r.File}, kind, reason))
+		}
+		rep.Counts = Counts{Failed: len(listed)}
+		return *rep
+	}
+
+	settings, err := a.Settings.ForPip()
+	if err != nil {
+		rep.Reason = err.Error()
+		return *rep
+	}
+	pub, err := newPublisher(settings)
+	if err != nil {
+		return failAll(KindLocal, "could not set up the nexus client: "+err.Error())
+	}
+	// A repository Nexus does not list as pypi hosted is the settings'
+	// fault and refuses the archive; an unreachable Nexus or refused
+	// credentials leave the import to retry.
+	if err := pub.CheckRepository(ctx); err != nil {
+		if ctx.Err() == nil && errors.Is(err, nexus.ErrRepository) {
+			rep.Reason = cut(err.Error())
+			return *rep
+		}
+		return failAll(KindNexus, "repository check failed: "+err.Error())
+	}
+
+	checked, err := verifyPip(ctx, a, m)
+	var ref *archive.Refusal
+	switch {
+	case err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()):
+		return failAll(KindInterrupted, reasonInterrupted)
+	case errors.As(err, &ref):
+		rep.Reason = cut(ref.Reason)
+		return *rep
+	case errors.Is(err, ErrSource):
+		return failAll(KindSource, clean(err.Error()))
+	case err != nil:
+		rep.Reason = cut("could not check the archive: " + err.Error())
+		return *rep
+	}
+	*rep.ArchiveChecked = true
+	if a.Progress.Checked != nil {
+		a.Progress.Checked()
+	}
+	wheels := make([]Package, len(checked))
+	for i, c := range checked {
+		wheels[i] = Package{Name: c.Wheel.Name, Version: c.Wheel.Version, File: c.Wheel.File, Path: c.Path, SHA512: c.SHA512}
+	}
+	// PublishWheels hashes the Nexus copies as they arrive, so it needs no directory.
+	rep.Packages = PublishWheels(ctx, pub, wheels, "", func(i int, r Result) { ended(i, r) })
+	rep.Counts = Counts{}
+	for i, r := range rep.Packages {
+		rep.Packages[i].Reason = cut(r.Reason)
+		switch r.State {
+		case Published:
+			rep.Counts.Published++
+		case Present:
+			rep.Counts.Present++
+		default:
+			rep.Counts.Failed++
+		}
+	}
+	rep.Outcome = OutcomeComplete
+	if rep.Counts.Failed > 0 {
+		rep.Outcome = OutcomeIncomplete
+	}
+	return *rep
+}
+
+func verifyPip(ctx context.Context, a Attempt, m archive.PipManifest) ([]archive.CheckedWheel, error) {
+	rc, err := a.Source.Archive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return archive.VerifyPip(ctxReader{ctx, rc}, m, archive.VerifyOptions{
 		ExpectedSHA256: a.ExpectedSHA256,
 		Dir:            a.Dir,
 	})

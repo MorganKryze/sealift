@@ -220,3 +220,64 @@ func TestReportNamesTheTrustedKey(t *testing.T) {
 		}
 	})
 }
+
+func TestWriteTextPipTarget(t *testing.T) {
+	rep := Report{
+		Outcome: OutcomeComplete, ImportVersion: "0.7.0", Ecosystem: "pip",
+		Archive:     ArchiveInfo{File: "packages_pip.tar.gz"},
+		ToolVersion: "0.7.0", AnalysisID: "20261120T091500Z",
+		Target:   TargetInfo{OS: "linux", CPU: "x86_64", Python: "3.11.2", Glibc: "2.28"},
+		Nexus:    NexusInfo{URL: "https://nexus.example:8443", Repository: "pypi-hosted"},
+		Counts:   Counts{Published: 1},
+		Packages: []Result{{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", State: Published}},
+	}
+	var text bytes.Buffer
+	if err := rep.WriteText(&text); err != nil {
+		t.Fatal(err)
+	}
+	want := "\nmanifest: sealift 0.7.0, analysis 20261120T091500Z, target linux x86_64, python 3.11.2, glibc 2.28\n"
+	if !strings.Contains("\n"+text.String(), want) {
+		t.Errorf("text has no line %q:\n%s", strings.TrimSpace(want), text.String())
+	}
+	for _, npmOnly := range []string{"node ", "pnpm "} {
+		if strings.Contains(text.String(), npmOnly) {
+			t.Errorf("a pip report prints %q:\n%s", npmOnly, text.String())
+		}
+	}
+	if !strings.Contains(text.String(), "\nsix@1.16.0 published six-1.16.0-py2.py3-none-any.whl\n") {
+		t.Errorf("text has no wheel line:\n%s", text.String())
+	}
+}
+
+func TestReportJSONKeysByEcosystem(t *testing.T) {
+	pipKeys := []string{`"ecosystem":`, `"python":`, `"glibc":`}
+	t.Run("npm report has no pip key", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		rep := r.run(t)
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		b, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// "glibc" alone would match the npm value of libc.
+		for _, k := range pipKeys {
+			if bytes.Contains(b, []byte(k)) {
+				t.Errorf("npm report holds %s: %s", k, b)
+			}
+		}
+	})
+	t.Run("pip report has every pip key", func(t *testing.T) {
+		b, err := json.Marshal(Report{Ecosystem: "pip", Target: TargetInfo{OS: "linux", CPU: "x86_64", Python: "3.11.2", Glibc: "2.28"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{`"ecosystem":"pip"`, `"python":"3.11.2"`, `"glibc":"2.28"`} {
+			if !bytes.Contains(b, []byte(k)) {
+				t.Errorf("pip report lacks %s: %s", k, b)
+			}
+		}
+	})
+}

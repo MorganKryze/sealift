@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `sealift import` publishes a pip archive to the pypi hosted repository that `nexus.pip` names. It checks each wheel's signed digests, its `METADATA` and its file name, uploads only the wheels Nexus lacks, and reads each upload back. Without `nexus.pip` in the settings, it refuses a pip archive before reading it. [Archive format](docs/dev/archive-format.md#importing-a-pip-archive) describes the checks and the report.
+
 ## [0.6.2] - 2026-11-19
 
 ### Added
