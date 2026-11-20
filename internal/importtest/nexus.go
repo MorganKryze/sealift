@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -213,7 +214,7 @@ func (n *PyPINexus) page(w http.ResponseWriter, project, path string) {
 		return
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "<!DOCTYPE html>\n<html lang=\"en\">\n<head><title>Links for %s</title>\n  <meta name=\"api-version\" value=\"2\"/>\n</head>\n<body><h1>Links for %s</h1>\n", project, project)
+	fmt.Fprintf(&b, "<!DOCTYPE html>\n<html lang=\"en\">\n<head><title>Links for %s</title>\n  <meta name=\"api-version\" value=\"2\"/>\n</head>\n<body><h1>Links for %s</h1>\n", html.EscapeString(project), html.EscapeString(project))
 	for _, file := range files {
 		if n.omitted[file] {
 			continue
@@ -228,7 +229,7 @@ func (n *PyPINexus) page(w http.ResponseWriter, project, path string) {
 			href = "../../packages/" + project + "/" + version + "/" + file + "#sha256=" + hex.EncodeToString(sum[:])
 		}
 		fmt.Fprintf(&b, "    <a href=\"%s\"\n       rel=\"internal\"\n       data-core-metadata=\"sha256=%s\"\n       data-requires-python=\"&gt;=3.7\"\n       data-dist-info-metadata=\"sha256=%s\">\n      %s\n    </a><br/>\n",
-			href, hex.EncodeToString(sum[:]), hex.EncodeToString(sum[:]), file)
+			html.EscapeString(href), hex.EncodeToString(sum[:]), hex.EncodeToString(sum[:]), html.EscapeString(file))
 	}
 	b.WriteString("</body>\n</html>\n")
 	w.Header().Set("Content-Type", "text/html;charset=utf-8")
