@@ -416,7 +416,7 @@ type Target struct {
 	PnpmVer string `json:"pnpmVer"`
 }
 
-// ToolsState Installed and available pnpm and Trivy versions, and the DB date.
+// ToolsState Installed and available pnpm, uv and Trivy versions, and the DB date.
 type ToolsState struct {
 	// LatestSizeBytes Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable
 	LatestSizeBytes int `json:"latestSizeBytes"`
@@ -437,6 +437,9 @@ type ToolsState struct {
 
 	// TrivyRecommended Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age
 	TrivyRecommended *string `json:"trivyRecommended,omitempty"`
+
+	// UvInstalled The uv versions installed on the data volume, sorted
+	UvInstalled *[]string `json:"uvInstalled,omitempty"`
 }
 
 // Vector CVE counts by severity, critical to unknown
@@ -492,6 +495,15 @@ type UpdateTrivyJSONBody struct {
 	Version *string `json:"version,omitempty"`
 }
 
+// InstallUvJSONBody defines parameters for InstallUv.
+type InstallUvJSONBody struct {
+	// Force Install the release even when it is younger than the minimum release age
+	Force *bool `json:"force,omitempty"`
+
+	// Version The uv release to install, such as 0.13.7
+	Version string `json:"version"`
+}
+
 // CreateProjectMultipartRequestBody defines body for CreateProject for multipart/form-data ContentType.
 type CreateProjectMultipartRequestBody CreateProjectMultipartBody
 
@@ -512,6 +524,9 @@ type ActivateTrivyJSONRequestBody ActivateTrivyJSONBody
 
 // UpdateTrivyJSONRequestBody defines body for UpdateTrivy for application/json ContentType.
 type UpdateTrivyJSONRequestBody UpdateTrivyJSONBody
+
+// InstallUvJSONRequestBody defines body for InstallUv for application/json ContentType.
+type InstallUvJSONRequestBody InstallUvJSONBody
 
 // AsStepData returns the union data inside the Event_Data as a StepData
 func (t Event_Data) AsStepData() (StepData, error) {
@@ -733,6 +748,9 @@ type ServerInterface interface {
 	// UpdateTrivy Install a new Trivy release
 	// (POST /tools/trivy/update)
 	UpdateTrivy(w http.ResponseWriter, r *http.Request)
+	// InstallUv Install a uv release from the package index
+	// (POST /tools/uv/install)
+	InstallUv(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1385,6 +1403,20 @@ func (siw *ServerInterfaceWrapper) UpdateTrivy(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// InstallUv operation middleware
+func (siw *ServerInterfaceWrapper) InstallUv(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.InstallUv(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1530,6 +1562,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetTools)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/update", wrapper.UpdateTrivy)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/activate", wrapper.ActivateTrivy)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/uv/install", wrapper.InstallUv)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/db/update", wrapper.UpdateTrivyDB)
 
 	return m
@@ -2601,6 +2634,45 @@ func (response UpdateTrivydefaultApplicationProblemPlusJSONResponse) VisitUpdate
 	return err
 }
 
+type InstallUvRequestObject struct {
+	Body *InstallUvJSONRequestBody
+}
+
+type InstallUvResponseObject interface {
+	VisitInstallUvResponse(w http.ResponseWriter) error
+}
+
+type InstallUv200JSONResponse ToolsState
+
+func (response InstallUv200JSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type InstallUvdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response InstallUvdefaultApplicationProblemPlusJSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetInstance How this instance was deployed
@@ -2681,6 +2753,9 @@ type StrictServerInterface interface {
 	// UpdateTrivy Install a new Trivy release
 	// (POST /tools/trivy/update)
 	UpdateTrivy(ctx context.Context, request UpdateTrivyRequestObject) (UpdateTrivyResponseObject, error)
+	// InstallUv Install a uv release from the package index
+	// (POST /tools/uv/install)
+	InstallUv(ctx context.Context, request InstallUvRequestObject) (InstallUvResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3428,6 +3503,37 @@ func (sh *strictHandler) UpdateTrivy(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateTrivyResponseObject); ok {
 		if err := validResponse.VisitUpdateTrivyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// InstallUv operation middleware
+func (sh *strictHandler) InstallUv(w http.ResponseWriter, r *http.Request) {
+	var request InstallUvRequestObject
+
+	var body InstallUvJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.InstallUv(ctx, request.(InstallUvRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "InstallUv")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(InstallUvResponseObject); ok {
+		if err := validResponse.VisitInstallUvResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

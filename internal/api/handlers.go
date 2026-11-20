@@ -60,7 +60,7 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion):
+	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion), errors.Is(err, tools.ErrInvalidUvVersion):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict

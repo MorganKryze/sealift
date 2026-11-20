@@ -530,6 +530,36 @@ paths:
                 $ref: "#/components/schemas/ToolsState"
         default:
           $ref: "#/components/responses/Problem"
+  /tools/uv/install:
+    post:
+      operationId: installUv
+      tags:
+        - tools
+      summary: Install a uv release from the package index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - version
+              properties:
+                version:
+                  type: string
+                  description: The uv release to install, such as 0.13.7
+                force:
+                  type: boolean
+                  description: Install the release even when it is younger than the minimum release age
+      responses:
+        "200":
+          description: Tools state after the install
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
   /tools/trivy/db/update:
     post:
       operationId: updateTrivyDB
@@ -1015,10 +1045,15 @@ components:
         - createdAt
     ToolsState:
       type: object
-      description: Installed and available pnpm and Trivy versions, and the DB date.
+      description: Installed and available pnpm, uv and Trivy versions, and the DB date.
       properties:
         pnpmInstalled:
           type: array
+          items:
+            type: string
+        uvInstalled:
+          type: array
+          description: The uv versions installed on the data volume, sorted
           items:
             type: string
         trivyActive:

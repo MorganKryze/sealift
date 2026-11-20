@@ -389,6 +389,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tools/uv/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install a uv release from the package index */
+        post: operations["installUv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tools/trivy/db/update": {
         parameters: {
             query?: never;
@@ -634,9 +651,11 @@ export interface components {
             files?: string[];
             failure?: components["schemas"]["Failure"];
         };
-        /** @description Installed and available pnpm and Trivy versions, and the DB date. */
+        /** @description Installed and available pnpm, uv and Trivy versions, and the DB date. */
         ToolsState: {
             pnpmInstalled: string[];
+            /** @description The uv versions installed on the data volume, sorted */
+            uvInstalled?: string[];
             trivyActive: string;
             trivyInstalled: string[];
             trivyLatest: string;
@@ -1327,6 +1346,36 @@ export interface operations {
         };
         responses: {
             /** @description Tools state after the activation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolsState"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    installUv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description The uv release to install, such as 0.13.7 */
+                    version: string;
+                    /** @description Install the release even when it is younger than the minimum release age */
+                    force?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Tools state after the install */
             200: {
                 headers: {
                     [name: string]: unknown;

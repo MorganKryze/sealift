@@ -10,10 +10,11 @@ import { defineConfig } from "vitest/config"
 // port while the default 8080 stays running for other work.
 const apiTarget = process.env.SEALIFT_API ?? "http://127.0.0.1:8080"
 
-const apiProxy = {
+// The proxy leaves the browser's Host as it came: the tool installs refuse a
+// request whose Origin does not name the Host they receive.
+export const apiProxy = {
   "/api": {
     target: apiTarget,
-    changeOrigin: true,
   },
 }
 
@@ -39,7 +40,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     // tests/ holds the browser gate, which runs under Playwright.
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "vite.config.test.ts"],
     setupFiles: ["./src/test/setup.ts"],
     globals: true,
     passWithNoTests: true,

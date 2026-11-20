@@ -8,11 +8,14 @@ import (
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
-// toolsStateToAPI converts a tools.TrivyState, the installed pnpm versions
-// and the current readiness for a response.
-func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, missing []string) ToolsState {
+// toolsStateToAPI converts a tools.TrivyState, the installed pnpm and uv
+// versions and the current readiness for a response.
+func toolsStateToAPI(s tools.TrivyState, pnpmInstalled, uvInstalled []string, ready bool, missing []string) ToolsState {
 	if pnpmInstalled == nil {
 		pnpmInstalled = []string{}
+	}
+	if uvInstalled == nil {
+		uvInstalled = []string{}
 	}
 	trivyInstalled := s.Installed
 	if trivyInstalled == nil {
@@ -23,6 +26,7 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, mis
 	}
 	state := ToolsState{
 		PnpmInstalled:   pnpmInstalled,
+		UvInstalled:     &uvInstalled,
 		TrivyActive:     s.Active,
 		TrivyInstalled:  trivyInstalled,
 		TrivyLatest:     s.Latest,
@@ -38,9 +42,9 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled []string, ready bool, mis
 	return state
 }
 
-// currentToolsState reads the installed and available pnpm and Trivy
+// currentToolsState reads the installed and available pnpm, uv and Trivy
 // versions, and the current readiness, shared by every tools operation's
-// response.
+// response. It asks nothing of the package index.
 func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	trivyState, err := h.Tools.TrivyState(ctx)
 	if err != nil {
@@ -50,8 +54,12 @@ func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	if err != nil {
 		return ToolsState{}, err
 	}
+	uvInstalled, err := h.Tools.InstalledUv()
+	if err != nil {
+		return ToolsState{}, err
+	}
 	ready, missing := h.Tools.Ready()
-	return toolsStateToAPI(trivyState, pnpmInstalled, ready, missing), nil
+	return toolsStateToAPI(trivyState, pnpmInstalled, uvInstalled, ready, missing), nil
 }
 
 // GetTools returns installed and available tool versions and the
@@ -98,6 +106,23 @@ func (h *Handlers) UpdateTrivy(ctx context.Context, req UpdateTrivyRequestObject
 		return UpdateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("update trivy", err)), nil
 	}
 	return UpdateTrivy200JSONResponse(state), nil
+}
+
+// InstallUv installs a uv release from the package index, refusing one
+// younger than the minimum release age unless the request forces it.
+func (h *Handlers) InstallUv(ctx context.Context, req InstallUvRequestObject) (InstallUvResponseObject, error) {
+	if req.Body == nil {
+		return InstallUvdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "install uv", errors.New("a version body is required"))), nil
+	}
+	force := req.Body.Force != nil && *req.Body.Force
+	if _, err := h.Tools.EnsureUv(ctx, req.Body.Version, force); err != nil {
+		return InstallUvdefaultApplicationProblemPlusJSONResponse(autoProblem("install uv", err)), nil
+	}
+	state, err := h.currentToolsState(ctx)
+	if err != nil {
+		return InstallUvdefaultApplicationProblemPlusJSONResponse(autoProblem("install uv", err)), nil
+	}
+	return InstallUv200JSONResponse(state), nil
 }
 
 // UpdateTrivyDB forces a vulnerability database download.

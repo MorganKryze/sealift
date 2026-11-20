@@ -180,9 +180,16 @@ var onQueueReady func(*jobs.Queue)
 // address must be https, or http on a loopback host for the browser gate. The
 // error never repeats the value, which could carry credentials.
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
+// SEALIFT_PIP_INDEX names the package index uv comes from, under
+// tools.ParseIndexURL's rules.
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
+	index, err := tools.ParseIndexURL(os.Getenv("SEALIFT_PIP_INDEX"))
+	if err != nil {
+		return nil, fmt.Errorf("SEALIFT_PIP_INDEX: %w", err)
+	}
+	m.PipIndex = index
 	raw := os.Getenv("SEALIFT_GITHUB_API")
 	if raw == "" {
 		return m, nil
