@@ -20,15 +20,19 @@ func platformOfPip(t store.PipTarget) pip.Platform {
 	return pip.Platform{Python: t.Python, OS: t.OS, CPU: t.CPU, Glibc: t.Glibc}
 }
 
-// stepCheckPins reads the index page of every pin the target installs and
-// refuses the analysis, before uv runs, when one of them has no wheel the
-// target can install or none its hashes list. uv stops at the first such
-// package, so sealift names them all itself.
+// stepCheckPins reads the index page of every requirement the target
+// installs and refuses the analysis, before uv runs, when one of them has
+// no wheel the target can install or none its hashes list. uv stops at the
+// first such package, so sealift names them all itself. A constraint is
+// left to choose-wheels: it installs only when something requires it.
 func (r *pipRun) stepCheckPins() error {
 	return r.runStep("check-pins", func() error {
 		r.pins = r.targetPins()
 		var pkgs []runner.Resolved
 		for _, p := range r.pins {
+			if p.Constraint {
+				continue
+			}
 			if !slices.ContainsFunc(pkgs, func(q runner.Resolved) bool { return q.Name == p.Key }) {
 				pkgs = append(pkgs, runner.Resolved{Name: p.Key, Version: p.Version})
 			}

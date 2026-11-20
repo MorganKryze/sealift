@@ -241,6 +241,43 @@ func TestChooseWheelsNamesEveryBlockedPackage(t *testing.T) {
 	}
 }
 
+// A constraint limits a package only when something requires it, and a
+// marker can leave a requirement out for the target: neither is installed,
+// so neither needs a wheel.
+func TestCheckPinsSkipsPinsTheTargetDoesNotInstall(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []store.RequirementsFile
+	}{
+		{"a constraint nothing requires", []store.RequirementsFile{
+			reqFile("requirements.txt", "requests==2.32.3\n-c constraints.txt\n"),
+			reqFile("constraints.txt", "pywin32==306\n"),
+		}},
+		{"a requirement marked for another platform", []store.RequirementsFile{
+			reqFile("requirements.txt", "requests==2.32.3\npywin32==306 ; sys_platform == \"win32\"\n"),
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ix := piptest.NewIndex(t)
+			ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
+			ix.Add(piptest.Dist{Name: "pywin32", Version: "306", Tag: "cp311-cp311-win_amd64"})
+			a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, c.files...)
+			a.Uv = &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3")}
+
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if status, _ := readStatus(t, st, a); status.State != store.Done {
+				t.Errorf("state = %q, want done", status.State)
+			}
+			if n := ix.Requests("/simple/pywin32/"); n != 0 {
+				t.Errorf("the pywin32 page was read %d times, want 0: the target never installs it", n)
+			}
+		})
+	}
+}
+
 func TestPipAnalysisRecordsOneWheelPerPackage(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	// The generic wheel comes first on the page, so taking the first file
