@@ -61,7 +61,7 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
    docker compose run --rm mc cp /transfer/packages_npm.tar.gz /transfer/manifest.json /transfer/manifest.json.sig lab/user-alice/packages/npm/
    ```
 
-4. Import. The service imports the archive from the user's folder; `sealift import` imports one from a local file. Both read `import/settings.yaml`, which points at Nexus as the `sealift-import` user that `setup.sh` creates with the privileges to read, browse, add and edit in the `npm` repository and to upload components, and no others. `publicKeyFile` names `import/public-key.pem`, the file step 1 writes.
+4. Import. The service imports the archive from the user's folder; `sealift import` imports one from a local file. Both read `import/settings.yaml`, which points at Nexus as the `sealift-import` user that `setup.sh` creates with the privileges to read, browse, add and edit in the `npm` and `pypi` repositories and to upload components, and no others. `publicKeyFile` names `import/public-key.pem`, the file step 1 writes.
 
    Through the screens, open Archives, press `Start` on the archive's row, optionally paste its sha256 and press `Start the import`. The import page follows it: `Queued`, `Running` with its stages in place, then `Complete`, `Incomplete`, `Interrupted` or `Refused`. Through the API, start the import and follow it. The archive, `manifest.json` and `manifest.json.sig` must sit together in the user's folder, as step 3 leaves them:
 
@@ -122,6 +122,85 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
 
 A crossing passes when the sha256 of the key matches on both sides, step 2 matches, step 4 reports no `failed`, and step 5 installs every selected version. With a planted conflict, step 4 fails that one package and step 5 installs the rest.
 
+## Cross the gap with pip
+
+A pip archive crosses the same way: `packages_pip.tar.gz`, `manifest.json` and `manifest.json.sig` go together into the user's `packages/pip/` folder, and the import publishes each wheel to the `pypi` repository that `nexus.pip.repository` names in `import/settings.yaml`. The published 0.6.2 image has no pip import, so start `import-server` and run `import` with `SEALIFT_IMAGE=sealift:dev` after `just image`.
+
+Until the connected side exports pip, a test packs a lab archive from wheels you fetch yourself, signed with a key made for the run:
+
+```sh
+# from the repository root, with .whl files for linux x86_64 and CPython 3.11 in <dir>
+SEALIFT_LAB_PIP_WHEELS=<dir> SEALIFT_LAB_PIP_OUT=$PWD/lab/transfer/pip-lab \
+  go test -count=1 -run TestPackLabPipArchive ./internal/importtest/
+```
+
+`SEALIFT_LAB_PIP_OUT` takes an absolute path: `go test` runs in the package's directory. The test writes the three files and the run's `public-key.pem` there, and prints its sha256. The manifest's target is Python 3.11.2 on linux x86_64 with glibc 2.28. Copy `import/public-key.pem` aside, put `transfer/pip-lab/public-key.pem` in its place, and start the lab. To go back to the connected sealift's key afterwards, copy yours back or run `node scripts/carry-key.mjs`, then restart `import-server`.
+
+Steps 3 to 5 of [Cross the gap](#cross-the-gap) then read:
+
+3. Upload the three files into a folder of `packages/pip/`. A folder holds one archive:
+
+   ```sh
+   docker compose run --rm mc cp /transfer/pip-lab/packages_pip.tar.gz /transfer/pip-lab/manifest.json /transfer/pip-lab/manifest.json.sig lab/user-alice/packages/pip/lab-run/
+   ```
+
+   The archive list reads each manifest and marks an archive filed under the wrong folder as not importable: an npm archive under `packages/pip/` reads `its manifest is an npm archive's: keep the three files under packages/npm/`.
+
+4. Import through the screens or the API, with the archive's key:
+
+   ```sh
+   curl -X POST -H "Cookie: $cookie" -H 'Content-Type: application/json' \
+     -d '{"archive":"packages/pip/lab-run/packages_pip.tar.gz"}' http://localhost:18440/api/imports
+   ```
+
+   Or from a local file with the command line:
+
+   ```sh
+   SEALIFT_IMAGE=sealift:dev docker compose run --rm import sealift import -settings /import/settings.yaml -report /transfer/pip-lab/report.json /transfer/pip-lab/packages_pip.tar.gz
+   ```
+
+   Each wheel is `published`, `present` when Nexus serves the same file name with the same bytes, or `failed` with the reason. With settings that have no `nexus.pip` section, `sealift import` refuses a pip archive, exit 3, before it uploads anything.
+
+   To see a conflict, add one entry to a copy of a wheel the archive holds, keep its file name, and upload it as admin. Delete the component first when an import already published it:
+
+   ```sh
+   zip six-1.16.0-py2.py3-none-any.whl planted.txt
+   printf 'user = "admin:lab-admin-password"\n' | curl -K - -F pypi.asset=@six-1.16.0-py2.py3-none-any.whl "http://127.0.0.1:18441/service/rest/v1/components?repository=pypi"
+   ```
+
+   The import then fails that wheel, kind `conflict`, with both sha512, and the others go on. Delete the planted component and run it again: it publishes that one wheel. `GET /service/rest/v1/components?repository=pypi` as admin gives each component's id, and `DELETE /service/rest/v1/components/<id>` removes it.
+
+5. Download each wheel from Nexus in `pip-shell`, which runs linux x86_64 with CPython 3.11, the platform of the manifest's target, and compare its sha256 with the one in `manifest.json`:
+
+   ```sh
+   docker compose run --rm pip-shell sh -c 'pip download --no-deps --only-binary :all: --trusted-host nexus \
+     --index-url http://nexus:8081/repository/pypi/simple/ -d /tmp/w <name>==<version> ... && sha256sum /tmp/w/*'
+   ```
+
+   pip uses an index served over plain HTTP only for a trusted host, and the lab's Nexus has no TLS on the air-gapped network. `pip-shell` mounts `transfer/` and `scripts/` as `airgap-shell` does.
+
+### Prove the pypi upload path
+
+`sh scripts/pypi-proof.sh`, run from `lab/` after `setup.sh`, checks the calls the pip import makes on Nexus as `sealift-import`. It fetches four public wheels from files.pythonhosted.org with their sha256 checked. For three of them it reads the repository list, reads the project's simple page before the upload, uploads through the components API with the `pypi.asset` field, reads the page and the linked file back, posts the same file again, and downloads the wheel with pip in `pip-shell`. It then removes each privilege of the role in turn, uploads the fourth wheel, names the call that breaks and restores the role. Last, it deletes its components. It prints one Markdown table row per check and exits 1 when a check fails. Credentials reach `curl` on stdin.
+
+On commit ee12d3d, the proof showed on Nexus 3.96.5:
+
+- The upload answers 204. The simple page lists the file in the same second, with a relative link ending in `#sha256=` and the file's sha256, and the link gives the uploaded bytes.
+- The same file posted again answers 409: a repository that allows one write never overwrites.
+- Without `nx-repository-view-pypi-pypi-browse`, the repository list omits `pypi`. Without `nx-repository-view-pypi-pypi-read`, the page and the file answer 403. Without `nx-repository-view-pypi-pypi-edit`, the upload answers 400 `Not authorized for requested path`. Without `nx-repository-view-pypi-pypi-add` or without `nx-component-upload`, every call the import makes still passes. The role keeps both.
+
+### What the lab showed for pip
+
+On commit fa8b14e, with the image built by `just image` and an archive of five public wheels (six 1.16.0, mypy_extensions 1.0.0, MarkupSafe 2.1.5 for cp311 manylinux x86_64, idna 3.6 and attrs 23.2.0), the lab showed:
+
+- `sealift import` ended `complete`, exit 0, with the five wheels `published`. A second run gave five `present`.
+- With a six wheel holding one extra entry uploaded as admin under the same file name, the run ended `incomplete`, exit 1: six `failed`, kind `conflict`, `nexus holds this file with other bytes` with the shipped and Nexus sha512, and the four others `present`. After that component was deleted, the next run published six alone.
+- With `nexus.pip` removed from a copy of the settings, the run was refused, exit 3, with `the settings name no pip repository: set nexus.pip.repository`.
+- Through the gateway as `alice`, the archive in `packages/pip/lab-run/` was listed importable. The import started through the API ended `complete` with five `published`, Python 3.11.2 and glibc 2.28 in its report, and the service removed the archive, the manifest and the signature from MinIO.
+- An npm archive's three files under `packages/pip/` were listed not importable with `its manifest is an npm archive's: keep the three files under packages/npm/`.
+- `bob` saw none of `alice`'s archives or imports, and `GET /api/imports/<id>` of `alice`'s import answered 404.
+- In `pip-shell`, `pip download` of each of the five wheels from the `pypi` repository gave the sha256 of the file fetched from files.pythonhosted.org.
+
 ## Check a gateway that forwards another header
 
 Some gateways pass the access token in a header other than `X-Access-Token`. The service reads the one header `token.header` names and no other. The lab's gateway sends the token in both `X-Access-Token` and `X-Auth-Request-Access-Token`, so the lab can run the service on the second.
@@ -174,5 +253,4 @@ docker compose down -v   # deletes Nexus, MinIO, import and sealift data
 
 ## Not here yet
 
-- pip: the `pypi` repository and the `packages/pip/` folders exist, but no step publishes to them.
-- Harbor, for container images.
+Harbor, for container images.
