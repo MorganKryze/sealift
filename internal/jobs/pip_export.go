@@ -5,23 +5,34 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/pip"
 )
+
+// ErrPipSelection reports a selection sent for a pip export.
+var ErrPipSelection = errors.New("jobs: a pip export carries the analysis's whole set and takes no selection")
+
+// ErrPipNotExportable reports a pip analysis whose result is unreadable or
+// lists a package with no wheel.
+var ErrPipNotExportable = errors.New("jobs: the pip analysis has no wheel for every package")
 
 // PipAnalysisRef points a pip export at the analysis it exports.
 type PipAnalysisRef struct {
@@ -41,6 +52,69 @@ type PipExport struct {
 	Settings store.Settings
 	Analysis PipAnalysisRef
 	Dir, ID  string
+
+	beforeArchive func() // a test's hook between the download and archive steps
+}
+
+// Kind names the job for the queue.
+func (e *PipExport) Kind() string { return "export" }
+
+// StoreID names the job by its store directory id, which the client uses.
+func (e *PipExport) StoreID() string { return e.ID }
+
+// Run packs the analysis's wheels: package-list, download, archive and
+// reports. A failed or cancelled run keeps only status.json, as Export's
+// does; a done run leaves its directory for Service to commit.
+func (e *PipExport) Run(ctx context.Context, emit func(Event)) (err error) {
+	var steps []stepRecord
+	record := func(ev Event) {
+		if ev.Kind == "step" {
+			var d stepData
+			if json.Unmarshal(ev.Data, &d) == nil {
+				steps = append(steps, stepRecord{Name: d.Name, State: string(d.State), DurationMs: d.DurationMs, Error: d.Error})
+			}
+		}
+		emit(ev)
+	}
+	defer func() {
+		if err != nil {
+			e.failed(ctx, steps)
+		}
+	}()
+
+	// One key signs the whole export, whatever a regenerate does meanwhile.
+	key := e.Store.SigningKey()
+
+	pkgs, err := e.packageList(record)
+	if err != nil {
+		return err
+	}
+	wheels, err := e.downloadAll(ctx, record, pkgs)
+	if err != nil {
+		return err
+	}
+	if e.beforeArchive != nil {
+		e.beforeArchive()
+	}
+	arch, err := e.writeArchive(ctx, record, wheels)
+	if err != nil {
+		return err
+	}
+	if err := e.writeReports(ctx, record, wheels, arch, key); err != nil {
+		return err
+	}
+	return e.pruneWorkingFiles()
+}
+
+// pruneWorkingFiles removes what the export wrote on its way and does not
+// keep: the downloads directory and the scan input.
+func (e *PipExport) pruneWorkingFiles() error {
+	for _, name := range []string{"downloads", "export.cdx-input.json"} {
+		if err := os.RemoveAll(filepath.Join(e.Dir, name)); err != nil {
+			return fmt.Errorf("jobs: remove %s: %w", name, withoutPath(err))
+		}
+	}
+	return nil
 }
 
 // pipWheelFile is one wheel of the set, in the wheel cache.
@@ -274,6 +348,159 @@ func checkCachedWheel(path string, w PipWheel) (string, bool, error) {
 func removeCacheEntry(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	return nil
+}
+
+// writeArchive is the third step: packages_pip.tar.gz with every wheel
+// under out/. Each wheel is hashed again while it enters the archive, so
+// a cache entry changed after its download fails the step.
+func (e *PipExport) writeArchive(ctx context.Context, emit func(Event), wheels []pipWheelFile) (report.ArchiveManifest, error) {
+	start := time.Now()
+	emitStep(emit, "archive", store.Running, 0)
+	fail := func(err error) (report.ArchiveManifest, error) {
+		emitFailedStep(emit, "archive", time.Since(start), err)
+		return report.ArchiveManifest{}, err
+	}
+
+	entries := make([]archive.Entry, 0, len(wheels))
+	for _, w := range wheels {
+		entries = append(entries, archive.Entry{
+			Name: w.Wheel.File,
+			Size: w.Wheel.Size,
+			Open: func() (io.ReadCloser, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return openCachedWheel(w)
+			},
+		})
+	}
+
+	path := filepath.Join(e.Dir, archive.PipArchiveFile)
+	f, err := os.Create(path)
+	if err != nil {
+		return fail(fmt.Errorf("jobs: create the archive: %w", withoutPath(err)))
+	}
+	sum := sha256.New()
+	writeErr := archive.WriteTarGz(io.MultiWriter(f, sum), strings.TrimSuffix(pipArchiveDir, "/"), entries)
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fail(fmt.Errorf("jobs: write the archive: %w", writeErr))
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return fail(fmt.Errorf("jobs: stat the archive: %w", withoutPath(err)))
+	}
+	emitStep(emit, "archive", store.Done, time.Since(start))
+	return report.ArchiveManifest{SHA256: hex.EncodeToString(sum.Sum(nil)), Size: st.Size()}, nil
+}
+
+// openCachedWheel opens w's cache entry behind a reader that fails once
+// the bytes read differ from the download's, in length or in either
+// digest.
+func openCachedWheel(w pipWheelFile) (io.ReadCloser, error) {
+	// As in checkCachedWheel: no link is followed, and a FIFO cannot hold
+	// the open.
+	f, err := os.OpenFile(w.CachePath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ELOOP):
+		return nil, wheelChanged(w.Wheel.File)
+	case err != nil:
+		return nil, fmt.Errorf("open the cached %s: %w", w.Wheel.File, withoutPath(err))
+	}
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, wheelChanged(w.Wheel.File)
+	}
+	return &rehashedWheel{f: f, w: w, h256: sha256.New(), h512: sha512.New()}, nil
+}
+
+func wheelChanged(file string) error {
+	return fmt.Errorf("%s changed after its download", file)
+}
+
+// rehashedWheel reads a cached wheel and checks, at its end, that its
+// length, sha256 and sha512 are the download's.
+type rehashedWheel struct {
+	f          *os.File
+	w          pipWheelFile
+	h256, h512 hash.Hash
+	n          int64
+}
+
+func (r *rehashedWheel) Read(p []byte) (int, error) {
+	n, err := r.f.Read(p)
+	if room := r.w.Wheel.Size - r.n; int64(n) > room {
+		// The bytes past the recorded size never reach the archive, so the
+		// tar writer cannot report a longer entry before this check does.
+		r.n += int64(n)
+		return int(room), wheelChanged(r.w.Wheel.File)
+	}
+	r.h256.Write(p[:n])
+	r.h512.Write(p[:n])
+	r.n += int64(n)
+	if errors.Is(err, io.EOF) && (r.n != r.w.Wheel.Size ||
+		hex.EncodeToString(r.h256.Sum(nil)) != r.w.Wheel.Sha256 ||
+		hex.EncodeToString(r.h512.Sum(nil)) != r.w.SHA512) {
+		return n, wheelChanged(r.w.Wheel.File)
+	}
+	return n, err
+}
+
+func (r *rehashedWheel) Close() error { return r.f.Close() }
+
+// writeReports is the last step: the manifest and its signature.
+func (e *PipExport) writeReports(ctx context.Context, emit func(Event), wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {
+	start := time.Now()
+	emitStep(emit, "reports", store.Running, 0)
+	if err := ctx.Err(); err != nil {
+		emitFailedStep(emit, "reports", time.Since(start), err)
+		return err
+	}
+	if err := e.writeManifest(wheels, arch, key); err != nil {
+		emitFailedStep(emit, "reports", time.Since(start), err)
+		return err
+	}
+	emitStep(emit, "reports", store.Done, time.Since(start))
+	return nil
+}
+
+// writeManifest writes manifest.json, with the analysis's target and set,
+// and its signature with key.
+func (e *PipExport) writeManifest(wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {
+	entries := make([]report.WheelEntry, len(wheels))
+	for i, w := range wheels {
+		entries[i] = report.WheelEntry{
+			Name: pip.Normalize(w.Name), Version: w.Version, File: w.Wheel.File,
+			SHA256: w.Wheel.Sha256, ShippedSHA512: w.SHA512,
+		}
+	}
+	m := report.PipManifest{
+		FormatVersion: report.PipManifestFormatVersion,
+		Ecosystem:     store.Pip,
+		ToolVersion:   ToolVersion,
+		AnalysisID:    e.Analysis.ID,
+		CreatedAt:     time.Now().UTC(),
+		Target:        e.Analysis.Result.Target,
+		Archive:       arch,
+		Packages:      entries,
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("jobs: encode manifest.json: %w", err)
+	}
+	sig, err := key.SignManifest(data)
+	if err != nil {
+		return fmt.Errorf("jobs: sign manifest.json: %w", err)
+	}
+	if err := e.Store.WriteFile(filepath.Join(e.Dir, "manifest.json"), data); err != nil {
+		return fmt.Errorf("jobs: write manifest.json: %w", withoutPath(err))
+	}
+	if err := e.Store.WriteFile(filepath.Join(e.Dir, archive.SignatureFile), sig); err != nil {
+		return fmt.Errorf("jobs: write %s: %w", archive.SignatureFile, withoutPath(err))
 	}
 	return nil
 }

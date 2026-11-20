@@ -1,0 +1,51 @@
+{
+  "formatVersion": 2,
+  "toolVersion": "dev",
+  "analysisId": "20260910T080000Z",
+  "createdAt": "2026-09-17T10:15:02Z",
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": "22.17.1",
+    "pnpmVer": "10.34.5"
+  },
+  "archive": {
+    "sha256": "d075e144c44a7cc7631f8cac09cdedb0b8944b2486869f64b13a38bcf1d320f1",
+    "size": 684
+  },
+  "packages": [
+    {
+      "name": "@scope/gadget",
+      "version": "2.1.0",
+      "file": "scope-gadget-2.1.0.tgz",
+      "originalIntegrity": "sha512-IbJa9EvyrimpPzVi9ucmrvR9b0bSPHqEmN8hPWYJqhm1BDFbql9mzYsBQT3YZrnNutBLXemTiG5tWtcYdQqwsA==",
+      "shippedSha512": "6539f40bf802ac5141c0b4c7e1054cb49dd8da795ee855f0e5e54bf5b3b5acd243c7053aa7fdfec94339ff4e810d5f909c872ae2354826a55c7c2f1bdf309561",
+      "publishConfigStripped": true
+    },
+    {
+      "name": "@scope/gadget",
+      "version": "2.2.0",
+      "file": "scope-gadget-2.2.0.tgz",
+      "originalIntegrity": "sha512-sAGic0DtSOco7kRawlGuwa5hbn/Xm6sebNKdU5XOKt/HmgxkcKk12BysjI/3eQcPQW4fDVIUyZ7se/qDI2XW4Q==",
+      "shippedSha512": "4f17b343735dc951a728bd3bde7b869bdf8cdb0bb676b29d4cfd217b386789f27565e4f05d2e84a1cee3c19f4ba2cf8270c3ab24296626e72719817adb68fb82",
+      "publishConfigStripped": true
+    },
+    {
+      "name": "helper",
+      "version": "3.0.0",
+      "file": "helper-3.0.0.tgz",
+      "originalIntegrity": "sha512-6BBfpu1qcpHr7139uKaagDYAydYj2tr3fxtvmFXWYHxw4j9rrYfkE0+jKd2e5m0hmV6/MmhKYHKO1QIkJ+RMnQ==",
+      "shippedSha512": "e8105fa6ed6a7291ebef5dfdb8a69a803600c9d623dadaf77f1b6f9855d6607c70e23f6bad87e4134fa329dd9ee66d21995ebf32684a60728ed5022427e44c9d",
+      "publishConfigStripped": false
+    },
+    {
+      "name": "widgets",
+      "version": "1.1.0",
+      "file": "widgets-1.1.0.tgz",
+      "originalIntegrity": "sha512-iToLo7/ceYc24g+pwV1kquKPuoPv44Rb5M1eQkntbLsTFSsNxpKlsyoozVh8bVmjuWeSduyErNWaYewMKGtUOQ==",
+      "shippedSha512": "893a0ba3bfdc798736e20fa9c15d64aae28fba83efe3845be4cd5e4249ed6cbb13152b0dc692a5b32a28cd587c6d59a3b9679276ec84acd59a61ec0c286b5439",
+      "publishConfigStripped": false
+    }
+  ]
+}

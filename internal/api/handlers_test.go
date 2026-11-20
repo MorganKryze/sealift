@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2192,4 +2193,129 @@ func TestGetPipAnalysisDropsAnUnreadableResult(t *testing.T) {
 	if string(raw["state"]) != `"done"` {
 		t.Errorf("state = %s, want the analysis still answered", raw["state"])
 	}
+}
+
+// postExport posts body to the analysis's exports route and returns the
+// status and the response bytes.
+func postExport(t *testing.T, srv *httptest.Server, projectID, analysisID, body string) (int, []byte) {
+	t.Helper()
+	resp, err := http.Post(fmt.Sprintf("%s/api/projects/%s/analyses/%s/exports", srv.URL, projectID, analysisID), "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, data
+}
+
+// waitForEnd reads events until the job with storeID ends.
+func waitForEnd(events <-chan jobs.Event, storeID string) {
+	for e := range events {
+		if e.Kind == "end" && e.StoreID == storeID {
+			return
+		}
+	}
+}
+
+func TestQueueExportForAPipProject(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	t.Cleanup(q.Close)
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	t.Cleanup(srv.Close)
+
+	ix := piptest.NewIndex(t)
+	released := time.Date(2024, time.September, 1, 0, 0, 0, 0, time.UTC)
+	ix.Add(piptest.Dist{Name: "certifi", Version: "2024.8.30", Tag: "py3-none-any", Uploaded: released})
+	ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any", Uploaded: released})
+	allowPipAnalyses(t, h)
+	h.Tools.PipIndex = ix.URL
+	h.Tools.Arch = "amd64"
+	h.Service.SetPip(fakeUv{}, &pip.Client{Index: ix.URL})
+	project, err := h.Store.CreatePipProject("Data tools", []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("certifi==2024.8.30\nrequests==2.32.3\n")}}, store.DefaultPipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, unsubscribe := h.Service.Subscribe()
+	defer unsubscribe()
+	analysis, err := h.Service.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	waitForEnd(events, analysis.ID)
+	if info, err := h.Store.AnalysisInfo(project.ID, analysis.ID); err != nil || info.State != store.Done {
+		t.Fatalf("analysis = %+v, %v; want done", info, err)
+	}
+
+	status, body := postExport(t, srv, project.ID, analysis.ID, `{"selection":{"requests":["2.32.3"]}}`)
+	if p := decodeProblem(t, body); status != http.StatusBadRequest || !strings.Contains(deref(p.Detail), "takes no selection") {
+		t.Errorf("a selection answered %d %s, want 400 saying a pip export takes no selection", status, body)
+	}
+
+	status, body = postExport(t, srv, project.ID, analysis.ID, `{"selection":{}}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("an empty selection answered %d %s, want 202", status, body)
+	}
+	var queued Export
+	if err := json.Unmarshal(body, &queued); err != nil {
+		t.Fatal(err)
+	}
+	waitForEnd(events, queued.Id)
+	waitForTerminalState(t, h, project.ID, "export", queued.Id)
+	done := waitForExportState(t, srv, project.ID, queued.Id, Done, Failed, Cancelled)
+	if done.State != Done || done.Files == nil || !slices.Contains(*done.Files, "packages_pip.tar.gz") {
+		t.Fatalf("export = %+v, want done with packages_pip.tar.gz", done)
+	}
+	resp, err := http.Get(fmt.Sprintf("%s/api/projects/%s/exports/%s/files/packages_pip.tar.gz", srv.URL, project.ID, queued.Id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(project.Dir, "exports", queued.Id, "packages_pip.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !bytes.Equal(served, onDisk) {
+		t.Errorf("the file route answered %d with %d bytes, want 200 with the %d bytes on disk", resp.StatusCode, len(served), len(onDisk))
+	}
+
+	// The result loses a wheel, as one written by another build could.
+	path := filepath.Join(project.Dir, "analyses", analysis.ID, "pip-result.json")
+	var result map[string]any
+	if err := json.Unmarshal(readTestFile(t, path), &result); err != nil {
+		t.Fatal(err)
+	}
+	delete(result["packages"].([]any)[0].(map[string]any), "wheel")
+	if err := h.Store.WriteJSON(path, result); err != nil {
+		t.Fatal(err)
+	}
+	status, body = postExport(t, srv, project.ID, analysis.ID, `{"selection":{}}`)
+	if p := decodeProblem(t, body); status != http.StatusConflict || !strings.Contains(deref(p.Detail), "1 of 2 packages has no wheel") {
+		t.Errorf("an analysis without every wheel answered %d %s, want 409 naming the count", status, body)
+	}
+}
+
+func decodeProblem(t *testing.T, data []byte) Problem {
+	t.Helper()
+	var p Problem
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatalf("decode problem %s: %v", data, err)
+	}
+	return p
+}
+
+func readTestFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

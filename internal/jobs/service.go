@@ -199,12 +199,16 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 // The selection is validated against that analysis' own result before
 // anything is reserved, so a bad selection never reaches the queue only
 // to fail deep inside the job once the HTTP response is gone.
-// Unlike Analysis, Export leaves a successful run's directory for
-// Service's finalizer to commit.
+// The project's ecosystem picks Export or PipExport. Unlike Analysis, an
+// export leaves a successful run's directory for Service's finalizer to
+// commit.
 func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (store.ExportInfo, error) {
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.ExportInfo{}, err
+	}
+	if project.Ecosystem == store.Pip {
+		return s.queuePipExport(project, analysisID, req)
 	}
 	analysisInfo, err := s.store.AnalysisInfo(projectID, analysisID)
 	if err != nil {
@@ -242,6 +246,64 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
+	return s.submitExport(job, projectID, analysisID, pending)
+}
+
+// queuePipExport is QueueExport for a pip project: the export carries the
+// analysis's whole set, so it takes no selection, and every package needs
+// the wheel the analysis chose. A refusal reserves nothing.
+func (s *Service) queuePipExport(project store.Project, analysisID string, req ExportRequest) (store.ExportInfo, error) {
+	if len(req.Selection) > 0 {
+		return store.ExportInfo{}, ErrPipSelection
+	}
+	analysisInfo, err := s.store.AnalysisInfo(project.ID, analysisID)
+	if err != nil {
+		return store.ExportInfo{}, err
+	}
+	if analysisInfo.State != store.Done {
+		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s is %s", ErrAnalysisNotDone, analysisID, analysisInfo.State)
+	}
+	var result PipResult
+	if err := json.Unmarshal(analysisInfo.PipResult, &result); err != nil {
+		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s has no readable result", ErrPipNotExportable, analysisID)
+	}
+	missing := 0
+	for _, p := range result.Packages {
+		if p.Wheel == nil {
+			missing++
+		}
+	}
+	if missing > 0 {
+		return store.ExportInfo{}, fmt.Errorf("%w: %d of %d packages %s no wheel", ErrPipNotExportable, missing, len(result.Packages), plural(missing, "has", "have"))
+	}
+	s.mu.Lock()
+	index := s.index
+	s.mu.Unlock()
+	if index == nil {
+		return store.ExportInfo{}, errors.New("jobs: this server is not set up to export pip projects")
+	}
+
+	pending, err := s.store.NewDir("exports", project.ID)
+	if err != nil {
+		return store.ExportInfo{}, err
+	}
+	job := &PipExport{
+		Store:    s.store,
+		Index:    index,
+		Trivy:    s.trivy,
+		Project:  project,
+		Settings: s.store.Settings(),
+		Analysis: PipAnalysisRef{ID: analysisID, Dir: filepath.Join(project.Dir, "analyses", analysisID), Result: result},
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	return s.submitExport(job, project.ID, analysisID, pending)
+}
+
+// submitExport queues an export job whose directory pending holds, and
+// returns its queued state. A job the queue refuses gives its directory
+// back.
+func (s *Service) submitExport(job Job, projectID, analysisID string, pending *store.Pending) (store.ExportInfo, error) {
 	// Registered before the worker can start the job: tracking it after
 	// Submit returns races a job that has already finished, and the
 	// finalize hook would find nothing to finalize.

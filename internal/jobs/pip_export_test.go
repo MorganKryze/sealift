@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/piptest"
+	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/pip"
@@ -34,8 +37,10 @@ import (
 // start from, sorted as the analysis sorts it.
 var pipExportSet = resolved("certifi", "2024.8.30", "idna", "3.10", "requests", "2.32.3")
 
-// pipFixture is a done pip analysis and the store that holds it.
+// pipFixture is a done pip analysis, the store that holds it and the
+// Service that ran it.
 type pipFixture struct {
+	svc     *Service
 	st      *store.Store
 	project store.Project
 	ref     PipAnalysisRef
@@ -87,7 +92,7 @@ func runPipAnalysis(t *testing.T, indexURL, requirements string, set []runner.Re
 	if err := json.Unmarshal(info.PipResult, &result); err != nil {
 		t.Fatalf("decode pip-result.json: %v", err)
 	}
-	return pipFixture{st: st, project: project, ref: PipAnalysisRef{
+	return pipFixture{svc: svc, st: st, project: project, ref: PipAnalysisRef{
 		ID: queued.ID, Dir: filepath.Join(project.Dir, "analyses", queued.ID), Result: result,
 	}}
 }
@@ -965,4 +970,272 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
+}
+
+// runPipExport runs e to its end and returns its error and the steps it
+// reported.
+func runPipExport(ctx context.Context, e *PipExport) (*stepRecorder, error) {
+	rec := &stepRecorder{}
+	return rec, e.Run(ctx, rec.emit)
+}
+
+// dirNames lists the names in dir, sorted.
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, en := range entries {
+		names = append(names, en.Name())
+	}
+	return names
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func TestPipExportWritesASignedArchive(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	rec, err := runPipExport(context.Background(), e)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if want := []string{"manifest.json", archive.SignatureFile, archive.PipArchiveFile}; !slices.Equal(dirNames(t, e.Dir), want) {
+		t.Errorf("export directory holds %v, want %v", dirNames(t, e.Dir), want)
+	}
+	wantSteps := []string{
+		"package-list:running", "package-list:done", "download:running", "download:done",
+		"archive:running", "archive:done", "reports:running", "reports:done",
+	}
+	if !slices.Equal(stepNames(rec.steps), wantSteps) {
+		t.Errorf("steps = %v, want %v", stepNames(rec.steps), wantSteps)
+	}
+
+	manifest := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+	sig := readFile(t, filepath.Join(e.Dir, archive.SignatureFile))
+	if err := archive.CheckSignature(manifest, sig, publicKey(t, f.st.SigningKey())); err != nil {
+		t.Fatalf("CheckSignature: %v", err)
+	}
+	eco, err := archive.ManifestEcosystem(manifest)
+	if err != nil || eco != archive.Pip {
+		t.Fatalf("ManifestEcosystem = %q, %v; want pip", eco, err)
+	}
+	m, err := archive.ParsePipManifest(manifest)
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	data := readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile))
+	checked, err := archive.VerifyPip(bytes.NewReader(data), m, archive.VerifyOptions{
+		ExpectedSHA256: sha256Hex(data), Dir: t.TempDir(), Limits: archive.DefaultLimits,
+	})
+	if err != nil {
+		t.Fatalf("VerifyPip: %v", err)
+	}
+	if len(checked) != len(f.ref.Result.Packages) {
+		t.Errorf("VerifyPip accepted %d wheels, want %d", len(checked), len(f.ref.Result.Packages))
+	}
+}
+
+func TestPipExportCarriesExactlyTheAnalysisSet(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	f := donePipAnalysis(t, ix)
+	e := f.newPipExport(t)
+	// The project's target moved on after the analysis.
+	e.Project.PipTarget.Python = "3.13.1"
+	e.Project.PipTarget.CPU = "aarch64"
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var m report.PipManifest
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "manifest.json")), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Target != f.ref.Result.Target {
+		t.Errorf("manifest target = %+v, want the analysis's %+v", m.Target, f.ref.Result.Target)
+	}
+	if m.FormatVersion != report.PipManifestFormatVersion || m.Ecosystem != store.Pip || m.AnalysisID != f.ref.ID {
+		t.Errorf("manifest = format %d, ecosystem %q, analysis %q; want %d, pip, %s", m.FormatVersion, m.Ecosystem, m.AnalysisID, report.PipManifestFormatVersion, f.ref.ID)
+	}
+
+	entries := readArchive(t, readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile)))
+	want := make([]report.WheelEntry, 0, len(f.ref.Result.Packages))
+	wantEntries := []string{"out/"}
+	for _, p := range f.ref.Result.Packages {
+		want = append(want, report.WheelEntry{Name: pip.Normalize(p.Name), Version: p.Version, File: p.Wheel.File, SHA256: p.Wheel.Sha256})
+		wantEntries = append(wantEntries, "out/"+p.Wheel.File)
+	}
+	got := make([]report.WheelEntry, len(m.Packages))
+	for i, w := range m.Packages {
+		body, ok := entries["out/"+w.File]
+		if !ok {
+			t.Errorf("the archive has no entry for %s", w.File)
+		}
+		sum := sha512.Sum512([]byte(body))
+		if w.ShippedSHA512 != hex.EncodeToString(sum[:]) {
+			t.Errorf("%s: shippedSha512 does not match the archive's bytes", w.File)
+		}
+		w.ShippedSHA512 = ""
+		got[i] = w
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("manifest packages = %+v, want the analysis's %+v", got, want)
+	}
+	names := slices.Sorted(maps.Keys(entries))
+	if slices.Sort(wantEntries); !slices.Equal(names, wantEntries) {
+		t.Errorf("archive entries = %v, want %v", names, wantEntries)
+	}
+	for _, p := range f.ref.Result.Packages {
+		if got := sha256Hex([]byte(entries["out/"+p.Wheel.File])); got != p.Wheel.Sha256 {
+			t.Errorf("%s in the archive has sha256 %s, want the recorded %s", p.Wheel.File, got, p.Wheel.Sha256)
+		}
+	}
+}
+
+func TestPipExportTwiceGivesTheSameSha256(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	f := donePipAnalysis(t, ix)
+	first := f.newPipExport(t)
+	if _, err := runPipExport(context.Background(), first); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	before := fileRequests(ix, f.ref.Result.Packages)
+	second := f.newPipExport(t)
+	if _, err := runPipExport(context.Background(), second); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if after := fileRequests(ix, f.ref.Result.Packages); !maps.Equal(before, after) {
+		t.Errorf("the second export requested wheels (%v, then %v), want every one from the cache", before, after)
+	}
+	var sums []string
+	for _, e := range []*PipExport{first, second} {
+		var m report.PipManifest
+		if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "manifest.json")), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got := sha256Hex(readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile))); got != m.Archive.SHA256 {
+			t.Errorf("%s has sha256 %s, its manifest says %s", archive.PipArchiveFile, got, m.Archive.SHA256)
+		}
+		sums = append(sums, m.Archive.SHA256)
+	}
+	if sums[0] != sums[1] {
+		t.Errorf("two exports of one analysis gave sha256 %s and %s", sums[0], sums[1])
+	}
+}
+
+func TestPipExportNeverReadsAWheelsContent(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	var file string
+	for _, p := range pipExportSet {
+		f := ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
+		if p.Name == "idna" {
+			file = f.Filename
+		}
+	}
+	body := []byte("these bytes are no zip archive, and the export never opens one")
+	ix.Serve(file, body)
+	f := runPipAnalysis(t, ix.URL, "requests==2.32.3\n", pipExportSet)
+	e := f.newPipExport(t)
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	entries := readArchive(t, readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile)))
+	if got, ok := entries["out/"+file]; !ok || got != string(body) {
+		t.Errorf("out/%s = %q (present %v), want the served bytes unchanged", file, got, ok)
+	}
+}
+
+func TestPipExportFailsWhenAWheelChangesBeforeTheArchive(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(data []byte) []byte
+	}{
+		{"other bytes of the same length", func(data []byte) []byte { return bytes.Repeat([]byte("x"), len(data)) }},
+		{"one byte shorter", func(data []byte) []byte { return data[:len(data)-1] }},
+		{"one byte longer", func(data []byte) []byte { return append(slices.Clone(data), 'x') }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := donePipAnalysis(t, piptest.NewIndex(t))
+			e := f.newPipExport(t)
+			w := *f.ref.Result.Packages[1].Wheel
+			e.beforeArchive = func() {
+				path := filepath.Join(f.st.Root(), "cache", "wheels", w.Sha256+".whl")
+				if err := os.WriteFile(path, tc.change(readFile(t, path)), 0o664); err != nil {
+					t.Error(err)
+				}
+			}
+			rec, err := runPipExport(context.Background(), e)
+			if want := w.File + " changed after its download"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Run = %v, want an error saying %q", err, want)
+			}
+			last := rec.steps[len(rec.steps)-1]
+			if last.Name != "archive" || last.State != string(store.Failed) || last.Error != err.Error() {
+				t.Errorf("last step = %+v, want archive failed with the error", last)
+			}
+			if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+				t.Errorf("export directory holds %v, want only status.json", names)
+			}
+			var status exportStatusFile
+			if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != store.Failed {
+				t.Errorf("status state = %s, want failed", status.State)
+			}
+		})
+	}
+}
+
+func TestPipExportCancelled(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	e.Settings.DownloadParallelism = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &stepRecorder{}
+	emit := func(ev Event) {
+		rec.emit(ev)
+		if ev.Kind != "progress" {
+			return
+		}
+		// Every file a later step writes, so the cleanup has each one to remove.
+		for _, name := range []string{archive.PipArchiveFile, "manifest.json", archive.SignatureFile, "export.cdx-input.json"} {
+			if err := os.WriteFile(filepath.Join(e.Dir, name), []byte("x"), 0o664); err != nil {
+				t.Error(err)
+			}
+		}
+		cancel()
+	}
+	if err := e.Run(ctx, emit); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want context.Canceled", err)
+	}
+	names := stepNames(rec.steps)
+	if names[len(names)-1] != "download:failed" || slices.Contains(names, "archive:running") {
+		t.Errorf("steps = %v, want download failed and no archive step", names)
+	}
+	if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+		t.Errorf("export directory holds %v, want only status.json", names)
+	}
+	var status exportStatusFile
+	if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.State != store.Cancelled {
+		t.Errorf("status state = %s, want cancelled", status.State)
+	}
 }

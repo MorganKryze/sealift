@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
@@ -18,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -523,6 +525,65 @@ func TestExportRun(t *testing.T) {
 	}
 	if !slices.Equal(names, want) {
 		t.Fatalf("export directory holds %v, want exactly %v", names, want)
+	}
+}
+
+// createdAtLine is the one line of manifest.json that changes from run to
+// run.
+var createdAtLine = regexp.MustCompile(`(?m)^  "createdAt": "[^"]*",$`)
+
+// TestNPMExportBytesMatchTheLastRelease exports a fixed selection and
+// compares manifest.json with the one the last release wrote for it, so
+// the npm archive and manifest keep their bytes. SEALIFT_UPDATE_GOLDEN=1
+// writes the golden file instead.
+func TestNPMExportBytesMatchTheLastRelease(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	if err := h.newExport(t, analysisDir, exportDir, true).Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !createdAtLine.Match(manifest) {
+		t.Fatalf("manifest.json has no createdAt line:\n%s", manifest)
+	}
+	manifest = createdAtLine.ReplaceAll(manifest, []byte(`  "createdAt": "2026-09-17T10:15:02Z",`))
+	golden := filepath.Join("testdata", "npm-export-0.6.2", "manifest.json")
+	if os.Getenv("SEALIFT_UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(manifest, want) {
+		t.Errorf("manifest.json differs from %s:\n%s", golden, manifest)
+	}
+
+	var doc struct {
+		Archive struct {
+			SHA256 string `json:"sha256"`
+		} `json:"archive"`
+	}
+	if err := json.Unmarshal(want, &doc); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != doc.Archive.SHA256 {
+		t.Errorf("packages_npm.tar.gz sha256 = %x, want %s from %s", sum, doc.Archive.SHA256, golden)
 	}
 }
 

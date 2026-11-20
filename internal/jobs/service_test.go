@@ -6,10 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/piptest"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -657,29 +660,106 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 
 // Until a pip export exists, a done pip analysis has no ranking to export
 // from: the request fails before an export directory is reserved.
-func TestQueueExportRefusesPipAnalysis(t *testing.T) {
-	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
-	a.Uv = &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3")}
-	serveWheels(t, a, resolved("requests", "2.32.3"))
-	if err := a.Run(context.Background(), func(Event) {}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if status, _ := readStatus(t, st, a); status.State != store.Done {
-		t.Fatalf("state = %q, want done", status.State)
-	}
-	q := NewQueue(testLogger())
-	t.Cleanup(q.Close)
-	svc := NewService(st, q, a.Tools, noopPnpm{}, noopTrivy{}, &npm.Client{})
-
-	_, err := svc.QueueExport(a.Project.ID, a.ID, ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
-	if err == nil || !strings.Contains(err.Error(), a.ID) {
-		t.Fatalf("QueueExport on a pip analysis = %v, want an error naming the analysis", err)
-	}
-	entries, err := os.ReadDir(filepath.Join(a.Project.Dir, "exports"))
+// noExportReserved fails t when the project holds an export directory.
+func noExportReserved(t *testing.T, project store.Project) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(project.Dir, "exports"))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
 		t.Errorf("exports/ holds %d entries, want none reserved", len(entries))
 	}
+}
+
+func TestQueueExportQueuesAPipExport(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	events, unsubscribe := f.svc.Subscribe()
+	defer unsubscribe()
+	queued, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	if queued.State != store.Queued || queued.AnalysisID != f.ref.ID {
+		t.Errorf("queued = %+v, want queued for analysis %s", queued, f.ref.ID)
+	}
+	for e := range events {
+		if e.Kind == "end" && e.StoreID == queued.ID {
+			break
+		}
+	}
+	info, err := f.st.ExportInfo(f.project.ID, queued.ID)
+	if err != nil {
+		t.Fatalf("ExportInfo: %v", err)
+	}
+	if info.State != store.Done {
+		t.Fatalf("export state = %s (%+v), want done", info.State, info.Failure)
+	}
+	if want := []string{"manifest.json", archive.SignatureFile, archive.PipArchiveFile}; !slices.Equal(info.Files, want) {
+		t.Errorf("files = %v, want %v", info.Files, want)
+	}
+}
+
+func TestQueueExportRefusesASelectionForPip(t *testing.T) {
+	tests := []struct {
+		name      string
+		selection map[string][]string
+	}{
+		{"a version of a package", map[string][]string{"requests": {"2.32.3"}}},
+		{"a package with no version", map[string][]string{"requests": {}}},
+	}
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: tc.selection, IncludeProject: true})
+			if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "carries the analysis's whole set and takes no selection") {
+				t.Fatalf("QueueExport = %v, want ErrPipSelection", err)
+			}
+			noExportReserved(t, f.project)
+		})
+	}
+}
+
+func TestQueueExportRefusesAPipAnalysisWithoutEveryWheel(t *testing.T) {
+	tests := []struct {
+		name   string
+		result func(PipResult) any
+		reason string
+	}{
+		{"one package without a wheel", func(r PipResult) any {
+			r.Packages = clonePipPackages(r.Packages)
+			r.Packages[1].Wheel = nil
+			return r
+		}, "1 of 3 packages has no wheel"},
+		{"two packages without a wheel", func(r PipResult) any {
+			r.Packages = clonePipPackages(r.Packages)
+			r.Packages[0].Wheel, r.Packages[2].Wheel = nil, nil
+			return r
+		}, "2 of 3 packages have no wheel"},
+		{"a result that is no JSON object", func(PipResult) any { return []string{"not", "a", "result"} }, "has no readable result"},
+	}
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	path := filepath.Join(f.ref.Dir, "pip-result.json")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := f.st.WriteJSON(path, tc.result(f.ref.Result)); err != nil {
+				t.Fatal(err)
+			}
+			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+			if !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("QueueExport = %v, want ErrPipNotExportable saying %q", err, tc.reason)
+			}
+			noExportReserved(t, f.project)
+		})
+	}
+}
+
+func TestQueueExportRefusesPipWithoutTheIndex(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	f.svc.SetPip(nil, nil)
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+	if err == nil || !strings.Contains(err.Error(), "not set up to export pip projects") {
+		t.Fatalf("QueueExport = %v, want a refusal saying the server cannot export pip", err)
+	}
+	noExportReserved(t, f.project)
 }
