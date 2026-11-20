@@ -10,6 +10,14 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - pip projects through the API: requirements files resolved together at the interpreter's exact version, scanned, one wheel recorded per package. No screen opens them yet. [API](docs/dev/api.md#pip-projects) describes them.
 
+### Changed
+
+- The image carries Debian's `python3`, which uv needs to resolve pip projects at the target's exact version. The image grows by about 73 MB.
+
+### Security
+
+- Installing uv, or installing or updating Trivy, is refused with a 403 when the request comes from another site, carries no JSON body, or sends an `Origin` that differs from its `Host`. Behind a reverse proxy, pass the browser's host header through, as the nginx example under [Reverse proxy](docs/deployment.md#reverse-proxy) does, or these installs fail from the setup screen.
+
 ## [0.6.2] - 2026-11-19
 
 ### Added
