@@ -121,6 +121,38 @@ func newPipAnalysis(t *testing.T, index string, target store.PipTarget, files ..
 	}, st
 }
 
+// serveWheels points a at a fake index that publishes one py3-none-any
+// wheel for every pin of the project's files and every package of set, so
+// check-pins and choose-wheels find a wheel for each.
+func serveWheels(t *testing.T, a *PipAnalysis, set []runner.Resolved) *piptest.Index {
+	t.Helper()
+	stored, err := a.Store.ProjectRequirements(a.Project.ID)
+	if err != nil {
+		t.Fatalf("ProjectRequirements: %v", err)
+	}
+	files := make([]pip.File, len(stored))
+	for i, f := range stored {
+		files[i] = pip.File{Name: f.Name, Data: f.Data}
+	}
+	parsed, _ := pip.ParseFiles(files)
+	pkgs := slices.Clone(set)
+	for _, p := range slices.Concat(parsed.Requirements, parsed.Constraints) {
+		pkgs = append(pkgs, runner.Resolved{Name: p.Key, Version: p.Version})
+	}
+	ix := piptest.NewIndex(t)
+	published := map[string][]string{}
+	for _, p := range pkgs {
+		key := pip.Normalize(p.Name)
+		if slices.ContainsFunc(published[key], func(v string) bool { return pip.SameVersion(v, p.Version) }) {
+			continue
+		}
+		published[key] = append(published[key], p.Version)
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any"})
+	}
+	a.Index = &pip.Client{Index: ix.URL}
+	return ix
+}
+
 // resolved builds a resolution from name and version pairs.
 func resolved(pairs ...string) []runner.Resolved {
 	var set []runner.Resolved
@@ -159,13 +191,13 @@ func stepNames(steps []stepRecord) []string {
 }
 
 func TestPipAnalysisWritesTheLock(t *testing.T) {
-	idx := newCountingIndex(t)
-	a, st := newPipAnalysis(t, idx.URL(), store.DefaultPipTarget,
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
 		reqFile("requirements.txt", "requests==2.32.3\n-c constraints.txt\n"),
 		reqFile("constraints.txt", "idna==3.10\n"))
 	lock := "certifi==2024.8.30\nidna==3.10\nrequests==2.32.3\n"
 	uv := &fakeUv{lock: lock, set: resolved("certifi", "2024.8.30", "idna", "3.10", "requests", "2.32.3"), output: "Resolved 3 packages"}
 	a.Uv = uv
+	ix := serveWheels(t, a, uv.set)
 
 	var events []Event
 	before := time.Now().UTC()
@@ -188,7 +220,7 @@ func TestPipAnalysisWritesTheLock(t *testing.T) {
 	if status.State != store.Done {
 		t.Errorf("state = %q, want done", status.State)
 	}
-	if want := []string{"validate:done", "prepare-tools:done", "resolve:done", "scan:done"}; !slices.Equal(stepNames(status.Steps), want) {
+	if want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:done", "scan:done"}; !slices.Equal(stepNames(status.Steps), want) {
 		t.Errorf("steps = %v, want %v", stepNames(status.Steps), want)
 	}
 	if status.UvVersion != "0.13.7" {
@@ -209,7 +241,7 @@ func TestPipAnalysisWritesTheLock(t *testing.T) {
 	if string(in.Requirements) != "requests==2.32.3\n" || string(in.Constraints) != "idna==3.10\n" {
 		t.Errorf("uv input = %q and %q, want the requirement and the constraint", in.Requirements, in.Constraints)
 	}
-	if in.Target != store.DefaultPipTarget || in.Index != idx.URL() {
+	if in.Target != store.DefaultPipTarget || in.Index != ix.URL {
 		t.Errorf("uv target and index = %+v %q", in.Target, in.Index)
 	}
 	if want := []string{"idna", "requests"}; !slices.Equal(in.Exempt, want) {
@@ -241,15 +273,16 @@ func TestPipAnalysisConflictNamesPackagesAndFiles(t *testing.T) {
 		reqFile("requirements-dev.txt", "mypy==1.11.2\n"))
 	cause := "Because mypy==1.11.2 depends on mypy-extensions>=1.1.0 and you require mypy-extensions==1.0.0, we can conclude that your requirements are unsatisfiable."
 	a.Uv = &fakeUv{output: "error: No solution found\n  cause: " + cause + "\n", err: errors.New("uv pip compile: No solution found: " + cause + ": exit status 1")}
+	serveWheels(t, a, nil)
 
 	if err := a.Run(context.Background(), func(Event) {}); err == nil {
 		t.Fatal("Run succeeded, want the conflict")
 	}
 	status, _ := readStatus(t, st, a)
-	if status.State != store.Failed || len(status.Steps) != 3 || status.Steps[2].Name != "resolve" {
+	if status.State != store.Failed || len(status.Steps) != 4 || status.Steps[3].Name != "resolve" {
 		t.Fatalf("status = %+v, want resolve failed", status)
 	}
-	msg := status.Steps[2].Error
+	msg := status.Steps[3].Error
 	for _, want := range []string{cause, "mypy (requirements-dev.txt)", "mypy-extensions (requirements.txt)"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("resolve error = %q, want it to hold %q", msg, want)
@@ -333,6 +366,7 @@ func TestPipAnalysisInstallsTheTargetsUv(t *testing.T) {
 				Name: "uv", Version: "0.13.6", Tag: tag, Uploaded: c.uploaded,
 				Payload: map[string][]byte{"uv-0.13.6.data/scripts/uv": []byte("#!/bin/sh\n")},
 			})
+			ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
 			target := store.DefaultPipTarget
 			target.UvVer = "0.13.6"
 			a, st := newPipAnalysis(t, ix.URL, target, reqFile("requirements.txt", "requests==2.32.3\n"))
@@ -392,6 +426,7 @@ func TestPipAnalysisRefusesAPinTheResolutionChanged(t *testing.T) {
 			}
 			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, files...)
 			a.Uv = &fakeUv{lock: "x==1\n", set: c.set}
+			serveWheels(t, a, c.set)
 
 			err := a.Run(context.Background(), func(Event) {})
 			status, _ := readStatus(t, st, a)
@@ -426,6 +461,7 @@ func TestPipAnalysisExemptsOnlyThePinsTheTargetInstalls(t *testing.T) {
 		reqFile("c.txt", "idna==3.10 ; os_name == \"nt\"\nchardet==5.2.0\n"))
 	uv := &fakeUv{lock: "x==1\n", set: resolved("delta", "2.0.0", "zeta", "1.0.0")}
 	a.Uv = uv
+	serveWheels(t, a, uv.set)
 	emit := func(e Event) {
 		var d logData
 		if e.Kind == "log" && json.Unmarshal(e.Data, &d) == nil {
@@ -454,6 +490,7 @@ func TestPipAnalysisCancelled(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
 	uv := &fakeUv{block: true, started: make(chan struct{})}
 	a.Uv = uv
+	serveWheels(t, a, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -480,7 +517,7 @@ func TestPipAnalysisCancelled(t *testing.T) {
 	if status.State != store.Cancelled {
 		t.Errorf("state = %q, want cancelled", status.State)
 	}
-	if want := []string{"validate:done", "prepare-tools:done", "resolve:cancelled"}; !slices.Equal(stepNames(status.Steps), want) {
+	if want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:cancelled"}; !slices.Equal(stepNames(status.Steps), want) {
 		t.Errorf("steps = %v, want %v", stepNames(status.Steps), want)
 	}
 }
@@ -545,6 +582,7 @@ func TestPipScanReportsFixingVersions(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
 		reqFile("requirements.txt", "Jinja2==3.1.2\nrequests==2.32.3\n"))
 	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("certifi", "2024.8.30", "jinja2", "3.1.2", "markupsafe", "3.0.2", "requests", "2.32.3")}
+	serveWheels(t, a, resolved("certifi", "2024.8.30", "jinja2", "3.1.2", "markupsafe", "3.0.2", "requests", "2.32.3"))
 	trivy := &cannedTrivy{report: pipTrivyReport(
 		[5]string{"Jinja2", "3.1.2", "CVE-2024-34064", "MEDIUM", "3.1.4"},
 		[5]string{"Jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3, 3.0.4"},
@@ -620,6 +658,7 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 		reqFile("constraints.txt", "idna==3.10\n"))
 	set := resolved("certifi", "2024.8.30", "idna", "3.10", "iniconfig", "2.0.0", "pytest", "8.3.3", "requests", "2.32.3")
 	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
 	a.Trivy = &cannedTrivy{report: pipTrivyReport(
 		[5]string{"requests", "2.32.3", "CVE-2024-47081", "MEDIUM", "2.32.4"},
 		[5]string{"requests", "2.31.0", "CVE-2024-35195", "MEDIUM", "2.32.0"},
@@ -654,8 +693,8 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 		if p.Files == nil || !slices.Equal(p.Files, wantFiles[p.Name]) {
 			t.Errorf("%s files = %#v, want %v", p.Name, p.Files, wantFiles[p.Name])
 		}
-		if p.Wheel != nil {
-			t.Errorf("%s has a wheel %+v before any is chosen", p.Name, p.Wheel)
+		if p.Wheel == nil || p.Wheel.File != p.Name+"-"+p.Version+"-py3-none-any.whl" {
+			t.Errorf("%s wheel = %+v, want the one the index publishes", p.Name, p.Wheel)
 		}
 	}
 	for _, p := range res.Packages {
@@ -684,8 +723,8 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range rows {
-		if keys := slices.Sorted(maps.Keys(row)); !slices.Equal(keys, []string{"cves", "files", "name", "version"}) {
-			t.Errorf("package row keys = %v, want name, version, files and cves only", keys)
+		if keys := slices.Sorted(maps.Keys(row)); !slices.Equal(keys, []string{"cves", "files", "name", "version", "wheel"}) {
+			t.Errorf("package row keys = %v, want name, version, files, wheel and cves only", keys)
 		}
 	}
 	final := strings.TrimSuffix(a.Dir, ".tmp")
@@ -714,6 +753,7 @@ func TestPipScanFindsADottedName(t *testing.T) {
 			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
 				reqFile("requirements.txt", "plone.namedfile==5.0.0\n"))
 			a.Uv = &fakeUv{lock: "plone.namedfile==5.0.0\n", set: resolved("plone-namedfile", "5.0.0", "six", "1.16.0")}
+			serveWheels(t, a, resolved("plone-namedfile", "5.0.0", "six", "1.16.0"))
 			a.Trivy = c.trivy
 
 			if err := a.Run(context.Background(), func(Event) {}); err != nil {
@@ -776,6 +816,7 @@ func TestPipScanWarnsOnFindingsOutsideTheSet(t *testing.T) {
 			var logged []string
 			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
 			a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+			serveWheels(t, a, resolved("jinja2", "3.1.2", "markupsafe", "3.0.2"))
 			a.Trivy = &cannedTrivy{report: pipTrivyReport(c.rows...)}
 			emit := func(e Event) {
 				var d logData
@@ -838,17 +879,18 @@ func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
 			a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+			serveWheels(t, a, resolved("jinja2", "3.1.2", "markupsafe", "3.0.2"))
 			a.Trivy = c.trivy
 
 			if err := a.Run(context.Background(), func(Event) {}); err == nil {
 				t.Fatal("Run succeeded, want the scan failure")
 			}
 			status, _ := readStatus(t, st, a)
-			if want := []string{"validate:done", "prepare-tools:done", "resolve:done", "scan:failed"}; !slices.Equal(stepNames(status.Steps), want) {
+			if want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:done", "scan:failed"}; !slices.Equal(stepNames(status.Steps), want) {
 				t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
 			}
-			if status.State != store.Failed || !strings.Contains(status.Steps[3].Error, c.wantErr) {
-				t.Errorf("state %q, scan error %q, want failed with %q", status.State, status.Steps[3].Error, c.wantErr)
+			if status.State != store.Failed || !strings.Contains(status.Steps[5].Error, c.wantErr) {
+				t.Errorf("state %q, scan error %q, want failed with %q", status.State, status.Steps[5].Error, c.wantErr)
 			}
 			if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json")); !os.IsNotExist(err) {
 				t.Errorf("a failed scan left pip-result.json: %v", err)
@@ -912,6 +954,7 @@ func TestReadTrivyReportStopsAtTheBound(t *testing.T) {
 func TestPipScanWarnsOnAStaleDatabase(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
 	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2"))
 	a.Trivy = &cannedTrivy{report: pipTrivyReport(), updateErr: errors.New("registry unreachable")}
 
 	if err := a.Run(context.Background(), func(Event) {}); err != nil {

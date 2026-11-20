@@ -654,3 +654,32 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 		}
 	}
 }
+
+// Until a pip export exists, a done pip analysis has no ranking to export
+// from: the request fails before an export directory is reserved.
+func TestQueueExportRefusesPipAnalysis(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	a.Uv = &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3")}
+	serveWheels(t, a, resolved("requests", "2.32.3"))
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if status, _ := readStatus(t, st, a); status.State != store.Done {
+		t.Fatalf("state = %q, want done", status.State)
+	}
+	q := NewQueue(testLogger())
+	t.Cleanup(q.Close)
+	svc := NewService(st, q, a.Tools, noopPnpm{}, noopTrivy{}, &npm.Client{})
+
+	_, err := svc.QueueExport(a.Project.ID, a.ID, ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err == nil || !strings.Contains(err.Error(), a.ID) {
+		t.Fatalf("QueueExport on a pip analysis = %v, want an error naming the analysis", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(a.Project.Dir, "exports"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("exports/ holds %d entries, want none reserved", len(entries))
+	}
+}

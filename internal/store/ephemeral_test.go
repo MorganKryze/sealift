@@ -249,3 +249,70 @@ func TestPurgeIfIdlePutsOffAPurgeWhileAJobRuns(t *testing.T) {
 		t.Errorf("the put-off purge left the tarball cache")
 	}
 }
+
+// An ephemeral erase of a pip project leaves no file whose name or content
+// names one of its packages, neither in the project tree nor in a cache.
+func TestEphemeralPipProjectLeavesNoFile(t *testing.T) {
+	s := openTestStore(t)
+	s.SetEphemeral(true)
+	p, err := s.CreatePipProject("Data tools", []RequirementsFile{
+		{Name: "requirements.txt", Data: []byte("zorblax==1.0.0\n")},
+		{Name: "requirements-dev.txt", Data: []byte("quuxlib==2.0.0\n")},
+	}, DefaultPipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What a pip analysis leaves behind: its copy of the files, uv's lock
+	// and index cache, and a resolve directory.
+	for rel, data := range map[string]string{
+		filepath.Join(p.Dir, "analyses", "20261120T100000Z", "requirements", "requirements.txt"): "zorblax==1.0.0\n",
+		filepath.Join(p.Dir, "analyses", "20261120T100000Z", "project", "requirements.lock"):     "quuxlib==2.0.0\nzorblax==1.0.0\n",
+		filepath.Join(s.Root(), "cache", "uv", "simple-v16", "index", "zorblax.rkyv"):            "zorblax",
+		filepath.Join(s.Root(), "cache", "uv", "wheels-v5", "quuxlib", "2.0.0.msgpack"):          "quuxlib",
+		filepath.Join(s.Root(), "cache", "resolve", "r1", "requirements.in"):                     "quuxlib==2.0.0\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(rel), 0o770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(rel, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The API's delete in ephemeral mode: the project, then the caches.
+	if err := s.DeleteProject(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if purged, err := s.PurgeIfIdle(); err != nil || !purged {
+		t.Fatalf("PurgeIfIdle = %v, %v; want the caches emptied", purged, err)
+	}
+
+	for _, dir := range []string{"projects", "cache"} {
+		err := filepath.WalkDir(filepath.Join(s.Root(), dir), func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			for _, name := range []string{"zorblax", "quuxlib", "Data tools", "data-tools"} {
+				if strings.Contains(strings.ToLower(path), strings.ToLower(name)) {
+					t.Errorf("%s names %s after the erase", path, name)
+				}
+			}
+			if d.IsDir() {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, name := range []string{"zorblax", "quuxlib"} {
+				if strings.Contains(string(data), name) {
+					t.Errorf("%s holds %s after the erase", path, name)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}

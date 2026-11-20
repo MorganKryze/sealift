@@ -93,17 +93,23 @@ const shownProblems = 3
 // steps.
 type pipRun struct {
 	stepLog
-	a        *PipAnalysis
-	start    time.Time
-	set      pip.Set
-	files    []string // the project's file names, in upload order
-	uvBin    string
-	resolved []runner.Resolved
-	warnings []string
+	a          *PipAnalysis
+	start      time.Time
+	set        pip.Set
+	files      []string  // the project's file names, in upload order
+	pins       []pip.Pin // the pins the target installs
+	uvBin      string
+	resolved   []runner.Resolved
+	indexFiles map[string][]pip.IndexFile // by name@version, each page read once
+	wheels     map[string]PipWheel        // by normalized name
+	warnings   []string
 }
 
-// Run validates the project's files, installs the target's uv, resolves
-// the files together and scans the set. Like the npm analysis, it always commits the
+func (r *pipRun) resultPath() string { return filepath.Join(r.a.Dir, "pip-result.json") }
+
+// Run validates the project's files, installs the target's uv, checks
+// that every pin has a wheel, resolves the files together, records one
+// wheel per package and scans the set. Like the npm analysis, it always commits the
 // pending directory, so a failed or cancelled run keeps its log.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := os.OpenFile(filepath.Join(a.Dir, "log.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o664)
@@ -153,7 +159,13 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return err
 	}
 	uvVersion = target.UvVer
+	if err := r.stepCheckPins(); err != nil {
+		return err
+	}
 	if err := r.stepResolve(); err != nil {
+		return err
+	}
+	if err := r.stepChooseWheels(r.resolved); err != nil {
 		return err
 	}
 	return r.stepScan()
@@ -252,7 +264,8 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 
 // stepResolve resolves every file together with uv and writes
 // project/requirements.lock. Every package is held to the minimum release
-// age, except those the target's pins fix.
+// age, except those the target's pins fix. When uv names a package with no
+// wheel the target can install, pip-result.json records it.
 func (r *pipRun) stepResolve() error {
 	return r.runStep("resolve", func() error {
 		dir, err := r.a.Store.NewResolveDir()
@@ -261,9 +274,8 @@ func (r *pipRun) stepResolve() error {
 		}
 		defer os.RemoveAll(dir)
 
-		pins := r.targetPins()
-		exempt := make([]string, 0, len(pins))
-		for _, p := range pins {
+		exempt := make([]string, 0, len(r.pins))
+		for _, p := range r.pins {
 			exempt = append(exempt, p.Key)
 		}
 		slices.Sort(exempt)
@@ -285,12 +297,18 @@ func (r *pipRun) stepResolve() error {
 			}
 		}
 		if err != nil {
+			if b, ok := blockingFromUv(res.Output); ok {
+				r.log(r.describeBlocking(b))
+				if werr := r.writeFailedResult([]PipBlocking{b}); werr != nil {
+					err = errors.Join(err, werr)
+				}
+			}
 			if named := r.pinsNamedIn(err.Error()); named != "" {
 				return fmt.Errorf("%w; pinned by %s", err, named)
 			}
 			return err
 		}
-		if err := r.checkPins(res.Set, pins); err != nil {
+		if err := r.checkPins(res.Set, r.pins); err != nil {
 			return err
 		}
 		r.resolved = res.Set
@@ -334,12 +352,16 @@ func (r *pipRun) stepScan() error {
 		for _, p := range r.resolved {
 			key := p.Name + "@" + p.Version
 			matched[key] = true
-			result.Packages = append(result.Packages, PipPackage{
+			pkg := PipPackage{
 				Name:    p.Name,
 				Version: p.Version,
 				Files:   nonNil(r.set.FilesOf(p.Name)),
 				CVEs:    pipFindingsOf(index.Set([]string{key})),
-			})
+			}
+			if w, ok := r.wheels[p.Name]; ok {
+				pkg.Wheel = &w
+			}
+			result.Packages = append(result.Packages, pkg)
 		}
 		var outside []string
 		outsideFindings := 0
@@ -356,7 +378,7 @@ func (r *pipRun) stepScan() error {
 		if len(outside) > 0 {
 			result.Warnings = append(result.Warnings, outsideWarning(outsideFindings, outside))
 		}
-		return r.a.Store.WriteJSON(filepath.Join(r.a.Dir, "pip-result.json"), result)
+		return r.a.Store.WriteJSON(r.resultPath(), result)
 	})
 }
 
@@ -379,17 +401,21 @@ const shownNameLimit = 100
 
 // cleanName drops control and format characters from a name Trivy
 // reported and cuts it to shownNameLimit runes.
-func cleanName(s string) string {
+func cleanName(s string) string { return cleanText(s, shownNameLimit) }
+
+// cleanText drops control and format characters from s, which comes from
+// outside, and cuts it to limit runes.
+func cleanText(s string, limit int) string {
 	runes := []rune(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
 	}, s))
-	if len(runes) <= shownNameLimit {
+	if len(runes) <= limit {
 		return string(runes)
 	}
-	return string(runes[:shownNameLimit]) + "..."
+	return string(runes[:limit]) + "..."
 }
 
 // scanComponents writes components as a CycloneDX SBOM beside outPath,
@@ -510,8 +536,7 @@ func isNameByte(b byte) bool {
 // resolver chooses under the release age. A marker sealift cannot decide
 // keeps its pin, since uv may hold it.
 func (r *pipRun) targetPins() []pip.Pin {
-	t := r.a.Project.PipTarget
-	platform := pip.Platform{Python: t.Python, OS: t.OS, CPU: t.CPU, Glibc: t.Glibc}
+	platform := platformOfPip(r.a.Project.PipTarget)
 	var pins []pip.Pin
 	for _, p := range slices.Concat(r.set.Requirements, r.set.Constraints) {
 		if p.Marker != "" {
