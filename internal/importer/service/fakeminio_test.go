@@ -24,6 +24,10 @@ type fakeMinio struct {
 	calls   []call
 	// failWith, when set, is returned by every call.
 	failWith error
+	// failList makes a list of the keyed prefix fail.
+	failList map[string]error
+	// ignorePrefix makes a list answer every object of the bucket, as a server that ignores the prefix would.
+	ignorePrefix bool
 	// data holds the bytes of an object put with putData; put keeps zeros.
 	data map[string][]byte
 	// cut makes a read of the keyed object end cleanly after that many bytes.
@@ -46,6 +50,7 @@ func newFakeMinio() *fakeMinio {
 	return &fakeMinio{
 		buckets: map[string]map[string]s3.Object{}, data: map[string][]byte{}, cut: map[string]int{},
 		stall: map[string]int{}, stalled: make(chan struct{}, 8), readErr: map[string]error{}, serveETag: map[string]string{}, failDelete: map[string]error{},
+		failList: map[string]error{},
 	}
 }
 
@@ -101,6 +106,17 @@ func (f *fakeMinio) record(c call) error {
 	return f.failWith
 }
 
+// gets counts the reads of the keyed object, whatever the bucket.
+func (f *fakeMinio) gets(key string) int {
+	n := 0
+	for _, c := range f.recorded() {
+		if c.Op == "get" && c.Key == key {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fakeMinio) recorded() []call {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -113,13 +129,16 @@ func (f *fakeMinio) List(_ context.Context, bucket, prefix string, limit int) (s
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.failList[prefix]; ok {
+		return s3.Listing{}, err
+	}
 	objs, ok := f.buckets[bucket]
 	if !ok {
 		return s3.Listing{}, &s3.Error{Status: 404, Code: "NoSuchBucket", Message: "The specified bucket does not exist"}
 	}
 	var keys []string
 	for k := range objs {
-		if strings.HasPrefix(k, prefix) {
+		if f.ignorePrefix || strings.HasPrefix(k, prefix) {
 			keys = append(keys, k)
 		}
 	}

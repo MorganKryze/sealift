@@ -217,7 +217,7 @@ func (f *fakeNexus) settings(t *testing.T, caFile string) importer.Settings {
 }
 
 func newPublisher(s importer.Settings) (importer.Publisher, error) {
-	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, User: s.User, Password: s.Password, CAFile: s.CAFile})
+	c, err := nexus.New(nexus.Config{URL: s.NexusURL, Repository: s.Repository, Format: nexus.Format(s.Format), User: s.User, Password: s.Password, CAFile: s.CAFile})
 	if err != nil {
 		return nil, err
 	}

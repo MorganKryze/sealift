@@ -113,7 +113,7 @@ export interface components {
             minioConfigured: boolean;
             /** @description The user's MinIO bucket, user-<name>, named whether or not the settings file has a minio section */
             bucket: string;
-            /** @description The folder of the bucket the service lists, reads and deletes in */
+            /** @description The npm folder, packages/npm/, kept for clients that read one folder; the service lists, reads and deletes in packages/npm/ and packages/pip/ */
             folder: string;
             /** @description The sha256 of the public key every archive's signature must verify with, as the settings file names it */
             publicKeySha256: string;
@@ -122,21 +122,24 @@ export interface components {
             minioConfigured: boolean;
             /** @description The user's bucket, user-<name> */
             bucket: string;
-            /** @description The folder the list covers, packages/npm/ */
+            /** @description The npm folder, packages/npm/, kept for clients that read one folder */
             folder: string;
+            /** @description The folders the list covers, npm first, packages/npm/ then packages/pip/ */
+            folders?: string[];
             /** @description True when MinIO has no bucket for the user */
             bucketMissing: boolean;
-            /** @description Says what an empty list means when the bucket is missing */
+            /** @description Says what an empty list means when the bucket is missing, or names the folder MinIO could not list, with MinIO's reason, while the other folder is listed */
             message?: string;
-            /** @description True when the folder holds more objects than the list read */
+            /** @description True when a folder holds more objects than the list read */
             truncated: boolean;
             /** @description The links that run over plain http, among keySet, minio and nexus */
             unencrypted: string[];
             archives: components["schemas"]["Archive"][];
         };
         Archive: {
-            /** @description The object key, under packages/npm/ */
+            /** @description The object key, under packages/npm/ or packages/pip/ */
             key: string;
+            ecosystem?: components["schemas"]["Ecosystem"];
             /** Format: int64 */
             size: number;
             /** Format: date-time */
@@ -146,6 +149,11 @@ export interface components {
             reason?: string;
             latestImport?: components["schemas"]["LatestImport"];
         };
+        /**
+         * @description The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
+         * @enum {string}
+         */
+        Ecosystem: "npm" | "pip";
         /** @description The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since */
         LatestImport: {
             id: string;
@@ -153,7 +161,7 @@ export interface components {
             outcome: string;
         };
         StartImport: {
-            /** @description The archive's object key, under packages/npm/ */
+            /** @description The archive's object key, under packages/npm/ or packages/pip/ */
             archive: string;
             /** @description The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused */
             expectedSha256?: string;
@@ -212,6 +220,7 @@ export interface components {
             archive: components["schemas"]["ReportArchive"];
             toolVersion: string;
             analysisId: string;
+            ecosystem?: components["schemas"]["Ecosystem"];
             target: components["schemas"]["ReportTarget"];
             nexus: components["schemas"]["ReportNexus"];
             counts: components["schemas"]["ReportCounts"];
@@ -233,6 +242,10 @@ export interface components {
             libc: string;
             node: string;
             pnpmVer: string;
+            /** @description The Python version of a pip archive's target; empty for an npm archive */
+            python?: string;
+            /** @description The glibc version of a pip archive's target; empty for an npm archive */
+            glibc?: string;
         };
         ReportNexus: {
             url: string;

@@ -147,8 +147,9 @@ func (h *Handlers) checkArchive(ctx context.Context, bucket, key string) (archiv
 	case err != nil:
 		return fail(h.minioProblem("list the archives", err))
 	}
+	eco, _ := FolderOf(key)
 	var found *Archive
-	for _, a := range pair(listing.Objects) {
+	for _, a := range pair(listing.Objects, folderFor(eco), eco) {
 		if a.Key == key {
 			found = &a
 			break
@@ -212,6 +213,9 @@ func (h *Handlers) GetImport(ctx context.Context, req GetImportRequestObject) (G
 
 // toImport turns a stored import into the contract's shape. The record and
 // the contract share their field names, so the record's JSON is the contract's.
+// A report that names no ecosystem, as every npm report and every report
+// written before the manifest is read, takes its archive's folder's; python
+// and glibc are sent empty when the report has none.
 func toImport(imp imports.Import) (Import, error) {
 	b, err := json.Marshal(imp)
 	if err != nil {
@@ -222,6 +226,22 @@ func toImport(imp imports.Import) (Import, error) {
 		return Import{}, err
 	}
 	out.Outcome, out.ArchiveRemoved = imp.Outcome(), imp.ArchiveRemoved()
+	folder, ok := FolderOf(imp.Archive.Key)
+	if !ok {
+		folder = archive.NPM
+	}
+	for i := range out.Attempts {
+		rep := &out.Attempts[i].Report
+		if rep.Ecosystem == nil || *rep.Ecosystem == "" {
+			rep.Ecosystem = ptr(Ecosystem(folder))
+		}
+		if rep.Target.Python == nil {
+			rep.Target.Python = ptr("")
+		}
+		if rep.Target.Glibc == nil {
+			rep.Target.Glibc = ptr("")
+		}
+	}
 	return out, nil
 }
 
@@ -374,6 +394,8 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 		return h.stopped(imp, importer.OutcomeRefused, "could not check the archive: no working directory"), nil
 	}
 	defer os.RemoveAll(work)
+	// Every recorded key passed ArchiveKey, so it sits under one of the two folders.
+	folder, _ := FolderOf(imp.Archive.Key)
 	rep := importer.RunAttempt(ctx, importer.Attempt{
 		Settings:       h.settings,
 		Source:         minioSource(h.objects, bucket, imp),
@@ -382,6 +404,7 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 		Dir:            work,
 		Unencrypted:    len(h.links) > 0,
 		Progress:       p,
+		Ecosystem:      folder,
 	}, h.newPublisher)
 	if !everyPackageIn(rep) {
 		return rep, nil

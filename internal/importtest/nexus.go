@@ -35,6 +35,8 @@ type PyPINexus struct {
 	links    map[string]string   // href by file name
 	omitted  map[string]bool     // file names the page leaves out
 	tamper   bool
+	user     string // when set, a request without this user and pass answers 401
+	pass     string
 	uploads  int
 	requests []string
 }
@@ -85,6 +87,23 @@ func (n *PyPINexus) store(project, file, path string, body []byte) {
 		n.listed[project] = append(n.listed[project], file)
 	}
 	n.files[path] = body
+}
+
+// Remove makes the fake forget file under project, as an administrator's delete would.
+func (n *PyPINexus) Remove(project, file string) {
+	path := n.FilePath(project, file)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.files, path)
+	n.listed[project] = slices.DeleteFunc(n.listed[project], func(f string) bool { return f == file })
+}
+
+// RequireAuth makes every later request without user and pass in its basic
+// authorization answer 401, as Nexus does for another user.
+func (n *PyPINexus) RequireAuth(user, pass string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.user, n.pass = user, pass
 }
 
 // SetRepository makes the repository list name the repository with another
@@ -141,7 +160,12 @@ func (n *PyPINexus) handle(w http.ResponseWriter, r *http.Request) {
 	n.mu.Lock()
 	n.requests = append(n.requests, r.Method+" "+r.URL.Path)
 	status := n.status[r.URL.Path]
+	wantUser, wantPass := n.user, n.pass
 	n.mu.Unlock()
+	if user, pass, _ := r.BasicAuth(); wantUser != "" && (user != wantUser || pass != wantPass) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	if status != 0 {
 		w.WriteHeader(status)
 		_, _ = fmt.Fprintf(w, "status %d from the fake", status)
