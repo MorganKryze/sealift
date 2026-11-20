@@ -257,11 +257,45 @@ func TestDownloadFileRefusesBadInput(t *testing.T) {
 	}
 }
 
+// shortStall sets the stall timeout for one test.
+func shortStall(t *testing.T, d time.Duration) {
+	t.Helper()
+	stall := stallTimeout
+	stallTimeout = d
+	t.Cleanup(func() { stallTimeout = stall })
+}
+
+// A body that takes longer than the stall timeout in total, while a byte
+// arrives well within it each time, is a slow download, not a stalled one.
+func TestDownloadFileOutlivesTheStallTimeoutWhileBytesArrive(t *testing.T) {
+	noWaits(t)
+	shortStall(t, 200*time.Millisecond)
+	body := wheelBytes(30)
+	srv, hits := fileServer(t, func(_ int, w http.ResponseWriter) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		for _, b := range body {
+			w.(http.Flusher).Flush()
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte{b})
+		}
+	})
+	path := filepath.Join(t.TempDir(), wheelFile)
+	start := time.Now()
+	if _, err := (&Client{}).DownloadFile(context.Background(), indexFileFor(srv.URL, body), path); err != nil {
+		t.Fatalf("DownloadFile = %v, want the slow body accepted", err)
+	}
+	if took := time.Since(start); took < 2*stallTimeout {
+		t.Fatalf("the body took %s, under twice the %s stall timeout, so this test proves nothing", took, stallTimeout)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+}
+
 func TestDownloadFileStallsOut(t *testing.T) {
 	noWaits(t)
-	stall := stallTimeout
-	stallTimeout = 20 * time.Millisecond
-	t.Cleanup(func() { stallTimeout = stall })
+	shortStall(t, 20*time.Millisecond)
 	release := make(chan struct{})
 	srv, _ := fileServer(t, func(_ int, w http.ResponseWriter) {
 		w.Header().Set("Content-Length", "100")
