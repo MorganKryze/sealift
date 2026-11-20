@@ -233,3 +233,25 @@ func TestValidatePipTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestPipProjectFilesSurviveStartupSweep(t *testing.T) {
+	s := openTestStore(t)
+	files := []RequirementsFile{
+		{Name: "pins.tmp", Data: []byte("requests==2.32.3\n")},
+		{Name: "base.txt", Data: []byte("flask==3.0.0\n")},
+	}
+	p, err := s.CreatePipProject("proj", files, DefaultPipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RemoveOrphanDirs(); err != nil {
+		t.Fatalf("RemoveOrphanDirs: %v", err)
+	}
+	got, err := s.ProjectRequirements(p.ID)
+	if err != nil {
+		t.Fatalf("ProjectRequirements after the sweep: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "pins.tmp" || string(got[0].Data) != "requests==2.32.3\n" {
+		t.Errorf("files after the sweep = %+v, want both files kept", got)
+	}
+}
