@@ -194,6 +194,53 @@ func TestPipAnalysisRecordsTheBlockingPackageUvNames(t *testing.T) {
 	}
 }
 
+// uv resolves against every file the index lists, so a transitive package
+// can reach the set with no wheel the target installs. The analysis must
+// fail on it, never finish with a package that has no wheel.
+func TestChooseWheelsNamesEveryBlockedPackage(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+	ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0"})
+	ix.Add(piptest.Dist{Name: "zeta", Version: "2.0.0", Tag: "cp311-cp311-win_amd64"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "omega==1.0.0\n"))
+	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0", "theta", "3.0.0", "zeta", "2.0.0")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err == nil {
+		t.Fatal("Run succeeded, want choose-wheels to refuse eps, theta and zeta")
+	}
+	status, _ := readStatus(t, st, a)
+	if status.State != store.Failed {
+		t.Errorf("state = %q, want failed", status.State)
+	}
+	want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
+	if !slices.Equal(stepNames(status.Steps), want) {
+		t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
+	}
+	msg := status.Steps[4].Error
+	for _, want := range []string{
+		"3 packages have no wheel the target can install",
+		"eps==1.0.0: source distribution only",
+		"theta==3.0.0: no files on the index",
+		"zeta==2.0.0: wheels for other platforms only",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("choose-wheels error = %q, want %q", msg, want)
+		}
+	}
+	res, _ := readPipResult(t, st, a)
+	wantBlocking := []PipBlocking{
+		{Name: "eps", Version: "1.0.0", Kind: "source-only", Detail: "source distribution only"},
+		{Name: "theta", Version: "3.0.0", Kind: "no-files", Detail: "no files on the index"},
+		{Name: "zeta", Version: "2.0.0", Kind: "other-platforms", Detail: "wheels for other platforms only"},
+	}
+	if !slices.Equal(res.Blocking, wantBlocking) {
+		t.Errorf("blocking = %+v, want %+v", res.Blocking, wantBlocking)
+	}
+	if res.Packages == nil || len(res.Packages) != 0 {
+		t.Errorf("packages = %#v, want an empty list: nothing was scanned", res.Packages)
+	}
+}
+
 func TestPipAnalysisRecordsOneWheelPerPackage(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	// The generic wheel comes first on the page, so taking the first file
