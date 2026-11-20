@@ -398,25 +398,54 @@ func TestDownloadFileOutlivesTheStallTimeoutWhileBytesArrive(t *testing.T) {
 	}
 }
 
+// The stall timeout bounds the wait for the headers as well as for the
+// body: the client sets no timeout of its own, so it is the only bound on
+// a server that stops answering.
 func TestDownloadFileStallsOut(t *testing.T) {
 	noWaits(t)
 	shortStall(t, 20*time.Millisecond)
-	release := make(chan struct{})
-	srv, _ := fileServer(t, func(_ int, w http.ResponseWriter) {
-		w.Header().Set("Content-Length", "100")
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-		<-release
-	})
-	// Registered after the server's Close, so it runs first and frees the
-	// handlers Close waits for.
-	t.Cleanup(func() { close(release) })
-	path := filepath.Join(t.TempDir(), wheelFile)
-	_, err := (&Client{}).DownloadFile(context.Background(), indexFileFor(srv.URL, wheelBytes(100)), path)
-	if err == nil || !strings.Contains(err.Error(), "stalled") || !strings.Contains(err.Error(), wheelFile) {
-		t.Fatalf("DownloadFile = %v, want a stall naming the file", err)
+	tests := []struct {
+		name    string
+		headers bool
+	}{
+		{"headers then nothing", true},
+		{"no headers", false},
 	}
-	assertNoFile(t, path)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			srv, hits := fileServer(t, func(_ int, w http.ResponseWriter) {
+				if tc.headers {
+					w.Header().Set("Content-Length", "100")
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				<-release
+			})
+			// Registered after the server's Close, so it runs first and frees the
+			// handlers Close waits for.
+			t.Cleanup(func() { close(release) })
+			path := filepath.Join(t.TempDir(), wheelFile)
+			done := make(chan error, 1)
+			go func() {
+				_, err := (&Client{}).DownloadFile(context.Background(), indexFileFor(srv.URL, wheelBytes(100)), path)
+				done <- err
+			}()
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("DownloadFile is still waiting after 10s")
+			}
+			if err == nil || !strings.Contains(err.Error(), "stalled") || !strings.Contains(err.Error(), wheelFile) {
+				t.Fatalf("DownloadFile = %v, want a stall naming the file", err)
+			}
+			if n := hits.Load(); n != 3 {
+				t.Errorf("requests = %d, want 3: a stall is retried like a network error", n)
+			}
+			assertNoFile(t, path)
+		})
+	}
 }
 
 func TestDownloadFileErrorsNameTheFileNotTheURL(t *testing.T) {
