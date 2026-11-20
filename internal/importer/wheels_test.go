@@ -183,6 +183,7 @@ func TestPublishWheelsStopsWhenRepositoryCheckFails(t *testing.T) {
 func TestPublishWheelsFailsAMismatchAndGoesOn(t *testing.T) {
 	dir := t.TempDir()
 	newer := importtest.Wheel(t, "six", "1.17.0", "py2.py3-none-any")
+	other := importtest.Wheel(t, "requests", "1.16.0", "py2.py3-none-any")
 	idna := importtest.Wheel(t, "idna", "3.6", "py3-none-any")
 	for name, tc := range map[string]struct {
 		wheel importtest.WheelFile
@@ -191,6 +192,10 @@ func TestPublishWheelsFailsAMismatchAndGoesOn(t *testing.T) {
 		"metadata names another version": {
 			importtest.WheelFile{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", Body: newer.Body},
 			`the wheel's METADATA says "six" "1.17.0", the manifest says six 1.16.0`,
+		},
+		"metadata names another project": {
+			importtest.WheelFile{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", Body: other.Body},
+			`the wheel's METADATA says "requests" "1.16.0", the manifest says six 1.16.0`,
 		},
 		"file name names another project": {
 			importtest.WheelFile{Name: "six", Version: "1.17.0", File: "five-1.17.0-py2.py3-none-any.whl", Body: newer.Body},
@@ -217,7 +222,7 @@ func TestPublishWheelsFailsAMismatchAndGoesOn(t *testing.T) {
 				t.Errorf("next wheel: %+v", r)
 			}
 			for _, req := range n.Requests() {
-				if strings.Contains(req, "six") || strings.Contains(req, "five") {
+				if strings.Contains(req, "six") || strings.Contains(req, "five") || strings.Contains(req, "requests") {
 					t.Errorf("a request reached nexus for the mismatched wheel: %s", req)
 				}
 			}
