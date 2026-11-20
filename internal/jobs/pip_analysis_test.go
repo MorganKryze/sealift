@@ -375,6 +375,9 @@ func TestPipAnalysisRefusesAPinTheResolutionChanged(t *testing.T) {
 		{"a constraint changed", "requests==2.32.3\n-c c.txt\n", resolved("idna", "3.9", "requests", "2.32.3"), "idna==3.10 (c.txt) came back as 3.9"},
 		{"the same version written another way", "requests==2.32\n", resolved("requests", "2.32.0"), ""},
 		{"a pin whose marker is false", "requests==2.32.3\nidna==3.10 ; python_version < \"3.8\"\n", resolved("requests", "2.32.3"), ""},
+		{"a package another pin needs, under a pin whose marker is false", "zeta==1.0.0\ngamma==1.0.0 ; python_version < \"3.8\"\n", resolved("gamma", "1.1.0", "zeta", "1.0.0"), ""},
+		{"a pin whose marker is true", "zeta==1.0.0\ngamma==1.0.0 ; python_version >= \"3.8\"\n", resolved("gamma", "1.1.0", "zeta", "1.0.0"), "gamma==1.0.0 (requirements.txt) came back as 1.1.0"},
+		{"a pin whose marker sealift cannot decide", "zeta==1.0.0\ngamma==1.0.0 ; platform_release >= \"5\"\n", resolved("gamma", "1.1.0", "zeta", "1.0.0"), "gamma==1.0.0 (requirements.txt) came back as 1.1.0"},
 		{"a constraint nothing needs", "requests==2.32.3\n-c c.txt\n", resolved("requests", "2.32.3"), ""},
 	}
 	for _, c := range cases {
@@ -402,6 +405,44 @@ func TestPipAnalysisRefusesAPinTheResolutionChanged(t *testing.T) {
 				t.Errorf("a refused resolution left a lock: %v", err)
 			}
 		})
+	}
+}
+
+// A pin whose marker is false on the target fixes no version, so its
+// package stays held to the release age. A marker sealift cannot decide
+// keeps its pin exempt, as uv may hold that pin.
+func TestPipAnalysisExemptsOnlyThePinsTheTargetInstalls(t *testing.T) {
+	var logged []string
+	a, _ := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "zeta==1.0.0\n"+
+			"gamma==1.0.0 ; python_version < \"3.8\"\n"+
+			"delta==2.0.0 ; sys_platform == \"linux\"\n"+
+			"eps==1.0.0 ; platform_release >= \"5\"\n"+
+			"-c c.txt\n"),
+		reqFile("c.txt", "idna==3.10 ; os_name == \"nt\"\nchardet==5.2.0\n"))
+	uv := &fakeUv{lock: "x==1\n", set: resolved("delta", "2.0.0", "zeta", "1.0.0")}
+	a.Uv = uv
+	emit := func(e Event) {
+		var d logData
+		if e.Kind == "log" && json.Unmarshal(e.Data, &d) == nil {
+			logged = append(logged, d.Line)
+		}
+	}
+
+	if err := a.Run(context.Background(), emit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	calls := uv.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("uv ran %d times, want once", len(calls))
+	}
+	if want := []string{"chardet", "delta", "eps", "zeta"}; !slices.Equal(calls[0].Exempt, want) {
+		t.Errorf("exempt = %v, want %v", calls[0].Exempt, want)
+	}
+	if !slices.ContainsFunc(logged, func(l string) bool {
+		return strings.Contains(l, "eps==1.0.0 (requirements.txt)") && strings.Contains(l, "marker")
+	}) {
+		t.Errorf("log = %v, want a line on the marker of eps that was not decided", logged)
 	}
 }
 

@@ -192,7 +192,7 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 
 // stepResolve resolves every file together with uv and writes
 // project/requirements.lock. Every package is held to the minimum release
-// age, except the pinned ones, whose versions the pins fix.
+// age, except those the target's pins fix.
 func (r *pipRun) stepResolve() error {
 	return r.runStep("resolve", func() error {
 		dir, err := r.a.Store.NewResolveDir()
@@ -201,7 +201,7 @@ func (r *pipRun) stepResolve() error {
 		}
 		defer os.RemoveAll(dir)
 
-		pins := slices.Concat(r.set.Requirements, r.set.Constraints)
+		pins := r.targetPins()
 		exempt := make([]string, 0, len(pins))
 		for _, p := range pins {
 			exempt = append(exempt, p.Key)
@@ -230,7 +230,7 @@ func (r *pipRun) stepResolve() error {
 			}
 			return err
 		}
-		if err := r.checkPins(res.Set); err != nil {
+		if err := r.checkPins(res.Set, pins); err != nil {
 			return err
 		}
 		if err := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); err != nil {
@@ -274,15 +274,38 @@ func isNameByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-' || b == '_' || b == '.'
 }
 
-// checkPins refuses a resolution that changed a pinned version, or left
-// out a requirement whose line has no marker. A constraint only limits a
-// package something else needs, so it may be absent.
-func (r *pipRun) checkPins(set []runner.Resolved) error {
+// targetPins returns the pins that fix a version on the target: those with
+// no marker or a marker true there. A pin whose marker is false fixes
+// nothing, though another pin may still need its package, at a version the
+// resolver chooses under the release age. A marker sealift cannot decide
+// keeps its pin, since uv may hold it.
+func (r *pipRun) targetPins() []pip.Pin {
+	t := r.a.Project.PipTarget
+	platform := pip.Platform{Python: t.Python, OS: t.OS, CPU: t.CPU, Glibc: t.Glibc}
+	var pins []pip.Pin
+	for _, p := range slices.Concat(r.set.Requirements, r.set.Constraints) {
+		if p.Marker != "" {
+			holds, err := pip.MarkerHolds(p.Marker, platform)
+			if err != nil {
+				r.log(fmt.Sprintf("%s==%s (%s): %v; the pin stays exempt from the release age", p.Key, p.Version, p.File, err))
+			} else if !holds {
+				continue
+			}
+		}
+		pins = append(pins, p)
+	}
+	return pins
+}
+
+// checkPins refuses a resolution that gave one of pins another version, or
+// left out a requirement whose line has no marker. A constraint only limits
+// a package something else needs, so it may be absent.
+func (r *pipRun) checkPins(set []runner.Resolved, pins []pip.Pin) error {
 	resolved := make(map[string]string, len(set))
 	for _, p := range set {
 		resolved[p.Name] = p.Version
 	}
-	for _, p := range slices.Concat(r.set.Requirements, r.set.Constraints) {
+	for _, p := range pins {
 		if version, ok := resolved[p.Key]; ok && !pip.SameVersion(version, p.Version) {
 			return fmt.Errorf("the pin %s==%s (%s) came back as %s", p.Key, p.Version, p.File, version)
 		}

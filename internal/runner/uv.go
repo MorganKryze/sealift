@@ -38,7 +38,7 @@ type CompileInput struct {
 	Target       store.PipTarget
 	Index        string
 	ExcludeNewer time.Time
-	Exempt       []string // normalized names of every pin
+	Exempt       []string // normalized names of the pins that hold on the target
 	ExemptUntil  time.Time
 }
 
