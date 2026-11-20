@@ -14,9 +14,12 @@ Include the version, what an attacker needs, and the steps that show the problem
 
 - Every package in an archive matches the sha512 integrity the npm registry published for it. A mismatch stops the export.
 - Trivy matches the sha256 in its release's checksum file before sealift installs it.
+- uv matches the sha256 the package index publishes for its wheel before sealift installs it. sealift installs a uv release younger than the minimum release age only when the request forces it, and a pip analysis never forces it.
+- uv runs with `--no-build` and `--no-config`, so no package code runs on the connected side: a package with no wheel for the target fails the analysis, which names it. uv reads no `UV_` or `PIP_` variable and resolves against the one index sealift names.
+- A pip analysis records each package's wheel with the sha256 the index publishes, and fetches no wheel to choose it.
 - sealift proposes no version younger than the minimum release age, 14 days by default, and holds the packages under it to the same age, and installs a younger Trivy release only when you press **Install anyway**.
 - sealift downloads nothing before you press Install, Analyse or Confirm and build the archive.
-- In the published image, pnpm and Trivy run as a separate user that cannot read `private/`, which holds the settings file and the private signing key.
+- In the published image, pnpm, uv and Trivy run as a separate user that cannot read `private/`, which holds the settings file and the private signing key.
 - The archive is reproducible: the same selection built by the same sealift gives the same sha256.
 - `sealift import` publishes nothing until the archive passes every check: its sha256 and size match `manifest.json` (and the sha256 you pass with `-sha256`, when you give one), the manifest's Ed25519 signature verifies with the key the import is configured to trust (`publicKeyFile`), every tarball matches its `shippedSha512`, and the listing has no extra, missing or oversized entry.
 - The import never overwrites. A version Nexus already holds with other bytes fails with both digests, and the only exception is a copy that differs from the shipped one by the `publishConfig` that sealift removed.
@@ -44,6 +47,8 @@ Include the version, what an attacker needs, and the steps that show the problem
 - The reports (`summary.md`, `findings.csv`, `report.cdx.json`, `report.trivy.json`) are not signed. They inform the import side and are not covered.
 - The import trusts the public key file its settings name. A key carried through the kiosk with the archive weakens the check: carry it by another channel and compare the public key sha256 on both sides. A lost volume or a regenerate means a new key to carry; sealift cannot import or restore a key.
 - The minimum release age relies on pnpm's `minimumReleaseAge`, which the default pnpm 10.34.5 honours. An older pnpm set through the API can ignore it for transitive packages.
+- In a pip project, the pins of the requirements files are exempt from the minimum release age. A pinned release younger than it stays, and the analysis shows a warning with its upload date.
+- The image carries Debian's `python3` because uv needs an interpreter to start. It starts uv and builds nothing.
 - A malicious package with no published CVE passes: Trivy knows only disclosed vulnerabilities. The minimum release age and the signals on each candidate reduce that risk; they do not remove it.
 - sealift has no login. Anyone who reaches its port can run sessions, download archives, have any selection signed and regenerate the key by addressing sealift as `localhost`, as a loopback address or by its listen address. Only the regenerate route checks the `Host`; no other route does. [Deployment](docs/deployment.md#access) shows how to keep it private.
 - A Nexus repository that allows redeploy can be overwritten by another tool between the check and the upload. The runbook forbids another publish while an import runs.

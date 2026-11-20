@@ -12,13 +12,13 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 {"detail":"not found","status":404,"title":"get project","type":"about:blank"}
 ```
 
-`title` names the operation, `detail` the cause. A validation failure adds `errors`, one entry per problem with `field`, `reason`, and `name` and `value` when they apply. `type` is `about:blank`, except `tools-missing`, which adds `missing`.
+`title` names the operation, `detail` the cause. A validation failure adds `errors`, one entry per problem with `field`, `reason`, and `name` and `value` when they apply. For a requirements file, `field` is the file name, `line` the line number and `value` the line; `line` is absent for a problem with the whole file. `type` is `about:blank`, except `tools-missing`, which adds `missing`.
 
 | Status | When |
 | --- | --- |
-| 400 | An invalid body: a manifest sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
+| 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
 | 404 | An unknown project, analysis or export |
-| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; a Trivy release younger than the minimum release age |
+| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; a Trivy or uv release younger than the minimum release age |
 | 502 | GitHub cannot be reached to list Trivy releases |
 | 500 | Anything else; the server log has the cause |
 
@@ -34,15 +34,15 @@ curl -s http://localhost:8080/healthz
 
 ## Projects
 
-A project is a session: one `package.json` and its history.
+A project is a session: one `package.json` and its history, or the requirements files of a pip project and theirs. `ecosystem` says which, `npm` or `pip`. An npm project carries `target`, a pip project `pipTarget`.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /api/projects` | List projects, each with its last analysis and export. `?manifestSha256=` keeps those created from that exact file, which is how the interface finds a duplicate. |
-| `POST /api/projects` | Create a project from a `multipart/form-data` upload, field `manifest`, optional `name`, and queue its analysis. 201 with the project. 400 when the manifest is refused, 409 when the tools are not ready. |
+| `POST /api/projects` | Create a project from a `multipart/form-data` upload, field `manifest`, optional `name`, and queue its analysis. 201 with the project. 400 when the manifest is refused, 409 when the tools are not ready. With the field `ecosystem` set to `pip`, it creates a [pip project](#pip-projects). |
 | `GET /api/projects/{projectId}` | The project, its target, its analyses and its exports. |
 | `DELETE /api/projects/{projectId}` | Delete the project directory and everything in it. 204, or 409 while one of its jobs is queued or running. |
-| `PUT /api/projects/{projectId}/target` | Change the project's target platform and toolchain. |
+| `PUT /api/projects/{projectId}/target` | Change an npm project's target platform and toolchain. 400 for a pip project, whose target is set at creation. |
 | `GET /api/projects/{projectId}/manifest` | The `package.json` the project was created from, byte for byte. |
 
 <!-- run -->
@@ -50,6 +50,23 @@ A project is a session: one `package.json` and its history.
 ```sh
 curl -s http://localhost:8080/api/projects
 ```
+
+### pip projects
+
+A pip project holds one or more requirements files, resolved together for one target. `POST /api/projects` creates one from these parts:
+
+| Part | Content |
+| --- | --- |
+| `ecosystem` | `pip`. An absent field means `npm`, and any other value is refused. |
+| `name` | Required. |
+| `requirements` | One part per file, 1 to 32 files. The part's filename is the file name: a letter or digit, then letters, digits, `.`, `_` or `-`, 128 characters at most, with no two dots in a row and unique ignoring case. |
+| `pipTarget` | Optional. The target as JSON, at most 4 KiB, unknown fields refused. Absent, the default applies: `{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"}`. |
+
+A target names Python as `3.<minor>.<patch>`, `os` `linux`, `cpu` `x86_64`, `glibc` from `2.17` to `2.40`, and the uv release that resolves it. A request holds at most 40 parts. A requirements file above 1 MiB is refused, never cut.
+
+sealift reads every file before it stores anything. Each file pins exact versions with `==` and may include another file of the project with `-r` or `-c`. A pin may carry `--hash=sha256:` options. Any other option, a range, a URL or a local path is refused. A refusal answers 400 with one `errors` entry per refused line, the first 100 of them, and creates nothing. The same package pinned at two versions in two files is refused too, and the refusal names both files.
+
+The project is created with its first analysis queued, as for npm.
 
 ## Analyses
 
@@ -66,6 +83,39 @@ The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupt
 ```json
 {"message":"resolve project: pnpm install: ERR_PNPM_NO_MATCHING_VERSION No matching version found for left-pad@99.0.0: exit status 1","step":"resolve-project"}
 ```
+
+### pip analyses
+
+A pip analysis runs these steps:
+
+| Step | What it does |
+| --- | --- |
+| `validate` | Reads the project's files again and copies them into the analysis. |
+| `prepare-tools` | Installs the target's uv from the package index, held to the minimum release age, and refreshes the Trivy database. |
+| `check-pins` | Reads the index page of every requirement the target installs. It fails when a requirement has no wheel the target can install, or none its `--hash` options list, and names every such requirement. |
+| `resolve` | Resolves every file together with uv, at the target's exact Python version and platform, with `--no-build`, and writes `project/requirements.lock`. The files' pins keep their versions; every other package is held to the minimum release age. |
+| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256. It reads index pages only and downloads no file. |
+| `scan` | Scans the set for known CVEs with Trivy. |
+
+A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in place of `pnpmVersion`:
+
+| Field | Content |
+| --- | --- |
+| `target` | The target the set was resolved for. |
+| `files` | The requirements files the set comes from. |
+| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). |
+| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. |
+| `warnings` | A yanked release with the index's reason, a pin uploaded within the minimum release age, a database that could not be refreshed, and findings Trivy reported for packages outside the set. |
+
+An analysis that stops on packages with no wheel fails at `check-pins`, `resolve` or `choose-wheels`, and still carries `pipResult`: `blocking` lists every such package and `packages` is empty.
+
+```json
+{"message":"2 packages have no wheel the target can install: docopt==0.6.2 (requirements.txt): source distribution only; pywin32==306 (requirements-win.txt): wheels for other platforms only","step":"check-pins"}
+```
+
+uv stops at the first package with no usable wheel, so such a package that no file pins shows alone. A second one behind it shows at the next analysis.
+
+A pip analysis cannot be exported yet: an export request on it is refused and creates no export.
 
 ## Exports
 
@@ -111,10 +161,11 @@ A request with no `Origin` and a JSON body passes the check, as curl must. The s
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/tools` | Installed and latest Trivy versions, the database date, pnpm versions, and `ready` with `missing`. |
+| `GET /api/tools` | Installed and latest Trivy versions, the database date, pnpm and uv versions (`uvInstalled`), and `ready` with `missing`. It asks nothing of the package index. |
 | `POST /api/tools/trivy/update` | Install a Trivy release: the latest, or `version`. 409 when it is younger than the minimum release age, unless `force` is true. 502 when GitHub cannot be reached. |
 | `POST /api/tools/trivy/activate` | Switch to another installed Trivy, body `{"version":"0.74.0"}`. |
 | `POST /api/tools/trivy/db/update` | Download the vulnerability database now. |
+| `POST /api/tools/uv/install` | Install a uv release from the package index, body `{"version":"0.13.7"}`. sealift checks the wheel against the sha256 the index publishes. 409 when the release is younger than the minimum release age, unless `force` is true. 400 for a version that is not a release number. |
 
 <!-- run -->
 <!-- expect: "trivyActive" -->
@@ -125,6 +176,8 @@ curl -s http://localhost:8080/api/tools
 ```json
 {"latestSizeBytes":45424969,"missing":[],"pnpmInstalled":["10.34.5"],"ready":true,"trivyActive":"0.74.0","trivyDbDate":"2026-09-23T07:12:28.724391795Z","trivyInstalled":["0.74.0"],"trivyLatest":"0.74.0","trivyLatestAge":"960h59m15.099150044s"}
 ```
+
+A pip analysis installs its target's uv by itself at `prepare-tools`, never forced. uv and the pip analyses read one package index, `https://pypi.org/simple/`. `SEALIFT_PIP_INDEX` replaces it, for tests and development only. The value must be an `https` URL, or `http` on `localhost`, `127.0.0.1` or `::1`, with no credentials, query or fragment. sealift refuses to start on any other value and names the variable.
 
 ## The event stream
 
