@@ -1,6 +1,6 @@
 # Archive format
 
-This page is the contract between sealift's export and the tool that imports it on the air-gapped side: the layout of `packages_npm.tar.gz`, the fields of `manifest.json`, and the reports. It describes `formatVersion` 2. [The air gap](../air-gap.md) covers the same files for operators.
+This page is the contract between sealift's export and the tool that imports it on the air-gapped side: the layout of `packages_npm.tar.gz` and `packages_pip.tar.gz`, the fields of `manifest.json`, and the reports. It describes `formatVersion` 2, the npm format, and `formatVersion` 3, the pip format. [The air gap](../air-gap.md) covers the npm files for operators.
 
 ## packages_npm.tar.gz
 
@@ -183,3 +183,110 @@ The archive and the manifest are opened read-only. The command writes the JSON r
 | `report.trivy.json` | Trivy JSON, schema 2 | Trivy's scan of the exported packages |
 
 The reports are for people and audit tools. The import does not need them.
+
+## packages_pip.tar.gz
+
+A pip export writes `packages_pip.tar.gz`, laid out as `packages_npm.tar.gz` is: a gzip-compressed tar with one top-level directory, `out/`.
+
+| Entry | Content |
+| --- | --- |
+| `out/` | Mode 0755 |
+| `out/<file>.whl` | One wheel per package, mode 0644 |
+
+`out/` holds the wheels and nothing else, one per package. `archive.WriteTarGz` writes this archive too, so the entries are sorted, every timestamp is the Unix epoch and owner and group are 0. The same analysis exported twice by the same build of sealift has the same sha256.
+
+A wheel keeps the file name the package index gave it, such as `MarkupSafe-3.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`. The manifest's `name` is the normalized project name, which the file name may spell another way. A file name is at most 251 bytes, so `out/<file>` stays within the 255-byte bound on an entry name.
+
+## manifest.json of a pip export
+
+```json
+{
+  "formatVersion": 3,
+  "ecosystem": "pip",
+  "toolVersion": "dev",
+  "analysisId": "20261120T091500Z",
+  "createdAt": "2026-11-20T09:17:42.518204331Z",
+  "target": {
+    "python": "3.11.2",
+    "os": "linux",
+    "cpu": "x86_64",
+    "glibc": "2.28",
+    "uvVer": "0.13.7"
+  },
+  "archive": {
+    "sha256": "7412191e280551b2bb3071c767b661b39e9b6966528f0fb3afd9d167141043b7",
+    "size": 1395712
+  },
+  "packages": [
+    {
+      "name": "jinja2",
+      "version": "3.1.6",
+      "file": "jinja2-3.1.6-py3-none-any.whl",
+      "sha256": "dc4cadfd8d415504c2c06cd7f95028fcce2e45cd2297b52222fba1c0b0be8abb",
+      "shippedSha512": "43e5e55037605ffd406599cb282af332714528dfd8cb7d3aa42e46c782fb4c7abab45a415ba60b3698e72fd2915750813cdf4a53b47e856db3d78a66712dabde"
+    },
+    {
+      "name": "markupsafe",
+      "version": "3.0.2",
+      "file": "MarkupSafe-3.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "7743268b07457bf5f423266c39c8de26a3bbea92091b6a7d715a5bdfeffecbc0",
+      "shippedSha512": "2567b4efaa0966369b002906a9ed2f891befe023b797e90a664ddc12b1fb9cc54c9de7d96b7a4aebaa161927a7ff8e1d24ef18e08a998eb92a930f8a213e61ec"
+    }
+  ]
+}
+```
+
+The digests in this example are made up and match no published wheel.
+
+| Field | Meaning |
+| --- | --- |
+| `formatVersion` | 3, the pip format |
+| `ecosystem` | `pip` |
+| `toolVersion` | The sealift release that built the archive; `dev` for a build without a version, as in this example |
+| `analysisId` | The analysis the wheels came from |
+| `createdAt` | When the export ran, RFC 3339, UTC |
+| `target.python`, `.os`, `.cpu`, `.glibc`, `.uvVer` | The interpreter, system and uv version the analysis chose the wheels for |
+| `archive.sha256`, `archive.size` | Hex sha256 and byte size of `packages_pip.tar.gz` |
+| `packages[].name` | The project name in its PEP 503 normalized form: lower case, each run of `-`, `_` and `.` turned into one `-` |
+| `packages[].version` | The exact version |
+| `packages[].file` | The wheel's file name under `out/` |
+| `packages[].sha256` | The hex sha256 the package index published for the wheel |
+| `packages[].shippedSha512` | Hex sha512 of the file under `out/`, the same bytes as `sha256` |
+
+The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+
+## Telling the formats apart
+
+Once the signature verifies, an import reads `formatVersion` and `ecosystem`, and nothing else, to choose the rules for the rest of the manifest:
+
+| `formatVersion` | `ecosystem` | Read as |
+| --- | --- | --- |
+| 2 | absent or `npm` | npm, by the rules of [What `sealift import` checks](#what-sealift-import-checks) |
+| 3 | `pip` | pip, by the rules of [What an import checks in a pip archive](#what-an-import-checks-in-a-pip-archive) |
+
+Any other pair is refused with one of `formatVersion is missing`, `formatVersion 2 is an npm manifest, and its ecosystem is not npm`, `formatVersion 3 is a pip manifest, and its ecosystem is not pip` or `formatVersion is not 2 or 3, the versions this import reads`. The refusal does not repeat the value.
+
+An npm manifest keeps `formatVersion` 2 and has no `ecosystem` key, so an npm export writes the bytes 0.6.2 wrote. The import of sealift 0.6.2 reads `formatVersion` 2 only, and refuses a pip manifest with `formatVersion is missing or not 2, the only version this import reads`.
+
+## What an import checks in a pip archive
+
+The signature comes first, with the same steps and the same four refusal phrases as for npm (see [What `sealift import` checks](#what-sealift-import-checks)). Then the import tells the formats apart as above.
+
+The manifest:
+
+1. It is at most 16 MiB, and valid JSON with nothing after the document.
+2. `formatVersion` is 3 and `ecosystem` is `pip`. Every field in the table above is present and not empty: a missing field refuses the manifest. `packages` is not empty.
+3. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters, as for npm. `createdAt` is an RFC 3339 time. The target is checked as text only.
+4. Each `file` is a plain file name of at most 251 bytes that starts with a letter or a digit, holds only letters, digits and `._!+-`, and ends in `.whl`. It also reads as a wheel name: project name, version, an optional build tag, then the Python, ABI and platform tags. An sdist or any other file is refused.
+5. Each `name` is a valid project name in its normalized form. Each `version` is an exact public version of at most 256 bytes, with no range, no wildcard and no local part.
+6. Each `file` names its entry's package and version: the project name in the file, once normalized, is `name`, and its version equals `version` as PEP 440 compares them, so `3.1.6.0` matches `3.1.6`.
+7. `sha256` is 64 lowercase hex digits and `shippedSha512` 128.
+8. Each `name` appears once. A pip archive carries one wheel per package, so a second entry for a name, at the same version or another, refuses the manifest.
+9. A refusal names the field at fault. It repeats a `file` or a `name` only after that value has passed its rule above, and no other manifest value.
+10. Fields this version does not know are ignored.
+
+The archive:
+
+1. Rules 1 to 5 of the npm archive list apply as they are. They cover the size and sha256, the entry names, the bounds of 10,000 entries, 10 GiB unpacked and 255-byte names, and the cap on the inflated tar data. They also cover the zero padding after the end marker, and require every file under `out/` to be listed in `packages[].file` and every listed file to be present.
+2. Each wheel's sha512 matches `shippedSha512`, and its sha256 matches `sha256`. The refusals read `<file> does not match its shipped sha512` and `<file> does not match its sha256`.
+3. As for npm, a wrong size or sha256 of the archive is named before any other problem.

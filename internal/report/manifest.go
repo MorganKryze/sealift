@@ -39,3 +39,29 @@ type PackageEntry struct {
 	ShippedSHA512         string `json:"shippedSha512"`
 	PublishConfigStripped bool   `json:"publishConfigStripped"`
 }
+
+// PipManifestFormatVersion is the schema version of a pip export's
+// manifest.json. The ecosystem field tells it apart from an npm manifest.
+const PipManifestFormatVersion = 3
+
+// PipManifest is the content of a pip export's manifest.json.
+type PipManifest struct {
+	FormatVersion int             `json:"formatVersion"`
+	Ecosystem     store.Ecosystem `json:"ecosystem"`
+	ToolVersion   string          `json:"toolVersion"`
+	AnalysisID    string          `json:"analysisId"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	Target        store.PipTarget `json:"target"`
+	Archive       ArchiveManifest `json:"archive"`
+	Packages      []WheelEntry    `json:"packages"`
+}
+
+// WheelEntry describes one wheel a pip archive carries: sha256 is the
+// index's, shippedSha512 that of the same bytes.
+type WheelEntry struct {
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	File          string `json:"file"`
+	SHA256        string `json:"sha256"`
+	ShippedSHA512 string `json:"shippedSha512"`
+}
