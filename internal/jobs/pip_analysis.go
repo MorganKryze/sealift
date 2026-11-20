@@ -305,16 +305,18 @@ func (r *pipRun) stepResolve() error {
 // job, so a done analysis never stands for a scan that did not run.
 func (r *pipRun) stepScan() error {
 	return r.runStep("scan", func() error {
-		components := make([]sbom.Component, len(r.resolved))
-		for i, p := range r.resolved {
-			components[i] = sbom.Component{Name: p.Name, Version: p.Version, Type: "pypi"}
+		components := make([]sbom.Component, 0, len(r.resolved))
+		for _, p := range r.resolved {
+			components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
 		}
 		findings, err := scanComponents(r.ctx, r.a.Trivy, components, filepath.Join(r.a.Dir, "project.trivy.json"))
 		if err != nil {
 			return fmt.Errorf("scan the resolved set: %w", err)
 		}
-		// Trivy may name a package as its metadata spells it, such as
-		// Jinja2, while the set holds normalized names.
+		// Trivy may name a package as its metadata or the SBOM spells it,
+		// such as Jinja2 or plone.namedfile, while the set holds normalized
+		// names. Both spellings of a project fold into one key, where
+		// rank.Index.Set counts each vulnerability once.
 		for i := range findings {
 			findings[i].Package = pip.Normalize(findings[i].Package)
 		}

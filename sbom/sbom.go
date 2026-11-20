@@ -34,6 +34,22 @@ func PyPIPURL(name, version string) string {
 	return "pkg:pypi/" + pip.Normalize(name) + "@" + version
 }
 
+// PyPIComponents returns the components that stand for one PyPI package in
+// an SBOM Trivy scans: the normalized name and, when that name holds a
+// hyphen, a second spelling with dots. Trivy matches a PyPI package on
+// its component name and folds case and underscores but not dots, so a
+// project published as plone.namedfile matches only under that spelling.
+// A published name that mixes dots with hyphens or underscores, such as
+// a.b-c, matches under neither spelling.
+func PyPIComponents(name, version string) []Component {
+	name = pip.Normalize(name)
+	components := []Component{{Name: name, Version: version, Type: "pypi"}}
+	if strings.Contains(name, "-") {
+		components = append(components, Component{Name: strings.ReplaceAll(name, "-", "."), Version: version, Type: "pypi"})
+	}
+	return components
+}
+
 // purlOf returns c's package URL. An unknown type is an error: a purl
 // Trivy cannot match would read as a package with no known CVE.
 func purlOf(c Component) (string, error) {
@@ -77,12 +93,20 @@ func WriteCycloneDX(w io.Writer, components []Component) error {
 	sorted = slices.Compact(sorted)
 
 	doc := document{BOMFormat: "CycloneDX", SpecVersion: "1.6", Version: 1, Components: make([]component, 0, len(sorted))}
+	refs := map[string]bool{}
 	for _, c := range sorted {
 		purl, err := purlOf(c)
 		if err != nil {
 			return err
 		}
-		doc.Components = append(doc.Components, component{Type: "library", BOMRef: purl, Name: c.Name, Version: c.Version, PURL: purl})
+		ref := purl
+		if refs[purl] {
+			// CycloneDX wants each bom-ref unique, and the spellings of one
+			// PyPI project share a purl.
+			ref = c.Name + "@" + c.Version
+		}
+		refs[purl] = true
+		doc.Components = append(doc.Components, component{Type: "library", BOMRef: ref, Name: c.Name, Version: c.Version, PURL: purl})
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

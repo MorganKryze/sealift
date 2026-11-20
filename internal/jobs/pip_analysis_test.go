@@ -691,6 +691,50 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 	}
 }
 
+// The lock names plone.namedfile as plone-namedfile, while Trivy knows it
+// only under its published spelling.
+func TestPipScanFindsADottedName(t *testing.T) {
+	cases := []struct {
+		name  string
+		trivy runner.Trivy
+	}{
+		{"under its published spelling", &fakeTrivy{db: map[string][]fakeFinding{
+			"plone.namedfile@5.0.0": {{id: "CVE-2023-41048", severity: "LOW", fixed: "5.6.1, 6.0.3"}},
+		}}},
+		{"once when Trivy reports both spellings", &cannedTrivy{report: pipTrivyReport(
+			[5]string{"plone.namedfile", "5.0.0", "CVE-2023-41048", "LOW", "5.6.1, 6.0.3"},
+			[5]string{"plone-namedfile", "5.0.0", "CVE-2023-41048", "LOW", "5.6.1, 6.0.3"},
+		)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+				reqFile("requirements.txt", "plone.namedfile==5.0.0\n"))
+			a.Uv = &fakeUv{lock: "plone.namedfile==5.0.0\n", set: resolved("plone-namedfile", "5.0.0", "six", "1.16.0")}
+			a.Trivy = c.trivy
+
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			res, _ := readPipResult(t, st, a)
+			var names []string
+			for _, p := range res.Packages {
+				names = append(names, p.Name+"@"+p.Version)
+			}
+			if want := []string{"plone-namedfile@5.0.0", "six@1.16.0"}; !slices.Equal(names, want) {
+				t.Fatalf("packages = %v, want %v", names, want)
+			}
+			want := []PipFinding{{ID: "CVE-2023-41048", Severity: "LOW", FixedVersions: []string{"5.6.1", "6.0.3"}, Title: "test finding"}}
+			if got := res.Packages[0].CVEs; !reflect.DeepEqual(got, want) {
+				t.Errorf("plone-namedfile findings = %+v, want %+v", got, want)
+			}
+			if len(res.Warnings) != 0 {
+				t.Errorf("warnings = %q, want none", res.Warnings)
+			}
+		})
+	}
+}
+
 func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +142,27 @@ func TestTrivyScansPyPIComponents(t *testing.T) {
 		t.Skip("trivy not found on PATH: install Trivy (https://github.com/aquasecurity/trivy) to run this test")
 	}
 
+	// Each package goes through the naming a pip analysis uses: a line of
+	// uv's lock, parseLock, then sbom.PyPIComponents. Trivy matches PyPI
+	// names without folding dots, so plone.namedfile finds its CVE only
+	// under its published spelling.
+	rows := []struct{ lock, name, version, cve string }{
+		{"Jinja2==3.1.2", "jinja2", "3.1.2", "CVE-2024-22195"},
+		{"plone.namedfile==5.0.0", "plone-namedfile", "5.0.0", "CVE-2023-41048"},
+	}
+	var lock strings.Builder
+	for _, r := range rows {
+		lock.WriteString(r.lock + "\n")
+	}
+	set, err := parseLock([]byte(lock.String()))
+	if err != nil {
+		t.Fatalf("parseLock: %v", err)
+	}
+	var components []sbom.Component
+	for _, p := range set {
+		components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
+	}
+
 	dir := t.TempDir()
 	sbomPath := filepath.Join(dir, "project.cdx.json")
 	reportPath := filepath.Join(dir, "project.trivy.json")
@@ -148,7 +170,7 @@ func TestTrivyScansPyPIComponents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sbom: %v", err)
 	}
-	err = sbom.WriteCycloneDX(f, []sbom.Component{{Name: "Jinja2", Version: "3.1.2", Type: "pypi"}})
+	err = sbom.WriteCycloneDX(f, components)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
@@ -175,13 +197,21 @@ func TestTrivyScansPyPIComponents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadTrivyJSON: %v", err)
 	}
-	for _, f := range findings {
-		if f.ID == "CVE-2024-22195" {
-			if pip.Normalize(f.Package) != "jinja2" || f.Version != "3.1.2" || f.FixedVersion == "" {
-				t.Errorf("CVE-2024-22195 = %+v, want jinja2 3.1.2 with a fixed version", f)
+	for _, r := range rows {
+		t.Run(r.lock, func(t *testing.T) {
+			found := false
+			for _, f := range findings {
+				if f.ID != r.cve {
+					continue
+				}
+				found = true
+				if pip.Normalize(f.Package) != r.name || f.Version != r.version || f.FixedVersion == "" {
+					t.Errorf("%s = %+v, want %s %s with a fixed version", r.cve, f, r.name, r.version)
+				}
 			}
-			return
-		}
+			if !found {
+				t.Errorf("findings = %+v, want %s for %s %s", findings, r.cve, r.name, r.version)
+			}
+		})
 	}
-	t.Fatalf("findings = %+v, want CVE-2024-22195 for jinja2 3.1.2", findings)
 }
