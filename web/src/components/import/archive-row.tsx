@@ -74,7 +74,7 @@ export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
         <div className="col-span-2 min-w-0">
           <p className="text-[13px] font-medium">Cannot be imported</p>
           <p className="mt-1 text-[13px] [overflow-wrap:anywhere]">{archive.reason || "Reason not recorded"}</p>
-          <p className="mt-1 text-xs text-muted">Keep one archive with its manifest.json and manifest.json.sig side by side, at the root of packages/npm/ or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.</p>
+          <p className="mt-1 text-xs text-muted">Keep one archive with its manifest.json and manifest.json.sig side by side, in packages/npm/ for npm or packages/pip/ for pip, at the root or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.</p>
         </div>
       )}
     </li>

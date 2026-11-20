@@ -183,9 +183,13 @@ The full reason reads `the manifest is signed by another key, public key sha256 
 
 The full reason reads `the signature does not match the manifest: manifest.json or manifest.json.sig changed after the export. Carry both again from the connected side`. The signature names the trusted key, and the check fails: a byte of the manifest or of the signature changed after the export. Do not edit either file. Carry both again, and check them with the sha256 you keep from the connected side.
 
-### formatVersion is missing or not 2
+### formatVersion is missing, or is not 2 or 3
 
-The signature verified, but the manifest is not of the version this import reads. Export the selection again with a sealift of the same release as the import.
+The signature verified, but the manifest names no format, or a format this import does not read: 2 for npm, 3 for pip. Export the selection again with a sealift of the same release as the import.
+
+### the settings name no pip repository
+
+The archive is a pip archive and the settings file has no `nexus.pip` section, so the import refuses it before reading it. Set `nexus.pip.repository` to the pypi hosted repository, or `nexus.pipRepository` in the chart's values, and start the import again.
 
 ### publicKeyFile is required, or cannot be read
 

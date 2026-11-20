@@ -259,7 +259,7 @@ func TestDownloadFileRefusesBadInput(t *testing.T) {
 		{"http on another host", func(f *IndexFile) { f.URL = "http://files.example.org/files/" + wheelFile }, "is not https"},
 		{"user info", func(f *IndexFile) { f.URL = "http://user:pw@" + host + "/files/" + wheelFile }, "credentials"},
 		{"no size", func(f *IndexFile) { f.Size = 0 }, "no recorded size"},
-		{"size above the bound", func(f *IndexFile) { f.Size = MaxWheelBytes + 1 }, "4294967296-byte bound"},
+		{"size above the bound", func(f *IndexFile) { f.Size = MaxDownloadBytes + 1 }, "4294967296-byte bound"},
 		{"uppercase sha256", func(f *IndexFile) { f.Sha256 = strings.ToUpper(f.Sha256) }, "no valid sha256"},
 		{"short sha256", func(f *IndexFile) { f.Sha256 = f.Sha256[:63] }, "no valid sha256"},
 		{"source distribution", func(f *IndexFile) {

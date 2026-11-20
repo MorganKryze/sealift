@@ -673,6 +673,35 @@ func TestChartNotes(t *testing.T) {
 
 // TestChartSettingsLoad loads the settings the chart renders through the
 // import's own loader, in a directory laid out like the pod's /etc/sealift.
+// loadRendered writes the rendered settings beside stand-in secret files laid
+// out as the pod mounts them, and loads them with the import's own loader.
+func loadRendered(t *testing.T, docs []map[string]any) importer.Settings {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"config/settings.yaml":       settingsOf(t, docs),
+		"secrets/nexus-password":     "stand-in-1\n",
+		"secrets/nexus-pip-password": "stand-in-pip\n",
+		"secrets/minio-access-key":   "stand-in-2\n",
+		"secrets/minio-secret-key":   "stand-in-3\n",
+		"public-key/public-key.pem":  testPEM,
+	}
+	for name, body := range files {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := importer.LoadSettings(filepath.Join(root, "config", "settings.yaml"))
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	return s
+}
+
 func TestChartSettingsLoad(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -702,28 +731,7 @@ func TestChartSettingsLoad(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			docs := mustRender(t, tt.args...)
-			files := map[string]string{
-				"config/settings.yaml":      settingsOf(t, docs),
-				"secrets/nexus-password":    "stand-in-1\n",
-				"secrets/minio-access-key":  "stand-in-2\n",
-				"secrets/minio-secret-key":  "stand-in-3\n",
-				"public-key/public-key.pem": testPEM,
-			}
-			for name, body := range files {
-				p := filepath.Join(root, name)
-				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			s, err := importer.LoadSettings(filepath.Join(root, "config", "settings.yaml"))
-			if err != nil {
-				t.Fatalf("LoadSettings: %v", err)
-			}
+			s := loadRendered(t, mustRender(t, tt.args...))
 			if err := s.CheckService(); err != nil {
 				t.Fatalf("CheckService: %v", err)
 			}
@@ -956,4 +964,108 @@ func TestChartExampleValues(t *testing.T) {
 			t.Errorf("%s rendered %d times, want 1", kind, n)
 		}
 	}
+}
+
+// secretKeys returns the keys the pod reads from the Secret, in order.
+func secretKeys(t *testing.T, d map[string]any) string {
+	t.Helper()
+	items, _ := at(volume(t, d, "secrets"), "secret", "items").([]any)
+	var keys []string
+	for _, it := range items {
+		if at(it, "key") != at(it, "path") {
+			t.Errorf("secret item %v is mounted under another name", it)
+		}
+		keys = append(keys, fmt.Sprint(at(it, "key")))
+	}
+	return strings.Join(keys, ",")
+}
+
+// nexusSettings decodes the rendered settings file and returns its nexus section.
+func nexusSettings(t *testing.T, docs []map[string]any) map[string]any {
+	t.Helper()
+	var settings map[string]any
+	if err := yaml.Unmarshal([]byte(settingsOf(t, docs)), &settings); err != nil {
+		t.Fatal(err)
+	}
+	nexus, _ := settings["nexus"].(map[string]any)
+	if nexus == nil {
+		t.Fatal("the settings hold no nexus section")
+	}
+	return nexus
+}
+
+func TestChartPipRepository(t *testing.T) {
+	const npmKeys = "nexus-password,minio-access-key,minio-secret-key"
+	t.Run("no pip repository renders no pip section", func(t *testing.T) {
+		docs := mustRender(t)
+		if pip, ok := nexusSettings(t, docs)["pip"]; ok {
+			t.Errorf("nexus.pip = %v, want none", pip)
+		}
+		if got := secretKeys(t, find(t, docs, "Deployment", "")); got != npmKeys {
+			t.Errorf("secret keys = %s, want %s", got, npmKeys)
+		}
+		if s := loadRendered(t, docs); s.Pip != nil {
+			t.Errorf("loaded Pip = %+v, want nil", s.Pip)
+		}
+	})
+	t.Run("a pip repository alone uses the npm user", func(t *testing.T) {
+		docs := mustRender(t, "--set", "nexus.pipRepository=pypi-hosted")
+		pip, _ := nexusSettings(t, docs)["pip"].(map[string]any)
+		if fmt.Sprint(pip) != "map[repository:pypi-hosted]" {
+			t.Errorf("nexus.pip = %v, want the repository alone", pip)
+		}
+		if got := secretKeys(t, find(t, docs, "Deployment", "")); got != npmKeys {
+			t.Errorf("secret keys = %s, want %s without a pip password", got, npmKeys)
+		}
+		s := loadRendered(t, docs)
+		if s.Pip == nil || s.Pip.Repository != "pypi-hosted" || s.Pip.User != "sealift-import" || string(s.Pip.Password) != "stand-in-1" {
+			t.Errorf("loaded Pip = %+v, want pypi-hosted with the npm user and password", s.Pip)
+		}
+	})
+	t.Run("a pip user reads its own password from the Secret", func(t *testing.T) {
+		docs := mustRender(t, "--set", "nexus.pipRepository=pypi-hosted", "--set", "nexus.pipUser=sealift-pip")
+		pip, _ := nexusSettings(t, docs)["pip"].(map[string]any)
+		want := map[string]any{"repository": "pypi-hosted", "user": "sealift-pip", "passwordFile": "../secrets/nexus-pip-password"}
+		if fmt.Sprint(pip) != fmt.Sprint(want) {
+			t.Errorf("nexus.pip = %v, want %v", pip, want)
+		}
+		if got, want := secretKeys(t, find(t, docs, "Deployment", "")), "nexus-password,nexus-pip-password,minio-access-key,minio-secret-key"; got != want {
+			t.Errorf("secret keys = %s, want %s", got, want)
+		}
+		s := loadRendered(t, docs)
+		if s.Pip == nil || s.Pip.Repository != "pypi-hosted" || s.Pip.User != "sealift-pip" || string(s.Pip.Password) != "stand-in-pip" {
+			t.Errorf("loaded Pip = %+v, want pypi-hosted, sealift-pip and the pip password", s.Pip)
+		}
+		if s.User != "sealift-import" || string(s.Password) != "stand-in-1" {
+			t.Errorf("loaded npm user %q changed", s.User)
+		}
+	})
+	t.Run("the pypi placeholder is refused", func(t *testing.T) {
+		_, err := render(t, "--set", "nexus.pipRepository=<nexus-pypi-repository>")
+		want := "nexus.pipRepository still holds its placeholder <nexus-pypi-repository>"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want %q", err, want)
+		}
+	})
+	t.Run("a pip user without a pip repository is refused", func(t *testing.T) {
+		_, err := render(t, "--set", "nexus.pipUser=sealift-pip")
+		want := "nexus.pipRepository is required when nexus.pipUser is set"
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want %q", err, want)
+		}
+	})
+	t.Run("no value holds a credential", func(t *testing.T) {
+		out, err := run(t, "template", "rel", chartDir, "-f", testValues, "--set", "nexus.pipRepository=pypi-hosted", "--set", "nexus.pipUser=sealift-pip", "--set", "nexus.pipPassword=stand-in")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "stand-in") {
+			t.Error("a nexus.pipPassword value reaches the rendered output")
+		}
+		for key := range nexusSettings(t, mustRender(t, "--set", "nexus.pipRepository=pypi-hosted", "--set", "nexus.pipUser=sealift-pip"))["pip"].(map[string]any) {
+			if strings.EqualFold(key, "password") {
+				t.Errorf("nexus.pip carries a %s value", key)
+			}
+		}
+	})
 }

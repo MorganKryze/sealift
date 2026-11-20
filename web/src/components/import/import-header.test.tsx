@@ -55,6 +55,8 @@ describe("import header", () => {
     expect(value("libc")).toBe("glibc")
     expect(value("Node")).toBe("22.17.1")
     expect(value("pnpm")).toBe("12.3.4")
+    expect(screen.queryByText("Python", { selector: "dt" })).toBeNull()
+    expect(screen.queryByText("glibc", { selector: "dt" })).toBeNull()
   })
 
   it("says Not read for every value the attempt never read", () => {
@@ -84,6 +86,42 @@ describe("import header", () => {
   it("keeps quiet about plain http when the report does not say so", () => {
     render(<ImportPageHeader imp={imp(attempt())} />)
     expect(screen.queryByText(/plain http/i)).toBeNull()
+  })
+
+  it("shows Python and glibc in place of Node and pnpm for a pip import", () => {
+    const pip = { os: "linux", cpu: "x86_64", libc: "", node: "", pnpmVer: "", python: "3.11.2", glibc: "2.28" }
+    const a = attempt({}, { ecosystem: "pip", target: pip, nexus: { url: "http://nexus.lab:8081", repository: "pypi-hosted" } })
+    render(<ImportPageHeader imp={imp(a, "packages/pip/2026-11-20-data-tools/packages_pip.tar.gz")} />)
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("packages_pip.tar.gz")
+    expect(screen.getByText("2026-11-20-data-tools/")).toBeInTheDocument()
+    expect(value("Target OS")).toBe("linux")
+    expect(value("CPU")).toBe("x86_64")
+    expect(value("Python")).toBe("3.11.2")
+    expect(value("glibc")).toBe("2.28")
+    expect(value("Nexus repository")).toBe("pypi-hosted")
+    for (const label of ["Node", "pnpm", "libc"]) {
+      expect(screen.queryByText(label, { selector: "dt" })).toBeNull()
+    }
+  })
+
+  it("shows the Python target of a queued pip import from its folder, before any report", () => {
+    const queued = attempt({ n: 1, status: "queued", outcome: "", startedAt: undefined }, { outcome: "", importVersion: "", target: blank, nexus: { url: "", repository: "" } })
+    render(<ImportPageHeader imp={imp(queued, "packages/pip/2026-11-20-data-tools/packages_pip.tar.gz")} />)
+    expect(value("Python")).toBe("Not read")
+    expect(value("glibc")).toBe("Not read")
+    for (const label of ["Node", "pnpm", "libc"]) {
+      expect(screen.queryByText(label, { selector: "dt" })).toBeNull()
+    }
+  })
+
+  it("shows the npm target of a queued npm import", () => {
+    const queued = attempt({ n: 1, status: "queued", outcome: "", startedAt: undefined }, { outcome: "", importVersion: "", target: blank, nexus: { url: "", repository: "" } })
+    render(<ImportPageHeader imp={imp(queued)} />)
+    for (const label of ["libc", "Node", "pnpm"]) {
+      expect(value(label)).toBe("Not read")
+    }
+    expect(screen.queryByText("Python", { selector: "dt" })).toBeNull()
+    expect(screen.queryByText("glibc", { selector: "dt" })).toBeNull()
   })
 
   it("wraps a 1,024-byte key", () => {

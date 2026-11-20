@@ -63,6 +63,20 @@ The service writes no dist-tag. A lab run on 2026-11-19 on Nexus 3.96.5 showed t
 
 Ask for a dedicated hosted npm repository for the proof of concept, with the same five privileges, and a group that also serves it to projects. Nothing imported then reaches production, and removing a version needs no administrator.
 
+## Nexus for Python
+
+sealift does not publish Python packages yet: support for pip is in progress. Asking now keeps the request from blocking that upgrade, and the same rights serve the manual path used until then.
+
+Ask for a hosted `pypi` repository, or the existing one, and a role on it with these five privileges, held by the same user as the npm role or by a second one:
+
+- `nx-repository-view-pypi-<nexus-pypi-repository>-browse`
+- `nx-repository-view-pypi-<nexus-pypi-repository>-read`
+- `nx-repository-view-pypi-<nexus-pypi-repository>-add`
+- `nx-repository-view-pypi-<nexus-pypi-repository>-edit`
+- `nx-component-upload`
+
+Why: the same as for npm. A wheel is read before its upload, uploaded through the component upload, and read back. What fails without it: the same 403 on the upload, and a failed check on each version without read or browse. Projects install from the repository's simple index, `<nexus-url>/repository/<nexus-pypi-repository>/simple/`, or from a group that serves it. Ask for **Disable redeploy** on a new repository: a wheel never changes once published.
+
 ## Keycloak
 
 Ask for one confidential client for the import's oauth2-proxy, in the realm Package Pusher already uses:

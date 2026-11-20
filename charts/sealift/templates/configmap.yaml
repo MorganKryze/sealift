@@ -12,8 +12,19 @@
 {{- if .Values.minio.region -}}
 {{- $_ := set $minio "region" .Values.minio.region -}}
 {{- end -}}
+{{- $nexus := dict "url" $nexusURL "repository" $repository "user" $user "passwordFile" "../secrets/nexus-password" -}}
+{{- if .Values.nexus.pipRepository -}}
+{{- $pip := dict "repository" (include "sealift.value" (list "nexus.pipRepository" .Values.nexus.pipRepository)) -}}
+{{- if .Values.nexus.pipUser -}}
+{{- $_ := set $pip "user" (include "sealift.value" (list "nexus.pipUser" .Values.nexus.pipUser)) -}}
+{{- $_ := set $pip "passwordFile" "../secrets/nexus-pip-password" -}}
+{{- end -}}
+{{- $_ := set $nexus "pip" $pip -}}
+{{- else if .Values.nexus.pipUser -}}
+{{- fail "nexus.pipRepository is required when nexus.pipUser is set" -}}
+{{- end -}}
 {{- $settings := dict
-  "nexus" (dict "url" $nexusURL "repository" $repository "user" $user "passwordFile" "../secrets/nexus-password")
+  "nexus" $nexus
   "publicKeyFile" "../public-key/public-key.pem"
   "token" (dict
     "keySetUrl" (default (printf "%s/protocol/openid-connect/certs" $realm) .Values.keycloak.keySetUrl)

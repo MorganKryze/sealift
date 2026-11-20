@@ -18,6 +18,13 @@ nexus:
   url: ""
   repository: ""
   user: ""
+  # Optional, unlike the empty values above: the pypi hosted repository pip
+  # archives publish into. Empty renders no pip section, and the import
+  # refuses pip archives.
+  pipRepository: ""
+  # Optional: the Nexus user for the pypi repository. Empty means nexus.user
+  # and its password. When set, the Secret must hold nexus-pip-password.
+  pipUser: ""
 
 keycloak:
   # The realm's address, such as https://<host>/realms/<realm>.
@@ -40,7 +47,8 @@ minio:
 
 secret:
   # A Secret of the release's namespace that you create. The chart never
-  # creates it. Keys: nexus-password, minio-access-key, minio-secret-key.
+  # creates it. Keys: nexus-password, minio-access-key, minio-secret-key,
+  # and nexus-pip-password when nexus.pipUser is set.
   name: ""
 
 publicKey:

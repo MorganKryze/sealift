@@ -95,6 +95,10 @@ spec:
             items:
               - key: nexus-password
                 path: nexus-password
+              {{- if .Values.nexus.pipUser }}
+              - key: nexus-pip-password
+                path: nexus-pip-password
+              {{- end }}
               - key: minio-access-key
                 path: minio-access-key
               - key: minio-secret-key

@@ -96,7 +96,7 @@ func checkPipSet(pkgs []PipPackage) error {
 		if err := checkPipWheel(p); err != nil {
 			return err
 		}
-		// Each size is at most pip.MaxWheelBytes, so the sum cannot overflow.
+		// Each size is at most pip.MaxDownloadBytes, so the sum cannot overflow.
 		total += p.Wheel.Size
 	}
 	if total > limits.Unpacked {
@@ -123,8 +123,8 @@ func checkPipWheel(p PipPackage) error {
 	if !wheelSha256.MatchString(w.Sha256) {
 		return fmt.Errorf("jobs: %s==%s: the wheel %s has no valid sha256", p.Name, p.Version, w.File)
 	}
-	if w.Size <= 0 || w.Size > pip.MaxWheelBytes {
-		return fmt.Errorf("jobs: %s==%s: the wheel %s is recorded at %d bytes, outside 1 to %d", p.Name, p.Version, w.File, w.Size, pip.MaxWheelBytes)
+	if w.Size <= 0 || w.Size > pip.MaxDownloadBytes {
+		return fmt.Errorf("jobs: %s==%s: the wheel %s is recorded at %d bytes, outside 1 to %d", p.Name, p.Version, w.File, w.Size, pip.MaxDownloadBytes)
 	}
 	return nil
 }

@@ -13,7 +13,7 @@ tags:
   - name: session
     description: The signed-in user
   - name: archives
-    description: The archives in the user's MinIO folder
+    description: The archives in the user's MinIO folders
   - name: imports
     description: Imports of those archives into Nexus
 paths:
@@ -197,7 +197,7 @@ components:
           description: The user's MinIO bucket, user-<name>, named whether or not the settings file has a minio section
         folder:
           type: string
-          description: The folder of the bucket the service lists, reads and deletes in
+          description: The npm folder, packages/npm/, kept for clients that read one folder; the service lists, reads and deletes in packages/npm/ and packages/pip/
         publicKeySha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -218,16 +218,24 @@ components:
           description: The user's bucket, user-<name>
         folder:
           type: string
-          description: The folder the list covers, packages/npm/
+          description: The npm folder, packages/npm/, kept for clients that read one folder
+        folders:
+          type: array
+          description: The folders the list covers, npm first, packages/npm/ then packages/pip/
+          items:
+            type: string
         bucketMissing:
           type: boolean
           description: True when MinIO has no bucket for the user
         message:
           type: string
-          description: Says what an empty list means when the bucket is missing
+          description: >
+            Says what an empty list means when the bucket is missing, or names
+            the folder MinIO could not list, with MinIO's reason, while the
+            other folder is listed
         truncated:
           type: boolean
-          description: True when the folder holds more objects than the list read
+          description: True when a folder holds more objects than the list read
         unencrypted:
           type: array
           description: The links that run over plain http, among keySet, minio and nexus
@@ -250,7 +258,9 @@ components:
       properties:
         key:
           type: string
-          description: The object key, under packages/npm/
+          description: The object key, under packages/npm/ or packages/pip/
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         size:
           type: integer
           format: int64
@@ -269,6 +279,14 @@ components:
         - size
         - modified
         - importable
+    Ecosystem:
+      type: string
+      enum:
+        - npm
+        - pip
+      description: >
+        The archive's ecosystem. On an archive, its folder's. On a report, the
+        manifest's once it is read, and the folder's before.
     LatestImport:
       type: object
       description: The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
@@ -286,7 +304,7 @@ components:
       properties:
         archive:
           type: string
-          description: The archive's object key, under packages/npm/
+          description: The archive's object key, under packages/npm/ or packages/pip/
         expectedSha256:
           type: string
           description: The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused
@@ -413,6 +431,8 @@ components:
           type: string
         analysisId:
           type: string
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         target:
           $ref: "#/components/schemas/ReportTarget"
         nexus:
@@ -472,6 +492,12 @@ components:
           type: string
         pnpmVer:
           type: string
+        python:
+          type: string
+          description: The Python version of a pip archive's target; empty for an npm archive
+        glibc:
+          type: string
+          description: The glibc version of a pip archive's target; empty for an npm archive
       required:
         - os
         - cpu

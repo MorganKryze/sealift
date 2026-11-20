@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// MaxWheelBytes bounds the size of one wheel a download accepts: 4 GiB.
-const MaxWheelBytes = 4 << 30
+// MaxDownloadBytes bounds the size of one wheel a download accepts: 4 GiB.
+const MaxDownloadBytes = 4 << 30
 
 // ErrDigest reports a downloaded file whose bytes do not match the sha256
 // the index recorded for it.
@@ -90,8 +90,8 @@ func checkDownload(f IndexFile) error {
 	if f.Size <= 0 {
 		return fmt.Errorf("pip: %s has no recorded size", f.Filename)
 	}
-	if f.Size > MaxWheelBytes {
-		return fmt.Errorf("pip: %s is recorded at %d bytes, above the %d-byte bound", f.Filename, f.Size, MaxWheelBytes)
+	if f.Size > MaxDownloadBytes {
+		return fmt.Errorf("pip: %s is recorded at %d bytes, above the %d-byte bound", f.Filename, f.Size, MaxDownloadBytes)
 	}
 	if !sha256RE.MatchString(f.Sha256) {
 		return fmt.Errorf("pip: %s has no valid sha256", f.Filename)

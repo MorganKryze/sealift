@@ -20,8 +20,12 @@ const archive = (folder: string, modified: string, over: Partial<Archive> = {}):
   key: `packages/npm/${folder}packages_npm.tar.gz`, size: 5_500_000, modified, importable: true, ...over,
 })
 
+const pipArchive = (folder: string, modified: string, over: Partial<Archive> = {}): Archive => ({
+  key: `packages/pip/${folder}packages_pip.tar.gz`, ecosystem: "pip", size: 81_920, modified, importable: true, ...over,
+})
+
 const folderList = (archives: Archive[], over: Partial<ArchiveList> = {}): ArchiveList => ({
-  minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", bucketMissing: false, truncated: false, unencrypted: [], archives, ...over,
+  minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", folders: ["packages/npm/", "packages/pip/"], bucketMissing: false, truncated: false, unencrypted: [], archives, ...over,
 })
 
 function renderList(answer: () => Response | Promise<Response>, seed?: (client: QueryClient) => void) {
@@ -98,6 +102,7 @@ describe("ArchivesList", () => {
     expect(screen.getByText("manifest.json.sig")).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "No archive in your folder" }).parentElement).toHaveTextContent(/an archive, its manifest\.json and its manifest\.json\.sig side by side/)
     expect(screen.getByText("user-alice/packages/npm/")).toBeInTheDocument()
+    expect(screen.getByText("user-alice/packages/pip/")).toBeInTheDocument()
     expect(screen.getByText(/side by side/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument()
   })
@@ -109,6 +114,49 @@ describe("ArchivesList", () => {
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument()
   })
 
+  it("names both folders when the bucket is missing", async () => {
+    renderList(() => json(folderList([], { bucketMissing: true, message: "MinIO has no bucket user-alice yet: nothing to list" })))
+    await screen.findByText(/MinIO has no bucket user-alice yet/)
+    expect(screen.getByText("user-alice/packages/npm/")).toBeInTheDocument()
+    expect(screen.getByText("user-alice/packages/pip/")).toBeInTheDocument()
+  })
+
+  it("lists a pip archive beside the npm ones, with its folder and its file", async () => {
+    renderList(() => json(folderList([...three, pipArchive("2026-11-20-data-tools/", "2026-11-20T08:00:00Z")])))
+    const rows = await screen.findAllByRole("listitem")
+    expect(rows).toHaveLength(4)
+    const pip = within(rows[0])
+    expect(pip.getByText("packages_pip.tar.gz")).toBeInTheDocument()
+    expect(pip.getByText("2026-11-20-data-tools/")).toBeInTheDocument()
+    expect(pip.getByText("80.0 KB")).toBeInTheDocument()
+    expect(pip.getByText("Can be imported")).toBeInTheDocument()
+    expect(pip.getByRole("button", { name: "Start import of 2026-11-20-data-tools/packages_pip.tar.gz" })).toBeInTheDocument()
+    expect(screen.getByRole("status")).toHaveTextContent("4 archives · 3 importable")
+  })
+
+  it("gives the reason of an archive in the wrong folder on its row", async () => {
+    const reason = "its manifest is a pip archive's: keep the three files under packages/pip/"
+    renderList(() => json(folderList([archive("2026-11-20-data-tools/", "2026-11-20T08:00:00Z", { importable: false, reason })])))
+    const row = (await screen.findAllByRole("listitem"))[0]
+    expect(within(row).getByText("Cannot be imported")).toBeInTheDocument()
+    expect(within(row).getByText(reason)).toBeInTheDocument()
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("shows the message naming the folder MinIO could not list, above the other folder's archives", async () => {
+    const message = "MinIO could not list packages/pip/: Access Denied."
+    renderList(() => json(folderList(three, { message })))
+    await screen.findAllByRole("listitem")
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
+  it("shows the message naming the folder MinIO could not list when the other folder is empty", async () => {
+    const message = "MinIO could not list packages/pip/: Access Denied."
+    renderList(() => json(folderList([], { message })))
+    expect(await screen.findByRole("heading", { name: "No archive in your folder" })).toBeInTheDocument()
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
   it("says MinIO is not configured and who sets it", async () => {
     renderList(() => json(folderList([], { minioConfigured: false })))
     expect(await screen.findByRole("heading", { name: "MinIO is not configured" })).toBeInTheDocument()
@@ -118,7 +166,7 @@ describe("ArchivesList", () => {
   it("names the user's folder in the status region while it loads and keeps the list's height", async () => {
     renderList(() => new Promise<Response>(() => {}))
     const status = await screen.findByRole("status")
-    await waitFor(() => expect(status).toHaveTextContent("Reading your folder in MinIO: user-alice/packages/npm/"))
+    await waitFor(() => expect(status).toHaveTextContent("Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/"))
     expect(document.querySelectorAll("[aria-hidden] > .min-h-18")).toHaveLength(4)
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
   })

@@ -143,6 +143,16 @@ services:
     volumes:
       - ./transfer:/transfer
       - ./scripts:/scripts:ro
+  pip-shell:
+    # pip picks the wheels of its own platform: linux x86_64 and CPython 3.11,
+    # as on the air-gapped hosts.
+    platform: linux/amd64
+    image: python:3.11.2-slim-bullseye@sha256:2f749ef90f54fd4b3c77cde78eec23ab5b8199d9ac84e4ced6ae523ef223ef7b
+    profiles: [tools]
+    networks: [airgap]
+    volumes:
+      - ./transfer:/transfer
+      - ./scripts:/scripts:ro
   import:
     # The import as the air-gapped side runs it: settings read-only, the
     # archive from the transfer folder, Nexus on the internal network.

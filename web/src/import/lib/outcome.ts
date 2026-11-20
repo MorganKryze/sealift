@@ -77,14 +77,26 @@ export function counts(a: Attempt): { published: number; present: number; failed
   return out
 }
 
-const FOLDER = "packages/npm/"
+/** The folders an import reads archives from, npm first. */
+export const FOLDERS = ["packages/npm/", "packages/pip/"] as const
 
-/** An archive's folder below packages/npm/ and its file. An archive at the root names packages/npm/ as its folder. */
+/** The ecosystem an archive's folder takes. A key under neither folder reads as npm, as the service lists only these two. */
+export function ecosystemOf(key: string): "npm" | "pip" {
+  return key.startsWith(FOLDERS[1]) ? "pip" : "npm"
+}
+
+/** Both folders in words, below the user's bucket when it is known. */
+export function whereText(bucket: string | undefined): string {
+  return `${bucket ? `${bucket}/` : ""}${FOLDERS[0]} and ${FOLDERS[1]}`
+}
+
+/** An archive's folder below packages/npm/ or packages/pip/ and its file. An archive at the root names its folder in full. */
 export function archiveName(key: string): { folder: string; file: string } {
-  const rel = key.startsWith(FOLDER) ? key.slice(FOLDER.length) : key
+  const root = FOLDERS.find((f) => key.startsWith(f))
+  const rel = root ? key.slice(root.length) : key
   const cut = rel.lastIndexOf("/")
   if (cut < 0) {
-    return { folder: key.startsWith(FOLDER) ? FOLDER : "", file: rel }
+    return { folder: root ?? "", file: rel }
   }
   return { folder: rel.slice(0, cut + 1), file: rel.slice(cut + 1) }
 }

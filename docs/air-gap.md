@@ -104,6 +104,10 @@ sealift import -settings /import/settings.yaml -sha256 <sha256 received separate
 
 The command reads `manifest.json` from the archive's directory, and `manifest.json.sig` beside the manifest; `-manifest <file>` and `-signature <file>` name others. `-sha256` is optional and compares the archive with the value you received by a separate channel. The exit code is 0 for a complete import, 1 when a package failed, 2 for a usage or settings error and 3 for a refused archive.
 
+A pip archive imports with the same command: give `packages_pip.tar.gz`, with its `manifest.json` and `manifest.json.sig` beside it. The import reads which kind of archive it holds from the signed manifest and publishes the wheels to the pypi hosted repository that `nexus.pip` names (below). Without `nexus.pip`, or when Nexus does not list that repository as pypi hosted, the archive is refused with exit code 3 before it is read. When Nexus does not answer, or refuses the user, every wheel fails with kind `nexus` and the exit code is 1.
+
+For each wheel, the import reads the zip directory, `METADATA` and `WHEEL` within fixed bounds, and never unpacks the wheel or runs anything from it. `METADATA` and the file name must name the project and version the manifest lists. A wheel that does not is `failed` with kind `mismatch`, and the others go on. The import then looks the file up in the repository's simple index. The same bytes there make the wheel `present`. Other bytes make it `failed` with kind `conflict`, and nothing is uploaded over them. Otherwise it uploads the wheel and reads it back, and the wheel is `published` only when Nexus serves the shipped sha512. A second run uploads only the wheels Nexus does not hold. [Archive format](dev/archive-format.md#importing-a-pip-archive) lists the bounds, the states and the report's pip fields.
+
 The settings file is YAML. Each secret lives in its own file, and a relative path resolves from the settings file's directory:
 
 <!-- illustrative -->
@@ -114,8 +118,14 @@ nexus:
   user: sealift-import
   passwordFile: nexus-password
   caFile: nexus-ca.pem          # optional, added to the system roots
+  pip:                          # optional, for pip archives
+    repository: pypi-hosted
+    user: sealift-import-pip    # optional, with passwordFile
+    passwordFile: nexus-pip-password
 publicKeyFile: public-key.pem
 ```
+
+`nexus.pip` names the pypi hosted repository that pip archives publish into. Without it, the import refuses a pip archive and imports npm archives as before. `user` and `passwordFile` go together: set both to publish pip archives as a second Nexus user, or leave both out to publish them as `nexus.user` with its password.
 
 `publicKeyFile` holds the public key from sealift's Settings on the connected side: one `PUBLIC KEY` PEM block of at most 4 KiB. The import and the service refuse to start without it, with exit code 2. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
 

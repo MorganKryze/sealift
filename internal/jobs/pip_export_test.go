@@ -359,7 +359,7 @@ func TestPipExportPackageListRefusesARecordedValue(t *testing.T) {
 			return p
 		}, "idna==3.10: the wheel " + idna.File + " is recorded at 0 bytes, outside 1 to 4294967296", ""},
 		{"a size above the wheel bound", func(p []PipPackage) []PipPackage {
-			p[1].Wheel.Size = pip.MaxWheelBytes + 1
+			p[1].Wheel.Size = pip.MaxDownloadBytes + 1
 			return p
 		}, "idna==3.10: the wheel " + idna.File + " is recorded at 4294967297 bytes, outside 1 to 4294967296", ""},
 	}
@@ -429,7 +429,7 @@ func TestPipExportRefusesASetTheImportWouldRefuse(t *testing.T) {
 		bound string
 	}{
 		{"too many wheels", archive.DefaultLimits.Entries, 100, fmt.Sprintf("%d entries", archive.DefaultLimits.Entries)},
-		{"too many bytes", 3, pip.MaxWheelBytes, fmt.Sprintf("%d bytes", archive.DefaultLimits.Unpacked)},
+		{"too many bytes", 3, pip.MaxDownloadBytes, fmt.Sprintf("%d bytes", archive.DefaultLimits.Unpacked)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

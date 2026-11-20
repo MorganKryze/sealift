@@ -1,0 +1,85 @@
+{
+  "formatVersion": 1,
+  "id": "20261119T140501Z-a7f3e4b6",
+  "user": "alice",
+  "createdAt": "2026-11-19T14:05:01Z",
+  "archive": {
+    "key": "packages/npm/web-app/packages_npm.tar.gz",
+    "etag": "\"5d41402abc4b2a76b9719d911017c592\"",
+    "size": 48213
+  },
+  "manifest": {
+    "key": "packages/npm/web-app/manifest.json",
+    "etag": "\"7d793037a0760186574b0282f2f435e7\"",
+    "size": 1187
+  },
+  "signature": {
+    "key": "packages/npm/web-app/manifest.json.sig",
+    "etag": "\"9e107d9d372bb6826bd81d3542a419d6\"",
+    "size": 214
+  },
+  "expectedSha256": "",
+  "attempts": [
+    {
+      "n": 1,
+      "status": "ended",
+      "queuedAt": "2026-11-19T14:05:01Z",
+      "startedAt": "2026-11-19T14:05:02Z",
+      "endedAt": "2026-11-19T14:05:03Z",
+      "outcome": "complete",
+      "report": {
+        "outcome": "complete",
+        "reason": "",
+        "unencrypted": false,
+        "importVersion": "0.6.2",
+        "archive": {
+          "file": "packages_npm.tar.gz",
+          "sha256": "3b0f1e2d4c5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+          "size": 48213
+        },
+        "toolVersion": "0.6.2",
+        "analysisId": "20261119T134210Z",
+        "target": {
+          "os": "linux",
+          "cpu": "x64",
+          "libc": "glibc",
+          "node": "22.17.1",
+          "pnpmVer": "10.34.5"
+        },
+        "nexus": {
+          "url": "https://nexus.example:8443",
+          "repository": "npm-hosted"
+        },
+        "counts": {
+          "published": 1,
+          "present": 1,
+          "failed": 0
+        },
+        "packages": [
+          {
+            "name": "left-pad",
+            "version": "1.3.0",
+            "file": "left-pad-1.3.0.tgz",
+            "state": "published",
+            "reason": "",
+            "note": ""
+          },
+          {
+            "name": "@scope/zeta",
+            "version": "2.0.0",
+            "file": "scope-zeta-2.0.0.tgz",
+            "state": "present",
+            "reason": "",
+            "note": "sealift removed publishConfig at export"
+          }
+        ],
+        "publicKeySha256": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "archiveChecked": true
+      },
+      "removal": {
+        "removed": true,
+        "reason": ""
+      }
+    }
+  ]
+}

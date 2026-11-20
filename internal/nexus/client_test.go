@@ -336,3 +336,149 @@ func TestUploadSendsTheTarballAlone(t *testing.T) {
 		t.Errorf("form parts = %+v, want only npm.asset with the tarball", parts)
 	}
 }
+
+func TestUploadUsesTheFormatField(t *testing.T) {
+	for _, tc := range []struct {
+		format     Format
+		file, want string
+	}{
+		{"", "pkg-1.0.0.tgz", "npm.asset"},
+		{FormatNPM, "pkg-1.0.0.tgz", "npm.asset"},
+		{FormatPyPI, "six-1.16.0-py2.py3-none-any.whl", "pypi.asset"},
+	} {
+		var field, file, query string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			query = r.URL.RawQuery
+			mr, err := r.MultipartReader()
+			if err != nil {
+				t.Errorf("multipart: %v", err)
+				return
+			}
+			if p, err := mr.NextPart(); err == nil {
+				field, file = p.FormName(), p.FileName()
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		u, _ := url.Parse(srv.URL)
+		c, err := New(Config{URL: u, Repository: "pypi", Format: tc.format, User: testUser, Password: []byte(testPassword)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Upload(context.Background(), tc.file, strings.NewReader("bytes")); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if field != tc.want || file != tc.file || query != "repository=pypi" {
+			t.Errorf("format %q: field %q file %q query %q, want %q %q", tc.format, field, file, query, tc.want, tc.file)
+		}
+	}
+}
+
+func TestClientRefusesAnUnknownFormat(t *testing.T) {
+	u, _ := url.Parse("https://nexus.example.internal")
+	_, err := New(Config{URL: u, Repository: "r", Format: "maven2"})
+	if err == nil || err.Error() != `nexus format "maven2" is neither npm nor pypi` {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCheckRepositoryFormat(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status   int
+		body     string
+		want     string
+		wrapsErr bool
+	}{
+		"pypi hosted": {200, `[{"name":"npm-hosted","format":"npm","type":"hosted"},{"name":"pypi","format":"pypi","type":"hosted"}]`, "", false},
+		"npm hosted":  {200, `[{"name":"pypi","format":"npm","type":"hosted"}]`, `nexus repository "pypi" is npm hosted, not pypi hosted`, true},
+		"pypi proxy":  {200, `[{"name":"pypi","format":"pypi","type":"proxy"}]`, `nexus repository "pypi" is pypi proxy, not pypi hosted`, true},
+		"absent":      {200, `[{"name":"npm-hosted","format":"npm","type":"hosted"}]`, `nexus repository "pypi" not found`, true},
+		"500":         {500, "down", "nexus answered 500: down", false},
+		"403":         {403, "denied", "nexus answered 403: denied", false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = io.WriteString(w, tc.body)
+		}))
+		u, _ := url.Parse(srv.URL)
+		c, err := New(Config{URL: u, Repository: "pypi", Format: FormatPyPI, User: testUser, Password: []byte(testPassword)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.CheckRepository(context.Background())
+		srv.Close()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case tc.want != "" && (err == nil || err.Error() != tc.want):
+			t.Errorf("%s: want %q, got %v", name, tc.want, err)
+		case errors.Is(err, ErrRepository) != tc.wrapsErr:
+			t.Errorf("%s: wraps ErrRepository %v, want %v", name, errors.Is(err, ErrRepository), tc.wrapsErr)
+		}
+	}
+}
+
+func TestCheckRepositoryNPMWrapsErrRepository(t *testing.T) {
+	for _, body := range []string{
+		`[{"name":"other","format":"npm","type":"hosted"}]`,
+		`[{"name":"npm-hosted","format":"pypi","type":"hosted"}]`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) }))
+		err := newClient(t, srv, "").CheckRepository(context.Background())
+		srv.Close()
+		if !errors.Is(err, ErrRepository) {
+			t.Errorf("%s: %v does not wrap ErrRepository", body, err)
+		}
+	}
+}
+
+func TestNexusErrorsCarryNoPipSecret(t *testing.T) {
+	const pipUser, pipPassword = "sealift-pip", "pip-test-password"
+	basic := base64.StdEncoding.EncodeToString([]byte(pipUser + ":" + pipPassword))
+	leak := "denied for password " + pipPassword + " token " + basic
+	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, leak+" "+r.Header.Get("Authorization"))
+	}))
+	defer echo.Close()
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<a href="http://`+pipUser+`:`+pipPassword+`@other.example/`+basic+`/six-1.16.0-py2.py3-none-any.whl">six</a>`)
+	}))
+	defer page.Close()
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	pipClient := func(srv *httptest.Server) *Client {
+		u, _ := url.Parse(srv.URL)
+		c, err := New(Config{URL: u, Repository: "pypi", Format: FormatPyPI, User: pipUser, Password: []byte(pipPassword)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	calls := map[string]func(*Client) error{
+		"check": func(c *Client) error { return c.CheckRepository(context.Background()) },
+		"fetch file": func(c *Client) error {
+			_, err := c.FetchFile(context.Background(), "six", "six-1.16.0-py2.py3-none-any.whl", io.Discard, 1<<20)
+			return err
+		},
+		"upload": func(c *Client) error {
+			return c.Upload(context.Background(), "six-1.16.0-py2.py3-none-any.whl", strings.NewReader("x"))
+		},
+	}
+	for name, call := range calls {
+		for label, srv := range map[string]*httptest.Server{"echo": echo, "unreachable": gone, "link": page} {
+			err := call(pipClient(srv))
+			if err == nil {
+				if label == "link" && name != "fetch file" {
+					continue
+				}
+				t.Fatalf("%s/%s: no error", name, label)
+			}
+			for _, secret := range []string{pipPassword, basic} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("%s/%s: error holds %q: %v", name, label, secret, err)
+				}
+			}
+		}
+	}
+}

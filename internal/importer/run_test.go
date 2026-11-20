@@ -308,6 +308,10 @@ func (c *cancelOnFetch) Fetch(context.Context, string, string, io.Writer, int64)
 	return false, context.Canceled
 }
 
+func (c *cancelOnFetch) FetchFile(ctx context.Context, project, file string, w io.Writer, limit int64) (bool, error) {
+	return c.Fetch(ctx, project, file, w, limit)
+}
+
 func (c *cancelOnFetch) Upload(context.Context, string, io.Reader) error {
 	c.calls++
 	return nil

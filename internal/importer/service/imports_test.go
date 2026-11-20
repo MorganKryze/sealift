@@ -18,6 +18,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/token"
+	"github.com/MorganKryze/sealift/internal/importtest"
 	"github.com/MorganKryze/sealift/internal/store/imports"
 )
 
@@ -58,9 +59,10 @@ type importRig struct {
 }
 
 type rigOptions struct {
-	links []string
-	hold  bool // runs wait for the test before they read anything
-	pkgs  []testPkg
+	links    []string
+	hold     bool // runs wait for the test before they read anything
+	pkgs     []testPkg
+	settings func(*importer.Settings) // changes the settings that point at the fake Nexus
 }
 
 func newImportRig(t *testing.T, o rigOptions) *importRig {
@@ -79,10 +81,14 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 		t.Fatal(err)
 	}
 	r.store = st
+	settings := nx.settings(t, ca)
+	if o.settings != nil {
+		o.settings(&settings)
+	}
 	r.rig = newRigConfig(t, Config{
 		Verifier: r.verifier, MinIO: r.minio, UnencryptedLinks: o.links,
 		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
-		Settings: nx.settings(t, ca), NewPublisher: newPublisher, ImportVersion: "0.3.0",
+		Settings: settings, NewPublisher: newPublisher, ImportVersion: "0.3.0",
 	})
 	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 		if o.hold {
@@ -279,7 +285,7 @@ func TestStartExpectedSHA256(t *testing.T) {
 
 func TestStartRefusesForeignKeys(t *testing.T) {
 	for name, key := range map[string]string{
-		"another prefix":    "packages/pip/a/packages_npm.tar.gz",
+		"another prefix":    "packages/pypi/a/packages_npm.tar.gz",
 		"dot dot":           base + "../x/packages_npm.tar.gz",
 		"leading slash":     "/" + archiveKey,
 		"encoded dot dot":   base + "%2e%2e/packages_npm.tar.gz",
@@ -942,4 +948,196 @@ func TestLatestImportFollowsTheSignature(t *testing.T) {
 	if li := byKey(listOf(t, r.get("/api/archives", "t")))[archiveKey].LatestImport; li == nil || li.Id != second {
 		t.Errorf("latestImport = %+v, want the new import %s", li, second)
 	}
+}
+
+const (
+	pipRepo        = "pypi-hosted"
+	pipUser        = "sealift-pip"
+	pipPassword    = "pip-test-password"
+	pipArchiveKey  = pipBase + "a/packages_pip.tar.gz"
+	pipManifestKey = pipBase + "a/manifest.json"
+)
+
+// onPyPI points the settings at n. With withPip, they name a pip repository
+// whose user is not the npm one, and n answers that user alone.
+func onPyPI(n *importtest.PyPINexus, withPip bool) func(*importer.Settings) {
+	n.RequireAuth(pipUser, pipPassword)
+	return func(s *importer.Settings) {
+		s.NexusURL, s.CAFile = n.URL, ""
+		if withPip {
+			s.Pip = &importer.PipRepository{Repository: pipRepo, User: pipUser, Password: importer.Secret(pipPassword)}
+		}
+	}
+}
+
+func pipWheels(t *testing.T) []importtest.WheelFile {
+	return []importtest.WheelFile{
+		importtest.Wheel(t, "six", "1.16.0", "py2.py3-none-any"),
+		importtest.Wheel(t, "idna", "3.6", "py3-none-any"),
+	}
+}
+
+// seedPip puts a pip archive of wheels, signed with the trusted key, in alice's folder.
+func (r *importRig) seedPip(t *testing.T, archiveAt, manifestAt string, wheels ...importtest.WheelFile) {
+	t.Helper()
+	f := importtest.PipArchive(t, t.TempDir(), testPriv, wheels...)
+	var b testBundle
+	for _, file := range []struct {
+		path string
+		to   *[]byte
+	}{{f.Archive, &b.archive}, {f.Manifest, &b.manifest}, {f.Signature, &b.signature}} {
+		data, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*file.to = data
+	}
+	r.seed(archiveAt, manifestAt, b)
+}
+
+func TestStartPipArchive(t *testing.T) {
+	t.Run("queued, then complete", func(t *testing.T) {
+		n := importtest.NewPyPINexus(t, pipRepo)
+		r := newImportRig(t, rigOptions{settings: onPyPI(n, true)})
+		r.seedPip(t, pipArchiveKey, pipManifestKey, pipWheels(t)...)
+		imp := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted)
+		if imp.Outcome != "queued" || imp.Archive.Key != pipArchiveKey || imp.Manifest.Key != pipManifestKey || imp.Signature == nil || imp.Signature.Key != pipManifestKey+".sig" {
+			t.Fatalf("answer = %+v", imp)
+		}
+		done := waitEnded(t, r.store, imp.Id)
+		rep := done.Attempts[0].Report
+		if done.Outcome() != importer.OutcomeComplete || rep.Ecosystem != "pip" || rep.Nexus.Repository != pipRepo || n.Uploads() != 2 {
+			t.Fatalf("outcome %q (%s), ecosystem %q, repository %q, %d uploads", done.Outcome(), rep.Reason, rep.Ecosystem, rep.Nexus.Repository, n.Uploads())
+		}
+		if d := strings.Join(r.deletes(), ","); d != pipArchiveKey+","+pipManifestKey+","+pipManifestKey+".sig" {
+			t.Errorf("deletes %s", d)
+		}
+	})
+	for _, tc := range []struct {
+		name, archiveAt, manifestAt, reason string
+		seed                                func(*testing.T, *importRig, string, string)
+	}{
+		{
+			"an npm archive in the pip folder", pipBase + "n/packages_npm.tar.gz", pipBase + "n/manifest.json",
+			"the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/",
+			func(t *testing.T, r *importRig, a, m string) { r.seed(a, m, buildBundle(t, leftPad)) },
+		},
+		{
+			"a pip archive in the npm folder", base + "p/packages_pip.tar.gz", base + "p/manifest.json",
+			"the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/",
+			func(t *testing.T, r *importRig, a, m string) { r.seedPip(t, a, m, pipWheels(t)...) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := importtest.NewPyPINexus(t, pipRepo)
+			r := newImportRig(t, rigOptions{settings: onPyPI(n, true)})
+			tc.seed(t, r, tc.archiveAt, tc.manifestAt)
+			id := importOf(t, r.start("t", tc.archiveAt), http.StatusAccepted).Id
+			done := waitEnded(t, r.store, id)
+			if done.Outcome() != importer.OutcomeRefused || done.Attempts[0].Report.Reason != tc.reason {
+				t.Errorf("outcome %q reason %q, want refused with %q", done.Outcome(), done.Attempts[0].Report.Reason, tc.reason)
+			}
+			if n.Uploads() != 0 || r.nexus.uploadCount() != 0 || len(r.deletes()) != 0 {
+				t.Errorf("%d pip uploads, %d npm uploads, deletes %v", n.Uploads(), r.nexus.uploadCount(), r.deletes())
+			}
+		})
+	}
+}
+
+func TestStartPipArchiveWithoutPipSettings(t *testing.T) {
+	n := importtest.NewPyPINexus(t, pipRepo)
+	r := newImportRig(t, rigOptions{settings: onPyPI(n, false)})
+	r.seedPip(t, pipArchiveKey, pipManifestKey, pipWheels(t)...)
+	id := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted).Id
+	done := waitEnded(t, r.store, id)
+	if got := done.Attempts[0].Report.Reason; done.Outcome() != importer.OutcomeRefused || got != "the settings name no pip repository: set nexus.pip.repository" {
+		t.Errorf("outcome %q reason %q", done.Outcome(), got)
+	}
+	if r.minio.gets(pipArchiveKey) != 0 || len(n.Requests()) != 0 || len(r.deletes()) != 0 {
+		t.Errorf("archive reads %d, Nexus requests %v, deletes %v", r.minio.gets(pipArchiveKey), n.Requests(), r.deletes())
+	}
+}
+
+func TestPipIncompleteKeepsTheArchiveAndRetries(t *testing.T) {
+	n := importtest.NewPyPINexus(t, pipRepo)
+	r := newImportRig(t, rigOptions{settings: onPyPI(n, true)})
+	wheels := pipWheels(t)
+	six := wheels[0]
+	n.Put("six", six.File, []byte("other bytes"))
+	r.seedPip(t, pipArchiveKey, pipManifestKey, wheels...)
+	id := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted).Id
+	first := waitEnded(t, r.store, id)
+	rep := first.Attempts[0].Report
+	if first.Outcome() != importer.OutcomeIncomplete || rep.Packages[0].State != importer.Failed || rep.Packages[0].Kind != importer.KindConflict || rep.Packages[1].State != importer.Published {
+		t.Fatalf("first attempt: outcome %q, packages %+v", first.Outcome(), rep.Packages)
+	}
+	for _, k := range []string{pipArchiveKey, pipManifestKey, pipManifestKey + ".sig"} {
+		if r.minio.etagOf(k) == "" {
+			t.Errorf("%s left MinIO after an incomplete attempt", k)
+		}
+	}
+	if d := r.deletes(); len(d) != 0 {
+		t.Fatalf("deletes after an incomplete attempt: %v", d)
+	}
+
+	n.Remove("six", six.File)
+	importOf(t, r.retry("t", id), http.StatusAccepted)
+	second := waitEnded(t, r.store, id)
+	rep = second.Attempts[1].Report
+	if second.Outcome() != importer.OutcomeComplete || !second.ArchiveRemoved() || rep.Packages[0].State != importer.Published || rep.Packages[1].State != importer.Present {
+		t.Fatalf("retry: outcome %q (%s) removed %v, packages %+v", second.Outcome(), rep.Reason, second.ArchiveRemoved(), rep.Packages)
+	}
+	if d := strings.Join(r.deletes(), ","); d != pipArchiveKey+","+pipManifestKey+","+pipManifestKey+".sig" {
+		t.Errorf("deletes %s", d)
+	}
+}
+
+func TestGetImportServesThePipReport(t *testing.T) {
+	t.Run("a stored pip report", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		const id = "20261120T101500Z-4e8b21c7"
+		data, err := os.ReadFile(filepath.Join("..", "..", "store", "imports", "testdata", "import-pip.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(r.data, "alice", id)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "import.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rep := importOf(t, r.get("/api/imports/"+id, "t"), http.StatusOK).Attempts[0].Report
+		if rep.Ecosystem == nil || *rep.Ecosystem != Pip || rep.Target.Python == nil || *rep.Target.Python != "3.11.2" || rep.Target.Glibc == nil || *rep.Target.Glibc != "2.28" {
+			t.Errorf("ecosystem %v, python %v, glibc %v", rep.Ecosystem, rep.Target.Python, rep.Target.Glibc)
+		}
+		if rep.Target.Libc != "" || rep.Target.Node != "" || rep.Target.PnpmVer != "" {
+			t.Errorf("target %+v, want no npm field", rep.Target)
+		}
+	})
+	t.Run("an npm report sends the new fields too", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEnded(t, r.store, id)
+		body := r.get("/api/imports/"+id, "t").Body.String()
+		for _, want := range []string{`"ecosystem":"npm"`, `"python":""`, `"glibc":""`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("the answer lacks %s: %s", want, body)
+			}
+		}
+	})
+	t.Run("a queued pip import names its folder's ecosystem", func(t *testing.T) {
+		n := importtest.NewPyPINexus(t, pipRepo)
+		r := newImportRig(t, rigOptions{hold: true, settings: onPyPI(n, true)})
+		r.seedPip(t, pipArchiveKey, pipManifestKey, pipWheels(t)...)
+		id := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		rep := importOf(t, r.get("/api/imports/"+id, "t"), http.StatusOK).Attempts[0].Report
+		if rep.Ecosystem == nil || *rep.Ecosystem != Pip {
+			t.Errorf("ecosystem %v, want pip", rep.Ecosystem)
+		}
+		close(r.release)
+		waitEnded(t, r.store, id)
+	})
 }

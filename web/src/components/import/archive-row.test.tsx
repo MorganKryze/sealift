@@ -47,7 +47,7 @@ describe("ArchiveRow", () => {
     expect(screen.getByText("the folder holds more than one archive")).toBeInTheDocument()
     expect(
       screen.getByText(
-        "Keep one archive with its manifest.json and manifest.json.sig side by side, at the root of packages/npm/ or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.",
+        "Keep one archive with its manifest.json and manifest.json.sig side by side, in packages/npm/ for npm or packages/pip/ for pip, at the root or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.",
       ),
     ).toBeInTheDocument()
     expect(screen.queryByRole("button")).not.toBeInTheDocument()

@@ -16,10 +16,17 @@ import (
 )
 
 const (
-	// Folder is the only part of a user's bucket the service lists, reads or deletes.
-	Folder = "packages/npm/"
-	// MaxListed is how many objects one list reads: one MinIO page of 1,000 keys.
+	// FolderNPM holds npm archives. With FolderPip, it is the only part of a
+	// user's bucket the service lists, reads or deletes.
+	FolderNPM = "packages/npm/"
+	// FolderPip holds pip archives.
+	FolderPip = "packages/pip/"
+	// MaxListed is how many objects one list of a folder reads: one MinIO page of 1,000 keys.
 	MaxListed = 1000
+	// maxMarkReads is how many manifests one list reads for the folder mark: 50.
+	maxMarkReads = 50
+	// maxMarks is how many manifests the mark cache keeps: 4,096.
+	maxMarks = 4096
 
 	archiveSuffix = ".tar.gz"
 	manifestName  = "manifest.json"
@@ -28,7 +35,7 @@ const (
 	maxKeyBytes = 1024
 	// maxTextChars caps text from MinIO that reaches an answer: 300 characters.
 	maxTextChars = 300
-	// maxFolderDepth is how many folders may sit between Folder and an archive.
+	// maxFolderDepth is how many folders may sit between a folder and an archive.
 	maxFolderDepth = 1
 
 	reasonName        = "its name cannot be imported"
@@ -45,13 +52,42 @@ type Objects interface {
 	Delete(ctx context.Context, bucket, key string) error
 }
 
+// folders are the folders a list covers, npm first.
+var folders = []struct {
+	prefix    string
+	ecosystem archive.Ecosystem
+}{{FolderNPM, archive.NPM}, {FolderPip, archive.Pip}}
+
+// FolderOf returns the ecosystem of the folder that holds key.
+func FolderOf(key string) (archive.Ecosystem, bool) {
+	for _, f := range folders {
+		if strings.HasPrefix(key, f.prefix) {
+			return f.ecosystem, true
+		}
+	}
+	return "", false
+}
+
+// folderFor is the folder that takes archives of eco.
+func folderFor(eco archive.Ecosystem) string {
+	for _, f := range folders {
+		if f.ecosystem == eco {
+			return f.prefix
+		}
+	}
+	return ""
+}
+
 // bucketOf names a user's bucket. It takes the checked user and nothing from the request.
 func bucketOf(user string) string { return "user-" + user }
 
-// ArchiveKey returns nil when key may be imported: under Folder, ending in
-// .tar.gz, at most one folder below, with no empty, "." or ".." segment. The
+// ArchiveKey returns nil when key may be imported: under one of the two
+// folders, and still under the same folder once decoded. It ends in .tar.gz,
+// sits at most one folder below, and holds no empty, "." or ".." segment. The
 // reason names the rule and never repeats the key.
 func ArchiveKey(key string) error {
+	eco, _ := FolderOf(key)
+	folder := folderFor(eco)
 	switch {
 	case len(key) > maxKeyBytes:
 		return errors.New("the key is over 1024 bytes")
@@ -59,34 +95,32 @@ func ArchiveKey(key string) error {
 		return errors.New("the key is not valid UTF-8")
 	case strings.IndexFunc(key, unicode.IsControl) >= 0:
 		return errors.New("the key holds a control character")
-	case !strings.HasPrefix(key, Folder):
-		return errors.New("the key must start with " + Folder)
+	case folder == "":
+		return errors.New("the key must start with " + FolderNPM + " or " + FolderPip)
 	case !strings.HasSuffix(key, archiveSuffix):
 		return errors.New("the key must end with " + archiveSuffix)
 	}
-	if err := checkSegments(key); err != nil {
+	if err := checkSegments(key, folder); err != nil {
 		return err
 	}
 	// A gateway or a proxy may decode the key once more, so the decoded form
-	// must pass too. An escape that does not decode is a plain name.
+	// must pass too. The folder holds no escape, so decoding keeps it in place.
+	// An escape that does not decode is a plain name.
 	if decoded, err := url.PathUnescape(key); err == nil && decoded != key {
-		if !strings.HasPrefix(decoded, Folder) {
-			return errors.New("the key must start with " + Folder + " once decoded")
-		}
-		return checkSegments(decoded)
+		return checkSegments(decoded, folder)
 	}
 	return nil
 }
 
-func checkSegments(key string) error {
-	segments := strings.Split(strings.TrimPrefix(key, Folder), "/")
+func checkSegments(key, folder string) error {
+	segments := strings.Split(strings.TrimPrefix(key, folder), "/")
 	for _, s := range segments {
 		if s == "" || s == "." || s == ".." {
 			return errors.New(`the key holds an empty, "." or ".." segment`)
 		}
 	}
 	if len(segments) > maxFolderDepth+1 {
-		return errors.New("the key may sit at most one folder below " + Folder)
+		return errors.New("the key may sit at most one folder below " + folder)
 	}
 	return nil
 }
@@ -105,10 +139,10 @@ func cleanText(s string) string {
 	return s
 }
 
-// folderOf splits a key under Folder into its folder ("" for the root) and
+// folderOf splits a key under prefix into its folder ("" for the root) and
 // file name. ok is false for an object more than one folder down.
-func folderOf(key string) (folder, name string, ok bool) {
-	rel := strings.TrimPrefix(key, Folder)
+func folderOf(key, prefix string) (folder, name string, ok bool) {
+	rel := strings.TrimPrefix(key, prefix)
 	if i := strings.LastIndex(rel, "/"); i >= 0 {
 		folder, name = rel[:i], rel[i+1:]
 	} else {
@@ -123,25 +157,26 @@ func folderOf(key string) (folder, name string, ok bool) {
 	return folder, name, depth <= maxFolderDepth
 }
 
-// pair turns a listing into archives, each matched with the manifest.json and
-// the manifest.json.sig of its own folder. Other objects, and anything deeper than one folder, are ignored.
-func pair(objects []s3.Object) []Archive {
+// pair turns a listing of prefix into archives of eco, each matched with the
+// manifest.json and the manifest.json.sig of its own folder. Objects outside
+// prefix, other objects, and anything deeper than one folder are ignored.
+func pair(objects []s3.Object, prefix string, eco archive.Ecosystem) []Archive {
 	type folder struct {
 		archives  []s3.Object
 		manifest  bool
 		signature bool
 	}
-	folders := map[string]*folder{}
+	byDir := map[string]*folder{}
 	at := func(name string) *folder {
-		if folders[name] == nil {
-			folders[name] = &folder{}
+		if byDir[name] == nil {
+			byDir[name] = &folder{}
 		}
-		return folders[name]
+		return byDir[name]
 	}
 	for _, o := range objects {
-		dir, name, ok := folderOf(o.Key)
+		dir, name, ok := folderOf(o.Key, prefix)
 		switch {
-		case !ok || !strings.HasPrefix(o.Key, Folder):
+		case !ok || !strings.HasPrefix(o.Key, prefix):
 		case name == manifestName:
 			at(dir).manifest = true
 		case name == signatureName:
@@ -152,9 +187,9 @@ func pair(objects []s3.Object) []Archive {
 		}
 	}
 	out := []Archive{}
-	for _, f := range folders {
+	for _, f := range byDir {
 		for _, o := range f.archives {
-			a := Archive{Key: o.Key, Size: o.Size, Modified: o.LastModified, Importable: true}
+			a := Archive{Key: o.Key, Ecosystem: ptr(Ecosystem(eco)), Size: o.Size, Modified: o.LastModified, Importable: true}
 			var reason string
 			switch {
 			case ArchiveKey(o.Key) != nil:
@@ -176,12 +211,18 @@ func pair(objects []s3.Object) []Archive {
 	return out
 }
 
-// ListArchives lists the archives in the user's own folder: the bucket comes
-// from the checked user and the prefix is Folder, whatever the request carries.
+// ListArchives lists the archives in the user's own folders: the bucket comes
+// from the checked user and the prefixes are FolderNPM and FolderPip, whatever
+// the request carries. A folder MinIO cannot list is named in the message
+// while the other is listed; the answer is 502 only when both fail.
 func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject) (ListArchivesResponseObject, error) {
 	user := userFrom(ctx)
+	names := make([]string, len(folders))
+	for i, f := range folders {
+		names[i] = f.prefix
+	}
 	out := ArchiveList{
-		MinioConfigured: h.objects != nil, Bucket: bucketOf(user), Folder: Folder,
+		MinioConfigured: h.objects != nil, Bucket: bucketOf(user), Folder: FolderNPM, Folders: &names,
 		Unencrypted: append([]string{}, h.links...), Archives: []Archive{},
 	}
 	if h.objects == nil {
@@ -189,24 +230,136 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 	}
 	lctx, cancel := context.WithTimeout(ctx, minioCallTimeout)
 	defer cancel()
-	listing, err := h.objects.List(lctx, out.Bucket, Folder, MaxListed)
+	var listed []s3.Object
+	var failures []string
+	var lastErr error
+	noBucket := false
+	for _, f := range folders {
+		listing, err := h.objects.List(lctx, out.Bucket, f.prefix, MaxListed)
+		if err != nil {
+			noBucket = noBucket || s3.IsNoBucket(err)
+			h.log.Warn("could not list a user's archives", "bucket", out.Bucket, "folder", f.prefix, "error", cleanText(err.Error()))
+			failures = append(failures, cleanText("MinIO could not list "+f.prefix+": "+err.Error()))
+			lastErr = err
+			continue
+		}
+		out.Truncated = out.Truncated || listing.Truncated
+		listed = append(listed, listing.Objects...)
+		out.Archives = append(out.Archives, pair(listing.Objects, f.prefix, f.ecosystem)...)
+	}
 	switch {
-	case s3.IsNoBucket(err):
+	case len(failures) == len(folders) && noBucket:
 		msg := "MinIO has no bucket " + out.Bucket + " yet: nothing to list"
 		out.BucketMissing, out.Message = true, &msg
 		return ListArchives200JSONResponse(out), nil
-	case err != nil:
-		h.log.Warn("could not list a user's archives", "bucket", out.Bucket, "error", cleanText(err.Error()))
-		detail := cleanText("MinIO could not list the archives: " + err.Error())
+	case len(failures) == len(folders):
+		detail := cleanText("MinIO could not list the archives: " + lastErr.Error())
 		return ListArchivesdefaultApplicationProblemPlusJSONResponse{
 			StatusCode: 502,
 			Body:       Problem{Type: ptr("about:blank"), Title: "MinIO failed", Status: 502, Detail: &detail},
 		}, nil
+	case len(failures) > 0:
+		out.Message = &failures[0]
 	}
-	out.Truncated = listing.Truncated
-	out.Archives = pair(listing.Objects)
-	h.addLatestImports(user, out.Archives, listing.Objects)
+	sort.Slice(out.Archives, func(i, j int) bool { return out.Archives[i].Key < out.Archives[j].Key })
+	h.markFolders(lctx, out.Bucket, out.Archives, listed)
+	h.addLatestImports(user, out.Archives, listed)
 	return ListArchives200JSONResponse(out), nil
+}
+
+// markFolders marks an importable archive whose manifest describes the other
+// ecosystem. It reads at most maxMarkReads manifests it has not read before,
+// each with its listed ETag and within archive.MaxManifestSize. The mark is
+// advisory: a manifest it cannot read or parse leaves the row as it is, and
+// the attempt checks the ecosystem again after the signature.
+func (h *Handlers) markFolders(ctx context.Context, bucket string, archives []Archive, listed []s3.Object) {
+	manifests := make(map[string]s3.Object, len(listed))
+	for _, o := range listed {
+		manifests[o.Key] = o
+	}
+	reads := 0
+	for i := range archives {
+		a := &archives[i]
+		folder, ok := FolderOf(a.Key)
+		m, found := manifests[path.Dir(a.Key)+"/"+manifestName]
+		if !a.Importable || !ok || !found || m.Size > archive.MaxManifestSize || !validETag(m.ETag) {
+			continue
+		}
+		mark := markKey(bucket, m)
+		eco, known := h.recall(mark)
+		if !known {
+			if reads == maxMarkReads {
+				continue
+			}
+			reads++
+			var err error
+			if eco, err = h.readEcosystem(ctx, bucket, m); err != nil {
+				continue
+			}
+			h.remember(mark, eco)
+		}
+		if eco != "" && eco != folder {
+			reason := "its manifest is " + article(eco) + " " + string(eco) + " archive's: keep the three files under " + folderFor(eco)
+			a.Importable, a.Reason = false, &reason
+		}
+	}
+}
+
+func article(eco archive.Ecosystem) string {
+	if eco == archive.NPM {
+		return "an"
+	}
+	return "a"
+}
+
+// readEcosystem reads a manifest's ecosystem. An error is a read that failed
+// and may pass later; a manifest that does not parse gives "" and no error,
+// since the same object with the same ETag holds the same bytes.
+func (h *Handlers) readEcosystem(ctx context.Context, bucket string, m s3.Object) (archive.Ecosystem, error) {
+	body, _, err := h.objects.Get(ctx, bucket, m.Key, m.ETag)
+	if err != nil {
+		return "", err
+	}
+	defer body.Close()
+	data, err := archive.ReadManifest(body)
+	var ref *archive.Refusal
+	switch {
+	case errors.As(err, &ref):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	eco, err := archive.ManifestEcosystem(data)
+	if err != nil {
+		return "", nil
+	}
+	return eco, nil
+}
+
+// markKey names a manifest in the mark cache by its bucket, key and ETag.
+// Two objects may share an ETag, so one user's manifest never answers for
+// another's.
+func markKey(bucket string, m s3.Object) string {
+	return bucket + "\x00" + m.Key + "\x00" + m.ETag
+}
+
+// recall returns the ecosystem remembered for a manifest's mark key.
+func (h *Handlers) recall(mark string) (archive.Ecosystem, bool) {
+	h.marksMu.Lock()
+	defer h.marksMu.Unlock()
+	eco, ok := h.marks[mark]
+	return eco, ok
+}
+
+// remember keeps a manifest's ecosystem by its mark key. The cache is emptied
+// when it holds maxMarks entries, so a long-running service stays bounded.
+func (h *Handlers) remember(mark string, eco archive.Ecosystem) {
+	h.marksMu.Lock()
+	defer h.marksMu.Unlock()
+	if h.marks == nil || len(h.marks) >= maxMarks {
+		h.marks = make(map[string]archive.Ecosystem)
+	}
+	h.marks[mark] = eco
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest

@@ -40,11 +40,12 @@ done
 echo "Nexus ready: repositories npm and pypi"
 
 # The import publishes as its own user, with the privileges to browse, read,
-# add and edit in the npm repository and to upload components, and no others.
+# add and edit in the npm and pypi repositories and to upload components, and
+# no others.
 # Nexus refuses a component upload without the edit privilege. The role is
 # written on every run, so an older lab picks up a changed list.
 IMPORT_PASSWORD=$(cat import/nexus-password)
-role='{"id":"sealift-import","name":"sealift-import","description":"Publishes imported npm packages","privileges":["nx-repository-view-npm-npm-read","nx-repository-view-npm-npm-browse","nx-repository-view-npm-npm-add","nx-repository-view-npm-npm-edit","nx-component-upload"],"roles":[]}'
+role='{"id":"sealift-import","name":"sealift-import","description":"Publishes imported npm and pip packages","privileges":["nx-repository-view-npm-npm-read","nx-repository-view-npm-npm-browse","nx-repository-view-npm-npm-add","nx-repository-view-npm-npm-edit","nx-repository-view-pypi-pypi-read","nx-repository-view-pypi-pypi-browse","nx-repository-view-pypi-pypi-add","nx-repository-view-pypi-pypi-edit","nx-component-upload"],"roles":[]}'
 if curl -sf -u "$auth" "$NEXUS/service/rest/v1/security/roles/sealift-import" >/dev/null; then
 	curl -sf -u "$auth" -X PUT -H 'Content-Type: application/json' --data "$role" \
 		"$NEXUS/service/rest/v1/security/roles/sealift-import" >/dev/null
@@ -67,8 +68,8 @@ for user in alice bob; do
 done
 echo "MinIO ready: buckets user-alice and user-bob"
 
-# The import service reads and deletes under packages/npm/ in any user bucket
-# and writes nothing. The policy and the user are rewritten on every run, so
+# The import service reads and deletes under packages/npm/ and packages/pip/
+# in any user bucket and writes nothing. The policy and the user are rewritten on every run, so
 # an older lab picks up a changed policy.
 mc() { docker compose run --rm -T mc "$@"; }
 mc admin policy create lab sealift-import /import/minio-policy.json >/dev/null

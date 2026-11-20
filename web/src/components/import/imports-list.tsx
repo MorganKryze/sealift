@@ -4,9 +4,11 @@ import { Inbox } from "lucide-react"
 import { ApiFailure } from "@/components/import/api-failure"
 import { SessionEnded } from "@/import/api/client"
 import { useImports, useMe } from "@/import/api/queries"
+import { FOLDERS } from "@/import/lib/outcome"
 
 import { ImportRow } from "./import-row"
 
+const code = "rounded border border-line bg-card px-1.5 py-px font-mono text-[12.5px] text-ink [overflow-wrap:anywhere]"
 const choose =
   "inline-flex h-9 items-center rounded-md bg-accent px-4 text-sm font-medium text-background outline-none hover:brightness-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
 
@@ -22,6 +24,7 @@ export function ImportsList() {
     ? [...query.data.imports].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id.localeCompare(a.id))
     : undefined
   const ended = query.error instanceof SessionEnded
+  const bucket = me.data ? `${me.data.bucket}/` : ""
   const running = imports?.filter((i) => i.outcome === "running").length ?? 0
   const queued = imports?.filter((i) => i.outcome === "queued").length ?? 0
 
@@ -75,11 +78,8 @@ export function ImportsList() {
           </div>
           <h2 className="mt-4 text-lg font-semibold">No import yet</h2>
           <p className="mt-1.5 mb-5 max-w-[52ch] leading-6 text-muted">
-            An import starts from an archive in your MinIO folder{" "}
-            <code className="rounded border border-line bg-card px-1.5 py-px font-mono text-[12.5px] text-ink [overflow-wrap:anywhere]">
-              {me.data ? `${me.data.bucket}/${me.data.folder}` : "packages/npm/"}
-            </code>
-            . Once you start one, it appears here with its progress and its report.
+            An import starts from an archive in your MinIO folder <code className={code}>{`${bucket}${FOLDERS[0]}`}</code> or{" "}
+            <code className={code}>{`${bucket}${FOLDERS[1]}`}</code>. Once you start one, it appears here with its progress and its report.
           </p>
           <Link to="/" className={choose}>
             Choose an archive

@@ -446,7 +446,7 @@ export interface components {
              * @description A URI identifying this specific occurrence
              */
             instance?: string;
-            /** @description Every offending entry, for a validation failure */
+            /** @description The offending entries of a validation failure, at most 100; the detail gives the total when there are more */
             errors?: components["schemas"]["ProblemDetail"][];
             /** @description Names of what a tools-missing problem needs and does not have yet */
             missing?: string[];
