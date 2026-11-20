@@ -329,3 +329,32 @@ func TestSaveSettingsRefusesLimitsOutOfRange(t *testing.T) {
 		}
 	}
 }
+
+// Every directory outside private/ is group-writable, so the tools account
+// can swap a temporary file for a link while the store writes it.
+func TestWriteFileNeverWritesThroughALink(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	victim := filepath.Join(root, "private", "signing-key.pem")
+	held, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeTempWrite = func(tmp string) {
+		if err := os.Remove(tmp); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(victim, tmp); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeTempWrite = nil })
+
+	_ = s.WriteFile(filepath.Join(root, "projects", "manifest.json"), []byte(`{"formatVersion":3}`))
+	if got, err := os.ReadFile(victim); err != nil || string(got) != string(held) {
+		t.Errorf("the link's target changed (%d bytes, %v), want it untouched", len(got), err)
+	}
+}

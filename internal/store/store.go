@@ -231,6 +231,10 @@ func validateTarget(t Target) error {
 	return nil
 }
 
+// beforeTempWrite is a test's hook between the creation of a temporary
+// file and the write of its content.
+var beforeTempWrite func(tmp string)
+
 // atomicWriteFile writes data to a temporary file next to path and renames
 // it into place, so a crash never leaves a partial file where callers expect
 // a complete one. The temporary file is created with mode directly, so the
@@ -242,13 +246,24 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("store: create %s: %w", dir, err)
 	}
 
-	tmp, err := tempFile(dir, filepath.Base(path), mode)
+	f, err := tempFile(dir, filepath.Base(path), mode)
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	defer os.Remove(tmp) // no-op once the rename below succeeds
 
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	if beforeTempWrite != nil {
+		beforeTempWrite(tmp)
+	}
+	// The tools account can replace any name in a group-writable directory,
+	// so the content goes through the descriptor tempFile created, never
+	// through a second open that would follow a link put in its place.
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return fmt.Errorf("store: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -282,25 +297,25 @@ func (s *Store) NewResolveDir() (string, error) {
 	return "", fmt.Errorf("store: could not allocate a resolve dir under %s", parent)
 }
 
-// tempFile reserves a unique path in dir for name and returns it, without
-// leaving the file behind for atomicWriteFile to overwrite with the real
-// content and mode.
-func tempFile(dir, name string, mode os.FileMode) (string, error) {
+// tempFile creates a file under a unique name in dir for name and returns
+// it open for writing. O_EXCL never opens an entry that exists, a link
+// included.
+func tempFile(dir, name string, mode os.FileMode) (*os.File, error) {
 	for attempt := 0; attempt < 10; attempt++ {
 		suffix, err := randomHex(4)
 		if err != nil {
-			return "", fmt.Errorf("store: generate temp name: %w", err)
+			return nil, fmt.Errorf("store: generate temp name: %w", err)
 		}
 		path := filepath.Join(dir, "."+name+".tmp-"+suffix)
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err == nil {
-			return path, f.Close()
+			return f, nil
 		}
 		if !os.IsExist(err) {
-			return "", fmt.Errorf("store: create %s: %w", path, err)
+			return nil, fmt.Errorf("store: create %s: %w", path, err)
 		}
 	}
-	return "", fmt.Errorf("store: could not reserve a temp file for %s", name)
+	return nil, fmt.Errorf("store: could not reserve a temp file for %s", name)
 }
 
 func writeJSONFile(path string, v any, mode os.FileMode) error {
