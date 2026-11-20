@@ -415,6 +415,12 @@ var projectReaders = []struct {
 	{"ExportFile", []string{"x", "exports", "20260917T101502Z", "signing-key.pem"}, func(s *Store) (*os.File, error) {
 		return s.ExportFile("x", "20260917T101502Z", "signing-key.pem")
 	}},
+	{"AnalysisLog", []string{"x", "analyses", "20260917T101502Z", "log.txt"}, func(s *Store) (*os.File, error) {
+		return s.AnalysisLog("x", "20260917T101502Z")
+	}},
+	{"ProjectManifest", []string{"x", "package.json"}, func(s *Store) (*os.File, error) {
+		return s.ProjectManifest("x")
+	}},
 }
 
 // linkOutOfProjects replaces the component of rel at depth with a link that

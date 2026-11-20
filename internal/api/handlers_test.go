@@ -919,6 +919,15 @@ func TestDownloadExportFileServesNothingOutsideProjects(t *testing.T) {
 		[]string{"x", "exports", "20260917T101502Z", "signing-key.pem"})
 }
 
+func TestGetAnalysisLogServesNothingOutsideProjects(t *testing.T) {
+	assertServesNothingOutsideProjects(t, "/api/projects/x/analyses/20260917T101502Z/log",
+		[]string{"x", "analyses", "20260917T101502Z", "log.txt"})
+}
+
+func TestGetProjectManifestServesNothingOutsideProjects(t *testing.T) {
+	assertServesNothingOutsideProjects(t, "/api/projects/x/manifest", []string{"x", "package.json"})
+}
+
 func TestDownloadExportFileRefusesAnEscapingName(t *testing.T) {
 	srv, h := newTestServer(t)
 
