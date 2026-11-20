@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // pipManifestExample is the example of docs/dev/archive-format.md, byte for byte.
@@ -254,6 +255,65 @@ func TestParsePipManifestRefuses(t *testing.T) {
 			_, err := ParsePipManifest(encode(t, doc))
 			assertRefusal(t, err, tt.reason)
 		})
+	}
+}
+
+// unsafeText holds one value of each kind of text a refusal must never repeat.
+// Each holds "owned", so a test can tell when a refusal quotes it, raw or escaped.
+var unsafeText = map[string]string{
+	"escape sequence": "owned\x1b]0;owned\a\x1b[2J",
+	"bidi override":   "owned\u202eevil",
+	"newline":         "owned\nb",
+	"delete":          "owned\x7f",
+	"zero width":      "owned\u200bb",
+}
+
+func assertRepeatsNoValue(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	reason := err.Error()
+	if strings.Contains(reason, "owned") || strings.IndexFunc(reason, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		t.Errorf("the refusal repeats the manifest's text: %q", reason)
+	}
+}
+
+func TestParsePipManifestRefusesUnsafeText(t *testing.T) {
+	long := "owned" + strings.Repeat("a", maxTextBytes)
+	target := func(key string) func(map[string]any, string) {
+		return func(d map[string]any, v string) { d["target"].(map[string]any)[key] = v }
+	}
+	fields := []struct {
+		name string
+		set  func(doc map[string]any, v string)
+	}{
+		{"toolVersion", func(d map[string]any, v string) { d["toolVersion"] = v }},
+		{"analysisId", func(d map[string]any, v string) { d["analysisId"] = v }},
+		{"createdAt", func(d map[string]any, v string) { d["createdAt"] = v }},
+		{"target.python", target("python")},
+		{"target.os", target("os")},
+		{"target.cpu", target("cpu")},
+		{"target.glibc", target("glibc")},
+		{"target.uvVer", target("uvVer")},
+	}
+	for _, f := range fields {
+		t.Run(f.name+" too long", func(t *testing.T) {
+			doc := pipManifestDoc()
+			f.set(doc, long)
+			_, err := ParsePipManifest(encode(t, doc))
+			assertRefusal(t, err, f.name+" is longer than 256 bytes")
+			assertRepeatsNoValue(t, err)
+		})
+		for kind, value := range unsafeText {
+			t.Run(f.name+" "+kind, func(t *testing.T) {
+				doc := pipManifestDoc()
+				f.set(doc, value)
+				_, err := ParsePipManifest(encode(t, doc))
+				assertRefusal(t, err, f.name+" holds a control or unprintable character")
+				assertRepeatsNoValue(t, err)
+			})
+		}
 	}
 }
 
