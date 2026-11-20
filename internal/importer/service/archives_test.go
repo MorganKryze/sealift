@@ -448,6 +448,8 @@ func TestArchiveKeyFolders(t *testing.T) {
 		{"pip two folders down", pipBase + "d/e/a.tar.gz", "one folder below packages/pip/"},
 		{"pip key that decodes under npm", pipBase + "..%2fnpm%2fx.tar.gz", ".."},
 		{"npm key that decodes under pip", base + "..%2Fpip%2Fx.tar.gz", ".."},
+		{"pip folder with an encoded slash", "packages/pip%2Fx.tar.gz", "start with packages/npm/ or packages/pip/"},
+		{"npm folder with an encoded slash", "packages%2Fnpm/x.tar.gz", "start with packages/npm/ or packages/pip/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

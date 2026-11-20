@@ -104,11 +104,9 @@ func ArchiveKey(key string) error {
 		return err
 	}
 	// A gateway or a proxy may decode the key once more, so the decoded form
-	// must pass too, under the same folder. An escape that does not decode is a plain name.
+	// must pass too. The folder holds no escape, so decoding keeps it in place.
+	// An escape that does not decode is a plain name.
 	if decoded, err := url.PathUnescape(key); err == nil && decoded != key {
-		if !strings.HasPrefix(decoded, folder) {
-			return errors.New("the key must stay under " + folder + " once decoded")
-		}
 		return checkSegments(decoded, folder)
 	}
 	return nil
