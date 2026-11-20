@@ -439,6 +439,21 @@ type pipFixture struct {
 	wheels   []importtest.WheelFile
 	// archiveErr, when set, is what opening the archive returns.
 	archiveErr error
+	// cancelOpen and cancelRead cancel the attempt as the archive is opened,
+	// or as its first bytes are read.
+	cancelOpen, cancelRead bool
+}
+
+// cancelOnRead cancels the attempt on each read and reads on, so only the
+// attempt's own check of its context stops the archive's read.
+type cancelOnRead struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnRead) Read(p []byte) (int, error) {
+	c.cancel()
+	return c.ReadCloser.Read(p)
 }
 
 func newPipFixture(t *testing.T) *pipFixture {
@@ -480,19 +495,29 @@ func (p *pipFixture) attempt(t *testing.T, folder archive.Ecosystem, opts ...fun
 		Source: fileSource(Options{Archive: p.files.Archive, Manifest: p.files.Manifest}),
 	}
 	a.Source.Name = archive.PipArchiveFile
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	opened := 0
 	open := a.Source.Archive
 	a.Source.Archive = func(ctx context.Context) (io.ReadCloser, error) {
 		opened++
-		if p.archiveErr != nil {
+		switch {
+		case p.archiveErr != nil:
 			return nil, p.archiveErr
+		case p.cancelOpen:
+			cancel()
+			return nil, ctx.Err()
 		}
-		return open(ctx)
+		rc, err := open(ctx)
+		if err != nil || !p.cancelRead {
+			return rc, err
+		}
+		return cancelOnRead{rc, cancel}, nil
 	}
 	for _, o := range opts {
 		o(&a)
 	}
-	return RunAttempt(context.Background(), a, clientFor), opened
+	return RunAttempt(ctx, a, clientFor), opened
 }
 
 func TestPipAttemptRefusals(t *testing.T) {
@@ -535,6 +560,14 @@ func TestPipAttemptRefusals(t *testing.T) {
 		"the archive's source fails": {
 			setup:   func(_ *testing.T, p *pipFixture) { p.archiveErr = fmt.Errorf("%w: minio answered 503", ErrSource) },
 			outcome: OutcomeIncomplete, reason: "the archive's source failed: minio answered 503", kind: KindSource, read: true,
+		},
+		"cancelled while the archive is opened": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.cancelOpen = true },
+			outcome: OutcomeIncomplete, reason: "interrupted", kind: KindInterrupted, read: true,
+		},
+		"cancelled while the archive is read": {
+			setup:   func(_ *testing.T, p *pipFixture) { p.cancelRead = true },
+			outcome: OutcomeIncomplete, reason: "interrupted", kind: KindInterrupted, read: true,
 		},
 		"pip manifest in the npm folder": {
 			setup:   func(*testing.T, *pipFixture) {},
