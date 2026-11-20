@@ -20,6 +20,24 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for Ecosystem.
+const (
+	Npm Ecosystem = "npm"
+	Pip Ecosystem = "pip"
+)
+
+// Valid indicates whether the value is a known member of the Ecosystem enum.
+func (e Ecosystem) Valid() bool {
+	switch e {
+	case Npm:
+		return true
+	case Pip:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventKind.
 const (
 	EventKindCandidate EventKind = "candidate"
@@ -41,6 +59,30 @@ func (e EventKind) Valid() bool {
 	case EventKindProgress:
 		return true
 	case EventKindStep:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PipBlockingKind.
+const (
+	HashMismatch   PipBlockingKind = "hash-mismatch"
+	NoFiles        PipBlockingKind = "no-files"
+	OtherPlatforms PipBlockingKind = "other-platforms"
+	SourceOnly     PipBlockingKind = "source-only"
+)
+
+// Valid indicates whether the value is a known member of the PipBlockingKind enum.
+func (e PipBlockingKind) Valid() bool {
+	switch e {
+	case HashMismatch:
+		return true
+	case NoFiles:
+		return true
+	case OtherPlatforms:
+		return true
+	case SourceOnly:
 		return true
 	default:
 		return false
@@ -85,6 +127,9 @@ type Analysis struct {
 	Failure *Failure `json:"failure,omitempty"`
 	Id      string   `json:"id"`
 
+	// PipResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+	PipResult *PipAnalysisResult `json:"pipResult,omitempty"`
+
 	// PnpmVersion pnpm version the analysis used, absent when it did not record one
 	PnpmVersion *string `json:"pnpmVersion,omitempty"`
 	ProjectId   string  `json:"projectId"`
@@ -100,6 +145,9 @@ type Analysis struct {
 
 	// TrivyVersion Trivy version the analysis used, absent when it did not record one
 	TrivyVersion *string `json:"trivyVersion,omitempty"`
+
+	// UvVersion uv version a pip analysis used, absent when it did not record one
+	UvVersion *string `json:"uvVersion,omitempty"`
 }
 
 // AnalysisResult What an analysis writes to candidates.json and ranking.json
@@ -166,6 +214,9 @@ type DependencyResult struct {
 	// Vector CVE counts by severity, critical to unknown
 	Vector Vector `json:"vector"`
 }
+
+// Ecosystem The package manager a project belongs to
+type Ecosystem string
 
 // EndData Payload of the end event, always the last one of a job
 type EndData struct {
@@ -241,12 +292,92 @@ type LogData struct {
 	Line string `json:"line"`
 }
 
+// PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+type PipAnalysisResult struct {
+	// Blocking Packages with no wheel the target can install
+	Blocking []PipBlocking `json:"blocking"`
+
+	// Files Every requirements file the set was resolved from
+	Files []string `json:"files"`
+
+	// Packages The resolved set, sorted by normalized name
+	Packages []PipPackage `json:"packages"`
+
+	// Target The system a pip resolution is prepared for
+	Target   PipTarget `json:"target"`
+	Warnings []string  `json:"warnings"`
+}
+
+// PipBlocking A package the target cannot install from a wheel
+type PipBlocking struct {
+	Detail  string          `json:"detail"`
+	Kind    PipBlockingKind `json:"kind"`
+	Name    string          `json:"name"`
+	Version string          `json:"version"`
+}
+
+// PipBlockingKind defines model for PipBlocking.Kind.
+type PipBlockingKind string
+
+// PipFinding One known vulnerability of a pip package
+type PipFinding struct {
+	// FixedVersions The versions that fix it, as Trivy lists them, empty when none is known
+	FixedVersions []string `json:"fixedVersions"`
+	Id            string   `json:"id"`
+
+	// Severity As Trivy prints it, upper case
+	Severity string  `json:"severity"`
+	Title    *string `json:"title,omitempty"`
+}
+
+// PipPackage One package of a pip analysis' set
+type PipPackage struct {
+	// Cves Sorted by severity, then id
+	Cves []PipFinding `json:"cves"`
+
+	// Files The project files that pin it, empty for a transitive package
+	Files []string `json:"files"`
+
+	// Name Normalized name
+	Name    string `json:"name"`
+	Version string `json:"version"`
+
+	// Wheel The wheel chosen for a package, as the index lists it
+	Wheel *PipWheel `json:"wheel,omitempty"`
+}
+
+// PipTarget The system a pip resolution is prepared for
+type PipTarget struct {
+	// Cpu Only x86_64 for now
+	Cpu string `json:"cpu"`
+
+	// Glibc glibc 2.17 to 2.40
+	Glibc string `json:"glibc"`
+	Os    string `json:"os"`
+
+	// Python Python 3.<minor>.<patch>
+	Python string `json:"python"`
+	UvVer  string `json:"uvVer"`
+}
+
+// PipWheel The wheel chosen for a package, as the index lists it
+type PipWheel struct {
+	File string `json:"file"`
+
+	// Sha256 Lowercase hex
+	Sha256 string `json:"sha256"`
+
+	// Size Bytes
+	Size int64  `json:"size"`
+	Url  string `json:"url"`
+}
+
 // Problem RFC 9457 Problem Details for HTTP APIs
 type Problem struct {
 	// Detail A human-readable explanation specific to this occurrence
 	Detail *string `json:"detail,omitempty"`
 
-	// Errors Every offending entry, for a validation failure
+	// Errors The offending entries of a validation failure, at most 100; the detail gives the total when there are more
 	Errors *[]ProblemDetail `json:"errors,omitempty"`
 
 	// Instance A URI identifying this specific occurrence
@@ -267,8 +398,11 @@ type Problem struct {
 
 // ProblemDetail One offending entry inside a validation failure's errors list
 type ProblemDetail struct {
-	// Field package.json field, such as dependencies or pnpm.overrides
+	// Field package.json field, such as dependencies or pnpm.overrides, or the file name of a requirements problem
 	Field string `json:"field"`
+
+	// Line Line of a requirements problem, absent for a problem of the whole file
+	Line *int `json:"line,omitempty"`
 
 	// Name Dependency name, empty for a field-level problem
 	Name   *string `json:"name,omitempty"`
@@ -288,23 +422,31 @@ type ProgressData struct {
 	Total int    `json:"total"`
 }
 
-// Project A project, its target and its analysis and export history.
+// Project A project, its target and its analysis and export history. An npm project has a target, a pip project has a pipTarget.
 type Project struct {
 	Analyses *[]Analysis `json:"analyses,omitempty"`
-	Exports  *[]Export   `json:"exports,omitempty"`
-	Id       string      `json:"id"`
+
+	// Ecosystem The package manager a project belongs to
+	Ecosystem Ecosystem `json:"ecosystem"`
+	Exports   *[]Export `json:"exports,omitempty"`
+	Id        string    `json:"id"`
 
 	// ManifestSha256 sha256 of the uploaded package.json bytes, lowercase hex
 	ManifestSha256 *string `json:"manifestSha256,omitempty"`
 	Name           string  `json:"name"`
 
+	// PipTarget The system a pip resolution is prepared for
+	PipTarget *PipTarget `json:"pipTarget,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
-	Target Target `json:"target"`
+	Target *Target `json:"target,omitempty"`
 }
 
 // ProjectSummary One row of the projects list.
 type ProjectSummary struct {
-	Id string `json:"id"`
+	// Ecosystem The package manager a project belongs to
+	Ecosystem Ecosystem `json:"ecosystem"`
+	Id        string    `json:"id"`
 
 	// LastAnalysis One analysis job and its state.
 	LastAnalysis *Analysis `json:"lastAnalysis,omitempty"`
@@ -313,8 +455,11 @@ type ProjectSummary struct {
 	LastExport *Export `json:"lastExport,omitempty"`
 	Name       string  `json:"name"`
 
+	// PipTarget The system a pip resolution is prepared for
+	PipTarget *PipTarget `json:"pipTarget,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
-	Target Target `json:"target"`
+	Target *Target `json:"target,omitempty"`
 }
 
 // Settings Every value the interface can change.
@@ -367,7 +512,7 @@ type Target struct {
 	PnpmVer string `json:"pnpmVer"`
 }
 
-// ToolsState Installed and available pnpm and Trivy versions, and the DB date.
+// ToolsState Installed and available pnpm, uv and Trivy versions, and the DB date.
 type ToolsState struct {
 	// LatestSizeBytes Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable
 	LatestSizeBytes int `json:"latestSizeBytes"`
@@ -388,6 +533,9 @@ type ToolsState struct {
 
 	// TrivyRecommended Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age
 	TrivyRecommended *string `json:"trivyRecommended,omitempty"`
+
+	// UvInstalled The uv versions installed on the data volume, sorted
+	UvInstalled *[]string `json:"uvInstalled,omitempty"`
 }
 
 // Vector CVE counts by severity, critical to unknown
@@ -410,11 +558,20 @@ type ListProjectsParams struct {
 
 // CreateProjectMultipartBody defines parameters for CreateProject.
 type CreateProjectMultipartBody struct {
-	// Manifest package.json content
-	Manifest openapi_types.File `json:"manifest"`
+	// Ecosystem The package manager a project belongs to
+	Ecosystem *Ecosystem `json:"ecosystem,omitempty"`
 
-	// Name Project name; defaults to the manifest name field
+	// Manifest package.json content, required for an npm project
+	Manifest *openapi_types.File `json:"manifest,omitempty"`
+
+	// Name Project name; an npm project defaults to the manifest name field, a pip project requires it
 	Name *string `json:"name,omitempty"`
+
+	// PipTarget JSON of a PipTarget, at most 4 KiB, unknown fields refused. The default target applies when absent.
+	PipTarget *string `json:"pipTarget,omitempty"`
+
+	// Requirements Requirements files of a pip project, repeated. Each part's filename is the file name.
+	Requirements *[]openapi_types.File `json:"requirements,omitempty"`
 }
 
 // RegenerateSigningKeyJSONBody defines parameters for RegenerateSigningKey.
@@ -432,6 +589,15 @@ type UpdateTrivyJSONBody struct {
 
 	// Version Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set.
 	Version *string `json:"version,omitempty"`
+}
+
+// InstallUvJSONBody defines parameters for InstallUv.
+type InstallUvJSONBody struct {
+	// Force Install the release even when it is younger than the minimum release age
+	Force *bool `json:"force,omitempty"`
+
+	// Version The uv release to install, such as 0.13.7
+	Version string `json:"version"`
 }
 
 // CreateProjectMultipartRequestBody defines body for CreateProject for multipart/form-data ContentType.
@@ -454,6 +620,9 @@ type ActivateTrivyJSONRequestBody ActivateTrivyJSONBody
 
 // UpdateTrivyJSONRequestBody defines body for UpdateTrivy for application/json ContentType.
 type UpdateTrivyJSONRequestBody UpdateTrivyJSONBody
+
+// InstallUvJSONRequestBody defines body for InstallUv for application/json ContentType.
+type InstallUvJSONRequestBody InstallUvJSONBody
 
 // AsStepData returns the union data inside the Event_Data as a StepData
 func (t Event_Data) AsStepData() (StepData, error) {
@@ -606,7 +775,7 @@ type ServerInterface interface {
 	// ListProjects List projects with their last analysis and export
 	// (GET /projects)
 	ListProjects(w http.ResponseWriter, r *http.Request, params ListProjectsParams)
-	// CreateProject Create a project from an uploaded package.json and start an analysis
+	// CreateProject Create a project from an uploaded package.json or requirements files
 	// (POST /projects)
 	CreateProject(w http.ResponseWriter, r *http.Request)
 	// DeleteProject Delete the project directory
@@ -675,6 +844,9 @@ type ServerInterface interface {
 	// UpdateTrivy Install a new Trivy release
 	// (POST /tools/trivy/update)
 	UpdateTrivy(w http.ResponseWriter, r *http.Request)
+	// InstallUv Install a uv release from the package index
+	// (POST /tools/uv/install)
+	InstallUv(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1327,6 +1499,20 @@ func (siw *ServerInterfaceWrapper) UpdateTrivy(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// InstallUv operation middleware
+func (siw *ServerInterfaceWrapper) InstallUv(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.InstallUv(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1472,6 +1658,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetTools)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/update", wrapper.UpdateTrivy)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/activate", wrapper.ActivateTrivy)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/uv/install", wrapper.InstallUv)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/db/update", wrapper.UpdateTrivyDB)
 
 	return m
@@ -2543,6 +2730,45 @@ func (response UpdateTrivydefaultApplicationProblemPlusJSONResponse) VisitUpdate
 	return err
 }
 
+type InstallUvRequestObject struct {
+	Body *InstallUvJSONRequestBody
+}
+
+type InstallUvResponseObject interface {
+	VisitInstallUvResponse(w http.ResponseWriter) error
+}
+
+type InstallUv200JSONResponse ToolsState
+
+func (response InstallUv200JSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type InstallUvdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response InstallUvdefaultApplicationProblemPlusJSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetInstance How this instance was deployed
@@ -2554,7 +2780,7 @@ type StrictServerInterface interface {
 	// ListProjects List projects with their last analysis and export
 	// (GET /projects)
 	ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error)
-	// CreateProject Create a project from an uploaded package.json and start an analysis
+	// CreateProject Create a project from an uploaded package.json or requirements files
 	// (POST /projects)
 	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
 	// DeleteProject Delete the project directory
@@ -2623,6 +2849,9 @@ type StrictServerInterface interface {
 	// UpdateTrivy Install a new Trivy release
 	// (POST /tools/trivy/update)
 	UpdateTrivy(ctx context.Context, request UpdateTrivyRequestObject) (UpdateTrivyResponseObject, error)
+	// InstallUv Install a uv release from the package index
+	// (POST /tools/uv/install)
+	InstallUv(ctx context.Context, request InstallUvRequestObject) (InstallUvResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3370,6 +3599,37 @@ func (sh *strictHandler) UpdateTrivy(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateTrivyResponseObject); ok {
 		if err := validResponse.VisitUpdateTrivyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// InstallUv operation middleware
+func (sh *strictHandler) InstallUv(w http.ResponseWriter, r *http.Request) {
+	var request InstallUvRequestObject
+
+	var body InstallUvJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.InstallUv(ctx, request.(InstallUvRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "InstallUv")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(InstallUvResponseObject); ok {
+		if err := validResponse.VisitInstallUvResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

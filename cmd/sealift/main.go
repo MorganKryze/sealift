@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 	"github.com/MorganKryze/sealift/web"
 )
 
@@ -114,6 +116,15 @@ func run(addr, root string, log *slog.Logger) error {
 		onQueueReady(queue)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
+	// uv needs an interpreter to start, and builds and runs nothing with it.
+	// Without one, pip analyses fail at resolve and say so.
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		log.Warn("no python3 on the PATH: pip analyses cannot resolve", "error", err)
+		python = ""
+	}
+	uvRunner := runner.NewUvCLI(python, filepath.Join(root, "cache", "uv"), asUser)
+	service.SetPip(uvRunner, &pip.Client{Index: toolsManager.PipIndex})
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle
@@ -180,9 +191,16 @@ var onQueueReady func(*jobs.Queue)
 // address must be https, or http on a loopback host for the browser gate. The
 // error never repeats the value, which could carry credentials.
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
+// SEALIFT_PIP_INDEX names the package index uv comes from, under
+// tools.ParseIndexURL's rules.
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
+	index, err := tools.ParseIndexURL(os.Getenv("SEALIFT_PIP_INDEX"))
+	if err != nil {
+		return nil, fmt.Errorf("SEALIFT_PIP_INDEX: %w", err)
+	}
+	m.PipIndex = index
 	raw := os.Getenv("SEALIFT_GITHUB_API")
 	if raw == "" {
 		return m, nil

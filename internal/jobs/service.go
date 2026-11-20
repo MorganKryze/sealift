@@ -14,6 +14,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 )
 
 // idLayout is the time.Parse layout analysis and export IDs use: a UTC
@@ -93,6 +94,8 @@ type Service struct {
 	reg   *npm.Client
 
 	mu          sync.Mutex
+	uv          runner.Uv   // nil until SetPip
+	index       *pip.Client // nil until SetPip
 	byQueueID   map[string]*trackedJob
 	byJobKey    map[jobKey]*trackedJob
 	byProjectID map[string]*trackedJob // the one job Service is tracking for a project, queued or running
@@ -119,23 +122,38 @@ func NewService(st *store.Store, q *Queue, tm *tools.Manager, pnpm runner.Pnpm, 
 	return s
 }
 
+// SetPip gives the Service what a pip analysis needs: the resolver and the
+// package index. Without it, QueueAnalysis refuses a pip project.
+func (s *Service) SetPip(uv runner.Uv, index *pip.Client) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uv, s.index = uv, index
+}
+
 // QueueAnalysis reserves a directory for a new analysis of project and
 // submits it to the queue, returning its queued state at once. The
-// analysis job itself owns committing that directory, on every path
-// including failure and cancellation.
+// project's ecosystem picks the job. The analysis job itself owns
+// committing that directory, on every path including failure and
+// cancellation.
 func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.AnalysisInfo{}, err
 	}
 	settings := s.store.Settings()
+	s.mu.Lock()
+	uv, index := s.uv, s.index
+	s.mu.Unlock()
+	if project.Ecosystem == store.Pip && (uv == nil || index == nil) {
+		return store.AnalysisInfo{}, errors.New("jobs: this server is not set up to analyse pip projects")
+	}
 
 	pending, err := s.store.NewDir("analyses", projectID)
 	if err != nil {
 		return store.AnalysisInfo{}, err
 	}
 
-	job := &Analysis{
+	var job Job = &Analysis{
 		Store:    s.store,
 		Tools:    s.tools,
 		Pnpm:     s.pnpm,
@@ -145,6 +163,19 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		Settings: settings,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
+	}
+	if project.Ecosystem == store.Pip {
+		job = &PipAnalysis{
+			Store:    s.store,
+			Tools:    s.tools,
+			Uv:       uv,
+			Trivy:    s.trivy,
+			Index:    index,
+			Project:  project,
+			Settings: settings,
+			Dir:      pending.Path(),
+			ID:       pending.ID(),
+		}
 	}
 	// Registered before the worker can start the job: tracking it after
 	// Submit returns races a job that has already finished, and the

@@ -46,7 +46,7 @@ sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second use
 
 ## Access
 
-sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts); no other route checks the Host. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
+sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts), and a tool install refuses a request whose `Origin` differs from its `Host`, described under [Reverse proxy](#reverse-proxy); no other route looks at the Host. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
 
 <!-- illustrative -->
 ```sh
@@ -74,6 +74,7 @@ Nginx:
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $http_host;
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_read_timeout 1h;
@@ -81,6 +82,8 @@ location / {
 ```
 
 A buffering proxy shows as progress that stalls, then jumps to the end.
+
+The proxy must also pass on the `Host` the browser sent. `POST /api/tools/trivy/update` and `POST /api/tools/uv/install` compare a request's `Origin` with its `Host`, port included, and refuse it with 403 when they differ. Behind a proxy that rewrites the `Host`, the setup screen cannot install Trivy. Caddy keeps the `Host` as it came. Nginx sends the address in `proxy_pass` instead, so the example sets `proxy_set_header Host $http_host`. `$host` drops the port and fails behind a proxy that listens on a port other than 80 or 443.
 
 ## Outbound access
 
@@ -173,7 +176,7 @@ A lost volume means a new key. Stop sealift, restore `private/signing-key.pem` f
 
 A backup of the volume holds the private key. Keep it as you keep the volume.
 
-A regenerate in Settings replaces the key, with the same consequence for the import side. The `POST /api/signing-key/regenerate` route refuses a request whose `Host` is not the server's own host (`localhost`, `127.0.0.1`, `::1` or the host of its listen address) with 403, so a page on another site cannot reach it by DNS rebinding. Behind a reverse proxy that passes a public name as `Host`, press **Regenerate key** through `localhost` or an SSH tunnel to `127.0.0.1:8080`. No other route checks the `Host`.
+A regenerate in Settings replaces the key, with the same consequence for the import side. The `POST /api/signing-key/regenerate` route refuses a request whose `Host` is not the server's own host (`localhost`, `127.0.0.1`, `::1` or the host of its listen address) with 403, so a page on another site cannot reach it by DNS rebinding. Behind a reverse proxy that passes a public name as `Host`, press **Regenerate key** through `localhost` or an SSH tunnel to `127.0.0.1:8080`. No other route holds the `Host` to that list.
 
 ## The import service
 

@@ -163,3 +163,91 @@ func TestAnalysisMethodsRefuseIDsThatEscapeTheDataVolume(t *testing.T) {
 		}
 	}
 }
+
+// status062 and ranking062 are an analysis directory's files as 0.6.2
+// wrote them.
+const status062 = `{
+  "state": "done",
+  "createdAt": "2026-11-01T10:00:00Z",
+  "steps": [
+    {
+      "name": "validate",
+      "state": "done",
+      "durationMs": 1
+    },
+    {
+      "name": "scan-project",
+      "state": "done",
+      "durationMs": 812
+    }
+  ],
+  "pnpmVersion": "10.34.5",
+  "trivyVersion": "0.72.0",
+  "trivyDbDate": "2026-10-31T00:00:00Z",
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": "22.17.1",
+    "pnpmVer": "10.34.5"
+  }
+}
+`
+
+const ranking062 = `{
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": "22.17.1",
+    "pnpmVer": "10.34.5"
+  },
+  "before": [0, 1, 0, 0, 0],
+  "after": null,
+  "dependencies": [],
+  "warnings": []
+}
+`
+
+func TestAnalysisStoredBeforePipReadsUnchanged(t *testing.T) {
+	s := openTestStore(t)
+	dir := writeAnalysisDir(t, s, "20261101T100000Z", status062)
+	if err := os.WriteFile(filepath.Join(dir, "ranking.json"), []byte(ranking062), fileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.AnalysisInfo("proj-1", "20261101T100000Z")
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if string(got.Result) != ranking062 {
+		t.Errorf("Result = %s, want ranking.json byte for byte", got.Result)
+	}
+	if got.PipResult != nil || got.UvVersion != "" {
+		t.Errorf("PipResult = %s, UvVersion = %q, want neither", got.PipResult, got.UvVersion)
+	}
+	if got.State != Done || got.PnpmVersion != "10.34.5" || got.TrivyVersion != "0.72.0" {
+		t.Errorf("AnalysisInfo = %+v, want the stored state and tool versions", got)
+	}
+}
+
+func TestAnalysisInfoReadsPipResult(t *testing.T) {
+	s := openTestStore(t)
+	status := `{"state":"done","steps":[{"name":"scan","state":"done"}],"pnpmVersion":"","uvVersion":"0.13.7","trivyVersion":"0.72.0","trivyDbDate":"2026-11-19T00:00:00Z","pipTarget":{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"}}`
+	dir := writeAnalysisDir(t, s, "20261120T100000Z", status)
+	result := `{"target":{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"},"files":["requirements.txt"],"packages":[],"blocking":[],"warnings":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "pip-result.json"), []byte(result), fileMode); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.AnalysisInfo("proj-1", "20261120T100000Z")
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if string(got.PipResult) != result || got.UvVersion != "0.13.7" {
+		t.Errorf("PipResult = %s, UvVersion = %q, want pip-result.json and 0.13.7", got.PipResult, got.UvVersion)
+	}
+	if got.Result != nil || got.PnpmVersion != "" {
+		t.Errorf("Result = %s, PnpmVersion = %q, want neither", got.Result, got.PnpmVersion)
+	}
+}

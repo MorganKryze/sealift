@@ -51,26 +51,46 @@ paths:
       operationId: createProject
       tags:
         - projects
-      summary: Create a project from an uploaded package.json and start an analysis
+      summary: Create a project from an uploaded package.json or requirements files
+      description: >-
+        An npm project (the default) takes a manifest and a pip project
+        takes one to 32 requirements parts and an optional pipTarget; either
+        queues its first analysis. The request holds at most 40 parts. A
+        requirements part above 1 MiB is refused, never cut.
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required:
-                - manifest
               properties:
+                ecosystem:
+                  $ref: "#/components/schemas/Ecosystem"
                 name:
                   type: string
-                  description: Project name; defaults to the manifest name field
+                  description: >-
+                    Project name; an npm project defaults to the manifest name
+                    field, a pip project requires it
                 manifest:
                   type: string
                   format: binary
-                  description: package.json content
+                  description: package.json content, required for an npm project
+                requirements:
+                  type: array
+                  description: >-
+                    Requirements files of a pip project, repeated. Each part's
+                    filename is the file name.
+                  items:
+                    type: string
+                    format: binary
+                pipTarget:
+                  type: string
+                  description: >-
+                    JSON of a PipTarget, at most 4 KiB, unknown fields refused.
+                    The default target applies when absent.
       responses:
         "201":
-          description: Project created, analysis queued
+          description: Project created, analysis queued for an npm project
           content:
             application/json:
               schema:
@@ -510,6 +530,36 @@ paths:
                 $ref: "#/components/schemas/ToolsState"
         default:
           $ref: "#/components/responses/Problem"
+  /tools/uv/install:
+    post:
+      operationId: installUv
+      tags:
+        - tools
+      summary: Install a uv release from the package index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - version
+              properties:
+                version:
+                  type: string
+                  description: The uv release to install, such as 0.13.7
+                force:
+                  type: boolean
+                  description: Install the release even when it is younger than the minimum release age
+      responses:
+        "200":
+          description: Tools state after the install
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolsState"
+        default:
+          $ref: "#/components/responses/Problem"
   /tools/trivy/db/update:
     post:
       operationId: updateTrivyDB
@@ -580,7 +630,9 @@ components:
           description: A URI identifying this specific occurrence
         errors:
           type: array
-          description: Every offending entry, for a validation failure
+          description: >-
+            The offending entries of a validation failure, at most 100; the
+            detail gives the total when there are more
           items:
             $ref: "#/components/schemas/ProblemDetail"
         missing:
@@ -597,7 +649,12 @@ components:
       properties:
         field:
           type: string
-          description: package.json field, such as dependencies or pnpm.overrides
+          description: >-
+            package.json field, such as dependencies or pnpm.overrides, or the
+            file name of a requirements problem
+        line:
+          type: integer
+          description: Line of a requirements problem, absent for a problem of the whole file
         name:
           type: string
           description: Dependency name, empty for a field-level problem
@@ -643,6 +700,40 @@ components:
         - libc
         - node
         - pnpmVer
+    Ecosystem:
+      type: string
+      description: The package manager a project belongs to
+      enum:
+        - npm
+        - pip
+    PipTarget:
+      type: object
+      description: The system a pip resolution is prepared for
+      properties:
+        python:
+          type: string
+          description: Python 3.<minor>.<patch>
+          example: 3.11.2
+        os:
+          type: string
+          example: linux
+        cpu:
+          type: string
+          description: Only x86_64 for now
+          example: x86_64
+        glibc:
+          type: string
+          description: glibc 2.17 to 2.40
+          example: "2.28"
+        uvVer:
+          type: string
+          example: 0.13.7
+      required:
+        - python
+        - os
+        - cpu
+        - glibc
+        - uvVer
     Instance:
       type: object
       description: >-
@@ -696,8 +787,12 @@ components:
           type: string
         name:
           type: string
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         target:
           $ref: "#/components/schemas/Target"
+        pipTarget:
+          $ref: "#/components/schemas/PipTarget"
         lastAnalysis:
           $ref: "#/components/schemas/Analysis"
         lastExport:
@@ -705,17 +800,23 @@ components:
       required:
         - id
         - name
-        - target
+        - ecosystem
     Project:
       type: object
-      description: A project, its target and its analysis and export history.
+      description: >-
+        A project, its target and its analysis and export history. An npm
+        project has a target, a pip project has a pipTarget.
       properties:
         id:
           type: string
         name:
           type: string
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         target:
           $ref: "#/components/schemas/Target"
+        pipTarget:
+          $ref: "#/components/schemas/PipTarget"
         manifestSha256:
           type: string
           description: sha256 of the uploaded package.json bytes, lowercase hex
@@ -730,7 +831,7 @@ components:
       required:
         - id
         - name
-        - target
+        - ecosystem
     Analysis:
       type: object
       description: One analysis job and its state.
@@ -756,6 +857,11 @@ components:
         pnpmVersion:
           type: string
           description: pnpm version the analysis used, absent when it did not record one
+        pipResult:
+          $ref: "#/components/schemas/PipAnalysisResult"
+        uvVersion:
+          type: string
+          description: uv version a pip analysis used, absent when it did not record one
         failure:
           $ref: "#/components/schemas/Failure"
       required:
@@ -897,6 +1003,132 @@ components:
         - before
         - dependencies
         - warnings
+    PipAnalysisResult:
+      type: object
+      description: >-
+        What a pip analysis writes to pip-result.json: the set resolved from
+        the project's files, each package with its findings. A pip analysis
+        proposes no other version.
+      properties:
+        target:
+          $ref: "#/components/schemas/PipTarget"
+        files:
+          type: array
+          description: Every requirements file the set was resolved from
+          items:
+            type: string
+        packages:
+          type: array
+          description: The resolved set, sorted by normalized name
+          items:
+            $ref: "#/components/schemas/PipPackage"
+        blocking:
+          type: array
+          description: Packages with no wheel the target can install
+          items:
+            $ref: "#/components/schemas/PipBlocking"
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+        - target
+        - files
+        - packages
+        - blocking
+        - warnings
+    PipPackage:
+      type: object
+      description: One package of a pip analysis' set
+      properties:
+        name:
+          type: string
+          description: Normalized name
+          example: jinja2
+        version:
+          type: string
+          example: 3.1.2
+        files:
+          type: array
+          description: The project files that pin it, empty for a transitive package
+          items:
+            type: string
+        wheel:
+          $ref: "#/components/schemas/PipWheel"
+        cves:
+          type: array
+          description: Sorted by severity, then id
+          items:
+            $ref: "#/components/schemas/PipFinding"
+      required:
+        - name
+        - version
+        - files
+        - cves
+    PipWheel:
+      type: object
+      description: The wheel chosen for a package, as the index lists it
+      properties:
+        file:
+          type: string
+        url:
+          type: string
+        sha256:
+          type: string
+          description: Lowercase hex
+        size:
+          type: integer
+          format: int64
+          description: Bytes
+      required:
+        - file
+        - url
+        - sha256
+        - size
+    PipFinding:
+      type: object
+      description: One known vulnerability of a pip package
+      properties:
+        id:
+          type: string
+          example: CVE-2024-22195
+        severity:
+          type: string
+          description: As Trivy prints it, upper case
+          example: MEDIUM
+        fixedVersions:
+          type: array
+          description: The versions that fix it, as Trivy lists them, empty when none is known
+          items:
+            type: string
+        title:
+          type: string
+      required:
+        - id
+        - severity
+        - fixedVersions
+    PipBlocking:
+      type: object
+      description: A package the target cannot install from a wheel
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        kind:
+          type: string
+          enum:
+            - source-only
+            - other-platforms
+            - no-files
+            - hash-mismatch
+        detail:
+          type: string
+      required:
+        - name
+        - version
+        - kind
+        - detail
     ExportRequest:
       type: object
       description: A selection of versions per dependency, plus the project tree flag
@@ -946,10 +1178,15 @@ components:
         - createdAt
     ToolsState:
       type: object
-      description: Installed and available pnpm and Trivy versions, and the DB date.
+      description: Installed and available pnpm, uv and Trivy versions, and the DB date.
       properties:
         pnpmInstalled:
           type: array
+          items:
+            type: string
+        uvInstalled:
+          type: array
+          description: The uv versions installed on the data volume, sorted
           items:
             type: string
         trivyActive:

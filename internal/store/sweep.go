@@ -72,10 +72,16 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 // whose rename fails. It returns how many it removed; a renamed directory
 // is kept, so it does not count.
 func (s *Store) RemoveOrphanDirs() (int, error) {
-	pattern := filepath.Join(s.root, "projects", "*", "*", "*.tmp")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return 0, fmt.Errorf("store: list orphan directories: %w", err)
+	// Only these two folders hold job directories. A wider glob would also
+	// match a requirements file a pip project stores under a name ending
+	// in .tmp.
+	var matches []string
+	for _, folder := range []string{"analyses", "exports"} {
+		found, err := filepath.Glob(filepath.Join(s.root, "projects", "*", folder, "*.tmp"))
+		if err != nil {
+			return 0, fmt.Errorf("store: list orphan directories: %w", err)
+		}
+		matches = append(matches, found...)
 	}
 
 	removed := 0

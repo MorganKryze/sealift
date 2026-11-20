@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
+	"github.com/MorganKryze/sealift/pip"
 )
 
 // manifestSizeLimit bounds an uploaded package.json: real ones run a few
@@ -58,7 +60,7 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion):
+	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion), errors.Is(err, tools.ErrInvalidUvVersion):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict
@@ -88,6 +90,29 @@ func manifestProblem(problems []manifestValidationEntry) problemBody {
 		}
 		if entry.Value != "" {
 			details[i].Value = ptr(entry.Value)
+		}
+	}
+	p.Errors = &details
+	return problemBody{Body: p, StatusCode: http.StatusBadRequest}
+}
+
+// requirementsProblem builds the 400 response for refused requirements
+// files, one entry per problem with its file, line, text and reason.
+func requirementsProblem(problems []pip.Problem) problemBody {
+	detail := "the requirements files have lines sealift cannot analyze"
+	if len(problems) > maxRequirementsProblems {
+		detail = fmt.Sprintf("%s: %d refusals, the first %d are listed", detail, len(problems), maxRequirementsProblems)
+		problems = problems[:maxRequirementsProblems]
+	}
+	p := NewProblem(http.StatusBadRequest, "invalid requirements files", detail)
+	details := make([]ProblemDetail, len(problems))
+	for i, pr := range problems {
+		details[i] = ProblemDetail{Field: pr.File, Reason: pr.Reason}
+		if pr.Line > 0 {
+			details[i].Line = ptr(pr.Line)
+		}
+		if pr.Text != "" {
+			details[i].Value = ptr(pr.Text)
 		}
 	}
 	p.Errors = &details
@@ -155,6 +180,34 @@ func decodeAnalysisResult(raw json.RawMessage) (AnalysisResult, bool) {
 	return result, true
 }
 
+// decodePipResult unmarshals raw (a pip analysis' pip-result.json, or nil
+// before one exists) into the contract's PipAnalysisResult. Field names
+// match internal/jobs.PipResult's JSON tags.
+func decodePipResult(raw json.RawMessage) (PipAnalysisResult, bool) {
+	if len(raw) == 0 {
+		return PipAnalysisResult{}, false
+	}
+	var result PipAnalysisResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return PipAnalysisResult{}, false
+	}
+	// The contract marks these lists required, so a client never meets null
+	// where it expects a list.
+	result.Files = orEmpty(result.Files)
+	result.Packages = orEmpty(result.Packages)
+	result.Blocking = orEmpty(result.Blocking)
+	result.Warnings = orEmpty(result.Warnings)
+	for i := range result.Packages {
+		p := &result.Packages[i]
+		p.Files = orEmpty(p.Files)
+		p.Cves = orEmpty(p.Cves)
+		for j := range p.Cves {
+			p.Cves[j].FixedVersions = orEmpty(p.Cves[j].FixedVersions)
+		}
+	}
+	return result, true
+}
+
 func orEmpty[T any](s []T) []T {
 	if s == nil {
 		return []T{}
@@ -164,6 +217,25 @@ func orEmpty[T any](s []T) []T {
 
 func targetToAPI(t store.Target) Target {
 	return Target{Os: t.OS, Cpu: t.CPU, Libc: t.Libc, Node: t.Node, PnpmVer: t.PnpmVer}
+}
+
+func pipTargetToAPI(t store.PipTarget) PipTarget {
+	return PipTarget{Python: t.Python, Os: t.OS, Cpu: t.CPU, Glibc: t.Glibc, UvVer: t.UvVer}
+}
+
+func pipTargetFromAPI(t PipTarget) store.PipTarget {
+	return store.PipTarget{Python: t.Python, OS: t.Os, CPU: t.Cpu, Glibc: t.Glibc, UvVer: t.UvVer}
+}
+
+// projectTargets returns the target a project's ecosystem uses and nil for
+// the other, so a response never carries an empty target of the wrong kind.
+func projectTargets(p store.Project) (*Target, *PipTarget) {
+	if p.Ecosystem == store.Pip {
+		t := pipTargetToAPI(p.PipTarget)
+		return nil, &t
+	}
+	t := targetToAPI(p.Target)
+	return &t, nil
 }
 
 func targetFromAPI(t Target) store.Target {
@@ -188,6 +260,9 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	if result, ok := decodeAnalysisResult(info.Result); ok {
 		a.Result = &result
 	}
+	if result, ok := decodePipResult(info.PipResult); ok {
+		a.PipResult = &result
+	}
 	if info.TrivyVersion != "" {
 		a.TrivyVersion = &info.TrivyVersion
 	}
@@ -196,6 +271,9 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	}
 	if info.PnpmVersion != "" {
 		a.PnpmVersion = &info.PnpmVersion
+	}
+	if info.UvVersion != "" {
+		a.UvVersion = &info.UvVersion
 	}
 	if info.Failure != nil {
 		a.Failure = &Failure{Step: info.Failure.Step, Message: info.Failure.Message}
@@ -219,7 +297,8 @@ func exportToAPI(info store.ExportInfo) Export {
 }
 
 func projectToAPI(p store.Project, analyses []store.AnalysisInfo, exports []store.ExportInfo) Project {
-	out := Project{Id: p.ID, Name: p.Name, Target: targetToAPI(p.Target)}
+	out := Project{Id: p.ID, Name: p.Name, Ecosystem: Ecosystem(p.Ecosystem)}
+	out.Target, out.PipTarget = projectTargets(p)
 	if p.ManifestSha256 != "" {
 		out.ManifestSha256 = &p.ManifestSha256
 	}

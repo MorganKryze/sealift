@@ -1,4 +1,4 @@
-// Package tools installs and manages the pnpm and Trivy binaries that
+// Package tools installs and manages the pnpm, uv and Trivy binaries that
 // sealift's jobs run as subprocesses.
 package tools
 
@@ -48,6 +48,9 @@ type Manager struct {
 	// NPMRegistry overrides the npm registry base URL. Empty uses the
 	// public registry; tests point it at an httptest server.
 	NPMRegistry string
+	// PipIndex overrides the package index uv comes from. Empty uses
+	// DefaultPipIndex; tests point it at a local index.
+	PipIndex string
 	// GitHubAPI overrides the GitHub API base URL. Empty uses the public
 	// API; tests point it at an httptest server.
 	GitHubAPI string

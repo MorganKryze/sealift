@@ -55,12 +55,14 @@ export function DropSummary({ project, analysis, steps }: DropSummaryProps) {
                 <dt className="text-xs text-muted">Dependencies</dt>
                 <dd className="font-semibold text-ink tabular-nums">{dependencies.length > 0 ? dependencies.length : "Unknown"}</dd>
               </div>
-              <div>
-                <dt className="text-xs text-muted">Target</dt>
-                <dd className="font-semibold text-ink">
-                  {project.target.os}/{project.target.cpu} · {project.target.libc} · Node {project.target.node}
-                </dd>
-              </div>
+              {project.target ? (
+                <div>
+                  <dt className="text-xs text-muted">Target</dt>
+                  <dd className="font-semibold text-ink">
+                    {project.target.os}/{project.target.cpu} · {project.target.libc} · Node {project.target.node}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
             {dependencies.length > 0 ? (
               <div className="mt-3.5 flex flex-wrap gap-1.5">

@@ -170,6 +170,19 @@ function HistoryList({ query, onOpen }: HistoryListProps) {
         {sessions.map((session, index) => {
           const badge = sessionStatus(session)
           const when = session.lastExport?.createdAt ?? session.lastAnalysis?.createdAt
+          if (!session.target) {
+            return (
+              <div
+                key={session.id}
+                className={cn("px-4.5 py-3.5", index > 0 && "border-t border-line")}
+              >
+                <span className="font-semibold text-ink">{session.name}</span>
+                <br />
+                <span className="text-sm text-muted">pip project. This release cannot open it yet.</span>
+              </div>
+            )
+          }
+          const { target } = session
           return (
             <button
               key={session.id}
@@ -184,7 +197,7 @@ function HistoryList({ query, onOpen }: HistoryListProps) {
                 <span className="font-semibold text-ink">{session.name}</span>
                 <br />
                 <span className="text-sm text-muted">
-                  {session.target.os}/{session.target.cpu} · {session.target.libc}
+                  {target.os}/{target.cpu} · {target.libc}
                 </span>
               </span>
               <span className="text-sm text-muted">{when ? formatWhen(when) : ""}</span>

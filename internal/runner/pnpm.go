@@ -211,7 +211,11 @@ func pnpmFailure(output string) string {
 
 // cleanFailure readies pnpm's text for the screen and the API: no URL
 // credentials, no control or format characters, a bounded length.
-func cleanFailure(s string) string {
+func cleanFailure(s string) string { return cleanLimited(s, pnpmFailureLimit) }
+
+// cleanLimited drops URL credentials and control or format characters from
+// a tool's text, folds its whitespace, and cuts it to limit runes.
+func cleanLimited(s string, limit int) string {
 	s = StripURLCredentials(s)
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
@@ -220,8 +224,8 @@ func cleanFailure(s string) string {
 		return r
 	}, s)
 	runes := []rune(strings.Join(strings.Fields(s), " "))
-	if len(runes) <= pnpmFailureLimit {
+	if len(runes) <= limit {
 		return string(runes)
 	}
-	return string(runes[:pnpmFailureLimit]) + "..."
+	return string(runes[:limit]) + "..."
 }

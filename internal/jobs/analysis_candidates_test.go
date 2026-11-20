@@ -58,8 +58,7 @@ func TestStepResolveCandidatesEmitsEstimatedRemainingMs(t *testing.T) {
 			Settings: store.Settings{ResolveParallelism: 2},
 			Dir:      pending.Path(),
 		},
-		ctx: context.Background(),
-		emit: func(e Event) {
+		stepLog: stepLog{ctx: context.Background(), emit: func(e Event) {
 			if e.Kind != "progress" {
 				return
 			}
@@ -73,7 +72,7 @@ func TestStepResolveCandidatesEmitsEstimatedRemainingMs(t *testing.T) {
 			mu.Lock()
 			events = append(events, d)
 			mu.Unlock()
-		},
+		}},
 	}
 
 	if _, err := r.stepResolveCandidates(deps, manifest, nil); err != nil {

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 )
 
 // liveAnalysisOrExport builds a synthetic Analysis or Export from
@@ -59,7 +61,8 @@ func (h *Handlers) ListProjects(_ context.Context, req ListProjectsRequestObject
 
 	out := make([]ProjectSummary, len(projects))
 	for i, p := range projects {
-		summary := ProjectSummary{Id: p.ID, Name: p.Name, Target: targetToAPI(p.Target)}
+		summary := ProjectSummary{Id: p.ID, Name: p.Name, Ecosystem: Ecosystem(p.Ecosystem)}
+		summary.Target, summary.PipTarget = projectTargets(p)
 		liveAnalysis, liveExport := h.liveAnalysisOrExport(p.ID)
 
 		switch {
@@ -93,15 +96,38 @@ func (h *Handlers) ListProjects(_ context.Context, req ListProjectsRequestObject
 	return ListProjects200JSONResponse(out), nil
 }
 
-// CreateProject reads the uploaded package.json from the multipart body,
-// validates it, creates the project directory and queues its first
-// analysis. An invalid manifest gets a 400 listing every offending entry
-// instead of stopping at the first one.
+// Bounds on a project creation request.
+const (
+	maxCreateParts = 40
+	// maxRequirementsProblems bounds the refusal list of one answer.
+	maxRequirementsProblems = 100
+	pipTargetLimit          = 4 << 10
+	requirementsField       = "requirements"
+)
+
+// createParts is what a project creation request holds.
+type createParts struct {
+	name      string
+	ecosystem Ecosystem
+	manifest  []byte
+	files     []store.RequirementsFile
+	pipTarget *store.PipTarget
+}
+
+// CreateProject reads the uploaded package.json or requirements files from
+// the multipart body and creates the project. An npm project queues its
+// first analysis, and an invalid manifest gets a 400 listing every
+// offending entry instead of stopping at the first one. A pip project
+// queues its first analysis too.
 func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObject) (CreateProjectResponseObject, error) {
-	name, manifest, err := readCreateProjectParts(req.Body)
+	parts, err := readCreateProjectParts(req.Body)
 	if err != nil {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "create project", err)), nil
 	}
+	if parts.ecosystem == Pip {
+		return h.createPipProject(parts), nil
+	}
+	name, manifest := parts.name, parts.manifest
 	if len(manifest) == 0 {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "create project", errors.New("the manifest field is required"))), nil
 	}
@@ -132,29 +158,127 @@ func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObje
 	return CreateProject201JSONResponse(projectToAPI(project, []store.AnalysisInfo{analysisInfo}, nil)), nil
 }
 
-// readCreateProjectParts reads the "name" and "manifest" fields of a
-// multipart body, capping each at manifestSizeLimit.
-func readCreateProjectParts(body *multipart.Reader) (name string, manifest []byte, err error) {
-	for {
+// createPipProject checks a pip request's name, files and target, then
+// stores the project and queues its first analysis.
+func (h *Handlers) createPipProject(parts createParts) CreateProjectResponseObject {
+	refuse := func(pb problemBody) CreateProjectResponseObject {
+		return CreateProjectdefaultApplicationProblemPlusJSONResponse(pb)
+	}
+	if parts.name == "" {
+		return refuse(problem(http.StatusBadRequest, "create project", errors.New("the name field is required for a pip project")))
+	}
+	if len(parts.files) == 0 {
+		return refuse(problem(http.StatusBadRequest, "create project", errors.New("at least one requirements file is required")))
+	}
+	files := make([]pip.File, len(parts.files))
+	for i, f := range parts.files {
+		files[i] = pip.File{Name: f.Name, Data: f.Data}
+	}
+	if _, problems := pip.ParseFiles(files); len(problems) > 0 {
+		return refuse(requirementsProblem(problems))
+	}
+	target := store.DefaultPipTarget
+	if parts.pipTarget != nil {
+		target = *parts.pipTarget
+	}
+	if err := store.ValidatePipTarget(target); err != nil {
+		return refuse(autoProblem("create project", err))
+	}
+	if ready, missing := h.Tools.Ready(); !ready {
+		return refuse(toolsMissingProblem(missing))
+	}
+	project, err := h.Store.CreatePipProject(parts.name, parts.files, target)
+	if err != nil {
+		return refuse(autoProblem("create project", err))
+	}
+	analysisInfo, err := h.Service.QueueAnalysis(project.ID)
+	if err != nil {
+		return refuse(autoProblem("queue analysis", err))
+	}
+	return CreateProject201JSONResponse(projectToAPI(project, []store.AnalysisInfo{analysisInfo}, nil))
+}
+
+// readCreateProjectParts reads the fields of a multipart creation body. The
+// name and manifest keep the manifest size cap. A requirements part above
+// pip.MaxFileBytes is refused, never cut: a cut file would drop pins
+// without a word.
+func readCreateProjectParts(body *multipart.Reader) (createParts, error) {
+	out := createParts{ecosystem: Npm}
+	for count := 1; ; count++ {
 		part, perr := body.NextPart()
 		if errors.Is(perr, io.EOF) {
-			return name, manifest, nil
+			return out, nil
 		}
 		if perr != nil {
-			return "", nil, perr
+			return createParts{}, perr
 		}
-		data, rerr := io.ReadAll(io.LimitReader(part, manifestSizeLimit))
+		if count > maxCreateParts {
+			_ = part.Close()
+			return createParts{}, fmt.Errorf("a request takes at most %d parts", maxCreateParts)
+		}
+		err := readCreatePart(part, &out)
 		_ = part.Close()
-		if rerr != nil {
-			return "", nil, rerr
+		if err != nil {
+			return createParts{}, err
+		}
+	}
+}
+
+func readCreatePart(part *multipart.Part, out *createParts) error {
+	switch part.FormName() {
+	case requirementsField:
+		if len(out.files) >= pip.MaxFiles {
+			return fmt.Errorf("a project takes at most %d files", pip.MaxFiles)
+		}
+		if err := store.ValidRequirementsName(part.FileName()); err != nil {
+			return err
+		}
+		data, err := io.ReadAll(io.LimitReader(part, pip.MaxFileBytes+1))
+		if err != nil {
+			return err
+		}
+		if len(data) > pip.MaxFileBytes {
+			return fmt.Errorf("requirements file %q is above the 1 MiB limit", part.FileName())
+		}
+		out.files = append(out.files, store.RequirementsFile{Name: part.FileName(), Data: data})
+	case "pipTarget":
+		data, err := io.ReadAll(io.LimitReader(part, pipTargetLimit+1))
+		if err != nil {
+			return err
+		}
+		if len(data) > pipTargetLimit {
+			return errors.New("the pipTarget field is above the 4 KiB limit")
+		}
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		var t PipTarget
+		if err := dec.Decode(&t); err != nil {
+			return fmt.Errorf("the pipTarget field is not a valid target: %w", err)
+		}
+		target := pipTargetFromAPI(t)
+		out.pipTarget = &target
+	default:
+		data, err := io.ReadAll(io.LimitReader(part, manifestSizeLimit))
+		if err != nil {
+			return err
 		}
 		switch part.FormName() {
 		case "name":
-			name = strings.TrimSpace(string(data))
+			out.name = strings.TrimSpace(string(data))
 		case "manifest":
-			manifest = data
+			out.manifest = data
+		case "ecosystem":
+			switch e := Ecosystem(strings.TrimSpace(string(data))); e {
+			case "", Npm:
+				out.ecosystem = Npm
+			case Pip:
+				out.ecosystem = Pip
+			default:
+				return fmt.Errorf("the ecosystem field must be npm or pip, not %q", e)
+			}
 		}
 	}
+	return nil
 }
 
 // toValidationEntries converts npm.Manifest.Validate's Problem list to the

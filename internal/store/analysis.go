@@ -17,17 +17,20 @@ import (
 const analysisIDLayout = "20060102T150405Z"
 
 // AnalysisInfo summarizes one committed analysis for the API: its identity,
-// its state, and the result an API response embeds once ranking.json
-// exists. Result is nil before the job ranks anything.
+// its state, and the result an API response embeds once ranking.json, or
+// pip-result.json for a pip analysis, exists. Result is nil before an npm
+// job ranks anything, and PipResult before a pip job scans its set.
 type AnalysisInfo struct {
 	ID           string
 	ProjectID    string
 	State        State
 	CreatedAt    time.Time
 	Result       json.RawMessage
+	PipResult    json.RawMessage
 	TrivyVersion string
 	TrivyDBDate  time.Time
 	PnpmVersion  string
+	UvVersion    string
 	Failure      *StepFailure // the first step status.json recorded as failed, nil otherwise
 }
 
@@ -48,6 +51,7 @@ type analysisStatus struct {
 	TrivyVersion string            `json:"trivyVersion"`
 	TrivyDBDate  time.Time         `json:"trivyDbDate"`
 	PnpmVersion  string            `json:"pnpmVersion"`
+	UvVersion    string            `json:"uvVersion"`
 	Steps        []analysisStepRow `json:"steps"`
 }
 
@@ -144,7 +148,8 @@ func (s *Store) jobInfos(projectID, kind string) ([]AnalysisInfo, error) {
 	return infos, nil
 }
 
-// readAnalysisInfo reads status.json and ranking.json under dir. A missing
+// readAnalysisInfo reads status.json, ranking.json and pip-result.json
+// under dir. A missing
 // or unreadable status.json is not fatal: the analysis ID still carries a
 // creation time, and the caller can show state Interrupted for a directory
 // this process cannot otherwise explain.
@@ -165,6 +170,7 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 		info.TrivyVersion = status.TrivyVersion
 		info.TrivyDBDate = status.TrivyDBDate
 		info.PnpmVersion = status.PnpmVersion
+		info.UvVersion = status.UvVersion
 		for _, step := range status.Steps {
 			if step.State == string(Failed) {
 				info.Failure = &StepFailure{Step: step.Name, Message: step.Error}
@@ -173,12 +179,25 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 		}
 	}
 
-	if raw, err := os.ReadFile(filepath.Join(dir, "ranking.json")); err == nil {
-		info.Result = json.RawMessage(raw)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if info.Result, err = readOptional(dir, "ranking.json"); err != nil {
 		return info, fmt.Errorf("store: read ranking.json for %s: %w", id, err)
 	}
+	if info.PipResult, err = readOptional(dir, "pip-result.json"); err != nil {
+		return info, fmt.Errorf("store: read pip-result.json for %s: %w", id, err)
+	}
 	return info, nil
+}
+
+// readOptional reads dir/name, or returns nil when the file is absent.
+func readOptional(dir, name string) (json.RawMessage, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 // deleteJobDir removes a committed analysis or export directory, shared by
