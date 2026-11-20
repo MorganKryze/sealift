@@ -850,6 +850,75 @@ func TestSettingsHaveNoSignatureKey(t *testing.T) {
 	}
 }
 
+// assertServesNothingOutsideProjects plants, one row at a time, a link that
+// leaves projects/ at each component of rel, the path a route reads there,
+// and expects the route at url to answer 404 without the signing key's
+// bytes. The tools account can write every directory under projects/.
+func assertServesNothingOutsideProjects(t *testing.T, url string, rel []string) {
+	t.Helper()
+	for depth := range rel {
+		for _, relative := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, relative %v", filepath.Join(rel[:depth+1]...), relative), func(t *testing.T) {
+				srv, h := newTestServer(t)
+				root := h.Store.Root()
+				key, err := os.ReadFile(filepath.Join(root, "private", "signing-key.pem"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				at := filepath.Join(append([]string{root, "projects"}, rel[:depth+1]...)...)
+				rest := rel[depth+1:]
+				// The link points at the key for the last component, at
+				// private/ when only the key's name follows, and otherwise at
+				// a directory under cache/ holding the key's bytes at the rest
+				// of rel.
+				target := filepath.Join(root, "private", "signing-key.pem")
+				switch {
+				case len(rest) == 1 && rest[0] == "signing-key.pem":
+					target = filepath.Join(root, "private")
+				case len(rest) > 0:
+					target = filepath.Join(root, "cache", "planted")
+					copied := filepath.Join(append([]string{target}, rest...)...)
+					if err := os.MkdirAll(filepath.Dir(copied), 0o770); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(copied, key, 0o664); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if relative {
+					if target, err = filepath.Rel(filepath.Dir(at), target); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.MkdirAll(filepath.Dir(at), 0o770); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, at); err != nil {
+					t.Fatal(err)
+				}
+
+				resp, err := http.Get(srv.URL + url)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				if bytes.Contains(body, key) {
+					t.Fatalf("GET %s served the signing key (status %d)", url, resp.StatusCode)
+				}
+				if resp.StatusCode != http.StatusNotFound {
+					t.Errorf("GET %s status = %d, want 404", url, resp.StatusCode)
+				}
+			})
+		}
+	}
+}
+
+func TestDownloadExportFileServesNothingOutsideProjects(t *testing.T) {
+	assertServesNothingOutsideProjects(t, "/api/projects/x/exports/20260917T101502Z/files/signing-key.pem",
+		[]string{"x", "exports", "20260917T101502Z", "signing-key.pem"})
+}
+
 func TestDownloadExportFileRefusesAnEscapingName(t *testing.T) {
 	srv, h := newTestServer(t)
 

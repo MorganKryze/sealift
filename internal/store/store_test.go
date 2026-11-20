@@ -3,9 +3,12 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -383,5 +386,149 @@ func TestWriteFileNeverWritesThroughALink(t *testing.T) {
 				t.Errorf("WriteFile = <nil>, but the destination holds %d other bytes (%v)", len(got), err)
 			}
 		})
+	}
+}
+
+// The data volume is group-writable, so the tools account can replace
+// projects/ itself with a link before sealift starts.
+func TestOpenRefusesProjectsThatIsALink(t *testing.T) {
+	root := t.TempDir()
+	elsewhere := filepath.Join(root, "elsewhere")
+	if err := os.Mkdir(elsewhere, dirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(root, "projects")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(root); err == nil {
+		t.Fatal("Open = <nil>, want a refusal of projects/ as a link")
+	}
+}
+
+// projectReaders are the store's readers of one file under projects/, each
+// with the path it opens there for project x.
+var projectReaders = []struct {
+	name string
+	rel  []string
+	open func(s *Store) (*os.File, error)
+}{
+	{"ExportFile", []string{"x", "exports", "20260917T101502Z", "signing-key.pem"}, func(s *Store) (*os.File, error) {
+		return s.ExportFile("x", "20260917T101502Z", "signing-key.pem")
+	}},
+}
+
+// linkOutOfProjects replaces the component of rel at depth with a link that
+// leaves projects/ and still lands rel on the signing key's bytes: the key
+// itself for the last component, private/ when only the key's name follows,
+// and otherwise a directory under cache/ holding a copy of the key at the
+// rest of rel.
+func linkOutOfProjects(t *testing.T, root string, rel []string, depth int, relative bool) {
+	t.Helper()
+	key := filepath.Join(root, "private", "signing-key.pem")
+	at := filepath.Join(append([]string{root, "projects"}, rel[:depth+1]...)...)
+	rest := rel[depth+1:]
+	var target string
+	switch {
+	case len(rest) == 0:
+		target = key
+	case len(rest) == 1 && rest[0] == filepath.Base(key):
+		target = filepath.Dir(key)
+	default:
+		target = filepath.Join(root, "cache", "planted")
+		copied := filepath.Join(append([]string{target}, rest...)...)
+		data, err := os.ReadFile(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(copied), dirMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(copied, data, fileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if relative {
+		var err error
+		if target, err = filepath.Rel(filepath.Dir(at), target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(at), dirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The tools account can write every directory under projects/ and put a
+// link at any component of a path a reader opens there, or a FIFO or a
+// directory at its last one.
+func TestProjectReadersServeOnlyARegularFileInsideProjects(t *testing.T) {
+	type plant struct {
+		name string
+		do   func(t *testing.T, root string, rel []string)
+	}
+	for _, r := range projectReaders {
+		var plants []plant
+		for depth := range r.rel {
+			for _, relative := range []bool{false, true} {
+				kind := "an absolute"
+				if relative {
+					kind = "a relative"
+				}
+				plants = append(plants, plant{
+					fmt.Sprintf("%s, %s link out of projects", filepath.Join(r.rel[:depth+1]...), kind),
+					func(t *testing.T, root string, rel []string) { linkOutOfProjects(t, root, rel, depth, relative) },
+				})
+			}
+		}
+		// No process writes to the FIFO, so an open that waits for a writer
+		// never returns.
+		plants = append(plants,
+			plant{"a FIFO", func(t *testing.T, root string, rel []string) {
+				path := filepath.Join(append([]string{root, "projects"}, rel...)...)
+				if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Mkfifo(path, 0o660); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			plant{"a directory", func(t *testing.T, root string, rel []string) {
+				if err := os.MkdirAll(filepath.Join(append([]string{root, "projects"}, rel...)...), dirMode); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		)
+		for _, p := range plants {
+			t.Run(r.name+"/"+p.name, func(t *testing.T) {
+				s := openTestStore(t)
+				p.do(t, s.Root(), r.rel)
+
+				type opened struct {
+					f   *os.File
+					err error
+				}
+				done := make(chan opened, 1)
+				go func() {
+					f, err := r.open(s)
+					done <- opened{f, err}
+				}()
+				select {
+				case got := <-done:
+					if got.f != nil {
+						data, _ := io.ReadAll(got.f)
+						_ = got.f.Close()
+						t.Fatalf("%s served %d bytes, want a refusal", r.name, len(data))
+					}
+					if !errors.Is(got.err, ErrNotFound) {
+						t.Errorf("%s = %v, want ErrNotFound", r.name, got.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("%s still waits after 5s", r.name)
+				}
+			})
+		}
 	}
 }

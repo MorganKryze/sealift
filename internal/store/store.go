@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +62,9 @@ var defaultSettings = Settings{
 // rooted at one directory.
 type Store struct {
 	root string
+	// projects is projects/, opened once, where every reader of a file a
+	// job wrote resolves its path.
+	projects *os.Root
 
 	mu       sync.RWMutex
 	settings Settings
@@ -112,7 +116,11 @@ func Open(root string) (*Store, error) {
 		}
 	}
 
-	s := &Store{root: root}
+	projects, err := openProjectsRoot(filepath.Join(root, "projects"))
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{root: root, projects: projects}
 	settingsPath := filepath.Join(root, "private", "settings.json")
 	switch _, err := os.Stat(settingsPath); {
 	case errors.Is(err, os.ErrNotExist):
@@ -140,6 +148,30 @@ func Open(root string) (*Store, error) {
 	}
 	s.signing = &key
 	return s, nil
+}
+
+// openProjectsRoot opens dir as the root the readers resolve in. The data
+// volume is group-writable, so the tools account can put a link in place of
+// projects/; the root counts only when it is the directory found at dir.
+func openProjectsRoot(dir string) (*os.Root, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", dir, err)
+	}
+	opened, err := r.Stat(".")
+	var found os.FileInfo
+	if err == nil {
+		found, err = os.Lstat(dir)
+	}
+	if err != nil {
+		_ = r.Close()
+		return nil, fmt.Errorf("store: stat %s: %w", dir, err)
+	}
+	if !os.SameFile(opened, found) {
+		_ = r.Close()
+		return nil, fmt.Errorf("store: %s must be a directory, not a link", dir)
+	}
+	return r, nil
 }
 
 // dropSignatureKey rewrites a settings.json from a 0.4 volume without its
@@ -349,6 +381,41 @@ func readJSONFile(path string, v any) error {
 		return fmt.Errorf("store: unmarshal %s: %w", path, err)
 	}
 	return nil
+}
+
+// openProjectFile opens rel, a path under projects/ joined from validated
+// identifiers, for reading. The tools account can write every directory
+// there and put a link at any component of rel. The root follows a link
+// only to a target inside projects/, which holds nothing kept from an API
+// reader, so a path that leaves projects/, a loop of links and anything but
+// a regular file are not found. O_NONBLOCK keeps a FIFO from holding the
+// open until the type check refuses it.
+func (s *Store) openProjectFile(rel string) (*os.File, error) {
+	f, err := s.projects.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNotFound
+		}
+		// The root refuses a path that leaves it with an error that
+		// carries no errno.
+		var errno syscall.Errno
+		if errors.As(err, &errno) && errno != syscall.ELOOP {
+			return nil, fmt.Errorf("store: open %s: %w", rel, err)
+		}
+		slog.Warn("store: refusing a link out of projects/ or a loop of links", "path", rel)
+		return nil, ErrNotFound
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("store: stat %s: %w", rel, err)
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		slog.Warn("store: refusing a path that is not a regular file", "path", rel, "type", st.Mode().Type().String())
+		return nil, ErrNotFound
+	}
+	return f, nil
 }
 
 // validID refuses an identifier that could escape the directory it names.

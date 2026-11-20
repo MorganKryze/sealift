@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -115,32 +114,7 @@ func (s *Store) ExportFile(projectID, exportID, name string) (*os.File, error) {
 	if err := validID(name); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.root, "projects", projectID, "exports", exportID, name)
-	// The tools account can write an export directory and put a link to
-	// private/ there. O_NOFOLLOW serves no link's target, and O_NONBLOCK
-	// keeps a FIFO from holding the open until the type check refuses it.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, syscall.ELOOP) {
-		slog.Warn("store: refusing an export file that is a link", "project", projectID, "export", exportID, "name", name)
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
-	}
-	st, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("store: stat %s: %w", path, err)
-	}
-	if !st.Mode().IsRegular() {
-		_ = f.Close()
-		slog.Warn("store: refusing an export file that is not a regular file", "project", projectID, "export", exportID, "name", name, "type", st.Mode().Type().String())
-		return nil, ErrNotFound
-	}
-	return f, nil
+	return s.openProjectFile(filepath.Join(projectID, "exports", exportID, name))
 }
 
 // readExportInfo reads manifest.json for the analysis ID and creation
