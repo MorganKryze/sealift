@@ -566,6 +566,9 @@ export interface components {
             trivyDbDate?: string;
             /** @description pnpm version the analysis used, absent when it did not record one */
             pnpmVersion?: string;
+            pipResult?: components["schemas"]["PipAnalysisResult"];
+            /** @description uv version a pip analysis used, absent when it did not record one */
+            uvVersion?: string;
             failure?: components["schemas"]["Failure"];
         };
         /** @description Which step failed and why */
@@ -626,6 +629,65 @@ export interface components {
             after?: components["schemas"]["Vector"] | null;
             dependencies: components["schemas"]["DependencyResult"][];
             warnings: string[];
+        };
+        /** @description What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. */
+        PipAnalysisResult: {
+            target: components["schemas"]["PipTarget"];
+            /** @description Every requirements file the set was resolved from */
+            files: string[];
+            /** @description The resolved set, sorted by normalized name */
+            packages: components["schemas"]["PipPackage"][];
+            /** @description Packages with no wheel the target can install */
+            blocking: components["schemas"]["PipBlocking"][];
+            warnings: string[];
+        };
+        /** @description One package of a pip analysis' set */
+        PipPackage: {
+            /**
+             * @description Normalized name
+             * @example jinja2
+             */
+            name: string;
+            /** @example 3.1.2 */
+            version: string;
+            /** @description The project files that pin it, empty for a transitive package */
+            files: string[];
+            wheel?: components["schemas"]["PipWheel"];
+            /** @description Sorted by severity, then id */
+            cves: components["schemas"]["PipFinding"][];
+        };
+        /** @description The wheel chosen for a package, as the index lists it */
+        PipWheel: {
+            file: string;
+            url: string;
+            /** @description Lowercase hex */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Bytes
+             */
+            size: number;
+        };
+        /** @description One known vulnerability of a pip package */
+        PipFinding: {
+            /** @example CVE-2024-22195 */
+            id: string;
+            /**
+             * @description As Trivy prints it, upper case
+             * @example MEDIUM
+             */
+            severity: string;
+            /** @description The versions that fix it, as Trivy lists them, empty when none is known */
+            fixedVersions: string[];
+            title?: string;
+        };
+        /** @description A package the target cannot install from a wheel */
+        PipBlocking: {
+            name: string;
+            version: string;
+            /** @enum {string} */
+            kind: "source-only" | "other-platforms" | "no-files" | "hash-mismatch";
+            detail: string;
         };
         /** @description A selection of versions per dependency, plus the project tree flag */
         ExportRequest: {

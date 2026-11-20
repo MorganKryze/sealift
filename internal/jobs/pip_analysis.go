@@ -1,9 +1,11 @@
 package jobs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,8 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
+	"github.com/MorganKryze/sealift/sbom"
 )
 
 // PipAnalysis resolves a pip project's requirements files together with
@@ -35,6 +39,49 @@ func (a *PipAnalysis) Kind() string { return "analysis" }
 // StoreID names the job by its store directory id, which the client uses.
 func (a *PipAnalysis) StoreID() string { return a.ID }
 
+// PipResult is what a pip analysis writes to pip-result.json, and what the
+// API returns as pipResult. Field names match the contract's schemas.
+type PipResult struct {
+	Target   store.PipTarget `json:"target"`
+	Files    []string        `json:"files"`    // every requirements file the set was resolved from
+	Packages []PipPackage    `json:"packages"` // sorted by normalized name
+	Blocking []PipBlocking   `json:"blocking"`
+	Warnings []string        `json:"warnings"`
+}
+
+// PipPackage is one package of the resolved set.
+type PipPackage struct {
+	Name    string       `json:"name"`
+	Version string       `json:"version"`
+	Files   []string     `json:"files"`           // project files that pin it, empty for a transitive package
+	Wheel   *PipWheel    `json:"wheel,omitempty"` // absent until chosen, and for a blocked package
+	CVEs    []PipFinding `json:"cves"`            // sorted by severity, then id
+}
+
+// PipWheel is the wheel chosen for a package, as the index lists it.
+type PipWheel struct {
+	File   string `json:"file"`
+	URL    string `json:"url"`
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// PipFinding is one known vulnerability of a package.
+type PipFinding struct {
+	ID            string   `json:"id"`
+	Severity      string   `json:"severity"`
+	FixedVersions []string `json:"fixedVersions"`
+	Title         string   `json:"title,omitempty"`
+}
+
+// PipBlocking is a package the target cannot install from a wheel.
+type PipBlocking struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Kind    string `json:"kind"` // source-only, other-platforms, no-files, hash-mismatch
+	Detail  string `json:"detail"`
+}
+
 // shownProblems bounds the requirements problems a validate failure names;
 // the log lists every one.
 const shownProblems = 3
@@ -43,14 +90,17 @@ const shownProblems = 3
 // steps.
 type pipRun struct {
 	stepLog
-	a     *PipAnalysis
-	start time.Time
-	set   pip.Set
-	uvBin string
+	a        *PipAnalysis
+	start    time.Time
+	set      pip.Set
+	files    []string // the project's file names, in upload order
+	uvBin    string
+	resolved []runner.Resolved
+	warnings []string
 }
 
-// Run validates the project's files, installs the target's uv, and
-// resolves the files together. Like the npm analysis, it always commits the
+// Run validates the project's files, installs the target's uv, resolves
+// the files together and scans the set. Like the npm analysis, it always commits the
 // pending directory, so a failed or cancelled run keeps its log.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := os.OpenFile(filepath.Join(a.Dir, "log.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o664)
@@ -100,7 +150,10 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return err
 	}
 	uvVersion = target.UvVer
-	return r.stepResolve()
+	if err := r.stepResolve(); err != nil {
+		return err
+	}
+	return r.stepScan()
 }
 
 // stepValidate parses the stored files and copies them under
@@ -112,8 +165,10 @@ func (r *pipRun) stepValidate() error {
 			return fmt.Errorf("read the requirements files: %w", err)
 		}
 		files := make([]pip.File, len(stored))
+		names := make([]string, len(stored))
 		for i, f := range stored {
 			files[i] = pip.File{Name: f.Name, Data: f.Data}
+			names[i] = f.Name
 		}
 		set, problems := pip.ParseFiles(files)
 		if len(problems) > 0 {
@@ -141,7 +196,7 @@ func (r *pipRun) stepValidate() error {
 				return fmt.Errorf("copy %s: %w", f.Name, err)
 			}
 		}
-		r.set = set
+		r.set, r.files = set, names
 		return nil
 	})
 }
@@ -165,8 +220,8 @@ func plural(n int, one, many string) string {
 }
 
 // stepPrepareTools installs the target's uv, held to the release age, then
-// refreshes the Trivy database. A failed database update on a stale
-// database only goes to the log.
+// refreshes the Trivy database. A failed database update only warns: the
+// scan runs on the database already there.
 func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err error) {
 	err = r.runStep("prepare-tools", func() error {
 		version := r.a.Project.PipTarget.UvVer
@@ -179,7 +234,9 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 			trivyVersion, dbDate = state.Active, state.DBDate
 		}
 		if _, derr := r.a.Trivy.UpdateDB(r.ctx); derr != nil {
-			r.log(fmt.Sprintf("trivy database update failed: %v; using the database from %s", derr, dbDateLabel(dbDate)))
+			r.warnings = append(r.warnings, fmt.Sprintf(
+				"could not refresh the vulnerability database: %v; using the database from %s", derr, dbDateLabel(dbDate)))
+			r.log(fmt.Sprintf("trivy database update failed: %v", derr))
 			return nil
 		}
 		if state, serr := r.a.Tools.TrivyState(r.ctx); serr == nil {
@@ -233,11 +290,120 @@ func (r *pipRun) stepResolve() error {
 		if err := r.checkPins(res.Set, pins); err != nil {
 			return err
 		}
+		r.resolved = res.Set
 		if err := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(r.a.Dir, "project", "requirements.lock"), res.Lock, 0o664)
 	})
+}
+
+// stepScan scans the resolved set with Trivy, keeping the report as
+// project.trivy.json, and writes pip-result.json. A scan failure stops the
+// job, so a done analysis never stands for a scan that did not run.
+func (r *pipRun) stepScan() error {
+	return r.runStep("scan", func() error {
+		components := make([]sbom.Component, len(r.resolved))
+		for i, p := range r.resolved {
+			components[i] = sbom.Component{Name: p.Name, Version: p.Version, Type: "pypi"}
+		}
+		findings, err := scanComponents(r.ctx, r.a.Trivy, components, filepath.Join(r.a.Dir, "project.trivy.json"))
+		if err != nil {
+			return fmt.Errorf("scan the resolved set: %w", err)
+		}
+		// Trivy may name a package as its metadata spells it, such as
+		// Jinja2, while the set holds normalized names.
+		for i := range findings {
+			findings[i].Package = pip.Normalize(findings[i].Package)
+		}
+		index := rank.NewIndex(findings)
+
+		result := PipResult{
+			Target:   r.a.Project.PipTarget,
+			Files:    nonNil(r.files),
+			Packages: make([]PipPackage, 0, len(r.resolved)),
+			Blocking: []PipBlocking{},
+			Warnings: nonNil(r.warnings),
+		}
+		matched := map[string]bool{}
+		for _, p := range r.resolved {
+			key := p.Name + "@" + p.Version
+			matched[key] = true
+			result.Packages = append(result.Packages, PipPackage{
+				Name:    p.Name,
+				Version: p.Version,
+				Files:   nonNil(r.set.FilesOf(p.Name)),
+				CVEs:    pipFindingsOf(index.Set([]string{key})),
+			})
+		}
+		for key, list := range index {
+			if !matched[key] {
+				r.log(fmt.Sprintf("trivy reported %d %s for %s, which is not in the set", len(list), plural(len(list), "finding", "findings"), key))
+			}
+		}
+		return r.a.Store.WriteJSON(filepath.Join(r.a.Dir, "pip-result.json"), result)
+	})
+}
+
+// scanComponents writes components as a CycloneDX SBOM beside outPath,
+// scans it with Trivy into outPath, and returns the findings the report
+// lists.
+func scanComponents(ctx context.Context, trivy runner.Trivy, components []sbom.Component, outPath string) ([]rank.Finding, error) {
+	sbomPath := outPath + ".cdx.json"
+	defer os.Remove(sbomPath)
+
+	f, err := os.Create(sbomPath)
+	if err != nil {
+		return nil, err
+	}
+	werr := sbom.WriteCycloneDX(f, components)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return nil, fmt.Errorf("write sbom: %w", werr)
+	}
+	if _, err := trivy.ScanSBOM(ctx, sbomPath, outPath); err != nil {
+		return nil, fmt.Errorf("trivy scan: %w", err)
+	}
+	report, err := os.Open(outPath)
+	if err != nil {
+		return nil, err
+	}
+	defer report.Close()
+	return rank.ReadTrivyJSON(report)
+}
+
+// pipFindingsOf converts a vulnerability set, as rank.Index.Set returns
+// it, into findings sorted by severity, critical first, then id.
+func pipFindingsOf(set map[string]rank.Finding) []PipFinding {
+	sorted := slices.SortedFunc(maps.Values(set), func(a, b rank.Finding) int {
+		return cmp.Or(cmp.Compare(a.Severity, b.Severity), strings.Compare(a.ID, b.ID))
+	})
+	findings := make([]PipFinding, len(sorted))
+	for i, f := range sorted {
+		findings[i] = PipFinding{ID: f.ID, Severity: severityText(f.Severity), FixedVersions: fixedVersions(f.FixedVersion), Title: f.Title}
+	}
+	return findings
+}
+
+// fixedVersions splits Trivy's FixedVersion, such as "3.1.3, 3.0.4", into
+// its versions. An empty value gives an empty list.
+func fixedVersions(s string) []string {
+	versions := []string{}
+	for v := range strings.SplitSeq(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			versions = append(versions, v)
+		}
+	}
+	return versions
+}
+
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // pinsNamedIn lists each pin a failure message names, with the files that

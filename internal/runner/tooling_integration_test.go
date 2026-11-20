@@ -23,6 +23,8 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
 	"github.com/MorganKryze/sealift/sbom"
 )
 
@@ -131,4 +133,55 @@ func TestTrivyScansResolvedProject(t *testing.T) {
 	if _, err := os.Stat(reportPath); err != nil {
 		t.Fatalf("stat report: %v", err)
 	}
+}
+
+func TestTrivyScansPyPIComponents(t *testing.T) {
+	trivyBin, err := exec.LookPath("trivy")
+	if err != nil {
+		t.Skip("trivy not found on PATH: install Trivy (https://github.com/aquasecurity/trivy) to run this test")
+	}
+
+	dir := t.TempDir()
+	sbomPath := filepath.Join(dir, "project.cdx.json")
+	reportPath := filepath.Join(dir, "project.trivy.json")
+	f, err := os.Create(sbomPath)
+	if err != nil {
+		t.Fatalf("create sbom: %v", err)
+	}
+	err = sbom.WriteCycloneDX(f, []sbom.Component{{Name: "Jinja2", Version: "3.1.2", Type: "pypi"}})
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("write sbom: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cli := NewTrivyCLI(trivyBin, filepath.Join(dir, "trivy-cache"), nil)
+	if _, err := cli.UpdateDB(ctx); err != nil {
+		t.Skipf("trivy UpdateDB: %v (no network access to download the vulnerability database)", err)
+	}
+	if out, err := cli.ScanSBOM(ctx, sbomPath, reportPath); err != nil {
+		t.Fatalf("ScanSBOM: %v\noutput:\n%s", err, out)
+	}
+
+	report, err := os.Open(reportPath)
+	if err != nil {
+		t.Fatalf("open report: %v", err)
+	}
+	defer report.Close()
+	findings, err := rank.ReadTrivyJSON(report)
+	if err != nil {
+		t.Fatalf("ReadTrivyJSON: %v", err)
+	}
+	for _, f := range findings {
+		if f.ID == "CVE-2024-22195" {
+			if pip.Normalize(f.Package) != "jinja2" || f.Version != "3.1.2" || f.FixedVersion == "" {
+				t.Errorf("CVE-2024-22195 = %+v, want jinja2 3.1.2 with a fixed version", f)
+			}
+			return
+		}
+	}
+	t.Fatalf("findings = %+v, want CVE-2024-22195 for jinja2 3.1.2", findings)
 }

@@ -180,6 +180,34 @@ func decodeAnalysisResult(raw json.RawMessage) (AnalysisResult, bool) {
 	return result, true
 }
 
+// decodePipResult unmarshals raw (a pip analysis' pip-result.json, or nil
+// before one exists) into the contract's PipAnalysisResult. Field names
+// match internal/jobs.PipResult's JSON tags.
+func decodePipResult(raw json.RawMessage) (PipAnalysisResult, bool) {
+	if len(raw) == 0 {
+		return PipAnalysisResult{}, false
+	}
+	var result PipAnalysisResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return PipAnalysisResult{}, false
+	}
+	// The contract marks these lists required, so a client never meets null
+	// where it expects a list.
+	result.Files = orEmpty(result.Files)
+	result.Packages = orEmpty(result.Packages)
+	result.Blocking = orEmpty(result.Blocking)
+	result.Warnings = orEmpty(result.Warnings)
+	for i := range result.Packages {
+		p := &result.Packages[i]
+		p.Files = orEmpty(p.Files)
+		p.Cves = orEmpty(p.Cves)
+		for j := range p.Cves {
+			p.Cves[j].FixedVersions = orEmpty(p.Cves[j].FixedVersions)
+		}
+	}
+	return result, true
+}
+
 func orEmpty[T any](s []T) []T {
 	if s == nil {
 		return []T{}
@@ -232,6 +260,9 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	if result, ok := decodeAnalysisResult(info.Result); ok {
 		a.Result = &result
 	}
+	if result, ok := decodePipResult(info.PipResult); ok {
+		a.PipResult = &result
+	}
 	if info.TrivyVersion != "" {
 		a.TrivyVersion = &info.TrivyVersion
 	}
@@ -240,6 +271,9 @@ func analysisToAPI(info store.AnalysisInfo) Analysis {
 	}
 	if info.PnpmVersion != "" {
 		a.PnpmVersion = &info.PnpmVersion
+	}
+	if info.UvVersion != "" {
+		a.UvVersion = &info.UvVersion
 	}
 	if info.Failure != nil {
 		a.Failure = &Failure{Step: info.Failure.Step, Message: info.Failure.Message}

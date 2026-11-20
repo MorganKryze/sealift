@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2036,5 +2037,159 @@ func TestToolsStateAsksNothingOfTheIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"uvInstalled":[]`) {
 		t.Errorf("body %s does not send uvInstalled as an empty list", data)
+	}
+}
+
+// writeAnalysisFiles commits an analysis directory holding files, as a job
+// would leave it.
+func writeAnalysisFiles(t *testing.T, st *store.Store, projectID, id string, files map[string]string) {
+	t.Helper()
+	dir := filepath.Join(st.Root(), "projects", projectID, "analyses", id)
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// getAnalysisRaw answers GET analysis as its top-level JSON keys.
+func getAnalysisRaw(t *testing.T, srv *httptest.Server, projectID, id string) map[string]json.RawMessage {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/%s", srv.URL, projectID, id))
+	if err != nil {
+		t.Fatalf("GET analysis: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET analysis status = %d, body: %s", resp.StatusCode, body)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode analysis: %v", err)
+	}
+	return raw
+}
+
+func sameJSON(t *testing.T, got []byte, want string) bool {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatalf("decode %s: %v", got, err)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatalf("decode %s: %v", want, err)
+	}
+	return reflect.DeepEqual(g, w)
+}
+
+func TestAnalysisStoredBeforePipReadsUnchanged(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	// An analysis as 0.6.2 wrote it.
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":null,` +
+		`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2024-0001","severity":"HIGH"}],"candidates":[]}],"warnings":[]}`
+	writeAnalysisFiles(t, h.Store, project.Id, "20261101T100000Z", map[string]string{
+		"status.json":  `{"state":"done","createdAt":"2026-11-01T10:00:00Z","steps":[],"pnpmVersion":"10.34.5","trivyVersion":"0.72.0","trivyDbDate":"2026-10-31T00:00:00Z","target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"}}`,
+		"ranking.json": ranking,
+	})
+
+	raw := getAnalysisRaw(t, srv, project.Id, "20261101T100000Z")
+	if !sameJSON(t, raw["result"], ranking) {
+		t.Errorf("result = %s, want ranking.json unchanged", raw["result"])
+	}
+	for _, key := range []string{"pipResult", "uvVersion"} {
+		if v, ok := raw[key]; ok {
+			t.Errorf("%s = %s, want it absent", key, v)
+		}
+	}
+	if string(raw["pnpmVersion"]) != `"10.34.5"` {
+		t.Errorf("pnpmVersion = %s, want 10.34.5", raw["pnpmVersion"])
+	}
+}
+
+func TestGetPipAnalysis(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, err := h.Store.CreatePipProject("Data tools", []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("jinja2==3.1.2\n")}}, store.DefaultPipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := `{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"}`
+	cases := []struct {
+		name, stored, want string
+	}{
+		{
+			"every list present",
+			`{"target":` + target + `,"files":["requirements.txt"],"packages":[{"name":"jinja2","version":"3.1.2","files":["requirements.txt"],` +
+				`"wheel":{"file":"jinja2-3.1.2-py3-none-any.whl","url":"https://files.example/jinja2-3.1.2-py3-none-any.whl","sha256":"` + strings.Repeat("a", 64) + `","size":133101},` +
+				`"cves":[{"id":"CVE-2024-22195","severity":"MEDIUM","fixedVersions":["3.1.3"],"title":"jinja2: HTML attribute injection"}]}],` +
+				`"blocking":[{"name":"docopt","version":"0.6.2","kind":"source-only","detail":"source distribution only"}],"warnings":["redis==5.0.8 is yanked on the index: no reason given"]}`,
+			"",
+		},
+		{
+			"every list absent",
+			`{"target":` + target + `,"packages":[{"name":"markupsafe","version":"3.0.2","cves":[{"id":"CVE-2024-0002","severity":"LOW"}]}]}`,
+			`{"target":` + target + `,"files":[],"packages":[{"name":"markupsafe","version":"3.0.2","files":[],"cves":[{"id":"CVE-2024-0002","severity":"LOW","fixedVersions":[]}]}],"blocking":[],"warnings":[]}`,
+		},
+		{
+			"every list null",
+			`{"target":` + target + `,"files":null,"packages":[{"name":"certifi","version":"2024.8.30","files":null,"cves":null}],"blocking":null,"warnings":null}`,
+			`{"target":` + target + `,"files":[],"packages":[{"name":"certifi","version":"2024.8.30","files":[],"cves":[]}],"blocking":[],"warnings":[]}`,
+		},
+		{
+			"no packages",
+			`{"target":` + target + `}`,
+			`{"target":` + target + `,"files":[],"packages":[],"blocking":[],"warnings":[]}`,
+		},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			id := fmt.Sprintf("20261120T10000%dZ", i)
+			writeAnalysisFiles(t, h.Store, project.ID, id, map[string]string{
+				"status.json":     `{"state":"done","steps":[],"pnpmVersion":"","uvVersion":"0.13.7","trivyVersion":"0.72.0","trivyDbDate":"2026-11-19T00:00:00Z","pipTarget":` + target + `}`,
+				"pip-result.json": c.stored,
+			})
+			raw := getAnalysisRaw(t, srv, project.ID, id)
+			want := c.want
+			if want == "" {
+				want = c.stored
+			}
+			if !sameJSON(t, raw["pipResult"], want) {
+				t.Errorf("pipResult = %s, want %s", raw["pipResult"], want)
+			}
+			if string(raw["uvVersion"]) != `"0.13.7"` {
+				t.Errorf("uvVersion = %s, want 0.13.7", raw["uvVersion"])
+			}
+			for _, key := range []string{"result", "pnpmVersion"} {
+				if v, ok := raw[key]; ok {
+					t.Errorf("%s = %s, want it absent on a pip analysis", key, v)
+				}
+			}
+		})
+	}
+}
+
+func TestGetPipAnalysisDropsAnUnreadableResult(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, err := h.Store.CreatePipProject("Data tools", []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("jinja2==3.1.2\n")}}, store.DefaultPipTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAnalysisFiles(t, h.Store, project.ID, "20261120T100000Z", map[string]string{
+		"status.json":     `{"state":"done","uvVersion":"0.13.7"}`,
+		"pip-result.json": `{"packages":"jinja2"}`,
+	})
+	raw := getAnalysisRaw(t, srv, project.ID, "20261120T100000Z")
+	if v, ok := raw["pipResult"]; ok {
+		t.Errorf("pipResult = %s, want it dropped", v)
+	}
+	if string(raw["state"]) != `"done"` {
+		t.Errorf("state = %s, want the analysis still answered", raw["state"])
 	}
 }

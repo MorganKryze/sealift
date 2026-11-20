@@ -1,13 +1,17 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -184,7 +188,7 @@ func TestPipAnalysisWritesTheLock(t *testing.T) {
 	if status.State != store.Done {
 		t.Errorf("state = %q, want done", status.State)
 	}
-	if want := []string{"validate:done", "prepare-tools:done", "resolve:done"}; !slices.Equal(stepNames(status.Steps), want) {
+	if want := []string{"validate:done", "prepare-tools:done", "resolve:done", "scan:done"}; !slices.Equal(stepNames(status.Steps), want) {
 		t.Errorf("steps = %v, want %v", stepNames(status.Steps), want)
 	}
 	if status.UvVersion != "0.13.7" {
@@ -478,6 +482,259 @@ func TestPipAnalysisCancelled(t *testing.T) {
 	}
 	if want := []string{"validate:done", "prepare-tools:done", "resolve:cancelled"}; !slices.Equal(stepNames(status.Steps), want) {
 		t.Errorf("steps = %v, want %v", stepNames(status.Steps), want)
+	}
+}
+
+// cannedTrivy answers every scan with report, whatever the SBOM holds,
+// and keeps the SBOM it was given.
+type cannedTrivy struct {
+	report    string
+	scanErr   error
+	updateErr error
+	mu        sync.Mutex
+	sbom      []byte
+}
+
+func (c *cannedTrivy) ScanSBOM(_ context.Context, sbomPath, outPath string) (string, error) {
+	data, err := os.ReadFile(sbomPath)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	c.sbom = data
+	c.mu.Unlock()
+	if c.scanErr != nil {
+		return "FATAL scan failed", c.scanErr
+	}
+	return "", os.WriteFile(outPath, []byte(c.report), 0o664)
+}
+
+func (c *cannedTrivy) ConvertToCycloneDX(context.Context, string, string) (string, error) {
+	return "", errors.New("cannedTrivy: ConvertToCycloneDX is not used by the analysis")
+}
+
+func (c *cannedTrivy) UpdateDB(context.Context) (string, error) { return "", c.updateErr }
+
+// pipTrivyReport builds a Trivy JSON report from rows of package, version,
+// id, severity and fixed version.
+func pipTrivyReport(rows ...[5]string) string {
+	var vulns []string
+	for _, r := range rows {
+		vulns = append(vulns, fmt.Sprintf(`{"VulnerabilityID":%q,"PkgName":%q,"InstalledVersion":%q,"Severity":%q,"FixedVersion":%q,"Title":"test finding"}`, r[2], r[0], r[1], r[3], r[4]))
+	}
+	return `{"SchemaVersion":2,"Results":[{"Target":"project.trivy.json.cdx.json","Class":"lang-pkgs","Type":"python-pkg","Vulnerabilities":[` + strings.Join(vulns, ",") + `]}]}`
+}
+
+// readPipResult reads the committed pip-result.json both as PipResult and
+// as raw JSON.
+func readPipResult(t *testing.T, st *store.Store, a *PipAnalysis) (PipResult, []byte) {
+	t.Helper()
+	path := filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pip-result.json: %v", err)
+	}
+	var res PipResult
+	if err := st.ReadJSON(path, &res); err != nil {
+		t.Fatalf("read pip-result.json: %v", err)
+	}
+	return res, raw
+}
+
+func TestPipScanReportsFixingVersions(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "Jinja2==3.1.2\nrequests==2.32.3\n"))
+	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("certifi", "2024.8.30", "jinja2", "3.1.2", "markupsafe", "3.0.2", "requests", "2.32.3")}
+	trivy := &cannedTrivy{report: pipTrivyReport(
+		[5]string{"Jinja2", "3.1.2", "CVE-2024-34064", "MEDIUM", "3.1.4"},
+		[5]string{"Jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3, 3.0.4"},
+		[5]string{"Jinja2", "3.1.2", "CVE-2024-56326", "HIGH", "3.1.5"},
+		[5]string{"Jinja2", "3.1.1", "CVE-2024-00001", "CRITICAL", "3.1.2"},
+		[5]string{"requests", "2.32.3", "CVE-2024-47081", "LOW", ""},
+	)}
+	a.Trivy = trivy
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+
+	byName := map[string]PipPackage{}
+	for _, p := range res.Packages {
+		byName[p.Name] = p
+	}
+	want := []PipFinding{
+		{ID: "CVE-2024-56326", Severity: "HIGH", FixedVersions: []string{"3.1.5"}, Title: "test finding"},
+		{ID: "CVE-2024-22195", Severity: "MEDIUM", FixedVersions: []string{"3.1.3", "3.0.4"}, Title: "test finding"},
+		{ID: "CVE-2024-34064", Severity: "MEDIUM", FixedVersions: []string{"3.1.4"}, Title: "test finding"},
+	}
+	if got := byName["jinja2"].CVEs; !reflect.DeepEqual(got, want) {
+		t.Errorf("jinja2 findings = %+v, want %+v", got, want)
+	}
+	if got, want := byName["requests"].CVEs, []PipFinding{{ID: "CVE-2024-47081", Severity: "LOW", FixedVersions: []string{}, Title: "test finding"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("requests findings = %+v, want %+v", got, want)
+	}
+	if got := byName["markupsafe"].CVEs; got == nil || len(got) != 0 {
+		t.Errorf("markupsafe findings = %#v, want an empty list", got)
+	}
+	for _, text := range []string{`"fixedVersions":["3.1.3","3.0.4"]`, `"fixedVersions":[]`, `"cves":[]`} {
+		if !strings.Contains(string(compactJSON(t, raw)), text) {
+			t.Errorf("pip-result.json = %s, want it to hold %s", raw, text)
+		}
+	}
+
+	var doc struct {
+		Components []struct {
+			PURL string `json:"purl"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(trivy.sbom, &doc); err != nil {
+		t.Fatalf("decode the scanned SBOM: %v", err)
+	}
+	var purls []string
+	for _, c := range doc.Components {
+		purls = append(purls, c.PURL)
+	}
+	if want := []string{"pkg:pypi/certifi@2024.8.30", "pkg:pypi/jinja2@3.1.2", "pkg:pypi/markupsafe@3.0.2", "pkg:pypi/requests@2.32.3"}; !slices.Equal(purls, want) {
+		t.Errorf("scanned purls = %v, want %v", purls, want)
+	}
+	final := strings.TrimSuffix(a.Dir, ".tmp")
+	if _, err := os.Stat(filepath.Join(final, "project.trivy.json")); err != nil {
+		t.Errorf("project.trivy.json not kept: %v", err)
+	}
+}
+
+func compactJSON(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := json.Compact(&b, raw); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	return b.Bytes()
+}
+
+func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "requests==2.32.3\n-c constraints.txt\n"),
+		reqFile("dev.txt", "pytest==8.3.3\nrequests==2.32.3\n"),
+		reqFile("constraints.txt", "idna==3.10\n"))
+	set := resolved("certifi", "2024.8.30", "idna", "3.10", "iniconfig", "2.0.0", "pytest", "8.3.3", "requests", "2.32.3")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	a.Trivy = &cannedTrivy{report: pipTrivyReport(
+		[5]string{"requests", "2.32.3", "CVE-2024-47081", "MEDIUM", "2.32.4"},
+		[5]string{"requests", "2.31.0", "CVE-2024-35195", "MEDIUM", "2.32.0"},
+	)}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+
+	if res.Target != store.DefaultPipTarget {
+		t.Errorf("target = %+v, want the project's", res.Target)
+	}
+	if want := []string{"requirements.txt", "dev.txt", "constraints.txt"}; !slices.Equal(res.Files, want) {
+		t.Errorf("files = %v, want %v", res.Files, want)
+	}
+	var got []runner.Resolved
+	for _, p := range res.Packages {
+		got = append(got, runner.Resolved{Name: p.Name, Version: p.Version})
+	}
+	if !slices.Equal(got, set) {
+		t.Errorf("packages = %v, want uv's set %v", got, set)
+	}
+	wantFiles := map[string][]string{
+		"certifi":   {},
+		"idna":      {"constraints.txt"},
+		"iniconfig": {},
+		"pytest":    {"dev.txt"},
+		"requests":  {"dev.txt", "requirements.txt"},
+	}
+	for _, p := range res.Packages {
+		if p.Files == nil || !slices.Equal(p.Files, wantFiles[p.Name]) {
+			t.Errorf("%s files = %#v, want %v", p.Name, p.Files, wantFiles[p.Name])
+		}
+		if p.Wheel != nil {
+			t.Errorf("%s has a wheel %+v before any is chosen", p.Name, p.Wheel)
+		}
+	}
+	for _, p := range res.Packages {
+		for _, f := range p.CVEs {
+			if f.ID == "CVE-2024-35195" {
+				t.Errorf("%s carries %s, reported for another version", p.Name, f.ID)
+			}
+		}
+	}
+
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	if keys := slices.Sorted(maps.Keys(top)); !slices.Equal(keys, []string{"blocking", "files", "packages", "target", "warnings"}) {
+		t.Errorf("pip-result.json keys = %v", keys)
+	}
+	if string(top["blocking"]) != "[]" || string(top["warnings"]) != "[]" {
+		t.Errorf("blocking = %s, warnings = %s, want empty lists", top["blocking"], top["warnings"])
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(top["packages"], &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if keys := slices.Sorted(maps.Keys(row)); !slices.Equal(keys, []string{"cves", "files", "name", "version"}) {
+			t.Errorf("package row keys = %v, want name, version, files and cves only", keys)
+		}
+	}
+	final := strings.TrimSuffix(a.Dir, ".tmp")
+	if _, err := os.Stat(filepath.Join(final, "ranking.json")); !os.IsNotExist(err) {
+		t.Errorf("a pip analysis wrote ranking.json: %v", err)
+	}
+}
+
+func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
+	cases := []struct {
+		name    string
+		trivy   *cannedTrivy
+		wantErr string
+	}{
+		{"trivy exits with an error", &cannedTrivy{scanErr: errors.New("exit status 1")}, "exit status 1"},
+		{"the report is not Trivy's schema", &cannedTrivy{report: `{"SchemaVersion":1,"Results":[]}`}, "schema version 1"},
+		{"the report is not JSON", &cannedTrivy{report: "FATAL"}, "read trivy report"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+			a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+			a.Trivy = c.trivy
+
+			if err := a.Run(context.Background(), func(Event) {}); err == nil {
+				t.Fatal("Run succeeded, want the scan failure")
+			}
+			status, _ := readStatus(t, st, a)
+			if want := []string{"validate:done", "prepare-tools:done", "resolve:done", "scan:failed"}; !slices.Equal(stepNames(status.Steps), want) {
+				t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
+			}
+			if status.State != store.Failed || !strings.Contains(status.Steps[3].Error, c.wantErr) {
+				t.Errorf("state %q, scan error %q, want failed with %q", status.State, status.Steps[3].Error, c.wantErr)
+			}
+			if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json")); !os.IsNotExist(err) {
+				t.Errorf("a failed scan left pip-result.json: %v", err)
+			}
+		})
+	}
+}
+
+func TestPipScanWarnsOnAStaleDatabase(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
+	a.Trivy = &cannedTrivy{report: pipTrivyReport(), updateErr: errors.New("registry unreachable")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, _ := readPipResult(t, st, a)
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "could not refresh the vulnerability database: registry unreachable") {
+		t.Errorf("warnings = %q, want the failed database refresh", res.Warnings)
 	}
 }
 
