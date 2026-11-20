@@ -44,7 +44,10 @@ FROM node:${NODE_VERSION}-bookworm-slim AS final
 # which this base image does not carry; without it every HTTPS call sealift
 # makes to the npm registry or the GitHub API fails to verify its
 # certificate, failing an analysis at "prepare-tools" with no visible error.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# uv needs an interpreter to start, even with an explicit target: python3
+# serves only that. The resolution follows the target's Python version, not
+# this one, and nothing is built with it.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 # sealift runs pnpm from its own download with node; the npm, corepack and
 # yarn the base image bundles are never called and only carry CVEs.

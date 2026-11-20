@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // TestToolsCredential proves toolsCredential builds a credential only when
@@ -356,6 +357,47 @@ func TestNewToolsManagerGitHubAPI(t *testing.T) {
 			}
 			if m.GitHubAPI != c.want {
 				t.Errorf("GitHubAPI = %q, want %q", m.GitHubAPI, c.want)
+			}
+		})
+	}
+}
+
+// TestNewToolsManagerPipIndex covers the package index the manager gets from
+// SEALIFT_PIP_INDEX: unset keeps the public index, a loopback or https address
+// is used as given, and anything else stops the start without echoing the
+// value.
+func TestNewToolsManagerPipIndex(t *testing.T) {
+	cases := []struct {
+		name, value, want string
+		wantErr           bool
+	}{
+		{"unset keeps the public index", "", tools.DefaultPipIndex, false},
+		{"https mirror", "https://mirror.example.internal/simple/", "https://mirror.example.internal/simple/", false},
+		{"http on loopback", "http://127.0.0.1:9/simple/", "http://127.0.0.1:9/simple/", false},
+		{"http on another host", "http://mirror.example.internal/simple/", "", true},
+		{"userinfo", "https://mirroruser:s3cretTOKEN@mirror.example.internal/simple/", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SEALIFT_PIP_INDEX", c.value)
+			m, err := newToolsManager(nil, nil, nil)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("newToolsManager accepted %q", c.value)
+				}
+				if strings.Contains(err.Error(), "s3cretTOKEN") || strings.Contains(err.Error(), "mirroruser") {
+					t.Errorf("error repeats the credentials: %v", err)
+				}
+				if !strings.Contains(err.Error(), "SEALIFT_PIP_INDEX") {
+					t.Errorf("error does not name the variable: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.PipIndex != c.want {
+				t.Errorf("PipIndex = %q, want %q", m.PipIndex, c.want)
 			}
 		})
 	}

@@ -13,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/piptest"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -1891,5 +1893,122 @@ func TestListProjectsMixesEcosystems(t *testing.T) {
 	}
 	if string(pipRow["ecosystem"]) != `"pip"` || pipRow["pipTarget"] == nil || pipRow["target"] != nil {
 		t.Errorf("pip row = %v, want ecosystem pip, a pipTarget and no target", pipRow)
+	}
+}
+
+// uvIndexServer serves a piptest index holding uv 0.13.7, a month old, and
+// uv 0.13.8, a day old, through a front that counts every request.
+func uvIndexServer(t *testing.T) (index string, requests func() int) {
+	t.Helper()
+	ix := piptest.NewIndex(t)
+	for v, age := range map[string]time.Duration{"0.13.7": 30 * 24 * time.Hour, "0.13.8": 24 * time.Hour} {
+		ix.Add(piptest.Dist{
+			Name: "uv", Version: v, Tag: "py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64",
+			Uploaded: time.Now().Add(-age),
+			Payload:  map[string][]byte{"uv-" + v + ".data/scripts/uv": []byte("#!/bin/sh\necho uv\n")},
+		})
+	}
+	var mu sync.Mutex
+	count := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		count++
+		mu.Unlock()
+		ix.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/simple/", func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return count
+	}
+}
+
+func postInstallUv(t *testing.T, srv *httptest.Server, body string) (int, []byte) {
+	t.Helper()
+	resp, err := http.Post(srv.URL+"/api/tools/uv/install", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST install uv: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, data
+}
+
+func TestInstallUvRoute(t *testing.T) {
+	srv, h := newTestServer(t)
+	index, _ := uvIndexServer(t)
+	h.Tools.PipIndex = index
+	h.Tools.Arch = "amd64"
+
+	status, data := postInstallUv(t, srv, `{"version":"0.13.7"}`)
+	if status != http.StatusOK {
+		t.Fatalf("install 0.13.7: status = %d, body %s", status, data)
+	}
+	var state ToolsState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("decode tools state: %v", err)
+	}
+	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7" {
+		t.Fatalf("uvInstalled = %v, want [0.13.7]", state.UvInstalled)
+	}
+
+	refusals := []struct {
+		name, body string
+		status     int
+		detail     []string
+	}{
+		{"a young release without force", `{"version":"0.13.8"}`, http.StatusConflict, []string{"uv 0.13.8", "14 days", "force"}},
+		{"a bad version", `{"version":"../0.13.7"}`, http.StatusBadRequest, []string{"invalid uv version", "such as 0.13.7"}},
+	}
+	for _, c := range refusals {
+		t.Run(c.name, func(t *testing.T) {
+			status, data := postInstallUv(t, srv, c.body)
+			if status != c.status {
+				t.Fatalf("status = %d, want %d, body %s", status, c.status, data)
+			}
+			var p Problem
+			if err := json.Unmarshal(data, &p); err != nil {
+				t.Fatalf("decode problem: %v", err)
+			}
+			for _, part := range c.detail {
+				if p.Detail == nil || !strings.Contains(*p.Detail, part) {
+					t.Errorf("detail = %v, want it to name %q", p.Detail, part)
+				}
+			}
+		})
+	}
+
+	status, data = postInstallUv(t, srv, `{"version":"0.13.8","force":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("forced install of 0.13.8: status = %d, body %s", status, data)
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("decode tools state: %v", err)
+	}
+	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7,0.13.8" {
+		t.Fatalf("uvInstalled = %v, want [0.13.7 0.13.8]", state.UvInstalled)
+	}
+}
+
+func TestToolsStateAsksNothingOfTheIndex(t *testing.T) {
+	srv, h := newTestServer(t)
+	index, requests := uvIndexServer(t)
+	h.Tools.PipIndex = index
+
+	resp, err := http.Get(srv.URL + "/api/tools")
+	if err != nil {
+		t.Fatalf("GET /api/tools: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, data)
+	}
+	if n := requests(); n != 0 {
+		t.Errorf("GET /api/tools made %d requests to the package index, want 0", n)
+	}
+	if !strings.Contains(string(data), `"uvInstalled":[]`) {
+		t.Errorf("body %s does not send uvInstalled as an empty list", data)
 	}
 }
