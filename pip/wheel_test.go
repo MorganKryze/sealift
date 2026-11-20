@@ -103,6 +103,15 @@ func TestInspectWheel(t *testing.T) {
 
 	longName := "Name: " + strings.Repeat("a", 300) + "\x1b]0;title\x07\nVersion: 1.2\n"
 
+	// evil builds a wheel whose .dist-info names evil 1.0, with the METADATA
+	// and WHEEL bodies given: Python's email parser, which pip reads both
+	// files with, must find the same fields in them as InspectWheel does.
+	evil := func(metadata, wheel string) []byte {
+		const evilDist = "evil-1.0.dist-info/"
+		return zipOf(t, zipEntry{name: evilDist + "METADATA", body: []byte(metadata)}, zipEntry{name: evilDist + "WHEEL", body: []byte(wheel)}, zipEntry{name: evilDist + "RECORD"})
+	}
+	const evilWheel = "Wheel-Version: 1.0\nTag: py3-none-any\n"
+
 	rows := []struct {
 		name    string
 		data    []byte
@@ -163,6 +172,19 @@ func TestInspectWheel(t *testing.T) {
 		{name: "an invalid Name", data: zipOf(t, replacing(metadata("Name: demo pkg!\nVersion: 1.2\n"))...), reasons: []string{`METADATA's Name "demo pkg!" is not a valid project name`}},
 		{name: "a folded Name", data: zipOf(t, replacing(metadata("Name: Demo.Pkg\n other\nVersion: 1.2\n"))...), reasons: []string{`METADATA's Name "Demo.Pkg other" is not a valid project name`}},
 		{name: "a long Name is cut", data: zipOf(t, replacing(metadata(longName))...), reasons: []string{`METADATA's Name "` + strings.Repeat("a", 100) + `" is not a valid project name`}},
+		{name: "a bare carriage return ends a header line for Python", data: evil("Metadata-Version: 2.1\nSummary: x\rName: requests\nName: evil\nVersion: 1.0\n\n", evilWheel),
+			reasons: []string{"METADATA holds a carriage return that does not end a line"}},
+		{name: "a carriage return closing the last line ends it", data: evil("Name: evil\r\nVersion: 1.0\r", evilWheel), want: WheelInfo{Name: "evil", Version: "1.0"}},
+		{name: "a line that is not a field starts Python's body", data: evil("Version: 1.0\ngarbage line\nName: evil\n", evilWheel),
+			reasons: []string{`METADATA holds a header line that is not a field: "garbage line"`}},
+		{name: "a space before the colon is not a field name", data: evil("Name : evil\nVersion: 1.0\n", evilWheel),
+			reasons: []string{`METADATA holds a header line that is not a field: "Name : evil"`}},
+		{name: "an empty field name", data: evil(": requests\nName: evil\nVersion: 1.0\n", evilWheel),
+			reasons: []string{`METADATA holds a header line that is not a field: ": requests"`}},
+		{name: "a form feed before the Name is kept as Python keeps it", data: zipOf(t, replacing(metadata("Name:\fDemo.Pkg\nVersion: 1.2\n"))...),
+			reasons: []string{`METADATA's Name "Demo.Pkg" is not a valid project name`}},
+		{name: "a bare carriage return in WHEEL", data: evil("Name: evil\nVersion: 1.0\n", "Wheel-Version: 1.0\rTag: py3-none-any\n"),
+			reasons: []string{"WHEEL holds a carriage return that does not end a line"}},
 		{name: "a local Version", data: zipOf(t, replacing(metadata("Name: Demo.Pkg\nVersion: 1.2+cpu\n"))...), reasons: []string{`METADATA's Version "1.2+cpu" is not an exact version`}},
 
 		{name: "WHEEL missing", data: zipOf(t, without(dist+"WHEEL")...), reasons: []string{`the wheel has no WHEEL file in "demo_pkg-1.2.dist-info"`}},

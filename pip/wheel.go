@@ -227,11 +227,17 @@ func readEntry(files []*zip.File, distInfo, file string, maxBytes int64) ([]byte
 
 // headers reads the header block of a METADATA or WHEEL file, up to the first
 // blank line, by lower-cased field name. A folded line joins the field above.
-func headers(data []byte) map[string][]string {
+// pip reads these files with Python's email parser, which also ends a line at
+// a bare carriage return and starts the body at the first line that is not a
+// field. headers refuses both: either would let pip find other fields here.
+func headers(file string, data []byte) (map[string][]string, error) {
 	fields := map[string][]string{}
 	var last string
 	for line := range bytes.Lines(data) {
-		text := strings.TrimRight(string(line), "\r\n")
+		text := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
+		if strings.Contains(text, "\r") {
+			return nil, fmt.Errorf("%s holds a carriage return that does not end a line", file)
+		}
 		if text == "" {
 			break
 		}
@@ -242,18 +248,35 @@ func headers(data []byte) map[string][]string {
 			continue
 		}
 		key, value, ok := strings.Cut(text, ":")
-		if !ok {
-			last = ""
-			continue
+		if !ok || !isFieldName(key) {
+			return nil, fmt.Errorf("%s holds a header line that is not a field: \"%s\"", file, shownText(text))
 		}
-		last = strings.ToLower(strings.TrimSpace(key))
-		fields[last] = append(fields[last], strings.TrimSpace(value))
+		last = strings.ToLower(key)
+		// Python strips spaces and tabs only, so a form feed stays in the value.
+		fields[last] = append(fields[last], strings.Trim(value, " \t"))
 	}
-	return fields
+	return fields, nil
+}
+
+// isFieldName reports whether key is a field name as RFC 5322 defines it:
+// printable ASCII other than the colon, at least one character.
+func isFieldName(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := range len(key) {
+		if key[i] < '!' || key[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseMetadata(data []byte) (WheelInfo, error) {
-	fields := headers(data)
+	fields, err := headers("METADATA", data)
+	if err != nil {
+		return WheelInfo{}, err
+	}
 	var info WheelInfo
 	for _, f := range []struct {
 		key, label string
@@ -280,7 +303,11 @@ func parseMetadata(data []byte) (WheelInfo, error) {
 // checkWheelVersion accepts a Wheel-Version of major 1, as pip does: a later
 // major may change the layout this reader relies on.
 func checkWheelVersion(data []byte) error {
-	values := headers(data)["wheel-version"]
+	fields, err := headers("WHEEL", data)
+	if err != nil {
+		return err
+	}
+	values := fields["wheel-version"]
 	if len(values) == 0 {
 		return errors.New("WHEEL has no Wheel-Version field")
 	}
