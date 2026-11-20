@@ -524,7 +524,7 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, fmt.Errorf("jobs: create %s: %w", strippedDir, err)
 	}
 	outPath := filepath.Join(strippedDir, file)
-	out, err := os.Create(outPath)
+	out, err := createNew(outPath)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: create %s: %w", outPath, err)
 	}
@@ -576,7 +576,7 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	}
 
 	path := filepath.Join(e.Dir, "packages_npm.tar.gz")
-	f, err := os.Create(path)
+	f, err := createNew(path)
 	if err != nil {
 		werr := fmt.Errorf("jobs: create archive: %w", err)
 		emitFailedStep(emit, "archive", time.Since(start), werr)
@@ -674,7 +674,7 @@ func (e *Export) writeTrivyReports(ctx context.Context, shipped []shippedPackage
 		components[i] = sbom.Component{Name: s.Name, Version: s.Version}
 	}
 	sbomPath := filepath.Join(e.Dir, "export.cdx-input.json")
-	f, err := os.Create(sbomPath)
+	f, err := createNew(sbomPath)
 	if err != nil {
 		return fmt.Errorf("jobs: create %s: %w", sbomPath, err)
 	}
@@ -743,7 +743,7 @@ func (e *Export) writeFindingsCSV() error {
 		}
 	}
 
-	out, err := os.Create(filepath.Join(e.Dir, "findings.csv"))
+	out, err := createNew(filepath.Join(e.Dir, "findings.csv"))
 	if err != nil {
 		return fmt.Errorf("jobs: create findings.csv: %w", err)
 	}
@@ -842,7 +842,7 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 		Signals: signals, ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(shipped),
 	}
 
-	out, err := os.Create(filepath.Join(e.Dir, "summary.md"))
+	out, err := createNew(filepath.Join(e.Dir, "summary.md"))
 	if err != nil {
 		return fmt.Errorf("jobs: create summary.md: %w", err)
 	}

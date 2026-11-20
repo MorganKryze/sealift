@@ -73,3 +73,10 @@ func moveFile(src, dst string) error {
 func errNotRegular(path string) error {
 	return fmt.Errorf("jobs: move %s: not a regular file", filepath.Base(path))
 }
+
+// createNew creates path for writing and fails when any entry holds the
+// name already. The tools account can write every job directory, and
+// through a link planted at path os.Create would fill the link's target.
+func createNew(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
+}

@@ -630,6 +630,47 @@ func TestExportRunUnknownSelectionKeepsPendingDirWithStatus(t *testing.T) {
 	assertExportFailedStatus(t, exportDir, "package-list", "did not resolve")
 }
 
+// The tools account can write an export directory, so a link can wait at
+// any name the export writes, aimed at a file the server owns.
+func TestExportNeverWritesThroughALink(t *testing.T) {
+	for _, tc := range []struct{ name, step string }{
+		{filepath.Join("stripped", "scope-gadget-2.1.0.tgz"), "strip"},
+		{"packages_npm.tar.gz", "archive"},
+		{"export.cdx-input.json", "reports"},
+		{"findings.csv", "reports"},
+		{"summary.md", "reports"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, false)
+
+			victim := filepath.Join(t.TempDir(), "signing-key.pem")
+			const held = "a file the server owns"
+			if err := os.WriteFile(victim, []byte(held), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(exportDir, tc.name)
+			if err := os.MkdirAll(filepath.Dir(link), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(victim, link); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := exp.Run(context.Background(), noopEmit); err == nil {
+				t.Error("Run = <nil>, want the planted link refused")
+			}
+			if got, err := os.ReadFile(victim); err != nil || string(got) != held {
+				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
+			}
+			assertExportFailedStatus(t, exportDir, tc.step, "file exists")
+		})
+	}
+}
+
 // assertExportFailedStatus proves the fix for finding 2: a failed export
 // keeps its directory instead of removing it, with a status.json a reader
 // can find the cause in even after the live event stream is gone. wantStep
