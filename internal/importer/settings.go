@@ -28,7 +28,12 @@ const (
 	// maxSecretBytes is the largest password or key file LoadSettings reads: 64 KiB.
 	maxSecretBytes = 64 << 10
 	redacted       = "[redacted]"
+	// pypiFormat is the Nexus format of the repository pip archives publish to.
+	pypiFormat = "pypi"
 )
+
+// ErrNoPipRepository is the reason a pip archive is refused when the settings name no pip repository.
+var ErrNoPipRepository = errors.New("the settings name no pip repository: set nexus.pip.repository")
 
 var (
 	repositoryName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -62,6 +67,10 @@ type Settings struct {
 	User       string
 	Password   Secret
 	CAFile     string
+	// Pip is the repository pip archives publish to; nil when the file has no nexus.pip section.
+	Pip *PipRepository
+	// Format is the Nexus format the client checks and uploads as: empty for npm, or "pypi".
+	Format string
 	// PublicKey is the only key a manifest signature may verify with, and
 	// PublicKeySHA256 its fingerprint, as the reports and the screens show it.
 	PublicKey       ed25519.PublicKey
@@ -73,6 +82,23 @@ type Settings struct {
 	// Files names the settings file and every file it points to, as the
 	// field that names each: a command must not write over any of them.
 	Files []NamedFile
+}
+
+// PipRepository is the pypi hosted repository pip archives publish to.
+type PipRepository struct {
+	Repository string
+	User       string // nexus.user when nexus.pip names none
+	Password   Secret // nexus.passwordFile's content when nexus.pip names none
+}
+
+// ForPip returns the settings a pip import publishes with: the pip
+// repository, its user and password, and the pypi format.
+func (s Settings) ForPip() (Settings, error) {
+	if s.Pip == nil {
+		return Settings{}, ErrNoPipRepository
+	}
+	s.Repository, s.User, s.Password, s.Format = s.Pip.Repository, s.Pip.User, s.Pip.Password, pypiFormat
+	return s, nil
 }
 
 // NamedFile is a path and the settings field that names it.
@@ -119,6 +145,11 @@ type rawSettings struct {
 		User         string `yaml:"user"`
 		PasswordFile string `yaml:"passwordFile"`
 		CAFile       string `yaml:"caFile"`
+		Pip          *struct {
+			Repository   string `yaml:"repository"`
+			User         string `yaml:"user"`
+			PasswordFile string `yaml:"passwordFile"`
+		} `yaml:"pip"`
 	} `yaml:"nexus"`
 	PublicKeyFile string `yaml:"publicKeyFile"`
 	Token         *struct {
@@ -166,8 +197,8 @@ func LoadSettings(path string) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	if !repositoryName.MatchString(raw.Nexus.Repository) {
-		return Settings{}, settingsErr("nexus.repository", "may hold only letters, digits, dots, hyphens and underscores")
+	if err := checkRepository("nexus.repository", raw.Nexus.Repository); err != nil {
+		return Settings{}, err
 	}
 	dir := filepath.Dir(path)
 	password, err := readSecret("nexus.passwordFile", resolve(dir, raw.Nexus.PasswordFile))
@@ -188,6 +219,14 @@ func LoadSettings(path string) (Settings, error) {
 			return Settings{}, err
 		}
 		s.Files = append(s.Files, NamedFile{"nexus.caFile", s.CAFile})
+	}
+	if p := raw.Nexus.Pip; p != nil {
+		if s.Pip, err = loadPip(dir, p.Repository, p.User, p.PasswordFile, s.User, s.Password); err != nil {
+			return Settings{}, err
+		}
+		if p.PasswordFile != "" {
+			s.Files = append(s.Files, NamedFile{"nexus.pip.passwordFile", resolve(dir, p.PasswordFile)})
+		}
 	}
 	if raw.Token != nil {
 		if s.Token, err = loadToken(dir, raw.Token.KeySetURL, raw.Token.Issuer, raw.Token.Audience, raw.Token.CAFile, raw.Token.Header); err != nil {
@@ -210,6 +249,38 @@ func LoadSettings(path string) (Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+func checkRepository(field, name string) error {
+	if !repositoryName.MatchString(name) {
+		return settingsErr(field, "may hold only letters, digits, dots, hyphens and underscores")
+	}
+	return nil
+}
+
+// loadPip reads the nexus.pip section. Without its own user and password file,
+// the pip repository takes the npm user and password.
+func loadPip(dir, repository, user, passwordFile, npmUser string, npmPassword Secret) (*PipRepository, error) {
+	switch {
+	case repository == "":
+		return nil, settingsErr("nexus.pip.repository", "is required")
+	case user != "" && passwordFile == "":
+		return nil, settingsErr("nexus.pip.passwordFile", "is required when nexus.pip.user is set")
+	case user == "" && passwordFile != "":
+		return nil, settingsErr("nexus.pip.user", "is required when nexus.pip.passwordFile is set")
+	}
+	if err := checkRepository("nexus.pip.repository", repository); err != nil {
+		return nil, err
+	}
+	p := &PipRepository{Repository: repository, User: npmUser, Password: npmPassword}
+	if user != "" {
+		password, err := readSecret("nexus.pip.passwordFile", resolve(dir, passwordFile))
+		if err != nil {
+			return nil, err
+		}
+		p.User, p.Password = user, password
+	}
+	return p, nil
 }
 
 func loadMinIO(dir, rawURL, region, accessKeyFile, secretKeyFile, caFile string) (*MinIOSettings, error) {

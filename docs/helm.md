@@ -33,6 +33,8 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 | `nexus.url` | required | The Nexus address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `nexus.repository` | required | The npm hosted repository the import publishes into |
 | `nexus.user` | required | The import's Nexus user |
+| `nexus.pipRepository` | empty | Optional. The pypi hosted repository the import publishes pip archives into. Empty renders no pip section, and the import refuses pip archives |
+| `nexus.pipUser` | empty | Optional. The Nexus user for the pypi repository. Empty means `nexus.user` and its password. When set, the Secret must hold `nexus-pip-password`, and the chart refuses to render without `nexus.pipRepository` |
 | `keycloak.realmUrl` | required | The realm's address. The chart refuses `http://` and names the key |
 | `keycloak.clientId` | required | The client of the import's oauth2-proxy, and the token's audience |
 | `keycloak.issuer` | empty | Empty means `realmUrl` |
@@ -41,7 +43,7 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 | `token.header` | `X-Auth-Request-Access-Token` | The one request header the service reads the token from. The chart writes the same value into the Ingress's `auth-response-headers` |
 | `minio.url` | required | The MinIO address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `minio.region` | `us-east-1` | |
-| `secret.name` | required | A Secret you create, with the keys `nexus-password`, `minio-access-key` and `minio-secret-key` |
+| `secret.name` | required | A Secret you create, with the keys `nexus-password`, `minio-access-key` and `minio-secret-key`, plus `nexus-pip-password` when `nexus.pipUser` is set |
 | `publicKey.pem` | required unless a ConfigMap is named | The collection's public key as one PEM block |
 | `publicKey.existingConfigMap` | empty | A ConfigMap that holds the key under `public-key.pem` |
 | `ca.pem` | empty | One PEM file the service trusts besides the system roots |
@@ -115,4 +117,4 @@ A pushed tag `vX.Y.Z` builds the image and, once the image is published, package
 
 ## Checks
 
-`just chart` runs `helm lint --strict` and the render tests of `charts/`. The tests render the default shape and each branch: ingress with TLS, ingress off, network policy off, persistence off, `existingClaim`, a CA, pull secrets, a digest and another token header. They check that each refusal fails the render and names its key, and that the settings file the chart renders loads through the import's own settings loader. CI runs them on every pull request with Helm 3.22.1, and the tests skip on a machine without Helm. No cluster ran the chart before the first install, and the runbook's checklist is its test.
+`just chart` runs `helm lint --strict` and the render tests of `charts/`. The tests render the default shape and each branch: ingress with TLS, ingress off, network policy off, persistence off, `existingClaim`, a CA, pull secrets, a digest, another token header, and a pip repository with and without its own user. They check that each refusal fails the render and names its key, and that the settings file the chart renders loads through the import's own settings loader. CI runs them on every pull request with Helm 3.22.1, and the tests skip on a machine without Helm. No cluster ran the chart before the first install, and the runbook's checklist is its test.

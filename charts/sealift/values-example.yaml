@@ -4,6 +4,10 @@ nexus:
   url: <nexus-url>
   repository: <nexus-repository>
   user: <nexus-user>
+  # Optional, to import pip archives: the pypi hosted repository, and its
+  # own user when it has one. The Secret then holds nexus-pip-password.
+  # pipRepository: <nexus-pypi-repository>
+  # pipUser: <nexus-pip-user>
 keycloak:
   realmUrl: <keycloak-realm-url>
   clientId: <keycloak-client-id>

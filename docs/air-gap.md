@@ -114,8 +114,14 @@ nexus:
   user: sealift-import
   passwordFile: nexus-password
   caFile: nexus-ca.pem          # optional, added to the system roots
+  pip:                          # optional, for pip archives
+    repository: pypi-hosted
+    user: sealift-import-pip    # optional, with passwordFile
+    passwordFile: nexus-pip-password
 publicKeyFile: public-key.pem
 ```
+
+`nexus.pip` names the pypi hosted repository that pip archives publish into. Without it, the import refuses a pip archive and imports npm archives as before. `user` and `passwordFile` go together: set both to publish pip archives as a second Nexus user, or leave both out to publish them as `nexus.user` with its password.
 
 `publicKeyFile` holds the public key from sealift's Settings on the connected side: one `PUBLIC KEY` PEM block of at most 4 KiB. The import and the service refuse to start without it, with exit code 2. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
 
