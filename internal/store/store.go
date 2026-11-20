@@ -260,6 +260,10 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	// so the content goes through the descriptor tempFile created, never
 	// through a second open that would follow a link put in its place.
 	_, err = f.Write(data)
+	var written os.FileInfo
+	if err == nil {
+		written, err = f.Stat()
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
@@ -268,6 +272,16 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("store: rename to %s: %w", path, err)
+	}
+	// The rename moves whatever entry holds the temporary name by then, a
+	// link or a file the tools account put there included. The write
+	// counts only when path names the file written above.
+	placed, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("store: stat %s: %w", path, err)
+	}
+	if !os.SameFile(written, placed) {
+		return fmt.Errorf("store: %s was replaced while it was written", path)
 	}
 	return nil
 }

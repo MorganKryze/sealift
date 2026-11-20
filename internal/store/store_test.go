@@ -331,30 +331,57 @@ func TestSaveSettingsRefusesLimitsOutOfRange(t *testing.T) {
 }
 
 // Every directory outside private/ is group-writable, so the tools account
-// can swap a temporary file for a link while the store writes it.
+// can swap a temporary file for a link or a file of its own while the store
+// writes it. The write then either fails or leaves its own bytes in place.
 func TestWriteFileNeverWritesThroughALink(t *testing.T) {
-	root := t.TempDir()
-	s, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+	swaps := []struct {
+		name    string
+		replace func(tmp, victim string) error
+	}{
+		{"a link to the signing key", func(tmp, victim string) error { return os.Symlink(victim, tmp) }},
+		{"a file of other bytes", func(tmp, _ string) error { return os.WriteFile(tmp, []byte(`{"formatVersion":0}`), fileMode) }},
 	}
-	victim := filepath.Join(root, "private", "signing-key.pem")
-	held, err := os.ReadFile(victim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeTempWrite = func(tmp string) {
-		if err := os.Remove(tmp); err != nil {
-			t.Error(err)
-		}
-		if err := os.Symlink(victim, tmp); err != nil {
-			t.Error(err)
-		}
-	}
-	t.Cleanup(func() { beforeTempWrite = nil })
+	for _, tc := range swaps {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			s, err := Open(root)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			victim := filepath.Join(root, "private", "signing-key.pem")
+			held, err := os.ReadFile(victim)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeTempWrite = func(tmp string) {
+				if err := os.Remove(tmp); err != nil {
+					t.Error(err)
+				}
+				if err := tc.replace(tmp, victim); err != nil {
+					t.Error(err)
+				}
+			}
+			t.Cleanup(func() { beforeTempWrite = nil })
 
-	_ = s.WriteFile(filepath.Join(root, "projects", "manifest.json"), []byte(`{"formatVersion":3}`))
-	if got, err := os.ReadFile(victim); err != nil || string(got) != string(held) {
-		t.Errorf("the link's target changed (%d bytes, %v), want it untouched", len(got), err)
+			path := filepath.Join(root, "projects", "manifest.json")
+			const data = `{"formatVersion":3}`
+			werr := s.WriteFile(path, []byte(data))
+			if got, err := os.ReadFile(victim); err != nil || string(got) != string(held) {
+				t.Errorf("the link's target changed (%d bytes, %v), want it untouched", len(got), err)
+			}
+			if werr != nil {
+				return
+			}
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatalf("WriteFile = <nil>, then %v", err)
+			}
+			if !info.Mode().IsRegular() {
+				t.Fatalf("WriteFile = <nil>, but the destination is %v, want a regular file", info.Mode().Type())
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != data {
+				t.Errorf("WriteFile = <nil>, but the destination holds %d other bytes (%v)", len(got), err)
+			}
+		})
 	}
 }
