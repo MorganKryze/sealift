@@ -888,6 +888,27 @@ func TestReadTrivyReportBound(t *testing.T) {
 	}
 }
 
+// TestReadTrivyReportStopsAtTheBound reads a source with no end: a read
+// that does not stop at the bound never returns.
+func TestReadTrivyReportStopsAtTheBound(t *testing.T) {
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		t.Skip("no /dev/zero on this system")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := readTrivyReport("/dev/zero", 1<<20)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "larger than 1 MiB") {
+			t.Errorf("err = %v, want the refusal naming the bound", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not stop at the bound")
+	}
+}
+
 func TestPipScanWarnsOnAStaleDatabase(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
 	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
