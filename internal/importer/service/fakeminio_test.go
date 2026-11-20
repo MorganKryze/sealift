@@ -57,11 +57,14 @@ func newFakeMinio() *fakeMinio {
 func dataKey(bucket, key string) string { return bucket + "/" + key }
 
 // putData stores an object of alice's that holds b.
-func (f *fakeMinio) putData(key string, b []byte) {
-	f.put(bucketAlice, key, int64(len(b)))
+func (f *fakeMinio) putData(key string, b []byte) { f.putDataIn(bucketAlice, key, b) }
+
+// putDataIn stores an object that holds b in a bucket.
+func (f *fakeMinio) putDataIn(bucket, key string, b []byte) {
+	f.put(bucket, key, int64(len(b)))
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.data[dataKey(bucketAlice, key)] = b
+	f.data[dataKey(bucket, key)] = b
 }
 
 // change gives alice's object a new ETag, as a replaced object has.

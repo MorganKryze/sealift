@@ -25,7 +25,7 @@ const (
 	MaxListed = 1000
 	// maxMarkReads is how many manifests one list reads for the folder mark: 50.
 	maxMarkReads = 50
-	// maxMarks is how many manifest ETags the mark cache keeps: 4,096.
+	// maxMarks is how many manifests the mark cache keeps: 4,096.
 	maxMarks = 4096
 
 	archiveSuffix = ".tar.gz"
@@ -287,7 +287,8 @@ func (h *Handlers) markFolders(ctx context.Context, bucket string, archives []Ar
 		if !a.Importable || !ok || !found || m.Size > archive.MaxManifestSize || !validETag(m.ETag) {
 			continue
 		}
-		eco, known := h.recall(m.ETag)
+		mark := markKey(bucket, m)
+		eco, known := h.recall(mark)
 		if !known {
 			if reads == maxMarkReads {
 				continue
@@ -297,7 +298,7 @@ func (h *Handlers) markFolders(ctx context.Context, bucket string, archives []Ar
 			if eco, err = h.readEcosystem(ctx, bucket, m); err != nil {
 				continue
 			}
-			h.remember(m.ETag, eco)
+			h.remember(mark, eco)
 		}
 		if eco != "" && eco != folder {
 			reason := "its manifest is " + article(eco) + " " + string(eco) + " archive's: keep the three files under " + folderFor(eco)
@@ -315,7 +316,7 @@ func article(eco archive.Ecosystem) string {
 
 // readEcosystem reads a manifest's ecosystem. An error is a read that failed
 // and may pass later; a manifest that does not parse gives "" and no error,
-// since the same ETag holds the same bytes.
+// since the same object with the same ETag holds the same bytes.
 func (h *Handlers) readEcosystem(ctx context.Context, bucket string, m s3.Object) (archive.Ecosystem, error) {
 	body, _, err := h.objects.Get(ctx, bucket, m.Key, m.ETag)
 	if err != nil {
@@ -337,23 +338,30 @@ func (h *Handlers) readEcosystem(ctx context.Context, bucket string, m s3.Object
 	return eco, nil
 }
 
-// recall returns the ecosystem remembered for a manifest's ETag.
-func (h *Handlers) recall(etag string) (archive.Ecosystem, bool) {
+// markKey names a manifest in the mark cache by its bucket, key and ETag.
+// Two objects may share an ETag, so one user's manifest never answers for
+// another's.
+func markKey(bucket string, m s3.Object) string {
+	return bucket + "\x00" + m.Key + "\x00" + m.ETag
+}
+
+// recall returns the ecosystem remembered for a manifest's mark key.
+func (h *Handlers) recall(mark string) (archive.Ecosystem, bool) {
 	h.marksMu.Lock()
 	defer h.marksMu.Unlock()
-	eco, ok := h.marks[etag]
+	eco, ok := h.marks[mark]
 	return eco, ok
 }
 
-// remember keeps a manifest's ecosystem by its ETag. The cache is emptied
+// remember keeps a manifest's ecosystem by its mark key. The cache is emptied
 // when it holds maxMarks entries, so a long-running service stays bounded.
-func (h *Handlers) remember(etag string, eco archive.Ecosystem) {
+func (h *Handlers) remember(mark string, eco archive.Ecosystem) {
 	h.marksMu.Lock()
 	defer h.marksMu.Unlock()
 	if h.marks == nil || len(h.marks) >= maxMarks {
 		h.marks = make(map[string]archive.Ecosystem)
 	}
-	h.marks[etag] = eco
+	h.marks[mark] = eco
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest

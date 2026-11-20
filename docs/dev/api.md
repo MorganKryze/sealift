@@ -191,7 +191,7 @@ The answer holds `minioConfigured`, `bucket`, `folder`, `folders`, `bucketMissin
 
 An archive pairs with the `manifest.json` and the `manifest.json.sig` in its own folder, at the root of `packages/npm/` or `packages/pip/`, or one folder below it. Objects deeper than that are ignored, as is every file that is neither an archive, a `manifest.json` nor a `manifest.json.sig`. A folder pairs only its own objects: a signature under `packages/npm/` never completes a folder under `packages/pip/`.
 
-For each archive that passes the rules below, the list reads its `manifest.json` with the listed ETag, within 16 MiB, and looks at `formatVersion` and `ecosystem` alone. A manifest of the other ecosystem marks the archive as not importable. The mark is a hint: a manifest that cannot be read or parsed leaves the archive importable, and the import checks the ecosystem again after the signature. The service keeps each manifest's ecosystem by its ETag, up to 4,096 ETags, and reads at most 50 manifests it has not read before in one list. Past 50, the remaining archives are marked at the next list.
+For each archive that passes the rules below, the list reads its `manifest.json` with the listed ETag, within 16 MiB, and looks at `formatVersion` and `ecosystem` alone. A manifest of the other ecosystem marks the archive as not importable. The mark is a hint: a manifest that cannot be read or parsed leaves the archive importable, and the import checks the ecosystem again after the signature. The service keeps each manifest's ecosystem by its bucket, key and ETag, up to 4,096 manifests, and reads at most 50 manifests it has not read before in one list. Past 50, the remaining archives are marked at the next list.
 
 | Reason | When |
 | --- | --- |

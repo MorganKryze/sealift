@@ -618,6 +618,35 @@ func TestListMarksAnArchiveInTheWrongFolder(t *testing.T) {
 	})
 }
 
+func TestListMarksEachUsersOwnManifest(t *testing.T) {
+	// The fake derives an ETag from the key, so both manifests share one,
+	// as two objects may on a real MinIO.
+	f := newFakeMinio()
+	folder := pipBase + "x/"
+	f.put(bucketAlice, folder+"x.tar.gz", 1)
+	f.putData(folder+"manifest.json", npmManifest)
+	f.put(bucketAlice, folder+"manifest.json.sig", 1)
+	f.put("user-bob", folder+"x.tar.gz", 1)
+	f.putDataIn("user-bob", folder+"manifest.json", pipManifest)
+	f.put("user-bob", folder+"manifest.json.sig", 1)
+	r := minioRig(t, f)
+	if a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]; a.Importable {
+		t.Fatalf("alice's npm manifest under %s left the row importable", pipBase)
+	}
+	if a := byKey(listOf(t, r.get("/api/archives", "b")))[folder+"x.tar.gz"]; !a.Importable || reasonOf(a) != "" {
+		t.Errorf("bob's pip archive: importable %v reason %q, want importable", a.Importable, reasonOf(a))
+	}
+	bobReads := 0
+	for _, c := range f.recorded() {
+		if c.Op == "get" && c.Bucket == "user-bob" {
+			bobReads++
+		}
+	}
+	if bobReads != 1 {
+		t.Errorf("bob's list read %d of his manifests, want 1", bobReads)
+	}
+}
+
 func TestMarkCacheHoldsAtMost4096(t *testing.T) {
 	var h Handlers
 	for i := 0; i < 4096; i++ {

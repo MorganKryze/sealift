@@ -54,7 +54,7 @@ type Handlers struct {
 	importVersion string
 	// startMu makes the duplicate check and the creation of an import one step.
 	startMu sync.Mutex
-	// marks holds the ecosystem read from each manifest, by the manifest's ETag.
+	// marks holds the ecosystem read from each manifest, by bucket, key and ETag.
 	marksMu sync.Mutex
 	marks   map[string]archive.Ecosystem
 }
