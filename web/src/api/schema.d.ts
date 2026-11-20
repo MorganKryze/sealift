@@ -177,7 +177,7 @@ export interface paths {
         put?: never;
         /**
          * Queue an export with a version selection
-         * @description An npm export packs the selected versions and, with includeProject, the project tree. A pip export packs every wheel the analysis recorded: it takes an empty selection and ignores includeProject. A selection for a pip analysis answers 400, and a pip analysis with a package that has no wheel answers 409.
+         * @description An npm export packs the selected versions and, with includeProject, the project tree. A pip export packs every wheel the analysis recorded: it takes an empty selection and ignores includeProject. A selection for a pip analysis answers 400. A pip analysis that lists no package, or a package with no wheel, answers 409.
          */
         post: operations["queueExport"];
         delete?: never;

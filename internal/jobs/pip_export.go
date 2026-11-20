@@ -30,8 +30,8 @@ import (
 // ErrPipSelection reports a selection sent for a pip export.
 var ErrPipSelection = errors.New("jobs: a pip export carries the analysis's whole set and takes no selection")
 
-// ErrPipNotExportable reports a pip analysis whose result is unreadable or
-// lists a package with no wheel.
+// ErrPipNotExportable reports a pip analysis whose result is unreadable,
+// lists no package, or lists a package with no wheel.
 var ErrPipNotExportable = errors.New("jobs: the pip analysis has no wheel for every package")
 
 // PipAnalysisRef points a pip export at the analysis it exports.
@@ -148,6 +148,9 @@ func (e *PipExport) packageList(emit func(Event)) ([]PipPackage, error) {
 // checkPipSet refuses a set the archive cannot carry within the limits
 // the import reads it with.
 func checkPipSet(pkgs []PipPackage) error {
+	if len(pkgs) == 0 {
+		return errors.New("jobs: the analysis lists no package, and the import refuses an archive without one")
+	}
 	limits := archive.DefaultLimits
 	// The out/ directory takes one entry.
 	if len(pkgs) >= limits.Entries {

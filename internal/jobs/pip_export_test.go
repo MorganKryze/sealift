@@ -1239,3 +1239,18 @@ func TestPipExportCancelled(t *testing.T) {
 		t.Errorf("status state = %s, want cancelled", status.State)
 	}
 }
+
+func TestPipExportRefusesAnEmptySet(t *testing.T) {
+	f := runPipAnalysis(t, piptest.NewIndex(t).URL, "# nothing pinned\n", nil)
+	e := f.newPipExport(t)
+	rec, err := runPipExport(context.Background(), e)
+	if want := "the analysis lists no package"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Run = %v, want an error saying %q", err, want)
+	}
+	if names := stepNames(rec.steps); !slices.Equal(names, []string{"package-list:running", "package-list:failed"}) {
+		t.Errorf("steps = %v, want package-list failed", names)
+	}
+	if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+		t.Errorf("export directory holds %v, want only status.json", names)
+	}
+}

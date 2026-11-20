@@ -788,3 +788,17 @@ func TestQueueExportRefusesPipWithoutTheIndex(t *testing.T) {
 	}
 	noExportReserved(t, f.project)
 }
+
+// The import refuses a manifest that lists no package, so an archive of an
+// empty set would cross the air gap only to be refused at the kiosk.
+func TestQueueExportRefusesAnEmptyPipAnalysis(t *testing.T) {
+	f := runPipAnalysis(t, piptest.NewIndex(t).URL, "# nothing pinned\n", nil)
+	if n := len(f.ref.Result.Packages); n != 0 {
+		t.Fatalf("the analysis lists %d packages, want none", n)
+	}
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+	if want := "analysis " + f.ref.ID + " lists no package"; !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("QueueExport = %v, want ErrPipNotExportable saying %q", err, want)
+	}
+	noExportReserved(t, f.project)
+}

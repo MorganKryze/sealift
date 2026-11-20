@@ -267,6 +267,9 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	if err := json.Unmarshal(analysisInfo.PipResult, &result); err != nil {
 		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s has no readable result", ErrPipNotExportable, analysisID)
 	}
+	if len(result.Packages) == 0 {
+		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s lists no package", ErrPipNotExportable, analysisID)
+	}
 	missing := 0
 	for _, p := range result.Packages {
 		if p.Wheel == nil {
