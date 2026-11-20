@@ -55,7 +55,8 @@ paths:
       description: >-
         An npm project (the default) takes a manifest and a pip project
         takes one to 32 requirements parts and an optional pipTarget; either
-        queues its first analysis. The request holds at most 40 parts. A requirements part above 1 MiB is refused, never cut.
+        queues its first analysis. The request holds at most 40 parts. A
+        requirements part above 1 MiB is refused, never cut.
       requestBody:
         required: true
         content:
