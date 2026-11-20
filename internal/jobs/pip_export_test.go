@@ -336,11 +336,15 @@ func TestPipExportPackageListRefusesARecordedValue(t *testing.T) {
 			dup.Name = "IDNA"
 			return append(p, dup)
 		}, "jobs: idna is listed twice", ""},
-		{"the wheel of another package", func(p []PipPackage) []PipPackage {
+		{"the wheel of another package and version", func(p []PipPackage) []PipPackage {
 			w := *p[0].Wheel
 			p[1].Wheel = &w
 			return p
 		}, "idna==3.10: the wheel " + f.ref.Result.Packages[0].Wheel.File + " names another package", ""},
+		{"the wheel of another package of the same version", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.File = "other-3.10-py3-none-any.whl"
+			return p
+		}, "idna==3.10: the wheel other-3.10-py3-none-any.whl names another package", ""},
 		{"the wheel of another version", func(p []PipPackage) []PipPackage {
 			p[1].Version = "3.9"
 			return p
