@@ -136,15 +136,60 @@ func Verify(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	if !filepath.IsAbs(opts.Dir) {
 		return nil, errors.New("archive: Verify needs an absolute directory")
 	}
-	src := &trackedReader{r: io.LimitReader(r, m.Archive.Size+1)}
-	sum := sha256.New()
+	files := make([]expected, len(m.Packages))
+	for i, p := range m.Packages {
+		want, err := hex.DecodeString(p.ShippedSHA512)
+		if err != nil {
+			return nil, refuse("%s: shippedSha512 is not hex", p.File)
+		}
+		files[i] = expected{file: p.File, sha512: want, what: "original integrity"}
+		if !p.PublishConfigStripped {
+			files[i].newH, files[i].want, err = npm.ParseIntegrity(p.OriginalIntegrity)
+			if err != nil {
+				return nil, refuse("%s: originalIntegrity is not usable", p.File)
+			}
+		}
+	}
+	copies, err := verifyStream(r, m.Archive, files, opts)
+	if err != nil {
+		return nil, err
+	}
+	checked := make([]Checked, len(copies))
+	for i, c := range copies {
+		checked[i] = Checked{Package: m.Packages[i], Path: c.path, SHA512: c.sha512}
+	}
+	return checked, nil
+}
+
+// expected is one file an archive must hold under out/, with the digests its
+// bytes must have.
+type expected struct {
+	file   string
+	sha512 []byte
+	newH   func() hash.Hash // nil when only the sha512 is checked
+	want   []byte
+	what   string // the second digest's name in a refusal: "original integrity" or "sha256"
+}
+
+// copied is a file that passed its digests, copied to path.
+type copied struct {
+	path   string
+	sha512 []byte
+}
+
+// verifyStream reads an archive once and refuses it unless it matches sum and
+// holds exactly files under out/, each with its digests. It returns the copies
+// in the order of files. opts.Dir is absolute: the callers check it.
+func verifyStream(r io.Reader, sum Summary, files []expected, opts VerifyOptions) ([]copied, error) {
+	src := &trackedReader{r: io.LimitReader(r, sum.Size+1)}
+	digest := sha256.New()
 	var size int64
 	tee := io.TeeReader(src, writerFunc(func(p []byte) (int, error) {
 		size += int64(len(p))
-		return sum.Write(p)
+		return digest.Write(p)
 	}))
 
-	checked, scanErr := scan(tee, m, opts)
+	copies, scanErr := scan(tee, files, opts)
 	// A damaged archive is named by its digest, so read to the end first.
 	if _, err := io.Copy(io.Discard, tee); err != nil && src.err == nil {
 		src.err = err
@@ -152,12 +197,12 @@ func Verify(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	if src.err != nil {
 		return nil, fmt.Errorf("read the archive: %w", src.err)
 	}
-	if size != m.Archive.Size {
-		return nil, refuse("archive size is %d bytes, the manifest says %d", size, m.Archive.Size)
+	if size != sum.Size {
+		return nil, refuse("archive size is %d bytes, the manifest says %d", size, sum.Size)
 	}
-	got := hex.EncodeToString(sum.Sum(nil))
-	if got != m.Archive.SHA256 {
-		return nil, refuse("archive sha256 %s differs from the manifest's %s", got, m.Archive.SHA256)
+	got := hex.EncodeToString(digest.Sum(nil))
+	if got != sum.SHA256 {
+		return nil, refuse("archive sha256 %s differs from the manifest's %s", got, sum.SHA256)
 	}
 	if opts.ExpectedSHA256 != "" && got != strings.ToLower(opts.ExpectedSHA256) {
 		return nil, refuse("archive sha256 %s differs from the expected sha256 %s", got, strings.ToLower(opts.ExpectedSHA256))
@@ -165,7 +210,7 @@ func Verify(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	if scanErr != nil {
 		return nil, scanErr
 	}
-	return checked, nil
+	return copies, nil
 }
 
 type writerFunc func([]byte) (int, error)
@@ -195,30 +240,11 @@ func shown(s string) string {
 	return strconv.Quote(s)
 }
 
-type pending struct {
-	pkg   Package
-	index int
-	want  []byte
-	sri   []byte
-	newH  func() hash.Hash
-}
-
-func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
+func scan(r io.Reader, files []expected, opts VerifyOptions) ([]copied, error) {
 	limits := opts.Limits.orDefault()
-	listed := make(map[string]*pending, len(m.Packages))
-	for i, p := range m.Packages {
-		want, err := hex.DecodeString(p.ShippedSHA512)
-		if err != nil {
-			return nil, refuse("%s: shippedSha512 is not hex", p.File)
-		}
-		pend := &pending{pkg: p, index: i, want: want}
-		if !p.PublishConfigStripped {
-			pend.newH, pend.sri, err = npm.ParseIntegrity(p.OriginalIntegrity)
-			if err != nil {
-				return nil, refuse("%s: originalIntegrity is not usable", p.File)
-			}
-		}
-		listed[p.File] = pend
+	listed := make(map[string]int, len(files))
+	for i, e := range files {
+		listed[e.file] = i
 	}
 
 	gz, err := gzip.NewReader(r)
@@ -233,8 +259,8 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 	tooMuch := refuse("the archive holds more than %d bytes of tar data, the most %d entries and %d bytes of content need", bound, limits.Entries, limits.Unpacked)
 	tr := tar.NewReader(&boundedReader{r: gz, left: bound, err: tooMuch})
 
-	checked := make([]Checked, len(m.Packages))
-	done := make([]bool, len(m.Packages))
+	copies := make([]copied, len(files))
+	done := make([]bool, len(files))
 	seen := map[string]bool{}
 	var unpacked int64
 	for n := 1; ; n++ {
@@ -269,15 +295,15 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 		}
 		unpacked += h.Size
 		file := strings.TrimPrefix(h.Name, root)
-		pend, ok := listed[file]
+		i, ok := listed[file]
 		if !ok {
 			return nil, refuse("%s is not listed in the manifest", shown(h.Name))
 		}
-		c, err := copyPackage(tr, pend, opts.Dir)
+		c, err := copyFile(tr, files[i], opts.Dir)
 		if err != nil {
 			return nil, err
 		}
-		checked[pend.index], done[pend.index] = c, true
+		copies[i], done[i] = c, true
 	}
 	if err := checkTrailing(gz); err != nil {
 		return nil, err
@@ -285,10 +311,10 @@ func scan(r io.Reader, m Manifest, opts VerifyOptions) ([]Checked, error) {
 
 	for i, ok := range done {
 		if !ok {
-			return nil, refuse("%s is absent from the archive", m.Packages[i].File)
+			return nil, refuse("%s is absent from the archive", files[i].file)
 		}
 	}
-	return checked, nil
+	return copies, nil
 }
 
 // checkTrailing reads what follows the tar end marker, which also reaches the
@@ -340,40 +366,40 @@ func checkEntryName(h *tar.Header, seen map[string]bool) error {
 	return nil
 }
 
-// copyPackage writes one tarball into dir while hashing it.
-func copyPackage(r io.Reader, p *pending, dir string) (Checked, error) {
-	path := filepath.Join(dir, p.pkg.File)
+// copyFile writes one expected file into dir while hashing it.
+func copyFile(r io.Reader, e expected, dir string) (copied, error) {
+	path := filepath.Join(dir, e.file)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return Checked{}, fmt.Errorf("copy %s: %w", p.pkg.File, err)
+		return copied{}, fmt.Errorf("copy %s: %w", e.file, err)
 	}
 	shipped := sha512.New()
 	writers := []io.Writer{shipped}
-	var original hash.Hash
-	if p.newH != nil {
-		original = p.newH()
-		writers = append(writers, original)
+	var second hash.Hash
+	if e.newH != nil {
+		second = e.newH()
+		writers = append(writers, second)
 	}
 	local := &trackedWriter{w: f}
 	_, copyErr := io.Copy(io.MultiWriter(append(writers, local)...), r)
 	closeErr := f.Close()
 	if local.err != nil {
-		return Checked{}, fmt.Errorf("copy %s: %w", p.pkg.File, local.err)
+		return copied{}, fmt.Errorf("copy %s: %w", e.file, local.err)
 	}
 	if copyErr != nil {
-		return Checked{}, readRefusal(copyErr)
+		return copied{}, readRefusal(copyErr)
 	}
 	if closeErr != nil {
-		return Checked{}, fmt.Errorf("copy %s: %w", p.pkg.File, closeErr)
+		return copied{}, fmt.Errorf("copy %s: %w", e.file, closeErr)
 	}
 	sum := shipped.Sum(nil)
-	if !bytes.Equal(sum, p.want) {
-		return Checked{}, refuse("%s does not match its shipped sha512", p.pkg.File)
+	if !bytes.Equal(sum, e.sha512) {
+		return copied{}, refuse("%s does not match its shipped sha512", e.file)
 	}
-	if original != nil && !bytes.Equal(original.Sum(nil), p.sri) {
-		return Checked{}, refuse("%s does not match its original integrity", p.pkg.File)
+	if second != nil && !bytes.Equal(second.Sum(nil), e.want) {
+		return copied{}, refuse("%s does not match its %s", e.file, e.what)
 	}
-	return Checked{Package: p.pkg, Path: path, SHA512: sum}, nil
+	return copied{path: path, sha512: sum}, nil
 }
 
 type trackedWriter struct {
