@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -237,6 +238,119 @@ func TestPipExportRefusesAPackageWithoutAWheel(t *testing.T) {
 	}
 	if len(rec.steps) != 2 || rec.steps[1].State != string(store.Failed) || rec.steps[1].Error != err.Error() {
 		t.Errorf("steps = %+v, want package-list failed with the error", rec.steps)
+	}
+}
+
+// clonePipPackages copies pkgs and their wheels, so a test can edit the
+// copy without touching the recorded result.
+func clonePipPackages(pkgs []PipPackage) []PipPackage {
+	out := slices.Clone(pkgs)
+	for i := range out {
+		if out[i].Wheel != nil {
+			w := *out[i].Wheel
+			out[i].Wheel = &w
+		}
+	}
+	return out
+}
+
+// treeSums maps each file under root to the sha256 of its bytes and each
+// other entry to its type, leaving out the tree under skip.
+func treeSums(t *testing.T, root, skip string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == skip {
+			return filepath.SkipDir
+		}
+		if !d.Type().IsRegular() {
+			out[p] = d.Type().String()
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		out[p] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Each value package-list checks is checked before a path joins it: a row
+// fails the first step with its reason, and no file outside the export
+// changes. A refusal quotes no value that failed its check.
+func TestPipExportPackageListRefusesARecordedValue(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	f := donePipAnalysis(t, ix)
+	// A sha256 of ../../victim would put the cache entry here.
+	victim := filepath.Join(f.st.Root(), "victim.whl")
+	if err := os.WriteFile(victim, []byte("victim"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	idna := f.ref.Result.Packages[1].Wheel
+	tests := []struct {
+		name   string
+		edit   func(pkgs []PipPackage) []PipPackage
+		reason string
+		bad    string // the value the refusal must not quote
+	}{
+		{"a sha256 that leaves the cache", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.Sha256 = "../../victim"
+			return p
+		}, "idna==3.10: the wheel " + idna.File + " has no valid sha256", "victim"},
+		{"an uppercase sha256", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.Sha256 = strings.ToUpper(idna.Sha256)
+			return p
+		}, "idna==3.10: the wheel " + idna.File + " has no valid sha256", strings.ToUpper(idna.Sha256)},
+		{"a short sha256", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.Sha256 = idna.Sha256[:63]
+			return p
+		}, "idna==3.10: the wheel " + idna.File + " has no valid sha256", idna.Sha256[:63]},
+		{"a wheel name with a path separator", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.File = "../../" + idna.File
+			return p
+		}, "idna==3.10: pip: wheel name has a path separator", "../"},
+		{"a source distribution", func(p []PipPackage) []PipPackage {
+			p[1].Wheel.File = "idna-3.10.tar.gz"
+			return p
+		}, "idna==3.10: pip: file is not a wheel", "idna-3.10.tar.gz"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := f.newPipExport(t)
+			e.Analysis.Result.Packages = tc.edit(clonePipPackages(f.ref.Result.Packages))
+			before := treeSums(t, f.st.Root(), e.Dir)
+			requests := fileRequests(ix, f.ref.Result.Packages)
+
+			rec := &stepRecorder{}
+			_, err := e.download(t, rec)
+			if err == nil {
+				t.Fatal("download accepted the edited set")
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("download = %v, want a refusal saying %q", err, tc.reason)
+			}
+			if tc.bad != "" && strings.Contains(err.Error(), tc.bad) {
+				t.Errorf("refusal %q quotes %q", err, tc.bad)
+			}
+			if want := []string{"package-list:running", "package-list:failed"}; !slices.Equal(stepNames(rec.steps), want) {
+				t.Errorf("steps = %v, want %v", stepNames(rec.steps), want)
+			}
+			if after := treeSums(t, f.st.Root(), e.Dir); !reflect.DeepEqual(after, before) {
+				t.Errorf("files outside the export changed:\nbefore %v\nafter  %v", before, after)
+			}
+			if after := fileRequests(ix, f.ref.Result.Packages); !reflect.DeepEqual(after, requests) {
+				t.Errorf("file requests went from %v to %v, want none", requests, after)
+			}
+		})
 	}
 }
 
