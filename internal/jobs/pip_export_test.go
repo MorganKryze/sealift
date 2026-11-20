@@ -1159,14 +1159,52 @@ func TestPipExportNeverReadsAWheelsContent(t *testing.T) {
 	}
 }
 
+// rewriteWith returns a change to a cache entry that rewrites its bytes in
+// place with change.
+func rewriteWith(change func(data []byte) []byte) func(t *testing.T, path string) {
+	return func(t *testing.T, path string) {
+		if err := os.WriteFile(path, change(readFile(t, path)), 0o664); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+// replaceWith returns a change that puts what plant makes at a cache
+// entry's path, as the tools account can.
+func replaceWith(plant func(t *testing.T, path string, data []byte) error) func(t *testing.T, path string) {
+	return func(t *testing.T, path string) {
+		data := readFile(t, path)
+		if err := os.Remove(path); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := plant(t, path, data); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
 func TestPipExportFailsWhenAWheelChangesBeforeTheArchive(t *testing.T) {
 	tests := []struct {
 		name   string
-		change func(data []byte) []byte
+		change func(t *testing.T, path string)
 	}{
-		{"other bytes of the same length", func(data []byte) []byte { return bytes.Repeat([]byte("x"), len(data)) }},
-		{"one byte shorter", func(data []byte) []byte { return data[:len(data)-1] }},
-		{"one byte longer", func(data []byte) []byte { return append(slices.Clone(data), 'x') }},
+		{"other bytes of the same length", rewriteWith(func(data []byte) []byte { return bytes.Repeat([]byte("x"), len(data)) })},
+		{"one byte shorter", rewriteWith(func(data []byte) []byte { return data[:len(data)-1] })},
+		{"one byte longer", rewriteWith(func(data []byte) []byte { return append(slices.Clone(data), 'x') })},
+		// The link's target holds the downloaded bytes, so only the refusal
+		// to follow it fails the step.
+		{"a link to the same bytes", replaceWith(func(t *testing.T, path string, data []byte) error {
+			target := filepath.Join(t.TempDir(), "elsewhere.whl")
+			if err := os.WriteFile(target, data, 0o664); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		})},
+		// No process writes to the FIFO, so an open that waits for a writer
+		// never returns.
+		{"a FIFO", replaceWith(func(_ *testing.T, path string, _ []byte) error { return syscall.Mkfifo(path, 0o660) })},
+		{"a directory", replaceWith(func(_ *testing.T, path string, _ []byte) error { return os.Mkdir(path, 0o770) })},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1174,12 +1212,20 @@ func TestPipExportFailsWhenAWheelChangesBeforeTheArchive(t *testing.T) {
 			e := f.newPipExport(t)
 			w := *f.ref.Result.Packages[1].Wheel
 			e.beforeArchive = func() {
-				path := filepath.Join(f.st.Root(), "cache", "wheels", w.Sha256+".whl")
-				if err := os.WriteFile(path, tc.change(readFile(t, path)), 0o664); err != nil {
-					t.Error(err)
-				}
+				tc.change(t, filepath.Join(f.st.Root(), "cache", "wheels", w.Sha256+".whl"))
 			}
-			rec, err := runPipExport(context.Background(), e)
+			var rec *stepRecorder
+			var err error
+			ran := make(chan struct{})
+			go func() {
+				defer close(ran)
+				rec, err = runPipExport(context.Background(), e)
+			}()
+			select {
+			case <-ran:
+			case <-time.After(20 * time.Second):
+				t.Fatal("the export still runs after 20s: the changed entry holds the archive step")
+			}
 			if want := w.File + " changed after its download"; err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("Run = %v, want an error saying %q", err, want)
 			}
