@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -638,6 +639,74 @@ func TestPipExportFailsOnATamperedWheel(t *testing.T) {
 	}
 	if n := len(status.Steps); n == 0 || status.Steps[n-1].Name != "download" || status.Steps[n-1].State != string(store.Failed) {
 		t.Errorf("status steps = %+v, want the failed download last", status.Steps)
+	}
+}
+
+// A cancel fails the download step with the context's error, whether it
+// lands before the first wheel or between two, and failed then records
+// the export as cancelled.
+func TestPipExportCancelledDownloadIsNotDone(t *testing.T) {
+	tests := []struct {
+		name  string
+		after int // wheels downloaded before the cancel
+	}{
+		{"before the first wheel", 0},
+		{"after the first wheel", 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := piptest.NewIndex(t)
+			f := donePipAnalysis(t, ix)
+			e := f.newPipExport(t)
+			e.Settings.DownloadParallelism = 1
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rec := &stepRecorder{}
+			pkgs, err := e.packageList(rec.emit)
+			if err != nil {
+				t.Fatalf("packageList: %v", err)
+			}
+			if tc.after == 0 {
+				cancel()
+			}
+			emit := func(ev Event) {
+				rec.emit(ev)
+				if ev.Kind == "progress" && len(rec.progress()) == tc.after {
+					cancel()
+				}
+			}
+
+			wheels, err := e.downloadAll(ctx, emit, pkgs)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("downloadAll = %d wheels, %v; want context.Canceled", len(wheels), err)
+			}
+			if wheels != nil {
+				t.Errorf("downloadAll returned %d wheels with its error, want none", len(wheels))
+			}
+			names := stepNames(rec.steps)
+			if slices.Contains(names, "download:done") || names[len(names)-1] != "download:failed" {
+				t.Errorf("steps = %v, want download failed and never done", names)
+			}
+			fetched := 0
+			for _, n := range fileRequests(ix, f.ref.Result.Packages) {
+				fetched += n
+			}
+			if fetched != tc.after {
+				t.Errorf("%d wheels were requested, want %d", fetched, tc.after)
+			}
+
+			e.failed(ctx, rec.steps)
+			var status exportStatusFile
+			if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != store.Cancelled {
+				t.Errorf("status state = %s, want cancelled", status.State)
+			}
+			if entries, err := os.ReadDir(e.Dir); err != nil || len(entries) != 1 {
+				t.Errorf("export directory holds %d entries (%v), want only status.json", len(entries), err)
+			}
+		})
 	}
 }
 
