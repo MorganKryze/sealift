@@ -16,7 +16,7 @@ export interface paths {
         put?: never;
         /**
          * Create a project from an uploaded package.json or requirements files
-         * @description An npm project (the default) takes a manifest and queues its first analysis. A pip project takes one to 32 requirements parts and an optional pipTarget, and queues nothing yet. The request holds at most 40 parts. A requirements part above 1 MiB is refused, never cut.
+         * @description An npm project (the default) takes a manifest and a pip project takes one to 32 requirements parts and an optional pipTarget; either queues its first analysis. The request holds at most 40 parts. A requirements part above 1 MiB is refused, never cut.
          */
         post: operations["createProject"];
         delete?: never;
