@@ -51,26 +51,46 @@ paths:
       operationId: createProject
       tags:
         - projects
-      summary: Create a project from an uploaded package.json and start an analysis
+      summary: Create a project from an uploaded package.json or requirements files
+      description: >-
+        An npm project (the default) takes a manifest and queues its first
+        analysis. A pip project takes one to 32 requirements parts and an
+        optional pipTarget, and queues nothing yet. The request holds at most
+        40 parts. A requirements part above 1 MiB is refused, never cut.
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required:
-                - manifest
               properties:
+                ecosystem:
+                  $ref: "#/components/schemas/Ecosystem"
                 name:
                   type: string
-                  description: Project name; defaults to the manifest name field
+                  description: >-
+                    Project name; an npm project defaults to the manifest name
+                    field, a pip project requires it
                 manifest:
                   type: string
                   format: binary
-                  description: package.json content
+                  description: package.json content, required for an npm project
+                requirements:
+                  type: array
+                  description: >-
+                    Requirements files of a pip project, repeated. Each part's
+                    filename is the file name.
+                  items:
+                    type: string
+                    format: binary
+                pipTarget:
+                  type: string
+                  description: >-
+                    JSON of a PipTarget, at most 4 KiB, unknown fields refused.
+                    The default target applies when absent.
       responses:
         "201":
-          description: Project created, analysis queued
+          description: Project created, analysis queued for an npm project
           content:
             application/json:
               schema:
@@ -597,7 +617,12 @@ components:
       properties:
         field:
           type: string
-          description: package.json field, such as dependencies or pnpm.overrides
+          description: >-
+            package.json field, such as dependencies or pnpm.overrides, or the
+            file name of a requirements problem
+        line:
+          type: integer
+          description: Line of a requirements problem, absent for a problem of the whole file
         name:
           type: string
           description: Dependency name, empty for a field-level problem
@@ -643,6 +668,40 @@ components:
         - libc
         - node
         - pnpmVer
+    Ecosystem:
+      type: string
+      description: The package manager a project belongs to
+      enum:
+        - npm
+        - pip
+    PipTarget:
+      type: object
+      description: The system a pip resolution is prepared for
+      properties:
+        python:
+          type: string
+          description: Python 3.<minor>.<patch>
+          example: 3.11.2
+        os:
+          type: string
+          example: linux
+        cpu:
+          type: string
+          description: Only x86_64 for now
+          example: x86_64
+        glibc:
+          type: string
+          description: glibc 2.17 to 2.40
+          example: "2.28"
+        uvVer:
+          type: string
+          example: 0.13.7
+      required:
+        - python
+        - os
+        - cpu
+        - glibc
+        - uvVer
     Instance:
       type: object
       description: >-
@@ -696,8 +755,12 @@ components:
           type: string
         name:
           type: string
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         target:
           $ref: "#/components/schemas/Target"
+        pipTarget:
+          $ref: "#/components/schemas/PipTarget"
         lastAnalysis:
           $ref: "#/components/schemas/Analysis"
         lastExport:
@@ -705,17 +768,23 @@ components:
       required:
         - id
         - name
-        - target
+        - ecosystem
     Project:
       type: object
-      description: A project, its target and its analysis and export history.
+      description: >-
+        A project, its target and its analysis and export history. An npm
+        project has a target, a pip project has a pipTarget.
       properties:
         id:
           type: string
         name:
           type: string
+        ecosystem:
+          $ref: "#/components/schemas/Ecosystem"
         target:
           $ref: "#/components/schemas/Target"
+        pipTarget:
+          $ref: "#/components/schemas/PipTarget"
         manifestSha256:
           type: string
           description: sha256 of the uploaded package.json bytes, lowercase hex
@@ -730,7 +799,7 @@ components:
       required:
         - id
         - name
-        - target
+        - ecosystem
     Analysis:
       type: object
       description: One analysis job and its state.

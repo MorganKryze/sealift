@@ -20,25 +20,34 @@ var ErrNotFound = errors.New("not found")
 // ErrBusy means a queued or running job still writes under the project.
 var ErrBusy = errors.New("a job is still writing to this project")
 
-// Project is one project directory: an uploaded package.json, its target
-// platform, and the analyses and exports run against it.
+// Project is one project directory: an uploaded package.json or a set of
+// requirements files, its target platform, and the analyses and exports run
+// against it. Target is the npm target and PipTarget the pip one; the other
+// stays zero.
 type Project struct {
 	ID             string
 	Name           string
+	Ecosystem      Ecosystem
 	Target         Target
+	PipTarget      PipTarget
 	Dir            string
 	ManifestSha256 string // sha256 of the uploaded package.json bytes, lowercase hex
 	CreatedAt      time.Time
 }
 
-// projectRecord is the on-disk shape of project.json. Name and Target come
-// straight from Project.
+// projectRecord is the on-disk shape of project.json. An npm record keeps
+// the keys 0.6.2 wrote and no other: the ecosystem is empty for npm, so a
+// record from before pip reads as npm and an older release reads a new npm
+// record unchanged.
 type projectRecord struct {
 	ID             string    `json:"id"`
 	Name           string    `json:"name"`
-	Target         Target    `json:"target"`
+	Target         Target    `json:"target,omitzero"`
 	CreatedAt      time.Time `json:"createdAt"`
 	ManifestSha256 string    `json:"manifestSha256,omitempty"`
+	Ecosystem      Ecosystem `json:"ecosystem,omitempty"`
+	PipTarget      PipTarget `json:"pipTarget,omitzero"`
+	Requirements   []string  `json:"requirements,omitempty"` // file names in upload order
 }
 
 // manifestSHA256 hashes the bytes at path as uploaded, not the parsed
@@ -101,7 +110,108 @@ func (s *Store) CreateProject(name string, manifest []byte) (Project, error) {
 		_ = os.RemoveAll(dir)
 		return Project{}, err
 	}
-	return Project{ID: id, Name: name, Target: target, Dir: dir, ManifestSha256: hash, CreatedAt: createdAt}, nil
+	return Project{ID: id, Name: name, Ecosystem: NPM, Target: target, Dir: dir, ManifestSha256: hash, CreatedAt: createdAt}, nil
+}
+
+// RequirementsFile is one uploaded requirements file.
+type RequirementsFile struct {
+	Name string
+	Data []byte
+}
+
+// requirementsNameRE bounds a requirements file name before it joins a path.
+var requirementsNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// ErrInvalidRequirements means the files given for a pip project cannot be stored.
+var ErrInvalidRequirements = errors.New("invalid requirements files")
+
+func validRequirementsNames(files []RequirementsFile) error {
+	if len(files) == 0 {
+		return fmt.Errorf("%w: a pip project needs at least one file", ErrInvalidRequirements)
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		if !requirementsNameRE.MatchString(f.Name) || strings.Contains(f.Name, "..") {
+			return fmt.Errorf("%w: %q is not a usable file name", ErrInvalidRequirements, f.Name)
+		}
+		lower := strings.ToLower(f.Name)
+		if seen[lower] {
+			return fmt.Errorf("%w: file name %q repeats another ignoring case", ErrInvalidRequirements, f.Name)
+		}
+		seen[lower] = true
+	}
+	return nil
+}
+
+// CreatePipProject writes a pip project under projects/<id>/: the files under
+// requirements/ and a project.json with the pip target. It checks the target
+// and every file name before it writes anything.
+func (s *Store) CreatePipProject(name string, files []RequirementsFile, target PipTarget) (Project, error) {
+	if err := ValidatePipTarget(target); err != nil {
+		return Project{}, err
+	}
+	if err := validRequirementsNames(files); err != nil {
+		return Project{}, err
+	}
+	base := slug(name)
+	if s.isEphemeral() {
+		base = "project"
+	}
+	if base == "" {
+		return Project{}, fmt.Errorf("store: %q has no usable characters for a project id", name)
+	}
+	id, dir, err := s.reserveProjectDir(base)
+	if err != nil {
+		return Project{}, err
+	}
+
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name
+		if err := atomicWriteFile(filepath.Join(dir, "requirements", f.Name), f.Data, fileMode); err != nil {
+			_ = os.RemoveAll(dir)
+			return Project{}, err
+		}
+	}
+	createdAt := time.Now().UTC()
+	record := projectRecord{ID: id, Name: name, CreatedAt: createdAt, Ecosystem: Pip, PipTarget: target, Requirements: names}
+	if err := writeJSONFile(filepath.Join(dir, "project.json"), record, fileMode); err != nil {
+		_ = os.RemoveAll(dir)
+		return Project{}, err
+	}
+	return Project{ID: id, Name: name, Ecosystem: Pip, PipTarget: target, Dir: dir, CreatedAt: createdAt}, nil
+}
+
+// ProjectRequirements reads a pip project's requirements files in upload
+// order. It returns ErrNotFound for an npm project.
+func (s *Store) ProjectRequirements(id string) ([]RequirementsFile, error) {
+	if err := validID(id); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(s.root, "projects", id)
+	var record projectRecord
+	if err := readJSONFile(filepath.Join(dir, "project.json"), &record); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if record.Ecosystem != Pip {
+		return nil, ErrNotFound
+	}
+	files := make([]RequirementsFile, len(record.Requirements))
+	for i, name := range record.Requirements {
+		// A damaged record must not walk out of requirements/.
+		if err := validRequirementsNames([]RequirementsFile{{Name: name}}); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "requirements", name))
+		if err != nil {
+			return nil, fmt.Errorf("store: read requirements file %s of %s: %w", name, id, err)
+		}
+		files[i] = RequirementsFile{Name: name, Data: data}
+	}
+	return files, nil
 }
 
 // reserveProjectDir creates projects/<base>-<suffix> under an id no other
@@ -172,13 +282,16 @@ func (s *Store) Project(id string) (Project, error) {
 		}
 		return Project{}, err
 	}
+	if record.Ecosystem == Pip {
+		return Project{ID: record.ID, Name: record.Name, Ecosystem: Pip, PipTarget: record.PipTarget, Dir: dir, CreatedAt: record.CreatedAt}, nil
+	}
 	hash := record.ManifestSha256
 	if hash == "" {
 		if computed, herr := manifestSHA256(filepath.Join(dir, "package.json")); herr == nil {
 			hash = computed
 		}
 	}
-	return Project{ID: record.ID, Name: record.Name, Target: record.Target, Dir: dir, ManifestSha256: hash, CreatedAt: record.CreatedAt}, nil
+	return Project{ID: record.ID, Name: record.Name, Ecosystem: NPM, Target: record.Target, Dir: dir, ManifestSha256: hash, CreatedAt: record.CreatedAt}, nil
 }
 
 // ProjectsByManifestSha256 returns every project whose manifest hash
@@ -217,6 +330,9 @@ func (s *Store) SetProjectTarget(id string, t Target) error {
 			return ErrNotFound
 		}
 		return err
+	}
+	if record.Ecosystem == Pip {
+		return fmt.Errorf("%w: a pip project has a pip target, not an npm one", ErrInvalidTarget)
 	}
 	record.Target = t
 	return writeJSONFile(path, record, fileMode)

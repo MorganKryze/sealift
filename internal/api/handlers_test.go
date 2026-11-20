@@ -1556,3 +1556,290 @@ func TestGetProjectManifestReturnsTheUploadedBytes(t *testing.T) {
 		t.Fatalf("missing project status = %d, want 404", missing.StatusCode)
 	}
 }
+
+// formPart is one part of a multipart request. A part with a filename is a
+// file upload.
+type formPart struct{ field, filename, data string }
+
+// postParts posts parts to /api/projects and returns the status and body.
+func postParts(t *testing.T, srv *httptest.Server, parts []formPart) (int, []byte) {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for _, p := range parts {
+		var part io.Writer
+		var err error
+		if p.filename != "" {
+			part, err = w.CreateFormFile(p.field, p.filename)
+		} else {
+			part, err = w.CreateFormField(p.field)
+		}
+		if err != nil {
+			t.Fatalf("create part %q: %v", p.field, err)
+		}
+		if _, err := part.Write([]byte(p.data)); err != nil {
+			t.Fatalf("write part %q: %v", p.field, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	resp, err := http.Post(srv.URL+"/api/projects", w.FormDataContentType(), &body)
+	if err != nil {
+		t.Fatalf("POST /api/projects: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, data
+}
+
+func pipParts(name string, files ...formPart) []formPart {
+	parts := []formPart{{field: "ecosystem", data: "pip"}}
+	if name != "" {
+		parts = append(parts, formPart{field: "name", data: name})
+	}
+	return append(parts, files...)
+}
+
+func requirementsPart(filename, data string) formPart {
+	return formPart{field: "requirements", filename: filename, data: data}
+}
+
+func decodeBadRequest(t *testing.T, status int, data []byte) Problem {
+	t.Helper()
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", status, data)
+	}
+	var p Problem
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatalf("decode problem: %v (body %s)", err, data)
+	}
+	return p
+}
+
+func TestCreatePipProject(t *testing.T) {
+	custom := store.PipTarget{Python: "3.12.4", OS: "linux", CPU: "x86_64", Glibc: "2.31", UvVer: "0.13.7"}
+	customJSON, _ := json.Marshal(custom)
+	cases := []struct {
+		name  string
+		extra []formPart
+		want  store.PipTarget
+	}{
+		{"default target", nil, store.DefaultPipTarget},
+		{"target from the part", []formPart{{field: "pipTarget", data: string(customJSON)}}, custom},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, h := newTestServer(t)
+			parts := pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n"))
+			status, data := postParts(t, srv, append(parts, c.extra...))
+			if status != http.StatusCreated {
+				t.Fatalf("status = %d, want 201, body: %s", status, data)
+			}
+			var project Project
+			if err := json.Unmarshal(data, &project); err != nil {
+				t.Fatalf("decode project: %v", err)
+			}
+			if project.Ecosystem != Pip || project.Name != "Data tools" {
+				t.Errorf("project = %+v, want a pip project named Data tools", project)
+			}
+			if project.Target != nil {
+				t.Errorf("target = %+v, want none", project.Target)
+			}
+			want := PipTarget{Python: c.want.Python, Os: c.want.OS, Cpu: c.want.CPU, Glibc: c.want.Glibc, UvVer: c.want.UvVer}
+			if project.PipTarget == nil || *project.PipTarget != want {
+				t.Errorf("pipTarget = %+v, want %+v", project.PipTarget, want)
+			}
+			if project.Analyses != nil {
+				t.Errorf("analyses = %+v, want none queued yet", project.Analyses)
+			}
+			if _, _, _, _, live := h.Service.LiveForProject(project.Id); live {
+				t.Error("a job is live for the new pip project, want none")
+			}
+			files, err := h.Store.ProjectRequirements(project.Id)
+			if err != nil || len(files) != 1 || string(files[0].Data) != "requests==2.32.3\n" {
+				t.Errorf("stored files = %+v, %v", files, err)
+			}
+		})
+	}
+}
+
+func TestCreatePipProjectRefusesBadLines(t *testing.T) {
+	srv, h := newTestServer(t)
+	file := "requests==2.32.3\n# a comment\nflask>=3.0\n--index-url https://example.com/simple\n"
+	status, data := postParts(t, srv, pipParts("proj", requirementsPart("requirements-dev.txt", file)))
+	p := decodeBadRequest(t, status, data)
+	if p.Errors == nil || len(*p.Errors) != 2 {
+		t.Fatalf("errors = %+v, want 2 entries", p.Errors)
+	}
+	first := (*p.Errors)[0]
+	if first.Field != "requirements-dev.txt" || first.Line == nil || *first.Line != 3 {
+		t.Errorf("first error = %+v, want requirements-dev.txt line 3", first)
+	}
+	if first.Value == nil || *first.Value != "flask>=3.0" || first.Reason == "" {
+		t.Errorf("first error = %+v, want the line text and a reason", first)
+	}
+	second := (*p.Errors)[1]
+	if second.Line == nil || *second.Line != 4 || second.Reason == "" {
+		t.Errorf("second error = %+v, want line 4 with a reason", second)
+	}
+	if projects, _ := h.Store.Projects(); len(projects) != 0 {
+		t.Errorf("a refused request created %d projects", len(projects))
+	}
+}
+
+func TestCreatePipProjectRefusesConflictingPins(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, pipParts("proj",
+		requirementsPart("a.txt", "requests==2.32.3\n"),
+		requirementsPart("b.txt", "Requests==2.31.0\n")))
+	p := decodeBadRequest(t, status, data)
+	if p.Errors == nil || len(*p.Errors) == 0 {
+		t.Fatalf("errors = %+v, want the conflict", p.Errors)
+	}
+	for _, e := range *p.Errors {
+		if e.Field == "" || e.Reason == "" {
+			t.Errorf("error = %+v, want a file and a reason", e)
+		}
+	}
+}
+
+func TestCreatePipProjectRefusesOversizeFile(t *testing.T) {
+	srv, h := newTestServer(t)
+	big := strings.Repeat("#", 1<<20+1) // 1 MiB plus 1 byte
+	status, data := postParts(t, srv, pipParts("proj", requirementsPart("requirements.txt", big)))
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(p.Title+deref(p.Detail), "1 MiB") {
+		t.Errorf("problem = %+v, want the 1 MiB bound named", p)
+	}
+	if projects, _ := h.Store.Projects(); len(projects) != 0 {
+		t.Errorf("an oversize file created %d projects, want none", len(projects))
+	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func TestCreateProjectRefusesTooManyParts(t *testing.T) {
+	srv, _ := newTestServer(t)
+	var parts []formPart
+	for i := 0; i < 41; i++ {
+		parts = append(parts, formPart{field: "extra", data: "x"})
+	}
+	status, data := postParts(t, srv, parts)
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(deref(p.Detail), "40 parts") {
+		t.Errorf("detail = %q, want the 40 parts bound named", deref(p.Detail))
+	}
+}
+
+func TestCreatePipProjectRefusesTooManyFiles(t *testing.T) {
+	srv, _ := newTestServer(t)
+	var files []formPart
+	for i := 0; i < 33; i++ {
+		files = append(files, requirementsPart(fmt.Sprintf("r%d.txt", i), "requests==2.32.3\n"))
+	}
+	status, data := postParts(t, srv, pipParts("proj", files...))
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(deref(p.Detail), "32 files") {
+		t.Errorf("detail = %q, want the 32 files bound named", deref(p.Detail))
+	}
+}
+
+func TestCreatePipProjectNeedsAName(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, pipParts("", requirementsPart("r.txt", "requests==2.32.3\n")))
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(deref(p.Detail), "name") {
+		t.Errorf("detail = %q, want it to name the name field", deref(p.Detail))
+	}
+}
+
+func TestCreatePipProjectNeedsAFile(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, pipParts("proj"))
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(deref(p.Detail), "requirements") {
+		t.Errorf("detail = %q, want it to name the requirements field", deref(p.Detail))
+	}
+}
+
+func TestCreatePipProjectRefusesBadTarget(t *testing.T) {
+	cases := []struct {
+		name, target, want string
+	}{
+		{"unknown field", `{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7","extra":"x"}`, "extra"},
+		{"glibc above the range", `{"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.41","uvVer":"0.13.7"}`, "glibc"},
+		{"not json", `not json`, "pipTarget"},
+		{"too large", `{"python":"` + strings.Repeat("3", 4096) + `"}`, "4 KiB"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, h := newTestServer(t)
+			status, data := postParts(t, srv, append(pipParts("proj", requirementsPart("r.txt", "requests==2.32.3\n")), formPart{field: "pipTarget", data: c.target}))
+			p := decodeBadRequest(t, status, data)
+			if !strings.Contains(deref(p.Detail), c.want) {
+				t.Errorf("detail = %q, want it to contain %q", deref(p.Detail), c.want)
+			}
+			if projects, _ := h.Store.Projects(); len(projects) != 0 {
+				t.Errorf("a refused target created %d projects", len(projects))
+			}
+		})
+	}
+}
+
+func TestCreateProjectRefusesUnknownEcosystem(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, []formPart{{field: "ecosystem", data: "cargo"}, {field: "manifest", filename: "package.json", data: `{"name":"x"}`}})
+	p := decodeBadRequest(t, status, data)
+	if !strings.Contains(deref(p.Detail), "ecosystem") {
+		t.Errorf("detail = %q, want it to name the ecosystem field", deref(p.Detail))
+	}
+}
+
+func TestListProjectsMixesEcosystems(t *testing.T) {
+	srv, h := newTestServer(t)
+
+	// A project as 0.6.2 wrote it.
+	dir := filepath.Join(h.Store.Root(), "projects", "left-pad-abc123")
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"id":"left-pad-abc123","name":"left-pad","target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"createdAt":"2026-11-01T10:00:00Z","manifestSha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}`
+	if err := os.WriteFile(filepath.Join(dir, "project.json"), []byte(record), 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Store.CreatePipProject("Data tools", []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("requests==2.32.3\n")}}, store.DefaultPipTarget); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var raw []map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	byName := map[string]map[string]json.RawMessage{}
+	for _, r := range raw {
+		var name string
+		_ = json.Unmarshal(r["name"], &name)
+		byName[name] = r
+	}
+	npmRow, pipRow := byName["left-pad"], byName["Data tools"]
+	if npmRow == nil || pipRow == nil {
+		t.Fatalf("list = %v, want both projects", raw)
+	}
+	if string(npmRow["ecosystem"]) != `"npm"` || npmRow["target"] == nil || npmRow["pipTarget"] != nil {
+		t.Errorf("npm row = %v, want ecosystem npm, a target and no pipTarget", npmRow)
+	}
+	if string(pipRow["ecosystem"]) != `"pip"` || pipRow["pipTarget"] == nil || pipRow["target"] != nil {
+		t.Errorf("pip row = %v, want ecosystem pip, a pipTarget and no target", pipRow)
+	}
+}

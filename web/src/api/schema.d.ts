@@ -14,7 +14,10 @@ export interface paths {
         /** List projects with their last analysis and export */
         get: operations["listProjects"];
         put?: never;
-        /** Create a project from an uploaded package.json and start an analysis */
+        /**
+         * Create a project from an uploaded package.json or requirements files
+         * @description An npm project (the default) takes a manifest and queues its first analysis. A pip project takes one to 32 requirements parts and an optional pipTarget, and queues nothing yet. The request holds at most 40 parts. A requirements part above 1 MiB is refused, never cut.
+         */
         post: operations["createProject"];
         delete?: never;
         options?: never;
@@ -433,8 +436,10 @@ export interface components {
         };
         /** @description One offending entry inside a validation failure's errors list */
         ProblemDetail: {
-            /** @description package.json field, such as dependencies or pnpm.overrides */
+            /** @description package.json field, such as dependencies or pnpm.overrides, or the file name of a requirements problem */
             field: string;
+            /** @description Line of a requirements problem, absent for a problem of the whole file */
+            line?: number;
             /** @description Dependency name, empty for a field-level problem */
             name?: string;
             value?: string;
@@ -457,6 +462,33 @@ export interface components {
             node: string;
             /** @example 10.34.5 */
             pnpmVer: string;
+        };
+        /**
+         * @description The package manager a project belongs to
+         * @enum {string}
+         */
+        Ecosystem: "npm" | "pip";
+        /** @description The system a pip resolution is prepared for */
+        PipTarget: {
+            /**
+             * @description Python 3.<minor>.<patch>
+             * @example 3.11.2
+             */
+            python: string;
+            /** @example linux */
+            os: string;
+            /**
+             * @description Only x86_64 for now
+             * @example x86_64
+             */
+            cpu: string;
+            /**
+             * @description glibc 2.17 to 2.40
+             * @example 2.28
+             */
+            glibc: string;
+            /** @example 0.13.7 */
+            uvVer: string;
         };
         /** @description How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes. */
         Instance: {
@@ -482,15 +514,19 @@ export interface components {
         ProjectSummary: {
             id: string;
             name: string;
-            target: components["schemas"]["Target"];
+            ecosystem: components["schemas"]["Ecosystem"];
+            target?: components["schemas"]["Target"];
+            pipTarget?: components["schemas"]["PipTarget"];
             lastAnalysis?: components["schemas"]["Analysis"];
             lastExport?: components["schemas"]["Export"];
         };
-        /** @description A project, its target and its analysis and export history. */
+        /** @description A project, its target and its analysis and export history. An npm project has a target, a pip project has a pipTarget. */
         Project: {
             id: string;
             name: string;
-            target: components["schemas"]["Target"];
+            ecosystem: components["schemas"]["Ecosystem"];
+            target?: components["schemas"]["Target"];
+            pipTarget?: components["schemas"]["PipTarget"];
             /** @description sha256 of the uploaded package.json bytes, lowercase hex */
             manifestSha256?: string;
             analyses?: components["schemas"]["Analysis"][];
@@ -723,18 +759,23 @@ export interface operations {
         requestBody: {
             content: {
                 "multipart/form-data": {
-                    /** @description Project name; defaults to the manifest name field */
+                    ecosystem?: components["schemas"]["Ecosystem"];
+                    /** @description Project name; an npm project defaults to the manifest name field, a pip project requires it */
                     name?: string;
                     /**
                      * Format: binary
-                     * @description package.json content
+                     * @description package.json content, required for an npm project
                      */
-                    manifest: string;
+                    manifest?: string;
+                    /** @description Requirements files of a pip project, repeated. Each part's filename is the file name. */
+                    requirements?: string[];
+                    /** @description JSON of a PipTarget, at most 4 KiB, unknown fields refused. The default target applies when absent. */
+                    pipTarget?: string;
                 };
             };
         };
         responses: {
-            /** @description Project created, analysis queued */
+            /** @description Project created, analysis queued for an npm project */
             201: {
                 headers: {
                     [name: string]: unknown;
