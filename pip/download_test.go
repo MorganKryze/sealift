@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -280,6 +281,81 @@ func TestDownloadFileRefusesBadInput(t *testing.T) {
 			}
 			if n := hits.Load(); n != 0 {
 				t.Errorf("requests = %d, want 0", n)
+			}
+			assertNoFile(t, path)
+		})
+	}
+}
+
+// loopbackOnly sends the requests for 127.0.0.1 and counts, without
+// sending them, the requests for any other host.
+type loopbackOnly struct{ elsewhere *atomic.Int64 }
+
+func (l loopbackOnly) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Hostname() != "127.0.0.1" {
+		l.elsewhere.Add(1)
+		return nil, errors.New("test: request to another host")
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func TestDownloadFileHoldsRedirectsToTheURLRule(t *testing.T) {
+	noWaits(t)
+	body := wheelBytes(100)
+	tests := []struct {
+		name   string
+		hops   int // redirects within the first server before the last one
+		last   func(target string) string
+		reason string
+		quotes string // a part of the url the refusal must not repeat
+	}{
+		{"to a url with credentials", 0, func(target string) string {
+			return "http://user:pw@" + strings.TrimPrefix(target, "http://") + "/files/" + wheelFile
+		}, "redirects to a url that holds credentials", "pw@"},
+		{"to http on another host", 0, func(string) string {
+			return "http://files.example.org/files/" + wheelFile
+		}, "redirects to a url that is not https", "files.example.org"},
+		{"past 10 redirects", 12, func(target string) string {
+			return target + "/files/" + wheelFile
+		}, "more than 10 redirects", "/hop/"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			target, targetHits := fileServer(t, serveBody(body))
+			var fromHits atomic.Int64
+			from := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := int(fromHits.Add(1))
+				if n <= tc.hops {
+					http.Redirect(w, r, fmt.Sprintf("/hop/%d", n), http.StatusFound)
+					return
+				}
+				http.Redirect(w, r, tc.last(target.URL), http.StatusFound)
+			}))
+			t.Cleanup(from.Close)
+			var elsewhere atomic.Int64
+			client := &Client{HTTP: &http.Client{Transport: loopbackOnly{&elsewhere}}}
+			path := filepath.Join(t.TempDir(), wheelFile)
+
+			_, err := client.DownloadFile(context.Background(), indexFileFor(from.URL, body), path)
+			if err == nil {
+				t.Fatal("DownloadFile followed the redirect to the end")
+			}
+			if !strings.Contains(err.Error(), tc.reason) || !strings.Contains(err.Error(), wheelFile) {
+				t.Errorf("DownloadFile = %v, want a refusal naming the file and saying %q", err, tc.reason)
+			}
+			if strings.Contains(err.Error(), tc.quotes) || strings.Contains(err.Error(), from.URL) {
+				t.Errorf("error %q quotes the url", err)
+			}
+			if n := targetHits.Load(); n != 0 {
+				t.Errorf("the redirect's target got %d requests, want 0", n)
+			}
+			if n := elsewhere.Load(); n != 0 {
+				t.Errorf("another host got %d requests, want 0", n)
+			}
+			if tc.hops > 0 {
+				if n := fromHits.Load(); n != 10 {
+					t.Errorf("the redirecting server got %d requests, want 10", n)
+				}
 			}
 			assertNoFile(t, path)
 		})
