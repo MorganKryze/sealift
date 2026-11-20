@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
@@ -226,14 +227,19 @@ func (e *PipExport) downloadOne(ctx context.Context, p PipPackage) (pipWheelFile
 }
 
 // checkCachedWheel reports whether path holds a regular file of the
-// wheel's recorded size and sha256, with its hex sha512. It removes a file
-// that does not.
+// wheel's recorded size and sha256, with its hex sha512. It removes an
+// entry that does not, a link or a FIFO included.
 func checkCachedWheel(path string, w PipWheel) (string, bool, error) {
-	f, err := os.Open(path)
-	if errors.Is(err, fs.ErrNotExist) {
+	// The tools account can write the cache. O_NOFOLLOW reads no link's
+	// target and O_NONBLOCK keeps a FIFO from holding the open; the type
+	// check below then refuses both.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return "", false, nil
-	}
-	if err != nil {
+	case errors.Is(err, syscall.ELOOP):
+		return "", false, removeCacheEntry(path)
+	case err != nil:
 		return "", false, err
 	}
 	defer f.Close()
@@ -250,10 +256,16 @@ func checkCachedWheel(path string, w PipWheel) (string, bool, error) {
 			return hex.EncodeToString(h512.Sum(nil)), true, nil
 		}
 	}
+	return "", false, removeCacheEntry(path)
+}
+
+// removeCacheEntry removes the entry at path, a link itself and never its
+// target. An entry already gone is no error.
+func removeCacheEntry(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", false, err
+		return err
 	}
-	return "", false, nil
+	return nil
 }
 
 // failed removes every file a failed or cancelled run wrote and records

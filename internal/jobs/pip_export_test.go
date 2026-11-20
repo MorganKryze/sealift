@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -363,6 +365,94 @@ func TestPipExportDropsADamagedCacheEntry(t *testing.T) {
 	}
 	if wheels[0].CachePath != cached {
 		t.Errorf("cache path = %s, want %s", wheels[0].CachePath, cached)
+	}
+}
+
+// The wheel cache is writable by the tools account. An entry it planted
+// is neither read through nor waited on: it goes, and the wheel is
+// downloaded again.
+func TestPipExportReplacesACacheEntryThatIsNotAFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		plant func(t *testing.T, cached string, body []byte) (check func(t *testing.T))
+	}{
+		{"a link to the wheel's bytes elsewhere", func(t *testing.T, cached string, body []byte) func(*testing.T) {
+			// The target holds the right bytes, so only the entry's type refuses it.
+			victim := filepath.Join(t.TempDir(), "elsewhere.whl")
+			if err := os.WriteFile(victim, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(victim, cached); err != nil {
+				t.Fatal(err)
+			}
+			return func(t *testing.T) {
+				if b, err := os.ReadFile(victim); err != nil || !bytes.Equal(b, body) {
+					t.Errorf("the link's target changed: %v", err)
+				}
+			}
+		}},
+		{"a FIFO", func(t *testing.T, cached string, _ []byte) func(*testing.T) {
+			if err := syscall.Mkfifo(cached, 0o660); err != nil {
+				t.Fatal(err)
+			}
+			return func(*testing.T) {}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := piptest.NewIndex(t)
+			f := donePipAnalysis(t, ix)
+			target := f.ref.Result.Packages[0].Wheel
+			resp, err := http.Get(target.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cached := filepath.Join(f.st.Root(), "cache", "wheels", target.Sha256+".whl")
+			if err := os.MkdirAll(filepath.Dir(cached), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			check := tc.plant(t, cached, body)
+			before := ix.Requests("/files/" + target.File)
+
+			e := f.newPipExport(t)
+			done := make(chan error, 1)
+			go func() {
+				_, err := e.download(t, &stepRecorder{})
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("download: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				// An open blocked on the FIFO returns once a writer opens it.
+				if w, err := os.OpenFile(cached, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+					_ = w.Close()
+				}
+				t.Fatal("download is still waiting on the cache entry after 10s")
+			}
+
+			if n := ix.Requests("/files/"+target.File) - before; n != 1 {
+				t.Errorf("%s was requested %d times, want 1", target.File, n)
+			}
+			st, err := os.Lstat(cached)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !st.Mode().IsRegular() {
+				t.Fatalf("cache entry mode = %s, want a regular file", st.Mode())
+			}
+			if b, err := os.ReadFile(cached); err != nil || !bytes.Equal(b, body) {
+				t.Errorf("the cache entry does not hold the wheel: %v", err)
+			}
+			check(t)
+		})
 	}
 }
 

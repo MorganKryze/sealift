@@ -105,6 +105,35 @@ func TestDownloadFileWritesTheCheckedFile(t *testing.T) {
 	}
 }
 
+// Another account that can write the download's directory may plant a
+// link at the .part path, aimed at a file only this process may write.
+func TestDownloadFileDoesNotWriteThroughALinkAtThePartPath(t *testing.T) {
+	body := wheelBytes(100)
+	srv, _ := fileServer(t, serveBody(body))
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "signing-key.pem")
+	if err := os.WriteFile(victim, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, wheelFile)
+	if err := os.Symlink(victim, path+".part"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (&Client{}).DownloadFile(context.Background(), indexFileFor(srv.URL, body), path); err != nil {
+		t.Fatalf("DownloadFile: %v", err)
+	}
+	if got, err := os.ReadFile(victim); err != nil || string(got) != "private" {
+		t.Errorf("the link's target holds %q (%v), want it untouched", got, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, body) {
+		t.Errorf("file = %q (%v), want the body", got, err)
+	}
+	if _, err := os.Lstat(path + ".part"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf(".part is left behind: %v", err)
+	}
+}
+
 // countingTransport counts the body bytes the client reads.
 type countingTransport struct{ read atomic.Int64 }
 

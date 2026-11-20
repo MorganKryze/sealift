@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"syscall"
 	"time"
 )
 
@@ -167,7 +169,13 @@ func downloadOnce(ctx context.Context, hc *http.Client, f IndexFile, path string
 	watchdog.Reset(stallTimeout)
 
 	part := path + ".part"
-	out, err := os.Create(part)
+	// Another account may write the directory. Whatever sits at the .part
+	// path goes, and O_EXCL refuses anything planted there again: through a
+	// link, the bytes would land in its target.
+	if err := os.Remove(part); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", permanent{fmt.Errorf("pip: download %s: %w", f.Filename, err)}
+	}
+	out, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 	if err != nil {
 		return "", permanent{fmt.Errorf("pip: download %s: %w", f.Filename, err)}
 	}

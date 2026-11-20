@@ -3,6 +3,7 @@ package jobs
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"syscall"
 )
@@ -25,7 +26,13 @@ func moveFile(src, dst string) error {
 	}
 	defer in.Close()
 	part := dst + ".part"
-	out, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o664)
+	// The caches are writable by the tools account. Whatever sits at the
+	// .part path goes, and O_EXCL refuses anything planted there again:
+	// through a link, the copy would land in its target.
+	if err := os.Remove(part); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o664)
 	if err != nil {
 		return err
 	}
