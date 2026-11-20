@@ -71,6 +71,30 @@ func TestPurgeCachesKeepsToolsKeyAndSettings(t *testing.T) {
 	}
 }
 
+// uv's cache holds the index pages and metadata of every package a pip
+// project resolved, so an erase must empty it too.
+func TestPurgeCachesEmptiesUvCache(t *testing.T) {
+	s := openTestStore(t)
+	page := filepath.Join(s.Root(), "cache", "uv", "simple-v16", "index", "requests.rkyv")
+	if err := os.MkdirAll(filepath.Dir(page), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(page, []byte("requests"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	purged, err := s.PurgeIfIdle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !purged {
+		t.Error("PurgeIfIdle saw the caches empty while cache/uv held a page")
+	}
+	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "uv")); !os.IsNotExist(err) {
+		t.Errorf("cache/uv survived the purge: %v", err)
+	}
+}
+
 func TestSweepEphemeral(t *testing.T) {
 	s := openTestStore(t)
 	s.SetEphemeral(true)

@@ -26,9 +26,9 @@ func (s *Store) isEphemeral() bool {
 }
 
 // cacheDirs are the shared caches that hold what past projects fetched:
-// pnpm's metadata and store, the export's tarball cache, and the resolve
-// working directories.
-var cacheDirs = []string{"pnpm", "tarballs", "resolve"}
+// pnpm's metadata and store, uv's index pages and metadata, the export's
+// tarball cache, and the resolve working directories.
+var cacheDirs = []string{"pnpm", "uv", "tarballs", "resolve"}
 
 // PurgeCaches empties the shared caches. Tools, the vulnerability database,
 // the settings and the signing key stay.
