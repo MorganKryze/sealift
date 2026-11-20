@@ -23,6 +23,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 )
 
 // newTestServer builds a full router against a fresh store and returns an
@@ -1633,6 +1634,7 @@ func TestCreatePipProject(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			srv, h := newTestServer(t)
+			allowPipAnalyses(t, h)
 			parts := pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n"))
 			status, data := postParts(t, srv, append(parts, c.extra...))
 			if status != http.StatusCreated {
@@ -1652,11 +1654,8 @@ func TestCreatePipProject(t *testing.T) {
 			if project.PipTarget == nil || *project.PipTarget != want {
 				t.Errorf("pipTarget = %+v, want %+v", project.PipTarget, want)
 			}
-			if project.Analyses != nil {
-				t.Errorf("analyses = %+v, want none queued yet", project.Analyses)
-			}
-			if _, _, _, _, live := h.Service.LiveForProject(project.Id); live {
-				t.Error("a job is live for the new pip project, want none")
+			if project.Analyses == nil || len(*project.Analyses) != 1 || (*project.Analyses)[0].State != Queued {
+				t.Errorf("analyses = %+v, want one queued", project.Analyses)
 			}
 			files, err := h.Store.ProjectRequirements(project.Id)
 			if err != nil || len(files) != 1 || string(files[0].Data) != "requests==2.32.3\n" {
@@ -1664,6 +1663,33 @@ func TestCreatePipProject(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeUv is a runner.Uv that resolves every requirement to itself.
+type fakeUv struct{}
+
+func (fakeUv) Compile(_ context.Context, in runner.CompileInput) (runner.CompileResult, error) {
+	var set []runner.Resolved
+	for _, line := range strings.Fields(string(in.Requirements)) {
+		name, version, _ := strings.Cut(line, "==")
+		set = append(set, runner.Resolved{Name: name, Version: version})
+	}
+	return runner.CompileResult{Lock: in.Requirements, Set: set}, nil
+}
+
+// allowPipAnalyses lets h queue pip analyses with no network: uv counts as
+// installed and the index is unroutable.
+func allowPipAnalyses(t *testing.T, h *Handlers) {
+	t.Helper()
+	bin := filepath.Join(h.Store.Root(), "tools", "uv", store.DefaultPipTarget.UvVer, "uv")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.Tools.PipIndex = unroutable
+	h.Service.SetPip(fakeUv{}, &pip.Client{Index: unroutable})
 }
 
 func TestCreatePipProjectRefusesBadLines(t *testing.T) {

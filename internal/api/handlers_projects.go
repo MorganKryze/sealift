@@ -118,7 +118,7 @@ type createParts struct {
 // the multipart body and creates the project. An npm project queues its
 // first analysis, and an invalid manifest gets a 400 listing every
 // offending entry instead of stopping at the first one. A pip project
-// queues nothing yet.
+// queues its first analysis too.
 func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObject) (CreateProjectResponseObject, error) {
 	parts, err := readCreateProjectParts(req.Body)
 	if err != nil {
@@ -159,7 +159,7 @@ func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObje
 }
 
 // createPipProject checks a pip request's name, files and target, then
-// stores the project.
+// stores the project and queues its first analysis.
 func (h *Handlers) createPipProject(parts createParts) CreateProjectResponseObject {
 	refuse := func(pb problemBody) CreateProjectResponseObject {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(pb)
@@ -191,7 +191,11 @@ func (h *Handlers) createPipProject(parts createParts) CreateProjectResponseObje
 	if err != nil {
 		return refuse(autoProblem("create project", err))
 	}
-	return CreateProject201JSONResponse(projectToAPI(project, nil, nil))
+	analysisInfo, err := h.Service.QueueAnalysis(project.ID)
+	if err != nil {
+		return refuse(autoProblem("queue analysis", err))
+	}
+	return CreateProject201JSONResponse(projectToAPI(project, []store.AnalysisInfo{analysisInfo}, nil))
 }
 
 // readCreateProjectParts reads the fields of a multipart creation body. The

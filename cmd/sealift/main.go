@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 	"github.com/MorganKryze/sealift/web"
 )
 
@@ -114,6 +116,15 @@ func run(addr, root string, log *slog.Logger) error {
 		onQueueReady(queue)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
+	// uv needs an interpreter to start, and builds and runs nothing with it.
+	// Without one, pip analyses fail at resolve and say so.
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		log.Warn("no python3 on the PATH: pip analyses cannot resolve", "error", err)
+		python = ""
+	}
+	uvRunner := runner.NewUvCLI(python, filepath.Join(root, "cache", "uv"), asUser)
+	service.SetPip(uvRunner, &pip.Client{Index: toolsManager.PipIndex})
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle

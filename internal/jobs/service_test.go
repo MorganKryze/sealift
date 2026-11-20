@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/pip"
 )
 
 // noopPnpm and noopTrivy are runner.Pnpm and runner.Trivy that never touch
@@ -85,6 +87,64 @@ func TestQueueAnalysisUnknownProjectReturnsErrNotFound(t *testing.T) {
 	if _, err := svc.QueueAnalysis("does-not-exist"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("QueueAnalysis(unknown project) = %v, want ErrNotFound", err)
 	}
+}
+
+func TestQueueAnalysisPicksTheJobByEcosystem(t *testing.T) {
+	statusKeys := func(t *testing.T, st *store.Store, projectID, id string) map[string]json.RawMessage {
+		t.Helper()
+		var raw map[string]json.RawMessage
+		if err := st.ReadJSON(filepath.Join(st.Root(), "projects", projectID, "analyses", id, "status.json"), &raw); err != nil {
+			t.Fatalf("read status.json: %v", err)
+		}
+		return raw
+	}
+	pipFiles := []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("requests==2.32.3\n")}}
+
+	t.Run("npm runs the npm analysis", func(t *testing.T) {
+		svc, st := newTestService(t)
+		svc.SetPip(&fakeUv{}, &pip.Client{Index: unroutable})
+		project := mustCreateProject(t, st)
+		info, err := svc.QueueAnalysis(project.ID)
+		if err != nil {
+			t.Fatalf("QueueAnalysis: %v", err)
+		}
+		waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+		raw := statusKeys(t, st, project.ID, info.ID)
+		if raw["target"] == nil || raw["pipTarget"] != nil {
+			t.Errorf("status.json = %v, want the npm target and no pip target", raw)
+		}
+	})
+	t.Run("pip runs the pip analysis", func(t *testing.T) {
+		svc, st := newTestService(t)
+		svc.tools.PipIndex = unroutable
+		svc.SetPip(&fakeUv{}, &pip.Client{Index: unroutable})
+		project, err := st.CreatePipProject("Data tools", pipFiles, store.DefaultPipTarget)
+		if err != nil {
+			t.Fatalf("CreatePipProject: %v", err)
+		}
+		info, err := svc.QueueAnalysis(project.ID)
+		if err != nil {
+			t.Fatalf("QueueAnalysis: %v", err)
+		}
+		waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+		raw := statusKeys(t, st, project.ID, info.ID)
+		if raw["pipTarget"] == nil || raw["target"] != nil {
+			t.Errorf("status.json = %v, want the pip target and no npm target", raw)
+		}
+	})
+	t.Run("pip without a resolver is refused", func(t *testing.T) {
+		svc, st := newTestService(t)
+		project, err := st.CreatePipProject("Data tools", pipFiles, store.DefaultPipTarget)
+		if err != nil {
+			t.Fatalf("CreatePipProject: %v", err)
+		}
+		if _, err := svc.QueueAnalysis(project.ID); err == nil || !strings.Contains(err.Error(), "pip") {
+			t.Fatalf("QueueAnalysis = %v, want a refusal naming pip", err)
+		}
+		if analyses, err := st.Analyses(project.ID); err != nil || len(analyses) != 0 {
+			t.Errorf("analyses = %+v (%v), want none reserved", analyses, err)
+		}
+	})
 }
 
 func TestQueueExportRefusesAnAnalysisNotDone(t *testing.T) {

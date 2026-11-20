@@ -97,14 +97,19 @@ func (a *Analysis) StoreID() string { return a.ID }
 // Named statusFile, not analysisStatus: the export job, also in
 // internal/jobs, already declares its own analysisStatus, a narrower
 // read-only view of this same file, in export.go.
+//
+// An npm analysis writes Target and a pip one PipTarget and UvVersion, so
+// an npm status.json keeps the keys it had before pip existed.
 type statusFile struct {
-	State        store.State  `json:"state"`
-	CreatedAt    time.Time    `json:"createdAt"`
-	Steps        []stepRecord `json:"steps"`
-	PnpmVersion  string       `json:"pnpmVersion"`
-	TrivyVersion string       `json:"trivyVersion"`
-	TrivyDBDate  time.Time    `json:"trivyDbDate"`
-	Target       store.Target `json:"target"`
+	State        store.State      `json:"state"`
+	CreatedAt    time.Time        `json:"createdAt"`
+	Steps        []stepRecord     `json:"steps"`
+	PnpmVersion  string           `json:"pnpmVersion"`
+	UvVersion    string           `json:"uvVersion,omitempty"`
+	TrivyVersion string           `json:"trivyVersion"`
+	TrivyDBDate  time.Time        `json:"trivyDbDate"`
+	Target       store.Target     `json:"target,omitzero"`
+	PipTarget    *store.PipTarget `json:"pipTarget,omitempty"`
 }
 
 // stepRecord is one entry of status.json's step timings.
@@ -164,16 +169,22 @@ func mustJSON(v any) json.RawMessage {
 	return data
 }
 
-// run holds the state one Run call thread through its steps: the emitter,
-// the log file, the accumulating result and the step timings that go into
-// status.json.
-type run struct {
-	a       *Analysis
+// stepLog records a job's steps and log lines: one "step" event and one
+// status.json entry per step, and each log line in log.txt and as an event.
+// The npm and pip analyses share it.
+type stepLog struct {
 	ctx     context.Context
 	emit    func(Event)
 	logFile *os.File
-	result  *Result
 	steps   []stepRecord
+}
+
+// run holds the state one Run call thread through its steps: the step
+// log, the accumulating result and pnpm's output for the project.
+type run struct {
+	stepLog
+	a      *Analysis
+	result *Result
 	// projectOutput is pnpm's output for the project as given, kept so
 	// step 9 reports only the peer issues the proposals bring.
 	projectOutput string
@@ -181,12 +192,12 @@ type run struct {
 
 // runStep runs fn, emits exactly one "step" event for name and records its
 // timing in status.json, regardless of whether fn succeeds.
-func (r *run) runStep(name string, fn func() error) error {
+func (l *stepLog) runStep(name string, fn func() error) error {
 	start := time.Now()
 	err := fn()
 	state := store.Done
 	switch {
-	case r.ctx.Err() != nil:
+	case l.ctx.Err() != nil:
 		state = store.Cancelled
 	case err != nil:
 		state = store.Failed
@@ -196,24 +207,24 @@ func (r *run) runStep(name string, fn func() error) error {
 	if state == store.Failed {
 		message = err.Error()
 	}
-	r.steps = append(r.steps, stepRecord{Name: name, State: string(state), DurationMs: duration, Error: message})
-	r.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration, Error: message})})
+	l.steps = append(l.steps, stepRecord{Name: name, State: string(state), DurationMs: duration, Error: message})
+	l.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration, Error: message})})
 	return err
 }
 
 // log writes line to log.txt and emits a matching "log" event, after
 // dropping any URL credentials, so no call site has to remember to.
-func (r *run) log(line string) {
+func (l *stepLog) log(line string) {
 	line = runner.StripURLCredentials(line)
-	fmt.Fprintln(r.logFile, line)
-	r.emit(Event{Kind: "log", Data: mustJSON(logData{Line: line})})
+	fmt.Fprintln(l.logFile, line)
+	l.emit(Event{Kind: "log", Data: mustJSON(logData{Line: line})})
 }
 
 // progress emits a "progress" event for step, the step name it belongs
 // to: the same name that step's own "step" event carries, so a client can
 // key progress and steps by the same field.
-func (r *run) progress(step string, done, total int) {
-	r.emit(Event{Kind: "progress", Data: mustJSON(progressData{Step: step, Done: done, Total: total})})
+func (l *stepLog) progress(step string, done, total int) {
+	l.emit(Event{Kind: "progress", Data: mustJSON(progressData{Step: step, Done: done, Total: total})})
 }
 
 // progressWithRemaining is progress plus an estimate of the time left,
@@ -244,15 +255,15 @@ func remaining(elapsed time.Duration, done, total int) time.Duration {
 	return elapsed * time.Duration(total-done) / time.Duration(done)
 }
 
-// commit writes status.json and renames the pending .tmp directory into
-// place. Analyses keep their directory whatever the outcome, unlike
-// exports, so this rename is unconditional.
-func (a *Analysis) commit(status statusFile) error {
-	if err := a.Store.WriteJSON(filepath.Join(a.Dir, "status.json"), status); err != nil {
+// commitAnalysis writes status.json into the pending .tmp directory dir and
+// renames it into place. Analyses keep their directory whatever the
+// outcome, unlike exports, so this rename is unconditional.
+func commitAnalysis(st *store.Store, dir string, status statusFile) error {
+	if err := st.WriteJSON(filepath.Join(dir, "status.json"), status); err != nil {
 		return fmt.Errorf("jobs: write status.json: %w", err)
 	}
-	final := strings.TrimSuffix(a.Dir, ".tmp")
-	if err := os.Rename(a.Dir, final); err != nil {
+	final := strings.TrimSuffix(dir, ".tmp")
+	if err := os.Rename(dir, final); err != nil {
 		return fmt.Errorf("jobs: commit analysis directory: %w", err)
 	}
 	return nil
@@ -284,10 +295,8 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	}
 
 	r := &run{
+		stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile},
 		a:       a,
-		ctx:     ctx,
-		emit:    emit,
-		logFile: logFile,
 		// Dependencies and Warnings start as empty slices, not nil: the
 		// contract marks both required arrays, and a client that trusts it
 		// must never see null for an analysis that simply found nothing to
@@ -304,7 +313,7 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		case err != nil:
 			state = store.Failed
 		}
-		commitErr := a.commit(statusFile{
+		commitErr := commitAnalysis(a.Store, a.Dir, statusFile{
 			State:        state,
 			CreatedAt:    createdAt,
 			Steps:        r.steps,

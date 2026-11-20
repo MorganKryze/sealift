@@ -243,7 +243,7 @@ func TestAnalysisKind(t *testing.T) {
 // set stepRecord.Error to err.Error() whenever the step's state is
 // Failed.
 func TestRunStepRecordsTheFailureMessage(t *testing.T) {
-	r := &run{a: &Analysis{}, ctx: context.Background(), emit: func(Event) {}}
+	r := &run{a: &Analysis{}, stepLog: stepLog{ctx: context.Background(), emit: func(Event) {}}}
 
 	err := r.runStep("boom-step", func() error { return errors.New("boom") })
 	if err == nil {
@@ -263,7 +263,7 @@ func TestRunStepRecordsTheFailureMessage(t *testing.T) {
 // TestRunStepLeavesErrorEmptyOnSuccess proves a done step never carries a
 // stray error message.
 func TestRunStepLeavesErrorEmptyOnSuccess(t *testing.T) {
-	r := &run{a: &Analysis{}, ctx: context.Background(), emit: func(Event) {}}
+	r := &run{a: &Analysis{}, stepLog: stepLog{ctx: context.Background(), emit: func(Event) {}}}
 
 	if err := r.runStep("ok-step", func() error { return nil }); err != nil {
 		t.Fatalf("runStep: %v", err)
@@ -828,7 +828,7 @@ func TestLogStripsURLCredentials(t *testing.T) {
 	}
 	defer f.Close()
 	var events []Event
-	r := &run{logFile: f, emit: func(e Event) { events = append(events, e) }}
+	r := &run{stepLog: stepLog{logFile: f, emit: func(e Event) { events = append(events, e) }}}
 
 	r.log("pnpm: fetch http://alice:s3cr3t@10.0.0.1:4873/x failed")
 
