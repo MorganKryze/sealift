@@ -6,6 +6,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- pip projects through the API: requirements files resolved together at the interpreter's exact version, scanned, one wheel recorded per package. No screen opens them yet. [API](docs/dev/api.md#pip-projects) describes them.
+
 ## [0.6.2] - 2026-11-19
 
 ### Added

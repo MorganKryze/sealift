@@ -65,6 +65,30 @@ func (e EventKind) Valid() bool {
 	}
 }
 
+// Defines values for PipBlockingKind.
+const (
+	HashMismatch   PipBlockingKind = "hash-mismatch"
+	NoFiles        PipBlockingKind = "no-files"
+	OtherPlatforms PipBlockingKind = "other-platforms"
+	SourceOnly     PipBlockingKind = "source-only"
+)
+
+// Valid indicates whether the value is a known member of the PipBlockingKind enum.
+func (e PipBlockingKind) Valid() bool {
+	switch e {
+	case HashMismatch:
+		return true
+	case NoFiles:
+		return true
+	case OtherPlatforms:
+		return true
+	case SourceOnly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for State.
 const (
 	Cancelled   State = "cancelled"
@@ -103,6 +127,9 @@ type Analysis struct {
 	Failure *Failure `json:"failure,omitempty"`
 	Id      string   `json:"id"`
 
+	// PipResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+	PipResult *PipAnalysisResult `json:"pipResult,omitempty"`
+
 	// PnpmVersion pnpm version the analysis used, absent when it did not record one
 	PnpmVersion *string `json:"pnpmVersion,omitempty"`
 	ProjectId   string  `json:"projectId"`
@@ -118,6 +145,9 @@ type Analysis struct {
 
 	// TrivyVersion Trivy version the analysis used, absent when it did not record one
 	TrivyVersion *string `json:"trivyVersion,omitempty"`
+
+	// UvVersion uv version a pip analysis used, absent when it did not record one
+	UvVersion *string `json:"uvVersion,omitempty"`
 }
 
 // AnalysisResult What an analysis writes to candidates.json and ranking.json
@@ -262,6 +292,60 @@ type LogData struct {
 	Line string `json:"line"`
 }
 
+// PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+type PipAnalysisResult struct {
+	// Blocking Packages with no wheel the target can install
+	Blocking []PipBlocking `json:"blocking"`
+
+	// Files Every requirements file the set was resolved from
+	Files []string `json:"files"`
+
+	// Packages The resolved set, sorted by normalized name
+	Packages []PipPackage `json:"packages"`
+
+	// Target The system a pip resolution is prepared for
+	Target   PipTarget `json:"target"`
+	Warnings []string  `json:"warnings"`
+}
+
+// PipBlocking A package the target cannot install from a wheel
+type PipBlocking struct {
+	Detail  string          `json:"detail"`
+	Kind    PipBlockingKind `json:"kind"`
+	Name    string          `json:"name"`
+	Version string          `json:"version"`
+}
+
+// PipBlockingKind defines model for PipBlocking.Kind.
+type PipBlockingKind string
+
+// PipFinding One known vulnerability of a pip package
+type PipFinding struct {
+	// FixedVersions The versions that fix it, as Trivy lists them, empty when none is known
+	FixedVersions []string `json:"fixedVersions"`
+	Id            string   `json:"id"`
+
+	// Severity As Trivy prints it, upper case
+	Severity string  `json:"severity"`
+	Title    *string `json:"title,omitempty"`
+}
+
+// PipPackage One package of a pip analysis' set
+type PipPackage struct {
+	// Cves Sorted by severity, then id
+	Cves []PipFinding `json:"cves"`
+
+	// Files The project files that pin it, empty for a transitive package
+	Files []string `json:"files"`
+
+	// Name Normalized name
+	Name    string `json:"name"`
+	Version string `json:"version"`
+
+	// Wheel The wheel chosen for a package, as the index lists it
+	Wheel *PipWheel `json:"wheel,omitempty"`
+}
+
 // PipTarget The system a pip resolution is prepared for
 type PipTarget struct {
 	// Cpu Only x86_64 for now
@@ -274,6 +358,18 @@ type PipTarget struct {
 	// Python Python 3.<minor>.<patch>
 	Python string `json:"python"`
 	UvVer  string `json:"uvVer"`
+}
+
+// PipWheel The wheel chosen for a package, as the index lists it
+type PipWheel struct {
+	File string `json:"file"`
+
+	// Sha256 Lowercase hex
+	Sha256 string `json:"sha256"`
+
+	// Size Bytes
+	Size int64  `json:"size"`
+	Url  string `json:"url"`
 }
 
 // Problem RFC 9457 Problem Details for HTTP APIs

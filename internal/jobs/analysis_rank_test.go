@@ -22,10 +22,9 @@ import (
 // dependency.
 func TestRankDependency_CurrentVersionResolveFailure(t *testing.T) {
 	r := &run{
-		a:      &Analysis{Settings: store.Settings{Target: store.Target{Node: "22.17.1"}}},
-		ctx:    context.Background(),
-		emit:   func(Event) {},
-		result: &Result{},
+		a:       &Analysis{Settings: store.Settings{Target: store.Target{Node: "22.17.1"}}},
+		stepLog: stepLog{ctx: context.Background(), emit: func(Event) {}},
+		result:  &Result{},
 	}
 	dep := npm.Dependency{Name: "foo", Version: "1.0.0"}
 	d := depInfo{
@@ -76,10 +75,9 @@ func TestRankDependency_CVEsListTheVulnerabilitiesBehindTheVector(t *testing.T) 
 	combinedIndex := rank.NewIndex(findings)
 
 	r := &run{
-		a:      &Analysis{Settings: store.Settings{Target: store.Target{Node: "22.17.1"}}},
-		ctx:    context.Background(),
-		emit:   func(Event) {},
-		result: &Result{},
+		a:       &Analysis{Settings: store.Settings{Target: store.Target{Node: "22.17.1"}}},
+		stepLog: stepLog{ctx: context.Background(), emit: func(Event) {}},
+		result:  &Result{},
 	}
 	dep := npm.Dependency{Name: "express", Version: "4.17.1"}
 	d := depInfo{
