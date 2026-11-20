@@ -13,8 +13,9 @@ import (
 	"testing"
 )
 
-// stubPublisher is a Publisher whose three calls are set per test; a nil
-// call answers as a Nexus that holds nothing and accepts everything.
+// stubPublisher is a Publisher whose calls are set per test; a nil call
+// answers as a Nexus that holds nothing and accepts everything. Fetch and
+// FetchFile share fetch.
 type stubPublisher struct {
 	check  func(context.Context) error
 	fetch  func(context.Context) (bool, error)
@@ -29,6 +30,13 @@ func (s stubPublisher) CheckRepository(ctx context.Context) error {
 }
 
 func (s stubPublisher) Fetch(ctx context.Context, _, _ string, _ io.Writer, _ int64) (bool, error) {
+	if s.fetch != nil {
+		return s.fetch(ctx)
+	}
+	return false, nil
+}
+
+func (s stubPublisher) FetchFile(ctx context.Context, _, _ string, _ io.Writer, _ int64) (bool, error) {
 	if s.fetch != nil {
 		return s.fetch(ctx)
 	}

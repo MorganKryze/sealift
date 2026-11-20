@@ -32,6 +32,9 @@ type Report struct {
 	// manifest and the signature. It is nil only in a record written by
 	// sealift 0.4.0 or earlier.
 	ArchiveChecked *bool `json:"archiveChecked,omitempty"`
+	// Ecosystem is "pip" for a pip archive. An npm report leaves it out, as
+	// every record written before pip existed does.
+	Ecosystem string `json:"ecosystem,omitempty"`
 }
 
 // ArchiveInfo names the archive and holds the digest and size its manifest declares.
@@ -42,12 +45,15 @@ type ArchiveInfo struct {
 }
 
 // TargetInfo is the platform the manifest says the packages were resolved for.
+// An npm target fills Libc, Node and PnpmVer; a pip target fills Python and Glibc.
 type TargetInfo struct {
 	OS      string `json:"os"`
 	CPU     string `json:"cpu"`
 	Libc    string `json:"libc"`
 	Node    string `json:"node"`
 	PnpmVer string `json:"pnpmVer"`
+	Python  string `json:"python,omitempty"`
+	Glibc   string `json:"glibc,omitempty"`
 }
 
 // NexusInfo is the repository the import published to.
@@ -103,7 +109,11 @@ func (r Report) WriteText(w io.Writer) error {
 	}
 	if r.ToolVersion != "" || r.AnalysisID != "" {
 		t := r.Target
-		p.linef("manifest: sealift %s, analysis %s, target %s %s %s, node %s, pnpm %s", r.ToolVersion, r.AnalysisID, t.OS, t.CPU, t.Libc, t.Node, t.PnpmVer)
+		if r.Ecosystem == ecosystemPip {
+			p.linef("manifest: sealift %s, analysis %s, target %s %s, python %s, glibc %s", r.ToolVersion, r.AnalysisID, t.OS, t.CPU, t.Python, t.Glibc)
+		} else {
+			p.linef("manifest: sealift %s, analysis %s, target %s %s %s, node %s, pnpm %s", r.ToolVersion, r.AnalysisID, t.OS, t.CPU, t.Libc, t.Node, t.PnpmVer)
+		}
 	}
 	p.linef("nexus: %s, repository %s", r.Nexus.URL, r.Nexus.Repository)
 	for _, pkg := range r.Packages {

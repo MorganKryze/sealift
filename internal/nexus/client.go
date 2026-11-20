@@ -1,4 +1,5 @@
-// Package nexus talks to a Nexus 3 hosted npm repository over its REST API.
+// Package nexus talks to a Nexus 3 hosted npm or pypi repository over its
+// REST API.
 package nexus
 
 import (
@@ -37,10 +38,32 @@ const (
 	headerTimeout = 5 * time.Minute
 )
 
+// Format is the Nexus format of a repository.
+type Format string
+
+// The two formats an import publishes to.
+const (
+	FormatNPM  Format = "npm"
+	FormatPyPI Format = "pypi"
+)
+
+// ErrRepository marks a repository Nexus does not list, or lists in another
+// format or type. CheckRepository wraps it; an unreachable Nexus or a 401 or
+// 403 does not.
+var ErrRepository = errors.New("nexus: no hosted repository of that name and format")
+
+// repositoryError keeps its own text and wraps ErrRepository.
+type repositoryError struct{ msg string }
+
+func (e *repositoryError) Error() string { return e.msg }
+func (e *repositoryError) Unwrap() error { return ErrRepository }
+
 // Config holds the address and credentials of one Nexus repository.
+// An empty Format reads as npm.
 type Config struct {
 	URL        *url.URL
 	Repository string
+	Format     Format
 	User       string
 	Password   []byte
 	CAFile     string
@@ -63,6 +86,7 @@ func (e *Error) Error() string {
 type Client struct {
 	base    url.URL
 	repo    string
+	format  Format
 	user    string
 	pass    []byte
 	secrets []string
@@ -77,6 +101,14 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.Repository == "" {
 		return nil, errors.New("nexus repository is empty")
+	}
+	format := cfg.Format
+	switch format {
+	case "":
+		format = FormatNPM
+	case FormatNPM, FormatPyPI:
+	default:
+		return nil, fmt.Errorf("nexus format %q is neither npm nor pypi", format)
 	}
 	roots, err := x509.SystemCertPool()
 	if err != nil {
@@ -101,10 +133,11 @@ func New(cfg Config) (*Client, error) {
 	tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 
 	c := &Client{
-		base: *cfg.URL,
-		repo: cfg.Repository,
-		user: cfg.User,
-		pass: cfg.Password,
+		base:   *cfg.URL,
+		repo:   cfg.Repository,
+		format: format,
+		user:   cfg.User,
+		pass:   cfg.Password,
 		http: &http.Client{
 			Transport: tr,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -121,7 +154,7 @@ func New(cfg Config) (*Client, error) {
 }
 
 // CheckRepository confirms that Nexus accepts the credentials and holds the
-// repository as a hosted npm repository.
+// repository as a hosted repository of the client's format.
 func (c *Client) CheckRepository(ctx context.Context) error {
 	resp, err := c.do(ctx, http.MethodGet, c.endpoint("/service/rest/v1/repositories", ""), nil, "")
 	if err != nil {
@@ -143,12 +176,12 @@ func (c *Client) CheckRepository(ctx context.Context) error {
 		if r.Name != c.repo {
 			continue
 		}
-		if r.Format != "npm" || r.Type != "hosted" {
-			return fmt.Errorf("nexus repository %q is %s %s, not npm hosted", c.repo, c.clean(r.Format), c.clean(r.Type))
+		if r.Format != string(c.format) || r.Type != "hosted" {
+			return &repositoryError{fmt.Sprintf("nexus repository %q is %s %s, not %s hosted", c.repo, c.clean(r.Format), c.clean(r.Type), c.format)}
 		}
 		return nil
 	}
-	return fmt.Errorf("nexus repository %q not found", c.repo)
+	return &repositoryError{fmt.Sprintf("nexus repository %q not found", c.repo)}
 }
 
 // Fetch copies the tarball of name@version to w. It reports found false on a
@@ -169,24 +202,29 @@ func (c *Client) Fetch(ctx context.Context, name, version string, w io.Writer, l
 	case resp.StatusCode != http.StatusOK:
 		return false, c.statusError(resp)
 	}
-	n, err := io.Copy(w, io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return true, fmt.Errorf("nexus unreachable: %s", c.clean(err.Error()))
-	}
-	if n > limit {
-		return true, fmt.Errorf("nexus copy is larger than %d bytes", limit)
-	}
-	return true, nil
+	return true, c.copyLimited(w, resp.Body, limit)
 }
 
-// Upload sends one tarball as a component of the repository.
+// copyLimited copies body to w and fails past limit bytes.
+func (c *Client) copyLimited(w io.Writer, body io.Reader, limit int64) error {
+	n, err := io.Copy(w, io.LimitReader(body, limit+1))
+	if err != nil {
+		return fmt.Errorf("nexus unreachable: %s", c.clean(err.Error()))
+	}
+	if n > limit {
+		return fmt.Errorf("nexus copy is larger than %d bytes", limit)
+	}
+	return nil
+}
+
+// Upload sends one file as a component, in the form field "<format>.asset".
 func (c *Client) Upload(ctx context.Context, file string, r io.Reader) error {
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		part, err := mw.CreateFormFile("npm.asset", file)
+		part, err := mw.CreateFormFile(string(c.format)+".asset", file)
 		if err == nil {
 			_, err = io.Copy(part, r)
 		}

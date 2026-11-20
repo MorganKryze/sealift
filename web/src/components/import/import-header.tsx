@@ -1,6 +1,6 @@
 import { TriangleAlert } from "lucide-react"
 
-import { archiveName, latestAttempt, type Import } from "@/import/lib/outcome"
+import { archiveName, ecosystemOf, latestAttempt, type Import } from "@/import/lib/outcome"
 import { formatBytes, formatWhen } from "@/lib/utils"
 
 import { OutcomeBadge } from "./outcome-badge"
@@ -21,6 +21,8 @@ export function ImportPageHeader({ imp }: { imp: Import }) {
   const attempt = latestAttempt(imp)
   const { folder, file } = archiveName(imp.archive.key)
   const { target, nexus, unencrypted } = attempt.report
+  // A queued attempt has no report yet: the archive's folder says which target it will read.
+  const pip = (attempt.report.ecosystem || ecosystemOf(imp.archive.key)) === "pip"
   const started = attempt.startedAt ? formatWhen(attempt.startedAt) : attempt.status === "queued" ? "Not started yet" : "Not recorded"
   return (
     <header>
@@ -45,9 +47,18 @@ export function ImportPageHeader({ imp }: { imp: Import }) {
         <Fact label="Nexus address" mono>{nexus.url || NOT_READ}</Fact>
         <Fact label="Target OS">{target.os || NOT_READ}</Fact>
         <Fact label="CPU">{target.cpu || NOT_READ}</Fact>
-        <Fact label="libc">{target.libc || NOT_READ}</Fact>
-        <Fact label="Node">{target.node || NOT_READ}</Fact>
-        <Fact label="pnpm">{target.pnpmVer || NOT_READ}</Fact>
+        {pip ? (
+          <>
+            <Fact label="Python">{target.python || NOT_READ}</Fact>
+            <Fact label="glibc">{target.glibc || NOT_READ}</Fact>
+          </>
+        ) : (
+          <>
+            <Fact label="libc">{target.libc || NOT_READ}</Fact>
+            <Fact label="Node">{target.node || NOT_READ}</Fact>
+            <Fact label="pnpm">{target.pnpmVer || NOT_READ}</Fact>
+          </>
+        )}
       </dl>
     </header>
   )

@@ -16,6 +16,24 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for Ecosystem.
+const (
+	Npm Ecosystem = "npm"
+	Pip Ecosystem = "pip"
+)
+
+// Valid indicates whether the value is a known member of the Ecosystem enum.
+func (e Ecosystem) Valid() bool {
+	switch e {
+	case Npm:
+		return true
+	case Pip:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ReportPackageKind.
 const (
 	Conflict    ReportPackageKind = "conflict"
@@ -48,9 +66,11 @@ func (e ReportPackageKind) Valid() bool {
 
 // Archive defines model for Archive.
 type Archive struct {
-	Importable bool `json:"importable"`
+	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
+	Ecosystem  *Ecosystem `json:"ecosystem,omitempty"`
+	Importable bool       `json:"importable"`
 
-	// Key The object key, under packages/npm/
+	// Key The object key, under packages/npm/ or packages/pip/
 	Key string `json:"key"`
 
 	// LatestImport The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since
@@ -72,14 +92,17 @@ type ArchiveList struct {
 	// BucketMissing True when MinIO has no bucket for the user
 	BucketMissing bool `json:"bucketMissing"`
 
-	// Folder The folder the list covers, packages/npm/
+	// Folder The npm folder, packages/npm/, kept for clients that read one folder
 	Folder string `json:"folder"`
 
-	// Message Says what an empty list means when the bucket is missing
+	// Folders The folders the list covers, npm first, packages/npm/ then packages/pip/
+	Folders *[]string `json:"folders,omitempty"`
+
+	// Message Says what an empty list means when the bucket is missing, or names the folder MinIO could not list, with MinIO's reason, while the other folder is listed
 	Message         *string `json:"message,omitempty"`
 	MinioConfigured bool    `json:"minioConfigured"`
 
-	// Truncated True when the folder holds more objects than the list read
+	// Truncated True when a folder holds more objects than the list read
 	Truncated bool `json:"truncated"`
 
 	// Unencrypted The links that run over plain http, among keySet, minio and nexus
@@ -105,6 +128,9 @@ type Attempt struct {
 	// Status queued, running or ended
 	Status string `json:"status"`
 }
+
+// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
+type Ecosystem string
 
 // Import defines model for Import.
 type Import struct {
@@ -157,7 +183,7 @@ type Me struct {
 	// Bucket The user's MinIO bucket, user-<name>, named whether or not the settings file has a minio section
 	Bucket string `json:"bucket"`
 
-	// Folder The folder of the bucket the service lists, reads and deletes in
+	// Folder The npm folder, packages/npm/, kept for clients that read one folder; the service lists, reads and deletes in packages/npm/ and packages/pip/
 	Folder string `json:"folder"`
 
 	// MinioConfigured Whether the settings file has a minio section
@@ -204,12 +230,15 @@ type Report struct {
 	Archive    ReportArchive `json:"archive"`
 
 	// ArchiveChecked True when the archive passed its checks against the manifest and the signature key, false when the attempt ended or stands before they passed. Absent in a report written by sealift 0.4.0 or earlier.
-	ArchiveChecked *bool           `json:"archiveChecked,omitempty"`
-	Counts         ReportCounts    `json:"counts"`
-	ImportVersion  string          `json:"importVersion"`
-	Nexus          ReportNexus     `json:"nexus"`
-	Outcome        string          `json:"outcome"`
-	Packages       []ReportPackage `json:"packages"`
+	ArchiveChecked *bool        `json:"archiveChecked,omitempty"`
+	Counts         ReportCounts `json:"counts"`
+
+	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
+	Ecosystem     *Ecosystem      `json:"ecosystem,omitempty"`
+	ImportVersion string          `json:"importVersion"`
+	Nexus         ReportNexus     `json:"nexus"`
+	Outcome       string          `json:"outcome"`
+	Packages      []ReportPackage `json:"packages"`
 
 	// PublicKeySha256 The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
 	PublicKeySha256 *string      `json:"publicKeySha256,omitempty"`
@@ -261,16 +290,22 @@ type ReportPackageKind string
 
 // ReportTarget defines model for ReportTarget.
 type ReportTarget struct {
-	Cpu     string `json:"cpu"`
-	Libc    string `json:"libc"`
-	Node    string `json:"node"`
-	Os      string `json:"os"`
-	PnpmVer string `json:"pnpmVer"`
+	Cpu string `json:"cpu"`
+
+	// Glibc The glibc version of a pip archive's target; empty for an npm archive
+	Glibc   *string `json:"glibc,omitempty"`
+	Libc    string  `json:"libc"`
+	Node    string  `json:"node"`
+	Os      string  `json:"os"`
+	PnpmVer string  `json:"pnpmVer"`
+
+	// Python The Python version of a pip archive's target; empty for an npm archive
+	Python *string `json:"python,omitempty"`
 }
 
 // StartImport defines model for StartImport.
 type StartImport struct {
-	// Archive The archive's object key, under packages/npm/
+	// Archive The archive's object key, under packages/npm/ or packages/pip/
 	Archive string `json:"archive"`
 
 	// ExpectedSha256 The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused

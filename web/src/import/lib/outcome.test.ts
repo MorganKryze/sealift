@@ -2,7 +2,7 @@ import { CircleAlert, CircleCheck, CirclePause, Clock, LoaderCircle, ShieldX } f
 import { describe, expect, it } from "vitest"
 
 import type { Attempt, Import, ReportPackage } from "./outcome"
-import { archiveName, counts, latestAttempt, notFinished, outcomeWords } from "./outcome"
+import { archiveName, counts, ecosystemOf, FOLDERS, latestAttempt, notFinished, outcomeWords, whereText } from "./outcome"
 
 const pkg = (over: Partial<ReportPackage> = {}): ReportPackage => ({
   name: "left-pad", version: "1.3.0", file: "npm/left-pad-1.3.0.tgz", state: "published", reason: "", note: "", ...over,
@@ -106,5 +106,40 @@ describe("archiveName", () => {
     const name = archiveName(key)
     expect(name.folder).toBe(`${folder}/`)
     expect(name.file).toBe("packages_npm.tar.gz")
+  })
+})
+
+describe("archiveName under packages/pip/", () => {
+  it("splits one folder below packages/pip/", () => {
+    expect(archiveName("packages/pip/2026-11-20-data-tools/packages_pip.tar.gz")).toEqual({
+      folder: "2026-11-20-data-tools/", file: "packages_pip.tar.gz",
+    })
+  })
+
+  it("names packages/pip/ as the folder of an archive at its root", () => {
+    expect(archiveName("packages/pip/packages_pip.tar.gz")).toEqual({ folder: "packages/pip/", file: "packages_pip.tar.gz" })
+  })
+})
+
+describe("ecosystemOf", () => {
+  it.each([
+    ["packages/npm/packages_npm.tar.gz", "npm"],
+    ["packages/npm/2026-11-05-hr-forms/packages_npm.tar.gz", "npm"],
+    ["packages/pip/packages_pip.tar.gz", "pip"],
+    ["packages/pip/2026-11-20-data-tools/packages_pip.tar.gz", "pip"],
+    ["packages_npm.tar.gz", "npm"],
+  ])("%s is %s", (key, want) => {
+    expect(ecosystemOf(key)).toBe(want)
+  })
+})
+
+describe("whereText", () => {
+  it("names both folders, npm first, in the user's bucket", () => {
+    expect(FOLDERS).toEqual(["packages/npm/", "packages/pip/"])
+    expect(whereText("user-alice")).toBe("user-alice/packages/npm/ and packages/pip/")
+  })
+
+  it("names both folders alone before the bucket is read", () => {
+    expect(whereText(undefined)).toBe("packages/npm/ and packages/pip/")
   })
 })

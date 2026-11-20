@@ -65,10 +65,12 @@ type Result struct {
 	Kind    Kind   `json:"kind,omitempty"`
 }
 
-// Publisher is the part of the Nexus client the run uses.
+// Publisher is the part of the Nexus client the run uses: Fetch reads an
+// npm tarball, FetchFile a file of a pypi repository's simple index.
 type Publisher interface {
 	CheckRepository(context.Context) error
 	Fetch(context.Context, string, string, io.Writer, int64) (bool, error)
+	FetchFile(ctx context.Context, project, file string, w io.Writer, limit int64) (bool, error)
 	Upload(context.Context, string, io.Reader) error
 }
 
@@ -81,6 +83,12 @@ func Publish(ctx context.Context, p Publisher, pkgs []Package, dir string) []Res
 // PublishEach is Publish that calls ended with each package's result as soon
 // as it is known, before the next package starts. ended may be nil.
 func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, ended func(int, Result)) []Result {
+	return publishEach(ctx, p, pkgs, ended, func(pkg Package) Result { return publishOne(ctx, p, pkg, dir) })
+}
+
+// publishEach checks the repository, then runs one on each package in order
+// until ctx is done.
+func publishEach(ctx context.Context, p Publisher, pkgs []Package, ended func(int, Result), one func(Package) Result) []Result {
 	results := make([]Result, len(pkgs))
 	done := func(i int, r Result) {
 		results[i] = r
@@ -100,7 +108,7 @@ func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, e
 			done(i, failed(pkg, KindInterrupted, reasonInterrupted))
 			continue
 		}
-		done(i, publishOne(ctx, p, pkg, dir))
+		done(i, one(pkg))
 	}
 	return results
 }

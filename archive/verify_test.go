@@ -560,7 +560,7 @@ func TestReadFailuresKeepTheirReason(t *testing.T) {
 	}
 	reads := map[string]func(r io.Reader) error{
 		"tarball": func(r io.Reader) error {
-			_, err := copyPackage(r, &pending{pkg: Package{File: alphaFile}}, t.TempDir())
+			_, err := copyFile(r, expected{file: alphaFile}, t.TempDir())
 			return err
 		},
 	}

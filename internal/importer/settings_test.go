@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ const (
 	// testAccessKey and testMinIOSecret are the MinIO credentials the settings files hold.
 	testAccessKey   = "test-access-id"
 	testMinIOSecret = "test-minio-secret"
+	// testPipPassword is the pypi repository's own password, distinct from the npm one.
+	testPipPassword = "pip-only-secret"
 	minioSection    = `minio:
   url: https://minio.example.internal:9000
   region: eu-west-1
@@ -51,6 +54,7 @@ func writeSettings(t *testing.T, body string) string {
 		}
 	}
 	write("nexus-password", testPassword+"\n")
+	write("nexus-pip-password", testPipPassword+"\n")
 	write("public-key.pem", archive.PublicKeyPEM(testPub))
 	write("ca.pem", "pem")
 	write("minio-access-key", testAccessKey+"\n")
@@ -431,6 +435,209 @@ func TestLoadSettingsTokenHeader(t *testing.T) {
 			var se *SettingsError
 			if !errors.As(err, &se) || se.Field != "token.header" || se.Reason != tt.reason {
 				t.Fatalf("got %v, want token.header %s", err, tt.reason)
+			}
+		})
+	}
+}
+
+// withPip returns the valid settings with a nexus.pip section holding lines,
+// each indented under pip.
+func withPip(lines string) string {
+	return strings.Replace(validSetting, "  passwordFile: nexus-password\n", "  passwordFile: nexus-password\n  pip:\n"+lines, 1)
+}
+
+const (
+	pipRepositoryOnly = "    repository: pypi-hosted\n"
+	pipOwnUser        = pipRepositoryOnly + "    user: sealift-pip\n    passwordFile: nexus-pip-password\n"
+)
+
+func TestLoadSettingsPip(t *testing.T) {
+	t.Run("no section leaves pip unset", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, validSetting))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Pip != nil {
+			t.Errorf("Pip = %+v, want nil", s.Pip)
+		}
+		if s.Format != "" {
+			t.Errorf("Format = %q, want empty for npm", s.Format)
+		}
+	})
+	t.Run("repository only inherits the npm user and password", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, withPip(pipRepositoryOnly)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Pip == nil {
+			t.Fatal("Pip = nil")
+		}
+		if s.Pip.Repository != "pypi-hosted" || s.Pip.User != "sealift-import" || string(s.Pip.Password) != testPassword {
+			t.Errorf("pip repository %q user %q, want pypi-hosted with the npm user and password", s.Pip.Repository, s.Pip.User)
+		}
+		for _, f := range s.Files {
+			if f.Field == "nexus.pip.passwordFile" {
+				t.Errorf("Files names %v without a pip password file", f)
+			}
+		}
+	})
+	t.Run("user and password file are read", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, withPip(pipOwnUser)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Pip == nil {
+			t.Fatal("Pip = nil")
+		}
+		if s.Pip.Repository != "pypi-hosted" || s.Pip.User != "sealift-pip" || string(s.Pip.Password) != testPipPassword {
+			t.Errorf("pip repository %q user %q, want pypi-hosted, sealift-pip and the pip password", s.Pip.Repository, s.Pip.User)
+		}
+		if s.Repository != "npm-hosted" || s.User != "sealift-import" || string(s.Password) != testPassword {
+			t.Errorf("npm repository %q user %q changed", s.Repository, s.User)
+		}
+	})
+	t.Run("the pip password file is in Files", func(t *testing.T) {
+		path := writeSettings(t, withPip(pipOwnUser))
+		s, err := LoadSettings(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := NamedFile{"nexus.pip.passwordFile", filepath.Join(filepath.Dir(path), "nexus-pip-password")}
+		if !slices.Contains(s.Files, want) {
+			t.Errorf("Files = %v, want it to hold %v", s.Files, want)
+		}
+	})
+
+	_, npmErr := LoadSettings(writeSettings(t, strings.Replace(validSetting, "npm-hosted", "npm/hosted", 1)))
+	var npmRefusal *SettingsError
+	if !errors.As(npmErr, &npmRefusal) {
+		t.Fatalf("npm repository with a slash: got %v, want a SettingsError", npmErr)
+	}
+	refused := []struct {
+		name   string
+		body   string
+		after  func(_ *testing.T, dir string)
+		field  string
+		reason string
+	}{
+		{"repository absent", withPip("    user: sealift-pip\n    passwordFile: nexus-pip-password\n"), nil, "nexus.pip.repository", "is required"},
+		{"empty section", strings.Replace(validSetting, "  passwordFile: nexus-password\n", "  passwordFile: nexus-password\n  pip: {}\n", 1), nil, "nexus.pip.repository", "is required"},
+		{"user without password file", withPip(pipRepositoryOnly + "    user: sealift-pip\n"), nil, "nexus.pip.passwordFile", "is required when nexus.pip.user is set"},
+		{"password file without user", withPip(pipRepositoryOnly + "    passwordFile: nexus-pip-password\n"), nil, "nexus.pip.user", "is required when nexus.pip.passwordFile is set"},
+		{"repository with a slash", withPip("    repository: pypi/hosted\n"), nil, "nexus.pip.repository", npmRefusal.Reason},
+		{"unknown key", withPip(pipRepositoryOnly + "    insecure: true\n"), nil, "insecure", "is an unknown field"},
+		{"empty password file", withPip(pipOwnUser), func(_ *testing.T, dir string) {
+			_ = os.WriteFile(filepath.Join(dir, "nexus-pip-password"), []byte("\n"), 0o600)
+		}, "nexus.pip.passwordFile", "points to an empty file"},
+		{"password file unreadable", withPip(pipOwnUser), func(_ *testing.T, dir string) { _ = os.Remove(filepath.Join(dir, "nexus-pip-password")) }, "nexus.pip.passwordFile", "cannot be read: the file does not exist"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeSettings(t, tc.body)
+			if tc.after != nil {
+				tc.after(t, filepath.Dir(path))
+			}
+			_, err := LoadSettings(path)
+			var se *SettingsError
+			if !errors.As(err, &se) {
+				t.Fatalf("got %v, want a SettingsError", err)
+			}
+			if se.Field != tc.field || se.Reason != tc.reason {
+				t.Errorf("got field %q reason %q, want %q %q", se.Field, se.Reason, tc.field, tc.reason)
+			}
+			for _, leak := range []string{testPassword, testPipPassword} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("error %q repeats a password", err)
+				}
+			}
+		})
+	}
+	if npmRefusal.Reason != "may hold only letters, digits, dots, hyphens and underscores" {
+		t.Errorf("npm repository reason = %q", npmRefusal.Reason)
+	}
+}
+
+func TestSettingsForPip(t *testing.T) {
+	t.Run("its own user", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, withPip(pipOwnUser)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := s.ForPip()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Repository != "pypi-hosted" || p.User != "sealift-pip" || string(p.Password) != testPipPassword || p.Format != "pypi" {
+			t.Errorf("ForPip repository %q user %q format %q, want pypi-hosted, sealift-pip, the pip password and pypi", p.Repository, p.User, p.Format)
+		}
+		if p.NexusURL.String() != s.NexusURL.String() || !p.PublicKey.Equal(s.PublicKey) {
+			t.Error("ForPip changed the Nexus address or the trusted key")
+		}
+		if s.Repository != "npm-hosted" || s.User != "sealift-import" || string(s.Password) != testPassword || s.Format != "" {
+			t.Errorf("receiver repository %q user %q format %q changed", s.Repository, s.User, s.Format)
+		}
+	})
+	t.Run("the npm user", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, withPip(pipRepositoryOnly)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := s.ForPip()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Repository != "pypi-hosted" || p.User != "sealift-import" || string(p.Password) != testPassword || p.Format != "pypi" {
+			t.Errorf("ForPip repository %q user %q format %q, want pypi-hosted with the npm user and password, and pypi", p.Repository, p.User, p.Format)
+		}
+	})
+	t.Run("no section", func(t *testing.T) {
+		s, err := LoadSettings(writeSettings(t, validSetting))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.ForPip()
+		if !errors.Is(err, ErrNoPipRepository) {
+			t.Fatalf("ForPip = %v, want ErrNoPipRepository", err)
+		}
+		if err.Error() != "the settings name no pip repository: set nexus.pip.repository" {
+			t.Errorf("reason = %q", err)
+		}
+	})
+}
+
+func TestSettingsNeverPrintThePipPassword(t *testing.T) {
+	s, err := LoadSettings(writeSettings(t, withPip(pipOwnUser)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.ForPip()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(testPipPassword))
+	for _, row := range []struct {
+		name  string
+		value any
+	}{
+		{"settings", s},
+		{"settings pointer", &s},
+		{"pip repository", *s.Pip},
+		{"pip repository pointer", s.Pip},
+		{"settings for pip", p},
+		{"settings for pip pointer", &p},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			b, err := jsonOf(row.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, got := range []string{fmt.Sprintf("%v", row.value), fmt.Sprintf("%+v", row.value), fmt.Sprintf("%#v", row.value), b} {
+				if strings.Contains(got, testPipPassword) || strings.Contains(got, encoded) {
+					t.Errorf("printed the pip password: %s", got)
+				}
+			}
+			if !strings.Contains(b, "[redacted]") {
+				t.Errorf("json = %s, want the redaction marker", b)
 			}
 		})
 	}

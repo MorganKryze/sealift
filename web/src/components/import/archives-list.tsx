@@ -5,6 +5,7 @@ import { ApiFailure } from "@/components/import/api-failure"
 import { Button } from "@/components/ui/button"
 import { ImportApiError, SessionEnded } from "@/import/api/client"
 import { useArchives, useImports, useMe, type Archive } from "@/import/api/queries"
+import { FOLDERS, whereText } from "@/import/lib/outcome"
 
 import { ArchiveRow } from "./archive-row"
 import { ImportFailure } from "./import-failure"
@@ -18,7 +19,16 @@ function newestFirst(archives: Archive[]): Archive[] {
   return [...archives].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified) || a.key.localeCompare(b.key))
 }
 
-/** The archives of the user's folder, with one status region that stays mounted from load to list. */
+/** Where to upload, one folder per ecosystem, below the bucket. */
+function Folders({ bucket }: { bucket: string }) {
+  return (
+    <>
+      <code className={code}>{`${bucket}/${FOLDERS[0]}`}</code> for npm or <code className={code}>{`${bucket}/${FOLDERS[1]}`}</code> for pip
+    </>
+  )
+}
+
+/** The archives of the user's folders, with one status region that stays mounted from load to list. */
 export function ArchivesList() {
   const query = useArchives(true)
   const imports = useImports()
@@ -26,7 +36,7 @@ export function ArchivesList() {
   const [filter, setFilter] = useState<"all" | "importable">("all")
   const list = query.data
   const ended = query.error instanceof SessionEnded
-  const where = me.data ? `${me.data.bucket}/${me.data.folder}` : "packages/npm/"
+  const where = whereText(me.data?.bucket)
   const refresh = () => void Promise.all([query.refetch(), imports.refetch()])
 
   const ownActive = imports.data?.imports.find((i) => i.outcome === "queued" || i.outcome === "running")
@@ -39,7 +49,7 @@ export function ArchivesList() {
       <div role="status" className="mt-7 mb-3 flex min-h-8 flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
         <span>
           {query.isPending ? (
-            <span className="text-muted">Reading your folder in MinIO: {where}</span>
+            <span className="text-muted">Reading your folders in MinIO: {where}</span>
           ) : list && list.archives.length > 0 && !ended ? (
             <>
               <b className="font-mono font-semibold">{all.length}</b> {all.length === 1 ? "archive" : "archives"}
@@ -93,15 +103,17 @@ export function ArchivesList() {
         <Empty title="No archive in your folder" onRefresh={refresh}>
           <span className="block text-ink">{list.message ?? `MinIO has no bucket ${list.bucket} yet: nothing to list`}</span>
           Once it exists, upload an archive, its <code className={code}>manifest.json</code> and its <code className={code}>manifest.json.sig</code> side by side in{" "}
-          <code className={code}>{where}</code>.
+          <Folders bucket={list.bucket} />.
         </Empty>
       ) : list.archives.length === 0 ? (
         <Empty title="No archive in your folder" onRefresh={refresh}>
+          {list.message ? <span className="block text-severity-critical-fg">{list.message}</span> : null}
           Upload an archive, its <code className={code}>manifest.json</code> and its <code className={code}>manifest.json.sig</code> side by side in{" "}
-          <code className={code}>{where}</code>, at the root or one folder below. Then refresh.
+          <Folders bucket={list.bucket} />, at the root or one folder below. Then refresh.
         </Empty>
       ) : (
         <>
+          {list.message ? <p className="mb-3 text-sm text-severity-critical-fg [overflow-wrap:anywhere]">{list.message}</p> : null}
           <ListNotices list={list} />
           {shown.length === 0 ? (
             <p className="rounded-xl border border-dashed border-line px-8 py-10 text-center text-muted">No archive can be imported. The rows under All say why.</p>

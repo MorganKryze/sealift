@@ -5,12 +5,12 @@
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": ["arn:aws:s3:::user-*"],
-      "Condition": {"StringLike": {"s3:prefix": ["packages/npm/", "packages/npm/*"]}}
+      "Condition": {"StringLike": {"s3:prefix": ["packages/npm/", "packages/npm/*", "packages/pip/", "packages/pip/*"]}}
     },
     {
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:DeleteObject"],
-      "Resource": ["arn:aws:s3:::user-*/packages/npm/*"]
+      "Resource": ["arn:aws:s3:::user-*/packages/npm/*", "arn:aws:s3:::user-*/packages/pip/*"]
     }
   ]
 }

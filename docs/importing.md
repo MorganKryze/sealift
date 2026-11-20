@@ -12,16 +12,24 @@ The sheet's `Trusted key` section shows `Public key sha256` in full, with a copy
 
 ![Archives, with two archives that cannot be imported, one that can, and one whose import ended incomplete](assets/import-archives.png)
 
-Archives lists the archives in your MinIO folder, newest first: `packages/npm/` in your bucket, and one folder below it. The line under the title counts them, such as `5 archives · 2 importable`. `All` and `Importable` filter the rows, and `Refresh` reads the folder again. The list also reads again each time you open the screen.
+Archives lists the archives in your MinIO folders, newest first: `packages/npm/` and `packages/pip/` in your bucket, and one folder below each. An npm export goes under `packages/npm/` and a pip export under `packages/pip/`, each with the same three files. The line under the title counts them, such as `5 archives · 2 importable`. `All` and `Importable` filter the rows, and `Refresh` reads the folders again. The list also reads again each time you open the screen.
 
 An archive can be imported when its folder holds one archive, its `manifest.json` and its `manifest.json.sig`, side by side. Any other row says `Cannot be imported` and why:
 
 | Reason on the row | What to do |
 | --- | --- |
-| `its name cannot be imported` | Rename or move it: the key must end in `.tar.gz`, sit in `packages/npm/` or one folder below it, hold no empty, `.` or `..` segment and no control character, and stay within 1,024 bytes. |
+| `its name cannot be imported` | Rename or move it: the key must end in `.tar.gz`, sit in `packages/npm/` or `packages/pip/` or one folder below either, hold no empty, `.` or `..` segment and no control character, and stay within 1,024 bytes. |
 | `the folder holds more than one archive` | Keep one archive with its manifest.json and manifest.json.sig in the folder. |
 | `no manifest.json in its folder` | Upload the manifest next to the archive. |
 | `no manifest.json.sig in its folder` | Upload the signature next to the manifest. sealift 0.4.0 and earlier wrote none: export such an archive again. |
+| `its manifest is a pip archive's: keep the three files under packages/pip/` | Move the archive, its manifest and its signature to `packages/pip/`. |
+| `its manifest is an npm archive's: keep the three files under packages/npm/` | Move the archive, its manifest and its signature to `packages/npm/`. |
+
+The list reads each manifest to tell which folder it belongs in, at most 50 new manifests each time it reads the folders. A row past those 50, or whose manifest cannot be read, shows no such reason until a later list. The import itself checks the folder again once the signature verifies, and refuses an archive in the wrong one with `the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/`, or `the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/`.
+
+When MinIO refuses to list one of the two folders, for instance before the administrator's MinIO policy covers `packages/pip/`, the list still shows the other folder's archives.
+
+A pip archive needs a pip repository in the settings file. Without a `nexus.pip` section, its import is refused before the archive is read, with `the settings name no pip repository: set nexus.pip.repository`.
 
 An importable row says `Can be imported`, then one of these:
 

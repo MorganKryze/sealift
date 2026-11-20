@@ -1,0 +1,35 @@
+{
+  "formatVersion": 2,
+  "toolVersion": "0.6.2",
+  "analysisId": "20261119T101500Z",
+  "createdAt": "2026-11-19T10:17:03.12Z",
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": "22.17.1",
+    "pnpmVer": "10.34.5"
+  },
+  "archive": {
+    "sha256": "7412191e280551b2bb3071c767b661b39e9b6966528f0fb3afd9d167141043b7",
+    "size": 7031361
+  },
+  "packages": [
+    {
+      "name": "@babel/code-frame",
+      "version": "7.29.7",
+      "file": "babel-code-frame-7.29.7.tgz",
+      "originalIntegrity": "sha512-DT9ck5YIRU+8GYzzU5kT3eHGA5iL+1Zd0EutOmTE9Dtk+Tvuzd23VBU+ec7HPNSTxXYO55gPV/hq4pSBJDjFpA==",
+      "shippedSha512": "0d3f5c939608454fbc198cf3539913dde1c603988bfb565dd04bad3a64c4f43b64f93beecdddb754153e79cec73cd493c5760ee7980f57f86ae294812438c5a4",
+      "publishConfigStripped": true
+    },
+    {
+      "name": "express",
+      "version": "5.1.0",
+      "file": "express-5.1.0.tgz",
+      "originalIntegrity": "sha512-DT9ck5YIRU+8GYzzU5kT3eHGA5iL+1Zd0EutOmTE9Dtk+Tvuzd23VBU+ec7HPNSTxXYO55gPV/hq4pSBJDjFpA==",
+      "shippedSha512": "0d3f5c939608454fbc198cf3539913dde1c603988bfb565dd04bad3a64c4f43b64f93beecdddb754153e79cec73cd493c5760ee7980f57f86ae294812438c5a4",
+      "publishConfigStripped": false
+    }
+  ]
+}

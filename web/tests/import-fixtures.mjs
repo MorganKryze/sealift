@@ -14,6 +14,8 @@ const KID = "gate-key"
 
 const FOLDER = "packages/npm/"
 const ARCHIVE = "packages_npm.tar.gz"
+const PIP_FOLDER = "packages/pip/"
+const PIP_ARCHIVE = "packages_pip.tar.gz"
 
 // One id per state alice's records show. The gate's routes name them.
 export const IDS = {
@@ -29,6 +31,7 @@ export const IDS = {
   refusedSignature: "20261031T100000Z-a100000c",
   legacy: "20261030T080000Z-a100000a",
   longKey: "20261020T170000Z-a100000b",
+  pipComplete: "20261020T090000Z-a100000d",
 }
 
 // The trusted key's sha256, set once the run's key is generated: the reports the store writes carry it.
@@ -89,15 +92,36 @@ function ended(n, createdAt, outcome, list, over = {}, removal) {
 }
 
 function record(id, folder, attempts, over = {}) {
-  const archiveKey = over.archiveKey ?? `${FOLDER}${folder}${ARCHIVE}`
+  const root = over.root ?? FOLDER
+  // npm records keep the ETags they had before the pip folder joined.
+  const tag = over.root ? root + folder : folder
+  const archiveKey = over.archiveKey ?? `${root}${folder}${over.archive ?? ARCHIVE}`
   return {
     formatVersion: 1, id, user: "alice", createdAt: iso(id),
     archive: { key: archiveKey, etag: `"${sha(archiveKey).slice(0, 32)}"`, size: 5_500_000 },
-    manifest: { key: `${FOLDER}${folder}manifest.json`, etag: `"${sha(folder).slice(0, 32)}"`, size: 1_200 },
+    manifest: { key: `${root}${folder}manifest.json`, etag: `"${sha(tag).slice(0, 32)}"`, size: 1_200 },
     // A record written by v0.4.0 holds no signature: its folder has none either.
-    signature: over.unsigned ? undefined : { key: `${FOLDER}${folder}manifest.json.sig`, etag: `"${sha(`${folder}sig`).slice(0, 32)}"`, size: 400 },
+    signature: over.unsigned ? undefined : { key: `${root}${folder}manifest.json.sig`, etag: `"${sha(`${tag}sig`).slice(0, 32)}"`, size: 400 },
     expectedSha256: over.expectedSha256 ?? "", attempts,
   }
+}
+
+// A complete pip import as the import writes it: the ecosystem, the Python target, no npm field.
+function pipRecord() {
+  const createdAt = iso(IDS.pipComplete)
+  const wheel = (name, version, file, state) => ({ name, version, file, state, reason: "", note: state === "present" ? "Nexus already holds these bytes" : "" })
+  const wheels = [
+    wheel("six", "1.16.0", "six-1.16.0-py2.py3-none-any.whl", "published"),
+    wheel("idna", "3.10", "idna-3.10-py3-none-any.whl", "present"),
+    wheel("markupsafe", "2.1.5", "MarkupSafe-2.1.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "published"),
+  ]
+  const over = {
+    archive: { file: PIP_ARCHIVE, sha256: sha("pip-archive"), size: 81_920 },
+    toolVersion: "0.7.0", analysisId: "20261020T083000Z", ecosystem: "pip",
+    target: { os: "linux", cpu: "x86_64", libc: "", node: "", pnpmVer: "", python: "3.11.2", glibc: "2.28" },
+    nexus: { url: "http://127.0.0.1:18093", repository: "pypi-gate" },
+  }
+  return record(IDS.pipComplete, "2026-10-20-data-tools/", [ended(1, createdAt, "complete", wheels, over, { removed: true, reason: "" })], { root: PIP_FOLDER, archive: PIP_ARCHIVE })
 }
 
 const longReason = (lead) => `${lead} ${"nexus said no ".repeat(40)}${"x".repeat(1000)}`.slice(0, 1000)
@@ -150,27 +174,28 @@ function aliceRecords() {
       ended(1, iso(IDS.refusedSignature), "refused", [], { reason: signatureReason, archiveChecked: false }),
     ]),
     record(IDS.longKey, `${longFolder}/`, [ended(1, iso(IDS.longKey), "complete", packages(30, 20, 10))], { archiveKey: longKey }),
+    pipRecord(),
   ]
 }
 
 const xml = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
 
-function listing(bucket, objects, truncated = false) {
+function listing(bucket, prefix, objects, truncated = false) {
   const items = objects
     .map((o) => `<Contents><Key>${xml(o.key)}</Key><LastModified>${o.modified ?? "2026-11-06T08:00:00.000Z"}</LastModified><ETag>${xml(o.etag)}</ETag><Size>${o.size}</Size></Contents>`)
     .join("")
-  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${FOLDER}</Prefix><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>${truncated}</IsTruncated>${items}</ListBucketResult>`
+  return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${xml(prefix)}</Prefix><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>${truncated}</IsTruncated>${items}</ListBucketResult>`
 }
 
 const s3Error = (code, message) => `<?xml version="1.0" encoding="UTF-8"?><Error><Code>${code}</Code><Message>${message}</Message></Error>`
 
-// What each user's bucket answers: alice lists her archives, bob an empty folder, carol has no bucket,
-// dave's MinIO fails, frank lists nothing.
-function minioAnswer(bucket) {
+// What each user's bucket answers for a prefix: alice lists her archives in both folders, bob empty
+// folders, carol has no bucket, dave's MinIO fails, frank lists nothing.
+function minioAnswer(bucket, prefix) {
   switch (bucket) {
     case "user-alice": {
       const objects = aliceRecords()
-        .filter((r) => r.id !== IDS.completeRemoved)
+        .filter((r) => r.id !== IDS.completeRemoved && r.id !== IDS.pipComplete)
         .flatMap((r) => [r.archive, r.manifest, r.signature].filter(Boolean).map((o) => ({ ...o, modified: `${iso(r.id).slice(0, -1)}.000Z` })))
       const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
       // Archives the service cannot import, one for each rule, and a 200-character folder.
@@ -187,11 +212,17 @@ function minioAnswer(bucket) {
       upload(wide, ARCHIVE, 2_700_000, "2026-10-25T08:00:00.000Z")
       upload(wide, "manifest.json", 800, "2026-10-25T08:00:00.000Z")
       upload(wide, "manifest.json.sig", 400, "2026-10-25T08:00:00.000Z")
-      return [200, listing(bucket, objects, true)]
+      // A pip export not imported yet: its archive, its manifest and its signature.
+      const pip = (name, size) => objects.push({ key: `${PIP_FOLDER}2026-11-20-data-tools/${name}`, etag: `"${sha(`pip${name}`).slice(0, 32)}"`, size, modified: "2026-11-20T08:00:00.000Z" })
+      pip(PIP_ARCHIVE, 81_920)
+      pip("manifest.json", 1_342)
+      pip("manifest.json.sig", 214)
+      const mine = objects.filter((o) => o.key.startsWith(prefix))
+      return [200, listing(bucket, prefix, mine, prefix === FOLDER)]
     }
     case "user-bob":
     case "user-frank":
-      return [200, listing(bucket, [])]
+      return [200, listing(bucket, prefix, [])]
     case "user-dave":
       return [500, s3Error("InternalError", "We encountered an internal error. Please try again.")]
     default:
@@ -230,7 +261,7 @@ export async function startImportFixtures(dir) {
       res.writeHead(405, { "Content-Type": "application/xml" }).end(s3Error("MethodNotAllowed", "only listings are served"))
       return
     }
-    const [status, body] = minioAnswer(bucket)
+    const [status, body] = minioAnswer(bucket, url.searchParams.get("prefix") ?? "")
     res.writeHead(status, { "Content-Type": "application/xml" }).end(body)
   })
   await listen(keySet, KEY_SET_PORT)
@@ -252,6 +283,8 @@ export async function startImportFixtures(dir) {
       "  repository: npm-gate",
       "  user: importer",
       "  passwordFile: nexus-password",
+      "  pip:",
+      "    repository: pypi-gate",
       "publicKeyFile: public-key.pem",
       "token:",
       `  keySetUrl: http://127.0.0.1:${KEY_SET_PORT}/certs`,

@@ -661,3 +661,133 @@ func TestStoreChecked(t *testing.T) {
 		t.Error("Checked on an ended attempt succeeded")
 	}
 }
+
+func TestStoreReadsV062RecordAsNPM(t *testing.T) {
+	const id = "20261119T140501Z-a7f3e4b6"
+	written, err := os.ReadFile(filepath.Join("testdata", "import-v0.6.2-complete.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	// The removal is dropped so the store can write it back, which rewrites
+	// the whole record.
+	dir := plantFile(t, "import-v0.6.2-complete.json", root, "alice", func(m map[string]any) {
+		delete(m["attempts"].([]any)[0].(map[string]any), "removal")
+	})
+	got, err := s.Get("alice", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := got.Attempts[0].Report
+	if rep.Ecosystem != "" || rep.Target.Python != "" || rep.Target.Glibc != "" {
+		t.Errorf("ecosystem %q, python %q, glibc %q: a 0.6.2 record is npm and has neither", rep.Ecosystem, rep.Target.Python, rep.Target.Glibc)
+	}
+	if rep.Outcome != importer.OutcomeComplete || rep.Target != (importer.TargetInfo{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}) ||
+		rep.Nexus.Repository != "npm-hosted" || rep.Counts != (importer.Counts{Published: 1, Present: 1}) || len(rep.Packages) != 2 ||
+		rep.Packages[1].Note != "sealift removed publishConfig at export" || rep.ArchiveChecked == nil || !*rep.ArchiveChecked {
+		t.Errorf("report %+v", rep)
+	}
+
+	if err := s.Removed("alice", id, 1, Removal{Removed: true}); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := os.ReadFile(filepath.Join(dir, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(rewritten, written) {
+		t.Errorf("the record rewritten differs from what 0.6.2 wrote:\n%s\nwant:\n%s", rewritten, written)
+	}
+}
+
+// pipReport is a pip attempt's report as the import ends it.
+func pipReport() importer.Report {
+	checked := true
+	return importer.Report{
+		Outcome: importer.OutcomeComplete, ImportVersion: "0.7.0", Ecosystem: "pip",
+		Archive:     importer.ArchiveInfo{File: "packages_pip.tar.gz", SHA256: "ab", Size: 12},
+		ToolVersion: "0.7.0", AnalysisID: "20261120T091500Z",
+		Target: importer.TargetInfo{OS: "linux", CPU: "x86_64", Python: "3.11.2", Glibc: "2.28"},
+		Nexus:  importer.NexusInfo{URL: "https://nexus.example:8443", Repository: "pypi-hosted"},
+		Counts: importer.Counts{Published: 1},
+		Packages: []importer.Result{
+			{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", State: importer.Published},
+		},
+		ArchiveChecked: &checked,
+	}
+}
+
+func TestStoreKeepsAPipReport(t *testing.T) {
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	pipArchive := Object{Key: "packages/pip/a/packages_pip.tar.gz", ETag: `"abc123"`, Size: 12}
+	pipManifest := Object{Key: "packages/pip/a/manifest.json", ETag: `"def456"`}
+	imp, err := s.Create("alice", pipArchive, pipManifest, &testSignatureObject, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed := pipReport()
+	listed.Outcome, listed.Counts = "", importer.Counts{}
+	listed.Packages = []importer.Result{{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", State: importer.Pending}}
+	if err := s.Listed("alice", imp.ID, 1, listed); err != nil {
+		t.Fatal(err)
+	}
+	running, err := s.Get("alice", imp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := running.Attempts[0].Report; r.Ecosystem != "pip" || r.Target.Python != "3.11.2" || r.Target.Glibc != "2.28" {
+		t.Errorf("listed report %+v", r)
+	}
+	if err := s.Finish("alice", imp.ID, 1, pipReport(), nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "alice", imp.ID, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"ecosystem": "pip"`, `"python": "3.11.2"`, `"glibc": "2.28"`} {
+		if !bytes.Contains(b, []byte(key)) {
+			t.Errorf("the record lacks %s:\n%s", key, b)
+		}
+	}
+	got, err := s.Get("alice", imp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := got.Attempts[0].Report
+	if rep.Ecosystem != "pip" || rep.Target != pipReport().Target || rep.Nexus.Repository != "pypi-hosted" || got.Outcome() != importer.OutcomeComplete {
+		t.Errorf("report read back %+v", rep)
+	}
+}
+
+func TestStoreReadsAPipRecord(t *testing.T) {
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	plantFile(t, "import-pip.json", root, "alice", nil)
+	got, err := s.Get("alice", "20261120T101500Z-4e8b21c7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Archive.Key != "packages/pip/data-tools/packages_pip.tar.gz" || got.Signature == nil || got.Outcome() != importer.OutcomeIncomplete {
+		t.Errorf("import %+v", got)
+	}
+	rep := got.Attempts[0].Report
+	if rep.Ecosystem != "pip" {
+		t.Errorf("ecosystem %q, want pip", rep.Ecosystem)
+	}
+	if want := (importer.TargetInfo{OS: "linux", CPU: "x86_64", Python: "3.11.2", Glibc: "2.28"}); rep.Target != want {
+		t.Errorf("target %+v, want %+v", rep.Target, want)
+	}
+	if rep.Archive.File != "packages_pip.tar.gz" || rep.Nexus.Repository != "pypi-hosted" || rep.Counts != (importer.Counts{Published: 1, Present: 1, Failed: 1}) {
+		t.Errorf("report %+v", rep)
+	}
+	if len(rep.Packages) != 3 || rep.Packages[2].Kind != importer.KindMismatch || rep.Packages[2].State != importer.Failed ||
+		rep.Packages[2].File != "certifi-2024.8.30-py3-none-any.whl" {
+		t.Errorf("packages %+v", rep.Packages)
+	}
+}
