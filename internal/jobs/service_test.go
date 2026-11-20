@@ -658,8 +658,6 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	}
 }
 
-// Until a pip export exists, a done pip analysis has no ranking to export
-// from: the request fails before an export directory is reserved.
 // noExportReserved fails t when the project holds an export directory.
 func noExportReserved(t *testing.T, project store.Project) {
 	t.Helper()
@@ -714,6 +712,33 @@ func TestQueueExportRefusesASelectionForPip(t *testing.T) {
 			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: tc.selection, IncludeProject: true})
 			if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "carries the analysis's whole set and takes no selection") {
 				t.Fatalf("QueueExport = %v, want ErrPipSelection", err)
+			}
+			noExportReserved(t, f.project)
+		})
+	}
+}
+
+// A cancel that lands after the scan step leaves a complete pip-result.json
+// in an analysis that is not done, so the state alone must refuse it.
+func TestQueueExportRefusesAPipAnalysisNotDone(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	statusPath := filepath.Join(f.ref.Dir, "status.json")
+	var status map[string]any
+	if err := f.st.ReadJSON(statusPath, &status); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.ref.Dir, "pip-result.json")); err != nil {
+		t.Fatalf("the analysis has no pip-result.json: %v", err)
+	}
+	for _, state := range []store.State{store.Failed, store.Cancelled, store.Interrupted} {
+		t.Run(string(state), func(t *testing.T) {
+			status["state"] = state
+			if err := f.st.WriteJSON(statusPath, status); err != nil {
+				t.Fatal(err)
+			}
+			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+			if want := "analysis " + f.ref.ID + " is " + string(state); !errors.Is(err, ErrAnalysisNotDone) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("QueueExport = %v, want ErrAnalysisNotDone saying %q", err, want)
 			}
 			noExportReserved(t, f.project)
 		})
