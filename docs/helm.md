@@ -33,7 +33,7 @@ An empty value marked required is a drop-in. The chart refuses to render until i
 | `nexus.url` | required | The Nexus address. Use `https://`: the chart accepts `http://` here, and the install notes warn |
 | `nexus.repository` | required | The npm hosted repository the import publishes into |
 | `nexus.user` | required | The import's Nexus user |
-| `nexus.pipRepository` | empty | Optional. The pypi hosted repository the import publishes pip archives into. Empty renders no pip section, and the import refuses pip archives |
+| `nexus.pipRepository` | empty | Optional. The pypi hosted repository the import publishes pip archives into. Empty renders no pip section, and the import refuses pip archives. [The request](admin-request.md#nexus-for-python) gives the rights it needs |
 | `nexus.pipUser` | empty | Optional. The Nexus user for the pypi repository. Empty means `nexus.user` and its password. When set, the Secret must hold `nexus-pip-password`, and the chart refuses to render without `nexus.pipRepository` |
 | `keycloak.realmUrl` | required | The realm's address. The chart refuses `http://` and names the key |
 | `keycloak.clientId` | required | The client of the import's oauth2-proxy, and the token's audience |

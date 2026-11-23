@@ -2,11 +2,11 @@
 
 This page is a request that you can forward once the `<name>` values are replaced. It asks for the accounts and the infrastructure that the sealift import service needs on the air-gapped side, with the reason for each and what fails without it. It asks for nothing sealift does not use. [The runbook](runbook.md) is the install that follows.
 
-sealift's import service lets each signed-in user import an archive from their own MinIO folder into the npm Nexus repository. It checks every archive before it writes anything. Package Pusher keeps running meanwhile: this request adds a hostname and a Keycloak client of its own and changes none of Package Pusher's settings.
+sealift's import service lets each signed-in user import an archive from their own MinIO folder into the npm or the pypi Nexus repository. It checks every archive before it writes anything. Package Pusher keeps running meanwhile: this request adds a hostname and a Keycloak client of its own and changes none of Package Pusher's settings.
 
 ## What the service never does
 
-- It never puts an object in MinIO. It reads and deletes under `packages/npm/` only, in the bucket of the signed-in user, and deletes the archive, the manifest and the signature only after the import ended `complete`.
+- It never puts an object in MinIO. It reads and deletes under `packages/npm/` and `packages/pip/` only, in the bucket of the signed-in user, and deletes the archive, the manifest and the signature only after the import ended `complete`.
 - It never replaces a version that Nexus holds, by its own check. [The next section](#no-change-to-the-deployment-policy) says where that check stops.
 - It never writes a dist-tag.
 - It never deletes in Nexus.
@@ -24,18 +24,18 @@ Ask for one service user with this policy, verbatim:
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": ["arn:aws:s3:::user-*"],
-      "Condition": {"StringLike": {"s3:prefix": ["packages/npm/", "packages/npm/*"]}}
+      "Condition": {"StringLike": {"s3:prefix": ["packages/npm/", "packages/npm/*", "packages/pip/", "packages/pip/*"]}}
     },
     {
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:DeleteObject"],
-      "Resource": ["arn:aws:s3:::user-*/packages/npm/*"]
+      "Resource": ["arn:aws:s3:::user-*/packages/npm/*", "arn:aws:s3:::user-*/packages/pip/*"]
     }
   ]
 }
 ```
 
-Why: the service lists a user's archives, reads them and removes them after a complete import. What fails without it: **Archives** lists nothing or answers with an error, and an import cannot read its archive. Proven in the lab: with this user, `mc` could not put an object, and could not list or read `packages/pip/`, list a bucket's root or list the buckets. The policy covers every `user-*` bucket, and the service itself keeps a request to the bucket of the checked user. Each user needs the bucket `user-<name>`: it already exists for Package Pusher's users.
+Why: the service lists a user's archives, reads them and removes them after a complete import. What fails without it: **Archives** lists nothing or answers with an error, and an import cannot read its archive. Proven in the lab at commit f5c6f46: with this user, `mc` listed and read `packages/npm/` and `packages/pip/`, and could not put an object, list a bucket's root or list the buckets. The policy covers every `user-*` bucket, and the service itself keeps a request to the bucket of the checked user. Each user needs the bucket `user-<name>`: it already exists for Package Pusher's users.
 
 ## Nexus
 
@@ -65,17 +65,15 @@ Ask for a dedicated hosted npm repository for the proof of concept, with the sam
 
 ## Nexus for Python
 
-sealift does not publish Python packages yet: support for pip is in progress. Asking now keeps the request from blocking that upgrade, and the same rights serve the manual path used until then.
-
-Ask for a hosted `pypi` repository, or the existing one, and a role on it with these five privileges, held by the same user as the npm role or by a second one:
+sealift publishes Python packages to a hosted `pypi` repository. Ask for one, or name the existing one, and a role on it with these three privileges, and no others:
 
 - `nx-repository-view-pypi-<nexus-pypi-repository>-browse`
 - `nx-repository-view-pypi-<nexus-pypi-repository>-read`
-- `nx-repository-view-pypi-<nexus-pypi-repository>-add`
 - `nx-repository-view-pypi-<nexus-pypi-repository>-edit`
-- `nx-component-upload`
 
-Why: the same as for npm. A wheel is read before its upload, uploaded through the component upload, and read back. What fails without it: the same 403 on the upload, and a failed check on each version without read or browse. Projects install from the repository's simple index, `<nexus-url>/repository/<nexus-pypi-repository>/simple/`, or from a group that serves it. Ask for **Disable redeploy** on a new repository: a wheel never changes once published.
+We suggest a second user, `<nexus-pip-user>`, for this role: the npm user and its role stay as they are, and the pip user holds no `nx-component-upload`. The role on the npm user works as well.
+
+Why: the service reads a wheel's index page and file before the upload, uploads it, and reads it back. What fails without it: without `browse` the repository is missing from the user's repository list, without `read` its index pages and files answer 403, and without `edit` the upload answers 400 `Not authorized for requested path`. Any of the three fails every wheel of the import. Proven in the lab on Nexus 3.96.5: the proof at commit ee12d3d removed each privilege in turn, and the crossing at commit f5c6f46 published 173 wheels through a user holding exactly these three. Another Nexus version is not proven. Projects install from the repository's simple index, `<nexus-url>/repository/<nexus-pypi-repository>/simple/`, or from a group that serves it. Ask for **Disable redeploy** on a new repository: a wheel never changes once published.
 
 ## Keycloak
 

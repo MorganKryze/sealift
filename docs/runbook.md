@@ -15,9 +15,9 @@ For the chart's values and notes, read [Helm chart](helm.md). To ask the adminis
 | The administrators | The Nexus, MinIO and Keycloak accounts, the namespace, the hostname and its certificate, the Harbor project |
 | You | The Secret, the values repository, the Argo CD files, the checklist |
 
-The proof of concept shares four things with Package Pusher: the users' MinIO buckets, the Nexus npm repository, the Keycloak realm and the ingress controller. It shares nothing else. It takes a hostname of its own, a Keycloak client of its own and a cookie name of its own, and it changes none of Package Pusher's settings or its repository's rules.
+The proof of concept shares four things with Package Pusher: the users' MinIO buckets, the Nexus npm repository (and the pypi one for Python packages), the Keycloak realm and the ingress controller. It shares nothing else. It takes a hostname of its own, a Keycloak client of its own and a cookie name of its own, and it changes none of Package Pusher's settings or its repository's rules.
 
-Package Pusher takes the first object under `packages/npm/` in a user's bucket and deletes it, even after a failed publish. Tell users not to start a Package Pusher publish on a folder that holds a sealift archive. An archive exported by v0.6.0 or later no longer passes Package Pusher's check.
+Package Pusher takes the first object under `packages/npm/` or `packages/pip/` in a user's bucket and deletes it, even after a failed publish. Tell users not to start a Package Pusher publish on a folder that holds a sealift archive. An archive exported by v0.6.0 or later no longer passes Package Pusher's check.
 
 ## The drop-in values
 
@@ -41,6 +41,9 @@ Each value below is found once and used in every place the table names. The char
 | `<nexus-repository>` | Administrators | `nexus.repository` | no |
 | `<nexus-user>` | Administrators | `nexus.user` | no |
 | Nexus password | Administrators | Secret key `nexus-password` | yes |
+| `<nexus-pypi-repository>` | Administrators | `nexus.pipRepository` | no |
+| `<nexus-pip-user>` | Administrators | `nexus.pipUser`, when the pypi role is on a second user | no |
+| Nexus pip password | Administrators | Secret key `nexus-pip-password`, when `nexus.pipUser` is set | yes |
 | `<minio-url>` | Administrators | `minio.url` | no |
 | MinIO access key and secret key | Administrators | Secret keys `minio-access-key` and `minio-secret-key` | yes |
 | `<secret-name>` | You | `secret.name`, the name in `kubectl create secret` | no |
@@ -94,13 +97,15 @@ Copy `deploy/connected/compose.yaml` and `deploy/connected/.env.example` from th
    `docker volume create` prints `sealift-data`, also when the volume exists, and changes nothing then. Without it, `docker compose up` stops with `external volume "sealift-data" not found`. The service shows `healthy` after a minute. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
 2. Open the page and follow the setup screen, which downloads Trivy and its database. [Getting started](getting-started.md) walks through the first archive.
 3. Open **Settings**, press **Download** in the signing key section and keep the file as `public-key.pem`. Read the `Public key sha256` next to it and write it down. This is the file that goes into the values and the value that the air-gapped side must show. Send the fingerprint by [another channel](#values-that-cross-by-another-channel).
-4. Export an archive as [Workflow](workflow.md) describes. Record the archive's sha256 on this side, before the key:
+4. Export an archive as [Workflow](workflow.md) describes, or a Python project's archive through the API as [the API](dev/api.md#pip-exports) shows. Record the archive's sha256 on this side, before the key:
 
    <!-- illustrative -->
    ```sh
    shasum -a 256 packages_npm.tar.gz manifest.json manifest.json.sig
    ```
-5. Carry three files: `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig`. Send the archive's sha256 by [another channel](#values-that-cross-by-another-channel), and check the three files against it on the kiosk.
+
+   A Python archive is `packages_pip.tar.gz`.
+5. Carry three files: the archive (`packages_npm.tar.gz` or `packages_pip.tar.gz`), `manifest.json` and `manifest.json.sig`. npm archives go to `packages/npm/<folder>/` in the user's bucket, Python archives to `packages/pip/<folder>/`. Send the archive's sha256 by [another channel](#values-that-cross-by-another-channel), and check the three files against it on the kiosk.
 
 The volume `sealift-data` holds the private signing key. A lost volume means a new key, and the air-gapped side then refuses every archive until it holds the new public key. [Deployment](deployment.md#the-key-the-import-trusts) says how to restore a key from a backup.
 
@@ -171,6 +176,9 @@ read -rs -p 'Nexus password: ' v; printf '%s' "$v" > nexus-password; echo
 read -rs -p 'MinIO access key: ' v; printf '%s' "$v" > minio-access-key; echo
 read -rs -p 'MinIO secret key: ' v; printf '%s' "$v" > minio-secret-key; echo
 unset v
+# only when nexus.pipUser is set
+read -rs -p 'Nexus pip password: ' v; printf '%s' "$v" > nexus-pip-password; echo
+unset v
 kubectl create namespace <namespace>
 kubectl -n <namespace> create secret generic <secret-name> \
   --from-file=nexus-password=./nexus-password \
@@ -179,7 +187,7 @@ kubectl -n <namespace> create secret generic <secret-name> \
 rm nexus-password minio-access-key minio-secret-key
 ```
 
-The three key names are fixed. When Harbor needs a pull credential, create it as well, from a Docker config file of the pull robot that you delete afterwards, and name it in `imagePullSecrets`:
+With `nexus.pipUser` set, add `--from-file=nexus-pip-password=./nexus-pip-password` to the `kubectl create secret` line and remove that file as well. The key names are fixed. When Harbor needs a pull credential, create it as well, from a Docker config file of the pull robot that you delete afterwards, and name it in `imagePullSecrets`:
 
 <!-- illustrative -->
 ```sh
@@ -219,6 +227,8 @@ nexus:
   url: <nexus-url>
   repository: <nexus-repository>
   user: <nexus-user>
+  pipRepository: <nexus-pypi-repository>
+  pipUser: <nexus-pip-user>
 keycloak:
   realmUrl: <keycloak-realm-url>
   clientId: <keycloak-client-id>
@@ -383,7 +393,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 
 | Step | Expected result | When it fails: look for | Fix |
 | --- | --- | --- | --- |
-| 1. The pod | `kubectl -n <namespace> get pods` shows `1/1 Running`, and the log says it listens | `ContainerCreating` with an event naming the Secret | Create the Secret of [the Secret](#the-secret) with its three keys |
+| 1. The pod | `kubectl -n <namespace> get pods` shows `1/1 Running`, and the log says it listens | `ContainerCreating` with an event naming the Secret | Create the Secret of [the Secret](#the-secret) with its keys, `nexus-pip-password` included when `nexus.pipUser` is set |
 | | | `CrashLoopBackOff` and exit code 2, with a log line that names a settings field, `token.header` included | Correct the value the line names. The service refuses to start on an empty header, an invalid name, or `Authorization`, `Cookie` or `Host` |
 | | | `ImagePullBackOff` | Check `image.repository`, `imagePullSecrets` and the robot account |
 | | | `Pending` | Check the claim's storage class and the `amd64` node selector |
@@ -401,9 +411,13 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | | | `blocked: TypeError ECONNREFUSED` | A host answered with a refusal, so no packet was dropped. Run `kubectl -n <namespace> get endpoints sealift`: with no address, the service has no ready pod and the check proved nothing. With an address, the policy does not drop the traffic: ask the administrators whether the plugin enforces NetworkPolicy and how it treats a denied connection |
 | | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
 | 9. A forged header | Run the commands under this table. The first answers 200 with your user name. The second, with forged headers added, answers 200 with the same name | Any 401, a name other than yours, or a 200 without the cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
-| 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`. The import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
+| 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`, an npm archive and a Python one. Each import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
 | | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
 | 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | Nexus does not hold it. Look for an import that is not `Complete`, a version that an administrator removed since (see [the rollback list](#the-rollback-list)), a lockfile that names a package the archive did not carry, or a registry address other than `<nexus-url>/repository/<nexus-repository>/` |
+| | | `Refused` with `the settings name no pip repository: set nexus.pip.repository` | The values hold no `nexus.pipRepository`. Set it and sync |
+| | | **Archives** shows `MinIO could not list packages/pip/: ` and MinIO's reason | The MinIO policy does not cover `packages/pip/`. Ask the administrators for the policy of [the request](admin-request.md#minio) |
+| 11b. A Python install | In a Python 3.11 project: `pip install --only-binary :all: --index-url <nexus-url>/repository/<nexus-pypi-repository>/simple/ -r requirements.txt` installs every package of the archive | `No matching distribution found` | Nexus does not hold that version: look for an import that is not `Complete`, or a requirements file that names a package the archive did not carry |
+| | | A certificate error | Add `--cert ca.pem`, or set `PIP_CERT`, with the authority of [the certificate](#the-certificate) |
 | 12. Memory | After step 10, `kubectl -n <namespace> top pod` shows the peak. Write it down | An `OOMKilled` pod | Raise `resources.limits.memory`. The attempt ended `interrupted`, and a retry continues it |
 
 ### Step 8, the network policy check
@@ -460,7 +474,8 @@ The check passes when the command prints no path and kubectl ends with `command 
 2. Carry the new image and chart through [Harbor](#from-ghcr-through-the-key-into-harbor).
 3. Bump `targetRevision` in `application.yaml` to the new release, and `image.tag` if you pin it.
 4. Run [the check](#checking-that-no-import-runs) until it passes.
-5. Sync. An import that is running at the sync ends `interrupted`, and a retry continues it.
+5. For the first release that imports Python packages: have the MinIO policy extended to `packages/pip/`, as [the request](admin-request.md#minio) gives it, or **Archives** shows `MinIO could not list packages/pip/: ` with MinIO's reason on every refresh. Set `nexus.pipRepository`, and `nexus.pipUser` with its Secret key when the role is on a second user, or a Python archive is refused with `the settings name no pip repository: set nexus.pip.repository`.
+6. Sync. An import that is running at the sync ends `interrupted`, and a retry continues it.
 
 The connected side changes `SEALIFT_IMAGE` in `.env`, then `docker compose pull && docker compose up -d`. Sessions, archives, settings and the key carry over.
 
