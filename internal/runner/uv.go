@@ -1,13 +1,9 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -86,11 +82,11 @@ func (c *UvCLI) Compile(ctx context.Context, in CompileInput) (CompileResult, er
 	if c.python == "" {
 		return CompileResult{}, errors.New("uv needs a Python interpreter to start; none was found on the server's PATH")
 	}
-	if err := os.WriteFile(filepath.Join(in.Dir, "requirements.in"), in.Requirements, 0o664); err != nil {
+	if err := writeNew(in.Dir, "requirements.in", in.Requirements); err != nil {
 		return CompileResult{}, fmt.Errorf("write requirements.in: %w", err)
 	}
 	if len(in.Constraints) > 0 {
-		if err := os.WriteFile(filepath.Join(in.Dir, "constraints.txt"), in.Constraints, 0o664); err != nil {
+		if err := writeNew(in.Dir, "constraints.txt", in.Constraints); err != nil {
 			return CompileResult{}, fmt.Errorf("write constraints.txt: %w", err)
 		}
 	}
@@ -104,9 +100,9 @@ func (c *UvCLI) Compile(ctx context.Context, in CompileInput) (CompileResult, er
 		return CompileResult{Output: output}, fmt.Errorf("uv pip compile: %w", runErr)
 	}
 
-	lock, err := readBounded(filepath.Join(in.Dir, "requirements.lock"), uvLockLimit)
+	lock, err := readOutput(in.Dir, "requirements.lock", uvLockLimit)
 	if err != nil {
-		return CompileResult{Output: output}, fmt.Errorf("read requirements.lock: %w", err)
+		return CompileResult{Output: output}, err
 	}
 	set, err := parseLock(lock)
 	if err != nil {
@@ -225,21 +221,4 @@ func keepTail(s string, limit int) string {
 		return s
 	}
 	return fmt.Sprintf("[uv output cut to its last %d MiB]\n", limit>>20) + s[len(s)-limit:]
-}
-
-// readBounded reads the file at path, refusing one above limit bytes.
-func readBounded(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, io.LimitReader(f, limit+1)); err != nil {
-		return nil, err
-	}
-	if int64(buf.Len()) > limit {
-		return nil, fmt.Errorf("%s is larger than %d MiB", filepath.Base(path), limit>>20)
-	}
-	return buf.Bytes(), nil
 }

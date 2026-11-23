@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +63,9 @@ var defaultSettings = Settings{
 // rooted at one directory.
 type Store struct {
 	root string
+	// projects is projects/, opened once, where every reader of a file a
+	// job wrote resolves its path.
+	projects *os.Root
 
 	mu       sync.RWMutex
 	settings Settings
@@ -112,7 +117,11 @@ func Open(root string) (*Store, error) {
 		}
 	}
 
-	s := &Store{root: root}
+	projects, err := openProjectsRoot(filepath.Join(root, "projects"))
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{root: root, projects: projects}
 	settingsPath := filepath.Join(root, "private", "settings.json")
 	switch _, err := os.Stat(settingsPath); {
 	case errors.Is(err, os.ErrNotExist):
@@ -140,6 +149,30 @@ func Open(root string) (*Store, error) {
 	}
 	s.signing = &key
 	return s, nil
+}
+
+// openProjectsRoot opens dir as the root the readers resolve in. The data
+// volume is group-writable, so the tools account can put a link in place of
+// projects/; the root counts only when it is the directory found at dir.
+func openProjectsRoot(dir string) (*os.Root, error) {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", dir, err)
+	}
+	opened, err := r.Stat(".")
+	var found os.FileInfo
+	if err == nil {
+		found, err = os.Lstat(dir)
+	}
+	if err != nil {
+		_ = r.Close()
+		return nil, fmt.Errorf("store: stat %s: %w", dir, err)
+	}
+	if !os.SameFile(opened, found) {
+		_ = r.Close()
+		return nil, fmt.Errorf("store: %s must be a directory, not a link", dir)
+	}
+	return r, nil
 }
 
 // dropSignatureKey rewrites a settings.json from a 0.4 volume without its
@@ -231,6 +264,10 @@ func validateTarget(t Target) error {
 	return nil
 }
 
+// beforeTempWrite is a test's hook between the creation of a temporary
+// file and the write of its content.
+var beforeTempWrite func(tmp string)
+
 // atomicWriteFile writes data to a temporary file next to path and renames
 // it into place, so a crash never leaves a partial file where callers expect
 // a complete one. The temporary file is created with mode directly, so the
@@ -242,17 +279,42 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("store: create %s: %w", dir, err)
 	}
 
-	tmp, err := tempFile(dir, filepath.Base(path), mode)
+	f, err := tempFile(dir, filepath.Base(path), mode)
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	defer os.Remove(tmp) // no-op once the rename below succeeds
 
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	if beforeTempWrite != nil {
+		beforeTempWrite(tmp)
+	}
+	// The tools account can replace any name in a group-writable directory,
+	// so the content goes through the descriptor tempFile created, never
+	// through a second open that would follow a link put in its place.
+	_, err = f.Write(data)
+	var written os.FileInfo
+	if err == nil {
+		written, err = f.Stat()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return fmt.Errorf("store: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("store: rename to %s: %w", path, err)
+	}
+	// The rename moves whatever entry holds the temporary name by then, a
+	// link or a file the tools account put there included. The write
+	// counts only when path names the file written above.
+	placed, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("store: stat %s: %w", path, err)
+	}
+	if !os.SameFile(written, placed) {
+		return fmt.Errorf("store: %s was replaced while it was written", path)
 	}
 	return nil
 }
@@ -282,25 +344,25 @@ func (s *Store) NewResolveDir() (string, error) {
 	return "", fmt.Errorf("store: could not allocate a resolve dir under %s", parent)
 }
 
-// tempFile reserves a unique path in dir for name and returns it, without
-// leaving the file behind for atomicWriteFile to overwrite with the real
-// content and mode.
-func tempFile(dir, name string, mode os.FileMode) (string, error) {
+// tempFile creates a file under a unique name in dir for name and returns
+// it open for writing. O_EXCL never opens an entry that exists, a link
+// included.
+func tempFile(dir, name string, mode os.FileMode) (*os.File, error) {
 	for attempt := 0; attempt < 10; attempt++ {
 		suffix, err := randomHex(4)
 		if err != nil {
-			return "", fmt.Errorf("store: generate temp name: %w", err)
+			return nil, fmt.Errorf("store: generate temp name: %w", err)
 		}
 		path := filepath.Join(dir, "."+name+".tmp-"+suffix)
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err == nil {
-			return path, f.Close()
+			return f, nil
 		}
 		if !os.IsExist(err) {
-			return "", fmt.Errorf("store: create %s: %w", path, err)
+			return nil, fmt.Errorf("store: create %s: %w", path, err)
 		}
 	}
-	return "", fmt.Errorf("store: could not reserve a temp file for %s", name)
+	return nil, fmt.Errorf("store: could not reserve a temp file for %s", name)
 }
 
 func writeJSONFile(path string, v any, mode os.FileMode) error {
@@ -312,7 +374,7 @@ func writeJSONFile(path string, v any, mode os.FileMode) error {
 }
 
 func readJSONFile(path string, v any) error {
-	data, err := os.ReadFile(path)
+	data, err := ReadRegularFile(path, storedFileLimit)
 	if err != nil {
 		return fmt.Errorf("store: read %s: %w", path, err)
 	}
@@ -320,6 +382,77 @@ func readJSONFile(path string, v any) error {
 		return fmt.Errorf("store: unmarshal %s: %w", path, err)
 	}
 	return nil
+}
+
+// storedFileLimit bounds every file the store reads back. Each is JSON or a
+// requirements file the server wrote, far smaller; the bound keeps a file
+// the tools account planted from filling memory.
+const storedFileLimit = 64 << 20
+
+// ReadRegularFile reads the regular file at path, refusing one above limit
+// bytes. The tools account can write the job directories and the caches:
+// O_NOFOLLOW reads no link's target, and O_NONBLOCK keeps a FIFO from
+// holding an open that nothing interrupts.
+func ReadRegularFile(path string, limit int64) ([]byte, error) {
+	name := filepath.Base(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d MiB", name, limit>>20)
+	}
+	return data, nil
+}
+
+// openProjectFile opens rel, a path under projects/ joined from validated
+// identifiers, for reading. The tools account can write every directory
+// there and put a link at any component of rel. The root follows a link
+// only to a target inside projects/, which holds nothing kept from an API
+// reader, so a path that leaves projects/, a loop of links and anything but
+// a regular file are not found. O_NONBLOCK keeps a FIFO from holding the
+// open until the type check refuses it.
+func (s *Store) openProjectFile(rel string) (*os.File, error) {
+	f, err := s.projects.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNotFound
+		}
+		// The root refuses a path that leaves it with an error that
+		// carries no errno.
+		var errno syscall.Errno
+		if errors.As(err, &errno) && errno != syscall.ELOOP {
+			return nil, fmt.Errorf("store: open %s: %w", rel, err)
+		}
+		slog.Warn("store: refusing a link out of projects/ or a loop of links", "path", rel)
+		return nil, ErrNotFound
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("store: stat %s: %w", rel, err)
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		slog.Warn("store: refusing a path that is not a regular file", "path", rel, "type", st.Mode().Type().String())
+		return nil, ErrNotFound
+	}
+	return f, nil
 }
 
 // validID refuses an identifier that could escape the directory it names.

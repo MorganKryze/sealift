@@ -1,15 +1,18 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -847,4 +850,245 @@ func TestLogStripsURLCredentials(t *testing.T) {
 			t.Errorf("%s = %q, lost the host or path", name, got)
 		}
 	}
+}
+
+// plantLinkToVictim puts a link at dir/rel to a file the server alone can
+// read and returns that file's path and bytes. The tools account can write
+// every job directory.
+func plantLinkToVictim(t *testing.T, dir, rel string) (string, string) {
+	t.Helper()
+	victim := filepath.Join(t.TempDir(), "signing-key.pem")
+	const held = "a file the server owns"
+	if err := os.WriteFile(victim, []byte(held), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(link), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	return victim, held
+}
+
+func TestAnalysisNeverWritesThroughALink(t *testing.T) {
+	for _, rel := range []string{
+		"log.txt",
+		"package.json",
+		filepath.Join("project", "pnpm-lock.yaml"),
+		"project.trivy.json.cdx.json",
+		filepath.Join("candidates", "foo@1.1.0", "pnpm-lock.yaml"),
+		"candidates.trivy.json",
+		filepath.Join("combined", "pnpm-lock.yaml"),
+	} {
+		t.Run(rel, func(t *testing.T) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0","bar":"2.0.0"}}`)
+			registry := registryServer(t, map[string]string{"foo": fooDoc, "bar": barDoc})
+			a := &Analysis{
+				Store: st,
+				Tools: newTestToolsManager(t, st),
+				// The candidate that does not resolve writes a line to the log.
+				Pnpm: &fakePnpm{fail: map[string]bool{"bar@2.1.0": true}},
+				Trivy: &fakeTrivy{db: map[string][]fakeFinding{
+					"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}},
+				}},
+				Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+				Project:  proj,
+				Settings: st.Settings(),
+				Dir:      pending.Path(),
+				ID:       pending.ID(),
+			}
+			victim, held := plantLinkToVictim(t, a.Dir, rel)
+
+			_ = a.Run(context.Background(), func(Event) {})
+			if got, err := os.ReadFile(victim); err != nil || string(got) != held {
+				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
+			}
+		})
+	}
+}
+
+// A name listed in two dependency groups resolves each candidate twice,
+// into one directory.
+func TestAnalysisResolvesANameListedInTwoGroups(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"},"devDependencies":{"foo":"1.0.0"}}`)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     &fakePnpm{},
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "candidates", "foo@1.0.0", "pnpm-lock.yaml")); err != nil {
+		t.Errorf("candidates/foo@1.0.0/pnpm-lock.yaml: %v", err)
+	}
+}
+
+// assertNowhere fails when a regular file under root holds secret.
+func assertNowhere(t *testing.T, root, secret string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if bytes.Contains(data, []byte(secret)) {
+			t.Errorf("%s holds the secret", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pnpm runs as the tools account, which can replace the lockfile it writes
+// with a link to the signing key.
+func TestAnalysisCopiesNoLinkedLockfile(t *testing.T) {
+	const secret = "-----BEGIN PRIVATE KEY----- a key the tools account must never read"
+	key := filepath.Join(t.TempDir(), "signing-key.pem")
+	if err := os.WriteFile(key, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\nln -s '"+key+"' pnpm-lock.yaml\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     runner.NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil),
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	var events []Event
+	err := a.Run(context.Background(), func(e Event) { events = append(events, e) })
+	if err == nil {
+		t.Fatal("Run succeeded, want the lockfile refused")
+	}
+	if !strings.Contains(err.Error(), "pnpm-lock.yaml is not a regular file") {
+		t.Errorf("Run error = %q, want the lockfile refused", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("Run error %q quotes the secret", err)
+	}
+	for _, e := range events {
+		if strings.Contains(string(e.Data), secret) {
+			t.Errorf("event %s quotes the secret", e.Kind)
+		}
+	}
+	assertNowhere(t, st.Root(), secret)
+}
+
+// lockSwap answers the resolutions match picks with lock instead.
+type lockSwap struct {
+	*fakePnpm
+	match func(manifest string) bool
+	lock  []byte
+}
+
+func (l lockSwap) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	res, err := l.fakePnpm.Resolve(ctx, in)
+	if err == nil && l.match(string(in.Manifest)) {
+		res.Lockfile = l.lock
+	}
+	return res, err
+}
+
+func TestAnalysisWritesNoLockfileItCannotParse(t *testing.T) {
+	const secret = "a value no lockfile may carry to disk"
+	notProbe := func(m string) bool { return !strings.Contains(m, `"name":"probe"`) }
+	for _, tc := range []struct {
+		rel   string
+		match func(string) bool
+	}{
+		{filepath.Join("project", "pnpm-lock.yaml"), func(m string) bool { return notProbe(m) && strings.Contains(m, `"foo":"1.0.0"`) }},
+		{filepath.Join("combined", "pnpm-lock.yaml"), func(m string) bool { return notProbe(m) && strings.Contains(m, `"foo":"1.1.0"`) }},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+			registry := registryServer(t, map[string]string{"foo": fooDoc})
+			a := &Analysis{
+				Store: st,
+				Tools: newTestToolsManager(t, st),
+				Pnpm:  lockSwap{fakePnpm: &fakePnpm{}, match: tc.match, lock: []byte("lockfileVersion: '5.4'\nleak: " + secret + "\n")},
+				Trivy: &fakeTrivy{db: map[string][]fakeFinding{
+					"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}},
+				}},
+				Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+				Project:  proj,
+				Settings: st.Settings(),
+				Dir:      pending.Path(),
+				ID:       pending.ID(),
+			}
+			_ = a.Run(context.Background(), func(Event) {})
+			assertNowhere(t, st.Root(), secret)
+		})
+	}
+}
+
+// The tools account writes the project's files and the analysis's scan
+// reports. A FIFO it leaves there must not hold the analysis.
+func TestAnalysisReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
+	t.Run("at the project's package.json", func(t *testing.T) {
+		st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"baz":"1.0.0"}}`)
+		fifo := replaceWithFIFO(t, filepath.Join(proj.Dir, "package.json"))
+		a := &Analysis{
+			Store:    st,
+			Tools:    newTestToolsManager(t, st),
+			Pnpm:     &fakePnpm{},
+			Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+			Registry: &npm.Client{Registry: "http://127.0.0.1:1", Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+			Project:  proj,
+			Settings: st.Settings(),
+			Dir:      pending.Path(),
+			ID:       pending.ID(),
+		}
+		var err error
+		returnsPromptly(t, fifo, func() { err = a.Run(context.Background(), func(Event) {}) })
+		if err == nil || !strings.Contains(err.Error(), "package.json is not a regular file") {
+			t.Fatalf("Run = %v, want package.json refused", err)
+		}
+	})
+	t.Run("at a scan's report", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "project.trivy.json")
+		a := &Analysis{Trivy: fifoTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{}}}}
+		var err error
+		returnsPromptly(t, out, func() { _, err = a.scanPackages(context.Background(), nil, out) })
+		if err == nil || !strings.Contains(err.Error(), "project.trivy.json is not a regular file") {
+			t.Fatalf("scanPackages = %v, want the report refused", err)
+		}
+	})
+	t.Run("at a report to merge", func(t *testing.T) {
+		dir := t.TempDir()
+		key := filepath.Join(dir, "candidates.trivy.key.json")
+		if err := syscall.Mkfifo(key, 0o660); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		returnsPromptly(t, key, func() { err = mergeTrivyReports([]string{key}, filepath.Join(dir, "candidates.trivy.json")) })
+		if err == nil || !strings.Contains(err.Error(), "candidates.trivy.key.json is not a regular file") {
+			t.Fatalf("mergeTrivyReports = %v, want the report refused", err)
+		}
+	})
 }

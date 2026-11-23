@@ -115,7 +115,7 @@ An analysis that stops on packages with no wheel fails at `check-pins`, `resolve
 
 uv stops at the first package with no usable wheel, so such a package that no file pins shows alone. A second one behind it shows at the next analysis.
 
-A pip analysis cannot be exported yet: an export request on it is refused and creates no export.
+A done pip analysis is exported as a whole: see [pip exports](#pip-exports).
 
 ## Exports
 
@@ -128,6 +128,21 @@ A pip analysis cannot be exported yet: an export request on it is refused and cr
 | `GET /api/projects/{projectId}/exports/{exportId}/files/{name}` | Download one file of a finished export: the archive, `manifest.json`, `manifest.json.sig` or a report. |
 
 A dependency left out of the selection, or given an empty list, stays at its current version.
+
+### pip exports
+
+A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body is `{"selection":{}}`; a selection that names a package answers 400, since the set is the analysis's. 409 when the analysis is not done, lists no package, or holds a package with no recorded wheel. A refused request creates no export.
+
+| Step | What it does |
+| --- | --- |
+| `package-list` | Checks the recorded set: every name, version, wheel file name, sha256 and size, within the bounds the import reads. |
+| `download` | Downloads each wheel from the address the analysis recorded and checks it against the index's sha256. A wheel whose bytes differ fails the export at once, with no retry; a failed connection or a server error is tried up to three times. A wheel already in the cache is checked again and reused. |
+| `archive` | Packs the wheels into `packages_pip.tar.gz`, hashing each again as it enters, then writes and signs `manifest.json`. The export never opens a wheel. |
+| `reports` | Scans the exported set with Trivy and writes the four reports. |
+
+A done pip export holds `packages_pip.tar.gz`, `manifest.json` (format version 3), `manifest.json.sig`, `report.trivy.json`, `report.cdx.json`, `findings.csv` and `summary.md`. [Archive format](archive-format.md#manifestjson-of-a-pip-export) describes the manifest. The same analysis exported twice gives the same archive sha256.
+
+Downloaded wheels stay in the shared cache `cache/wheels/`, named by their sha256, so a second export of the same set downloads nothing. In ephemeral mode, erasing a project empties `cache/wheels/` with the other shared caches.
 
 ## Settings
 

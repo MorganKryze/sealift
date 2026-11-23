@@ -69,9 +69,6 @@ func TestPnpmResolvesThreeDependencyProject(t *testing.T) {
 	}
 
 	projectDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(projectDir, "package.json"), []byte(threeDepManifest), 0o644); err != nil {
-		t.Fatalf("write package.json: %v", err)
-	}
 	cacheDir := filepath.Join(dataDir, "cache", "pnpm")
 	cli := NewPnpmCLI(pnpmBin, cacheDir, nil)
 

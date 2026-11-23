@@ -264,3 +264,64 @@ func TestRemoveOrphanDirsOnEmptyStoreReturnsZero(t *testing.T) {
 		t.Fatalf("removed = %d, want 0", n)
 	}
 }
+
+// The tools account can write every job directory, so the startup sweep
+// can meet a FIFO or a link at status.json. Neither holds the server's
+// start, the sweep rewrites no link's target, and an analysis .tmp whose
+// status.json is either is removed as unreadable.
+func TestStartupSweepRefusesAFIFOOrALinkAtStatusJSON(t *testing.T) {
+	s := openTestStore(t)
+	write := func(rel, state string) string {
+		path := filepath.Join(s.Root(), "projects", rel, "status.json")
+		if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(`{"state":"`+state+`"}`), fileMode); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		return path
+	}
+
+	running := write("proj-1/analyses/20260917T101502Z", "running")
+	fifo := write("proj-1/exports/20260917T101503Z", "running")
+	replaceWithFIFO(t, fifo)
+	link := write("proj-2/analyses/20260917T101504Z", "running")
+	target := replaceWithLink(t, link)
+	tmpFIFO := write("proj-1/analyses/20260917T101505Z.tmp", "interrupted")
+	replaceWithFIFO(t, tmpFIFO)
+	tmpLink := write("proj-2/analyses/20260917T101506Z.tmp", "interrupted")
+	replaceWithLink(t, tmpLink)
+
+	var changed, removed int
+	var markErr, removeErr error
+	finishesPromptly(t, []string{fifo, tmpFIFO}, func() {
+		changed, markErr = s.MarkRunningInterrupted()
+		removed, removeErr = s.RemoveOrphanDirs()
+	})
+	if markErr != nil || removeErr != nil {
+		t.Fatalf("sweep: %v, %v", markErr, removeErr)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1: only the regular status.json", changed)
+	}
+	var got struct {
+		State string `json:"state"`
+	}
+	if err := s.ReadJSON(running, &got); err != nil || got.State != string(Interrupted) {
+		t.Errorf("regular status.json = %q, %v, want %q", got.State, err, Interrupted)
+	}
+	if data, err := os.ReadFile(target); err != nil || !strings.Contains(string(data), `"running"`) {
+		t.Errorf("link target = %q, %v, want it untouched", data, err)
+	}
+	if st, err := os.Lstat(link); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link at %s was replaced: %v", link, err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want both analysis .tmp directories", removed)
+	}
+	for _, dir := range []string{filepath.Dir(tmpFIFO), filepath.Dir(tmpLink), strings.TrimSuffix(filepath.Dir(tmpFIFO), ".tmp"), strings.TrimSuffix(filepath.Dir(tmpLink), ".tmp")} {
+		if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+			t.Errorf("%s is still there: %v", dir, err)
+		}
+	}
+}

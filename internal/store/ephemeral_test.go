@@ -95,6 +95,30 @@ func TestPurgeCachesEmptiesUvCache(t *testing.T) {
 	}
 }
 
+// The wheel cache holds every wheel a pip export downloaded, so an erase
+// must empty it too.
+func TestPurgeCachesEmptiesTheWheelCache(t *testing.T) {
+	s := openTestStore(t)
+	wheel := filepath.Join(s.Root(), "cache", "wheels", strings.Repeat("ab", 32)+".whl")
+	if err := os.MkdirAll(filepath.Dir(wheel), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wheel, []byte("requests"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	purged, err := s.PurgeIfIdle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !purged {
+		t.Error("PurgeIfIdle saw the caches empty while cache/wheels held a wheel")
+	}
+	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "wheels")); !os.IsNotExist(err) {
+		t.Errorf("cache/wheels survived the purge: %v", err)
+	}
+}
+
 func TestSweepEphemeral(t *testing.T) {
 	s := openTestStore(t)
 	s.SetEphemeral(true)

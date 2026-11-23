@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+
+	"github.com/MorganKryze/sealift/internal/store"
 )
 
 // ErrReleaseTooRecent reports a Trivy release younger than the configured
@@ -306,11 +308,16 @@ func (m *Manager) activeTrivy() (string, error) {
 	return filepath.Base(target), nil
 }
 
+// trivyMetadataLimit bounds the database's metadata.json, a few hundred
+// bytes as Trivy writes it.
+const trivyMetadataLimit = 1 << 20
+
 // trivyDBDate reads the vulnerability database's update time from Trivy's
 // own cache metadata. A missing or unreadable file means no database yet,
-// reported as a zero time rather than an error.
+// reported as a zero time rather than an error. Trivy runs as the tools
+// account, which can leave a link or a FIFO there: neither is read.
 func (m *Manager) trivyDBDate() time.Time {
-	data, err := os.ReadFile(filepath.Join(m.vol.Root(), "trivy-cache", "db", "metadata.json"))
+	data, err := store.ReadRegularFile(filepath.Join(m.vol.Root(), "trivy-cache", "db", "metadata.json"), trivyMetadataLimit)
 	if err != nil {
 		return time.Time{}
 	}

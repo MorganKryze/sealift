@@ -204,15 +204,15 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 			r.log("pnpm: " + output)
 			r.result.Warnings = append(r.result.Warnings, warning)
 		}
-		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "combined"), 0o770); werr != nil {
-			return werr
-		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "combined", "pnpm-lock.yaml"), lockRaw, 0o664); werr != nil {
-			return werr
-		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
 		if perr != nil {
 			return fmt.Errorf("parse combined lockfile: %w", perr)
+		}
+		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "combined"), 0o770); werr != nil {
+			return werr
+		}
+		if werr := writeNew(filepath.Join(r.a.Dir, "combined", "pnpm-lock.yaml"), lockRaw); werr != nil {
+			return werr
 		}
 		pkgs := platformOf(r.a.Project.Target).Filter(parsed)
 		findings, serr := r.a.scanPackages(r.ctx, pkgs, filepath.Join(r.a.Dir, "combined.trivy.json"))

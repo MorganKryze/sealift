@@ -175,7 +175,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Queue an export with a version selection */
+        /**
+         * Queue an export with a version selection
+         * @description An npm export packs the selected versions and, with includeProject, the project tree. A pip export packs every wheel the analysis recorded: it takes an empty selection and ignores includeProject. A selection for a pip analysis answers 400. A pip analysis that lists no package, or a package with no wheel, answers 409.
+         */
         post: operations["queueExport"];
         delete?: never;
         options?: never;
@@ -689,14 +692,14 @@ export interface components {
             kind: "source-only" | "other-platforms" | "no-files" | "hash-mismatch";
             detail: string;
         };
-        /** @description A selection of versions per dependency, plus the project tree flag */
+        /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
         ExportRequest: {
-            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. */
+            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. */
             selection: {
                 [key: string]: string[];
             };
             /**
-             * @description Add the current project tree to the export
+             * @description Add the current project tree to an npm export. A pip export ignores it.
              * @default false
              */
             includeProject: boolean;

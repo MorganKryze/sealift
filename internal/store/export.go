@@ -102,7 +102,8 @@ func (s *Store) DeleteExport(projectID, id string) error {
 // ExportFile opens one file inside a committed export directory for
 // reading, refusing a name that is not a plain file name: no path
 // separator, no "..", nothing that could join outside the export
-// directory.
+// directory. A name that holds anything but a regular file is not found,
+// as readExportInfo leaves it out of Files.
 func (s *Store) ExportFile(projectID, exportID, name string) (*os.File, error) {
 	if err := validID(projectID); err != nil {
 		return nil, err
@@ -113,15 +114,7 @@ func (s *Store) ExportFile(projectID, exportID, name string) (*os.File, error) {
 	if err := validID(name); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.root, "projects", projectID, "exports", exportID, name)
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
-	}
-	return f, nil
+	return s.openProjectFile(filepath.Join(projectID, "exports", exportID, name))
 }
 
 // readExportInfo reads manifest.json for the analysis ID and creation

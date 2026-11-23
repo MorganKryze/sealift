@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -633,6 +634,69 @@ func TestGitHubTokenNeverInErrorsOrLogs(t *testing.T) {
 			}
 			if strings.Contains(logs.String(), testToken) {
 				t.Errorf("log carries the token: %q", logs.String())
+			}
+		})
+	}
+}
+
+// Trivy runs as the tools account, which can write its cache. A FIFO or a
+// link at the database's metadata.json reads as no database yet, at once.
+func TestTrivyStateRefusesAFIFOOrALinkAtTheDBMetadata(t *testing.T) {
+	for _, plant := range []struct {
+		name string
+		do   func(t *testing.T, path string)
+	}{
+		{"FIFO", func(t *testing.T, path string) {
+			if err := syscall.Mkfifo(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"link", func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "metadata.json")
+			if err := os.WriteFile(target, []byte(`{"Version":2,"UpdatedAt":"2026-09-10T12:00:00Z"}`), 0o664); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(plant.name, func(t *testing.T) {
+			srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
+			m, root := newTestManager(t, srv)
+			dbDir := filepath.Join(root, "trivy-cache", "db")
+			if err := os.MkdirAll(dbDir, 0o770); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dbDir, "metadata.json")
+			plant.do(t, path)
+
+			var state TrivyState
+			var err error
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				state, err = m.TrivyState(context.Background())
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				for {
+					if w, werr := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); werr == nil {
+						_ = w.Close()
+					}
+					select {
+					case <-done:
+						t.Fatal("TrivyState waited on a FIFO")
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+			}
+			if err != nil {
+				t.Fatalf("TrivyState: %v", err)
+			}
+			if !state.DBDate.IsZero() {
+				t.Errorf("DBDate = %v, want none read", state.DBDate)
 			}
 		})
 	}

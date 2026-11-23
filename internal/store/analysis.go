@@ -92,7 +92,7 @@ func (s *Store) AnalysisInfo(projectID, id string) (AnalysisInfo, error) {
 
 // AnalysisLog opens a committed analysis' log.txt for reading, the running
 // account of every step a reader would otherwise have to reconstruct from
-// status.json alone.
+// status.json alone. A log.txt that is not a regular file is not found.
 func (s *Store) AnalysisLog(projectID, id string) (*os.File, error) {
 	if err := validID(projectID); err != nil {
 		return nil, err
@@ -100,15 +100,7 @@ func (s *Store) AnalysisLog(projectID, id string) (*os.File, error) {
 	if err := validID(id); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.root, "projects", projectID, "analyses", id, "log.txt")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
-	}
-	return f, nil
+	return s.openProjectFile(filepath.Join(projectID, "analyses", id, "log.txt"))
 }
 
 // DeleteAnalysis removes a committed analysis directory.
@@ -190,7 +182,7 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 
 // readOptional reads dir/name, or returns nil when the file is absent.
 func readOptional(dir, name string) (json.RawMessage, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, name))
+	raw, err := ReadRegularFile(filepath.Join(dir, name), storedFileLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -223,18 +215,11 @@ func (s *Store) deleteJobDir(projectID, kind, id string) error {
 }
 
 // ProjectManifest opens the package.json a project was created from, as
-// uploaded. ErrNotFound when the project does not exist.
+// uploaded. ErrNotFound when the project does not exist, or when its
+// package.json is not a regular file.
 func (s *Store) ProjectManifest(projectID string) (*os.File, error) {
 	if err := validID(projectID); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(s.root, "projects", projectID, "package.json")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("store: open %s: %w", path, err)
-	}
-	return f, nil
+	return s.openProjectFile(filepath.Join(projectID, "package.json"))
 }

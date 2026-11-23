@@ -83,6 +83,14 @@ func (ix *Index) Add(d Dist) pip.IndexFile {
 	return f
 }
 
+// Serve replaces the bytes served for one file. The project's page lists
+// the sha256 and size of the new bytes from then on.
+func (ix *Index) Serve(file string, body []byte) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	ix.files[file] = body
+}
+
 // Requests counts the requests made for a URL path.
 func (ix *Index) Requests(path string) int {
 	ix.mu.Lock()

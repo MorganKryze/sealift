@@ -255,6 +255,12 @@ paths:
       tags:
         - exports
       summary: Queue an export with a version selection
+      description: >
+        An npm export packs the selected versions and, with includeProject,
+        the project tree. A pip export packs every wheel the analysis
+        recorded: it takes an empty selection and ignores includeProject. A
+        selection for a pip analysis answers 400. A pip analysis that lists
+        no package, or a package with no wheel, answers 409.
       requestBody:
         required: true
         content:
@@ -1131,13 +1137,17 @@ components:
         - detail
     ExportRequest:
       type: object
-      description: A selection of versions per dependency, plus the project tree flag
+      description: >
+        A selection of versions per dependency, plus the project tree flag.
+        A pip export takes an empty selection and ignores the flag.
       properties:
         selection:
           type: object
           description: >
             Dependency name to the list of its versions to include. An
-            empty or absent list selects nothing for that dependency.
+            empty or absent list selects nothing for that dependency. A pip
+            export carries the analysis's whole set, so its selection is
+            empty.
           additionalProperties:
             type: array
             items:
@@ -1145,7 +1155,7 @@ components:
         includeProject:
           type: boolean
           default: false
-          description: Add the current project tree to the export
+          description: Add the current project tree to an npm export. A pip export ignores it.
       required:
         - selection
     Export:

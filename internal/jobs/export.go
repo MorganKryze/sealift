@@ -65,6 +65,8 @@ type Export struct {
 	Request  ExportRequest
 	Dir      string
 	ID       string
+
+	beforeStrip, beforeArchive func() // a test's hooks after the download and strip steps
 }
 
 // ExportRequest is the input to an export: the versions selected per
@@ -135,9 +137,15 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err != nil {
 		return err
 	}
+	if e.beforeStrip != nil {
+		e.beforeStrip()
+	}
 	shipped, err := e.stripAll(ctx, record, downloaded)
 	if err != nil {
 		return err
+	}
+	if e.beforeArchive != nil {
+		e.beforeArchive()
 	}
 	arch, err := e.writeArchive(ctx, record, shipped)
 	if err != nil {
@@ -292,7 +300,7 @@ func (e *Export) candidateLockfilePath(name, version string) string {
 }
 
 func (e *Export) readLockfile(path string) ([]npm.LockPackage, error) {
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: read %s: %w", path, err)
 	}
@@ -418,14 +426,11 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downlo
 
 // fileSHA512 returns the hex sha512 of the regular file at path.
 func fileSHA512(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-		return "", fmt.Errorf("jobs: %s is not a regular file", path)
-	}
 	h := sha512.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -498,9 +503,10 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, err
 	}
 
-	f, err := os.Open(d.CachePath)
+	file := npm.PackFileName(d.Name, d.Version)
+	f, st, err := openRegular(d.CachePath, file)
 	if err != nil {
-		return shippedPackage{}, fmt.Errorf("jobs: open %s: %w", d.CachePath, err)
+		return shippedPackage{}, fmt.Errorf("jobs: %s@%s: %w", d.Name, d.Version, err)
 	}
 	defer f.Close()
 
@@ -508,12 +514,8 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: inspect %s@%s: %w", d.Name, d.Version, err)
 	}
-	file := npm.PackFileName(d.Name, d.Version)
 	if !info.HasPublishConfig {
-		st, err := os.Stat(d.CachePath)
-		if err != nil {
-			return shippedPackage{}, fmt.Errorf("jobs: stat %s: %w", d.CachePath, err)
-		}
+		// The archive step reads it again and checks its sha512.
 		return shippedPackage{
 			LockPackage: d.LockPackage, File: file, Path: d.CachePath, Size: st.Size(),
 			SHA512: d.SHA512, OriginalSHA512: d.SHA512,
@@ -524,7 +526,7 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, fmt.Errorf("jobs: create %s: %w", strippedDir, err)
 	}
 	outPath := filepath.Join(strippedDir, file)
-	out, err := os.Create(outPath)
+	out, err := createNew(outPath)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: create %s: %w", outPath, err)
 	}
@@ -533,19 +535,22 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, fmt.Errorf("jobs: rewind %s: %w", d.CachePath, err)
 	}
 	sum := sha512.New()
-	stripErr := npm.StripPublishConfig(io.MultiWriter(out, sum), f)
+	// The stripped bytes come from this read, so it carries the download's
+	// sha512 check. StripPublishConfig reads the tarball to its end.
+	in := newRehashed(f, recorded{name: file, size: st.Size(), sha512: d.SHA512})
+	stripErr := npm.StripPublishConfig(io.MultiWriter(out, sum), in)
 	if closeErr := out.Close(); stripErr == nil {
 		stripErr = closeErr
 	}
 	if stripErr != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: strip publishConfig from %s@%s: %w", d.Name, d.Version, stripErr)
 	}
-	st, err := os.Stat(outPath)
+	outSt, err := os.Stat(outPath)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: stat %s: %w", outPath, err)
 	}
 	return shippedPackage{
-		LockPackage: d.LockPackage, File: file, Path: outPath, Size: st.Size(),
+		LockPackage: d.LockPackage, File: file, Path: outPath, Size: outSt.Size(),
 		SHA512: hex.EncodeToString(sum.Sum(nil)), OriginalSHA512: d.SHA512, Stripped: true,
 	}, nil
 }
@@ -562,7 +567,6 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 
 	entries := make([]archive.Entry, 0, len(shipped))
 	for _, s := range shipped {
-		path := s.Path
 		entries = append(entries, archive.Entry{
 			Name: s.File,
 			Size: s.Size,
@@ -570,13 +574,13 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				return os.Open(path)
+				return openUnchanged(s.Path, recorded{name: s.File, size: s.Size, sha512: s.SHA512})
 			},
 		})
 	}
 
 	path := filepath.Join(e.Dir, "packages_npm.tar.gz")
-	f, err := os.Create(path)
+	f, err := createNew(path)
 	if err != nil {
 		werr := fmt.Errorf("jobs: create archive: %w", err)
 		emitFailedStep(emit, "archive", time.Since(start), werr)
@@ -674,7 +678,7 @@ func (e *Export) writeTrivyReports(ctx context.Context, shipped []shippedPackage
 		components[i] = sbom.Component{Name: s.Name, Version: s.Version}
 	}
 	sbomPath := filepath.Join(e.Dir, "export.cdx-input.json")
-	f, err := os.Create(sbomPath)
+	f, err := createNew(sbomPath)
 	if err != nil {
 		return fmt.Errorf("jobs: create %s: %w", sbomPath, err)
 	}
@@ -707,7 +711,7 @@ func (e *Export) writeTrivyReports(ctx context.Context, shipped []shippedPackage
 // findings.csv gets one row per selected version and vulnerability, as
 // the spec's selected_version column implies.
 func (e *Export) writeFindingsCSV() error {
-	f, err := os.Open(filepath.Join(e.Analysis.Dir, "candidates.trivy.json"))
+	f, err := openRegularFile(filepath.Join(e.Analysis.Dir, "candidates.trivy.json"))
 	if err != nil {
 		return fmt.Errorf("jobs: read candidates.trivy.json: %w", err)
 	}
@@ -743,7 +747,7 @@ func (e *Export) writeFindingsCSV() error {
 		}
 	}
 
-	out, err := os.Create(filepath.Join(e.Dir, "findings.csv"))
+	out, err := createNew(filepath.Join(e.Dir, "findings.csv"))
 	if err != nil {
 		return fmt.Errorf("jobs: create findings.csv: %w", err)
 	}
@@ -786,10 +790,18 @@ type analysisStatus struct {
 	TrivyDBDate  time.Time `json:"trivyDbDate"`
 }
 
-func (e *Export) readAnalysisStatus() analysisStatus {
+// analysisStatusLimit bounds the analysis's status.json an export reads.
+// A done analysis writes a few KiB there.
+const analysisStatusLimit = 1 << 20
+
+func readAnalysisStatus(dir string) analysisStatus {
 	var status analysisStatus
-	path := filepath.Join(e.Analysis.Dir, "status.json")
-	if err := e.Store.ReadJSON(path, &status); err != nil {
+	path := filepath.Join(dir, "status.json")
+	data, err := readRegularFile(path, analysisStatusLimit)
+	if err == nil {
+		err = json.Unmarshal(data, &status)
+	}
+	if err != nil {
 		// summary.md still gets written with zero dates and versions: a
 		// report of secondary importance should not fail the export over
 		// a status.json that is missing or corrupt, but a silent miss here
@@ -800,7 +812,7 @@ func (e *Export) readAnalysisStatus() analysisStatus {
 }
 
 func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManifest) error {
-	status := e.readAnalysisStatus()
+	status := readAnalysisStatus(e.Analysis.Dir)
 
 	var deps []report.DependencyChange
 	var signals []report.SignalNote
@@ -842,7 +854,7 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 		Signals: signals, ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(shipped),
 	}
 
-	out, err := os.Create(filepath.Join(e.Dir, "summary.md"))
+	out, err := createNew(filepath.Join(e.Dir, "summary.md"))
 	if err != nil {
 		return fmt.Errorf("jobs: create summary.md: %w", err)
 	}
@@ -867,7 +879,7 @@ func findCandidate(cands []Candidate, version string) (Candidate, bool) {
 // summary.md rather than failing the export over a report.
 func (e *Export) projected() *rank.Vector {
 	path := filepath.Join(e.Analysis.Dir, "project.trivy.json")
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		slog.Warn("jobs: no project scan for summary.md", "path", path, "error", err)
 		return nil
@@ -887,7 +899,7 @@ func (e *Export) projected() *rank.Vector {
 // shipped, not the analysis' own picks. The row counts distinct
 // vulnerabilities, the most serious severity winning, as the analysis does.
 func (e *Export) exportedFindings() (after rank.Vector, critical, high []rank.Finding, err error) {
-	f, err := os.Open(filepath.Join(e.Dir, "report.trivy.json"))
+	f, err := openRegularFile(filepath.Join(e.Dir, "report.trivy.json"))
 	if err != nil {
 		return after, nil, nil, fmt.Errorf("jobs: read report.trivy.json: %w", err)
 	}

@@ -3,7 +3,9 @@ package jobs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -112,7 +114,15 @@ func (r *run) stepResolveCandidates(deps []depInfo, manifest npm.Manifest, befor
 			if werr := os.MkdirAll(dir, 0o770); werr != nil {
 				return werr
 			}
-			if werr := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), o.lock, 0o664); werr != nil {
+			lock := filepath.Join(dir, "pnpm-lock.yaml")
+			// A name listed in two dependency groups resolves into this
+			// directory twice, and the later lock replaces the earlier one.
+			// Remove takes a link away without following it, and writeNew
+			// refuses one planted again.
+			if werr := os.Remove(lock); werr != nil && !errors.Is(werr, fs.ErrNotExist) {
+				return werr
+			}
+			if werr := writeNew(lock, o.lock); werr != nil {
 				return werr
 			}
 		}

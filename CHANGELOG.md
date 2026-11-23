@@ -13,14 +13,17 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The import service lists and imports archives from `packages/pip/` beside `packages/npm/`, and refuses an archive whose manifest belongs to the other folder. The MinIO service user needs list, read and delete on `packages/pip/` too; with the old policy, every list shows that `packages/pip/` could not be listed.
 - The chart takes `nexus.pipRepository` and an optional `nexus.pipUser`. With `nexus.pipUser` set, the Secret also holds `nexus-pip-password`.
 - The import screens show a pip archive's Python version and glibc.
+- pip exports through the API: a signed archive of the analysis's wheels, with its manifest in format version 3 and the four reports. No screen exports them yet. [API](docs/dev/api.md#pip-exports) describes them.
 
 ### Changed
 
 - The image carries Debian's `python3`, which uv needs to resolve pip projects at the target's exact version. The image grows by about 73 MB.
+- sealift refuses to start when `projects/` in its data directory is a symbolic link, with `store: <dir> must be a directory, not a link`. Mount the other disk at `projects/` itself instead of linking to it.
 
 ### Security
 
 - Installing uv, or installing or updating Trivy, is refused with a 403 when the request comes from another site, carries no JSON body, or sends an `Origin` that differs from its `Host`. Behind a reverse proxy, pass the browser's host header through, as the nginx example under [Reverse proxy](docs/deployment.md#reverse-proxy) does, or these installs fail from the setup screen.
+- In the published image, sealift opens the files pnpm, uv and Trivy leave only when they are regular files, and creates its own files there only where none exists. A compromised tool could otherwise have made sealift copy the private signing key into a folder the tool can read, overwrite a file through a link, or hold the job queue and the next start on a FIFO.
 
 ## [0.6.2] - 2026-11-19
 

@@ -100,7 +100,7 @@ func (a *Analysis) scanPackages(ctx context.Context, pkgs []npm.LockPackage, out
 	sbomPath := outPath + ".cdx.json"
 	defer os.Remove(sbomPath)
 
-	f, err := os.Create(sbomPath)
+	f, err := createNew(sbomPath)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (a *Analysis) scanPackages(ctx context.Context, pkgs []npm.LockPackage, out
 		return nil, fmt.Errorf("trivy scan: %w", err)
 	}
 
-	report, err := os.Open(outPath)
+	report, err := openRegularFile(outPath)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ type trivyReport struct {
 func mergeTrivyReports(paths []string, outPath string) error {
 	merged := trivyReport{SchemaVersion: 2}
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		data, err := readAllRegular(p)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", p, err)
 		}
@@ -171,7 +171,7 @@ func mergeTrivyReports(paths []string, outPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, data, 0o664)
+	return writeNew(outPath, data)
 }
 
 // factsOf builds rank.Facts for one packument version. Resolves is left at

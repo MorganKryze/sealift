@@ -18,7 +18,7 @@ import (
 func (r *run) stepValidate() (npm.Manifest, error) {
 	var manifest npm.Manifest
 	err := r.runStep("validate", func() error {
-		raw, ferr := os.ReadFile(filepath.Join(r.a.Project.Dir, "package.json"))
+		raw, ferr := readAllRegular(filepath.Join(r.a.Project.Dir, "package.json"))
 		if ferr != nil {
 			return fmt.Errorf("read package.json: %w", ferr)
 		}
@@ -32,7 +32,7 @@ func (r *run) stepValidate() (npm.Manifest, error) {
 			}
 			return fmt.Errorf("%d problem(s) in package.json, see the log", len(problems))
 		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "package.json"), raw, 0o664); werr != nil {
+		if werr := writeNew(filepath.Join(r.a.Dir, "package.json"), raw); werr != nil {
 			return fmt.Errorf("copy package.json: %w", werr)
 		}
 		manifest = m
@@ -95,15 +95,15 @@ func (r *run) stepResolveProject(manifest npm.Manifest) ([]npm.LockPackage, erro
 			return fmt.Errorf("resolve project: %w", rerr)
 		}
 		r.projectOutput = output
-		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); werr != nil {
-			return werr
-		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "project", "pnpm-lock.yaml"), lockRaw, 0o664); werr != nil {
-			return werr
-		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
 		if perr != nil {
 			return fmt.Errorf("parse project lockfile: %w", perr)
+		}
+		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); werr != nil {
+			return werr
+		}
+		if werr := writeNew(filepath.Join(r.a.Dir, "project", "pnpm-lock.yaml"), lockRaw); werr != nil {
+			return werr
 		}
 		pkgs = platformOf(r.a.Project.Target).Filter(parsed)
 		return nil

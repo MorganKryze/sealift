@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
@@ -18,11 +19,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -526,6 +529,65 @@ func TestExportRun(t *testing.T) {
 	}
 }
 
+// createdAtLine is the one line of manifest.json that changes from run to
+// run.
+var createdAtLine = regexp.MustCompile(`(?m)^  "createdAt": "[^"]*",$`)
+
+// TestNPMExportBytesMatchTheLastRelease exports a fixed selection and
+// compares manifest.json with the one the last release wrote for it, so
+// the npm archive and manifest keep their bytes. SEALIFT_UPDATE_GOLDEN=1
+// writes the golden file instead.
+func TestNPMExportBytesMatchTheLastRelease(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	if err := h.newExport(t, analysisDir, exportDir, true).Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !createdAtLine.Match(manifest) {
+		t.Fatalf("manifest.json has no createdAt line:\n%s", manifest)
+	}
+	manifest = createdAtLine.ReplaceAll(manifest, []byte(`  "createdAt": "2026-09-17T10:15:02Z",`))
+	golden := filepath.Join("testdata", "npm-export-0.6.2", "manifest.json")
+	if os.Getenv("SEALIFT_UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(golden, manifest, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(manifest, want) {
+		t.Errorf("manifest.json differs from %s:\n%s", golden, manifest)
+	}
+
+	var doc struct {
+		Archive struct {
+			SHA256 string `json:"sha256"`
+		} `json:"archive"`
+	}
+	if err := json.Unmarshal(want, &doc); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != doc.Archive.SHA256 {
+		t.Errorf("packages_npm.tar.gz sha256 = %x, want %s from %s", sum, doc.Archive.SHA256, golden)
+	}
+}
+
 func TestExportRunIntegrityMismatch(t *testing.T) {
 	h := newTestHarness(t)
 	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
@@ -567,6 +629,47 @@ func TestExportRunUnknownSelectionKeepsPendingDirWithStatus(t *testing.T) {
 		}
 	}
 	assertExportFailedStatus(t, exportDir, "package-list", "did not resolve")
+}
+
+// The tools account can write an export directory, so a link can wait at
+// any name the export writes, aimed at a file the server owns.
+func TestExportNeverWritesThroughALink(t *testing.T) {
+	for _, tc := range []struct{ name, step string }{
+		{filepath.Join("stripped", "scope-gadget-2.1.0.tgz"), "strip"},
+		{"packages_npm.tar.gz", "archive"},
+		{"export.cdx-input.json", "reports"},
+		{"findings.csv", "reports"},
+		{"summary.md", "reports"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, false)
+
+			victim := filepath.Join(t.TempDir(), "signing-key.pem")
+			const held = "a file the server owns"
+			if err := os.WriteFile(victim, []byte(held), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(exportDir, tc.name)
+			if err := os.MkdirAll(filepath.Dir(link), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(victim, link); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := exp.Run(context.Background(), noopEmit); err == nil {
+				t.Error("Run = <nil>, want the planted link refused")
+			}
+			if got, err := os.ReadFile(victim); err != nil || string(got) != held {
+				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
+			}
+			assertExportFailedStatus(t, exportDir, tc.step, "file exists")
+		})
+	}
 }
 
 // assertExportFailedStatus proves the fix for finding 2: a failed export
@@ -1022,5 +1125,220 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The tools account can write the tarball cache and the stripped files, so
+// a tarball can change between its download's sha512 check and the reads
+// that ship it.
+func TestExportFailsWhenATarballChangesAfterItsDownload(t *testing.T) {
+	cached := func(h *testHarness, data []byte) string {
+		sum := sha512.Sum512(data)
+		return filepath.Join(h.root, "cache", "tarballs", hex.EncodeToString(sum[:])+".tgz")
+	}
+	stripped := func(_ *testHarness, exportDir string) string {
+		return filepath.Join(exportDir, "stripped", "scope-gadget-2.1.0.tgz")
+	}
+	// replaceWithLink puts at path a link to a new file holding data.
+	replaceWithLink := func(t *testing.T, path string, data []byte) {
+		t.Helper()
+		target := filepath.Join(t.TempDir(), "signing-key.pem")
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replaceWithFIFO := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(path, 0o660); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, step string
+		plant      func(t *testing.T, h *testHarness, exportDir string)
+	}{
+		{"the cached gadget 2.1.0 holds another tarball", "strip", func(t *testing.T, h *testHarness, _ string) {
+			if err := os.WriteFile(cached(h, h.gadget21), h.gadget22, 0o664); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the cached gadget 2.1.0 is a link to the same bytes", "strip", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithLink(t, cached(h, h.gadget21), h.gadget21)
+		}},
+		{"the cached gadget 2.1.0 is a FIFO", "strip", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithFIFO(t, cached(h, h.gadget21))
+		}},
+		{"the cached widgets 1.1.0 holds other bytes of its length", "archive", func(t *testing.T, h *testHarness, _ string) {
+			if err := os.WriteFile(cached(h, h.widgets), bytes.Repeat([]byte("x"), len(h.widgets)), 0o664); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the cached widgets 1.1.0 is a link to a file of its length", "archive", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithLink(t, cached(h, h.widgets), bytes.Repeat([]byte("k"), len(h.widgets)))
+		}},
+		{"the cached widgets 1.1.0 is a FIFO", "archive", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithFIFO(t, cached(h, h.widgets))
+		}},
+		{"the stripped gadget 2.1.0 is a link to a file of its length", "archive", func(t *testing.T, h *testHarness, exportDir string) {
+			st, err := os.Stat(stripped(h, exportDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			replaceWithLink(t, stripped(h, exportDir), bytes.Repeat([]byte("k"), int(st.Size())))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, false)
+			hook := func() { tc.plant(t, h, exportDir) }
+			if tc.step == "strip" {
+				exp.beforeStrip = hook
+			} else {
+				exp.beforeArchive = hook
+			}
+
+			// No process writes to a FIFO, so an open that waits for a
+			// writer never returns.
+			done := make(chan error, 1)
+			go func() { done <- exp.Run(context.Background(), noopEmit) }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("Run = <nil>, want the changed tarball refused")
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("the export still runs after 20s")
+			}
+			assertExportFailedStatus(t, exportDir, tc.step, "changed after its download")
+		})
+	}
+}
+
+// TestReadAnalysisStatusReadsOnlyARegularFile gives the read what the
+// tools account can leave at the analysis's status.json. A FIFO would hold
+// an open that no cancel interrupts.
+func TestReadAnalysisStatusReadsOnlyARegularFile(t *testing.T) {
+	const status = `{"createdAt":"2026-11-20T10:00:00Z","trivyVersion":"0.76.2","trivyDbDate":"2026-11-19T00:00:00Z"}`
+	for _, c := range []struct {
+		name  string
+		plant func(path string) error
+		want  string // the Trivy version read; empty for a refusal
+	}{
+		{"a regular file", func(p string) error { return os.WriteFile(p, []byte(status), 0o600) }, "0.76.2"},
+		{"a link to a status", func(p string) error {
+			target := filepath.Join(filepath.Dir(p), "elsewhere.json")
+			if err := os.WriteFile(target, []byte(status), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink(target, p)
+		}, ""},
+		{"a FIFO", func(p string) error { return syscall.Mkfifo(p, 0o600) }, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "status.json")
+			if err := c.plant(path); err != nil {
+				t.Fatal(err)
+			}
+			var got analysisStatus
+			returnsPromptly(t, path, func() { got = readAnalysisStatus(dir) })
+			if got.TrivyVersion != c.want {
+				t.Errorf("Trivy version = %q, want %q", got.TrivyVersion, c.want)
+			}
+			if c.want == "" && !got.CreatedAt.IsZero() {
+				t.Errorf("analysis date = %v, want none read", got.CreatedAt)
+			}
+		})
+	}
+}
+
+// replaceWithFIFO puts a FIFO where path was, as the tools account could.
+func replaceWithFIFO(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The tools account writes the analysis's lockfiles and reports, the
+// export's scan report and the tarball cache. A FIFO it leaves at any of
+// them must not hold the export: no cancel interrupts an open, and the
+// queue runs one job at a time.
+func TestExportReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// plant leaves a FIFO, or has the export's scan leave one, and
+		// returns its path.
+		plant        func(t *testing.T, h *testHarness, analysisDir string, exp *Export) string
+		step, reason string // the failed step and its reason; empty for a done export
+	}{
+		{"at a candidate's lockfile", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "candidates", "widgets@1.1.0", "pnpm-lock.yaml"))
+		}, "package-list", "pnpm-lock.yaml is not a regular file"},
+		{"at the project's lockfile", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "project", "pnpm-lock.yaml"))
+		}, "package-list", "pnpm-lock.yaml is not a regular file"},
+		{"at a tarball cache entry", func(t *testing.T, h *testHarness, analysisDir string, _ *Export) string {
+			if err := h.newExport(t, analysisDir, filepath.Join(t.TempDir(), "exports", "20260917T101501Z.tmp"), true).Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("first Run: %v", err)
+			}
+			entries, err := filepath.Glob(filepath.Join(h.store.Root(), "cache", "tarballs", "*.tgz"))
+			if err != nil || len(entries) == 0 {
+				t.Fatalf("cache entries = %v, %v", entries, err)
+			}
+			return replaceWithFIFO(t, entries[0])
+		}, "", ""},
+		{"at the analysis's candidate scan", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "candidates.trivy.json"))
+		}, "reports", "candidates.trivy.json is not a regular file"},
+		{"at the analysis's project scan", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			path := filepath.Join(analysisDir, "project.trivy.json")
+			if err := os.WriteFile(path, []byte(exportScanJSON), 0o664); err != nil {
+				t.Fatal(err)
+			}
+			return replaceWithFIFO(t, path)
+		}, "", ""},
+		{"at the export scan's report", func(_ *testing.T, _ *testHarness, _ string, exp *Export) string {
+			exp.Trivy = fifoTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{}}}
+			return filepath.Join(exp.Dir, "report.trivy.json")
+		}, "reports", "report.trivy.json is not a regular file"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, true)
+			fifo := c.plant(t, h, analysisDir, exp)
+
+			var err error
+			returnsPromptly(t, fifo, func() { err = exp.Run(context.Background(), noopEmit) })
+			if c.reason == "" {
+				if err != nil {
+					t.Fatalf("Run: %v, want the export done", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.reason) {
+				t.Fatalf("Run = %v, want an error saying %q", err, c.reason)
+			}
+			assertExportFailedStatus(t, exportDir, c.step, c.reason)
+		})
 	}
 }

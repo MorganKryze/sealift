@@ -264,12 +264,12 @@ type Export struct {
 	State State `json:"state"`
 }
 
-// ExportRequest A selection of versions per dependency, plus the project tree flag
+// ExportRequest A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag.
 type ExportRequest struct {
-	// IncludeProject Add the current project tree to the export
+	// IncludeProject Add the current project tree to an npm export. A pip export ignores it.
 	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency.
+	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty.
 	Selection map[string][]string `json:"selection"`
 }
 
