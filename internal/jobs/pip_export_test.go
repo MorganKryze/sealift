@@ -52,8 +52,15 @@ type pipFixture struct {
 // event has gone out.
 func runPipAnalysis(t *testing.T, indexURL, requirements string, set []runner.Resolved) pipFixture {
 	t.Helper()
+	return runScannedPipAnalysis(t, indexURL, requirements, set, pipTrivyReport())
+}
+
+// runScannedPipAnalysis is runPipAnalysis with a Trivy that answers every
+// scan with report.
+func runScannedPipAnalysis(t *testing.T, indexURL, requirements string, set []runner.Resolved, report string) pipFixture {
+	t.Helper()
 	svc, st := newTestService(t)
-	svc.trivy = &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}}
+	svc.trivy = &exportTrivy{cannedTrivy: &cannedTrivy{report: report}}
 	svc.tools.PipIndex = indexURL
 	svc.tools.Arch = "amd64"
 	svc.SetPip(&fakeUv{lock: "x==1\n", set: set}, &pip.Client{Index: indexURL})
@@ -1536,6 +1543,29 @@ func TestPipExportFindingsComeFromTheExportScan(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary.md lacks %q:\n%s", want, summary)
 		}
+	}
+}
+
+func TestPipExportSummaryCarriesTheAnalysisWarnings(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	for _, p := range pipExportSet {
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
+	}
+	outside := pipTrivyReport([5]string{"urllib3", "1.26.0", "CVE-2099-0004", "LOW", ""})
+	f := runScannedPipAnalysis(t, ix.URL, "requests==2.32.3\n", pipExportSet, outside)
+	const warning = "1 Trivy finding matched no package of the resolved set: urllib3@1.26.0"
+	if !slices.Contains(f.ref.Result.Warnings, warning) {
+		t.Fatalf("the analysis warned %q, want %q among them", f.ref.Result.Warnings, warning)
+	}
+	e := f.newPipExport(t)
+	scannedBy(e)
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	summary := string(readFile(t, filepath.Join(e.Dir, "summary.md")))
+	want := "## Warnings from the analysis\n\n- " + strings.Join(f.ref.Result.Warnings, "\n- ") + "\n\n"
+	if !strings.Contains(summary, want) {
+		t.Errorf("summary.md lacks the analysis's warnings %q:\n%s", want, summary)
 	}
 }
 
