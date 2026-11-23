@@ -100,7 +100,7 @@ func (a *Analysis) scanPackages(ctx context.Context, pkgs []npm.LockPackage, out
 	sbomPath := outPath + ".cdx.json"
 	defer os.Remove(sbomPath)
 
-	f, err := os.Create(sbomPath)
+	f, err := createNew(sbomPath)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func mergeTrivyReports(paths []string, outPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, data, 0o664)
+	return writeNew(outPath, data)
 }
 
 // factsOf builds rank.Facts for one packument version. Resolves is left at

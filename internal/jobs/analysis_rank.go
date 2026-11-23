@@ -207,7 +207,7 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "combined"), 0o770); werr != nil {
 			return werr
 		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "combined", "pnpm-lock.yaml"), lockRaw, 0o664); werr != nil {
+		if werr := writeNew(filepath.Join(r.a.Dir, "combined", "pnpm-lock.yaml"), lockRaw); werr != nil {
 			return werr
 		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))

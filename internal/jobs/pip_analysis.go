@@ -119,7 +119,7 @@ func (r *pipRun) releaseCut() time.Time {
 // wheel per package and scans the set. Like the npm analysis, it always commits the
 // pending directory, so a failed or cancelled run keeps its log.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
-	logFile, ferr := os.OpenFile(filepath.Join(a.Dir, "log.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o664)
+	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
 		return fmt.Errorf("jobs: open log.txt: %w", ferr)
 	}
@@ -214,7 +214,7 @@ func (r *pipRun) stepValidate() error {
 		}
 		for _, f := range stored {
 			// The store checked each name before handing it out.
-			if err := os.WriteFile(filepath.Join(dir, f.Name), f.Data, 0o664); err != nil {
+			if err := writeNew(filepath.Join(dir, f.Name), f.Data); err != nil {
 				return fmt.Errorf("copy %s: %w", f.Name, err)
 			}
 		}
@@ -321,7 +321,7 @@ func (r *pipRun) stepResolve() error {
 		if err := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(r.a.Dir, "project", "requirements.lock"), res.Lock, 0o664)
+		return writeNew(filepath.Join(r.a.Dir, "project", "requirements.lock"), res.Lock)
 	})
 }
 
@@ -431,7 +431,7 @@ func scanComponents(ctx context.Context, trivy runner.Trivy, components []sbom.C
 	sbomPath := outPath + ".cdx.json"
 	defer os.Remove(sbomPath)
 
-	f, err := os.Create(sbomPath)
+	f, err := createNew(sbomPath)
 	if err != nil {
 		return nil, err
 	}

@@ -32,7 +32,7 @@ func (r *run) stepValidate() (npm.Manifest, error) {
 			}
 			return fmt.Errorf("%d problem(s) in package.json, see the log", len(problems))
 		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "package.json"), raw, 0o664); werr != nil {
+		if werr := writeNew(filepath.Join(r.a.Dir, "package.json"), raw); werr != nil {
 			return fmt.Errorf("copy package.json: %w", werr)
 		}
 		manifest = m
@@ -98,7 +98,7 @@ func (r *run) stepResolveProject(manifest npm.Manifest) ([]npm.LockPackage, erro
 		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); werr != nil {
 			return werr
 		}
-		if werr := os.WriteFile(filepath.Join(r.a.Dir, "project", "pnpm-lock.yaml"), lockRaw, 0o664); werr != nil {
+		if werr := writeNew(filepath.Join(r.a.Dir, "project", "pnpm-lock.yaml"), lockRaw); werr != nil {
 			return werr
 		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))

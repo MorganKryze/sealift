@@ -977,3 +977,26 @@ func TestPipAnalysisKind(t *testing.T) {
 		t.Errorf("Kind, StoreID = %q, %q", a.Kind(), a.StoreID())
 	}
 }
+
+func TestPipAnalysisNeverWritesThroughALink(t *testing.T) {
+	for _, rel := range []string{
+		"log.txt",
+		filepath.Join("requirements", "requirements.txt"),
+		filepath.Join("project", "requirements.lock"),
+		"project.trivy.json.cdx.json",
+	} {
+		t.Run(rel, func(t *testing.T) {
+			a, _ := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+				reqFile("requirements.txt", "requests==2.32.3\n"))
+			uv := &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3"), output: "Resolved 1 package"}
+			a.Uv = uv
+			serveWheels(t, a, uv.set)
+			victim, held := plantLinkToVictim(t, a.Dir, rel)
+
+			_ = a.Run(context.Background(), func(Event) {})
+			if got, err := os.ReadFile(victim); err != nil || string(got) != held {
+				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
+			}
+		})
+	}
+}

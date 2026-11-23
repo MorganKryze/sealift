@@ -80,3 +80,23 @@ func errNotRegular(path string) error {
 func createNew(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 }
+
+// writeNew writes data to a file it creates at path, under createNew's rule.
+func writeNew(path string, data []byte) error {
+	f, err := createNew(path)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}
+
+// openLog opens the log at path for appending, creating it. O_NOFOLLOW
+// refuses a link planted there, through which the log would land in the
+// link's target.
+func openLog(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o664)
+}

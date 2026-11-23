@@ -848,3 +848,84 @@ func TestLogStripsURLCredentials(t *testing.T) {
 		}
 	}
 }
+
+// plantLinkToVictim puts a link at dir/rel to a file the server alone can
+// read and returns that file's path and bytes. The tools account can write
+// every job directory.
+func plantLinkToVictim(t *testing.T, dir, rel string) (string, string) {
+	t.Helper()
+	victim := filepath.Join(t.TempDir(), "signing-key.pem")
+	const held = "a file the server owns"
+	if err := os.WriteFile(victim, []byte(held), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(link), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	return victim, held
+}
+
+func TestAnalysisNeverWritesThroughALink(t *testing.T) {
+	for _, rel := range []string{
+		"log.txt",
+		"package.json",
+		filepath.Join("project", "pnpm-lock.yaml"),
+		"project.trivy.json.cdx.json",
+		filepath.Join("candidates", "foo@1.1.0", "pnpm-lock.yaml"),
+		"candidates.trivy.json",
+		filepath.Join("combined", "pnpm-lock.yaml"),
+	} {
+		t.Run(rel, func(t *testing.T) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0","bar":"2.0.0"}}`)
+			registry := registryServer(t, map[string]string{"foo": fooDoc, "bar": barDoc})
+			a := &Analysis{
+				Store: st,
+				Tools: newTestToolsManager(t, st),
+				// The candidate that does not resolve writes a line to the log.
+				Pnpm: &fakePnpm{fail: map[string]bool{"bar@2.1.0": true}},
+				Trivy: &fakeTrivy{db: map[string][]fakeFinding{
+					"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}},
+				}},
+				Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+				Project:  proj,
+				Settings: st.Settings(),
+				Dir:      pending.Path(),
+				ID:       pending.ID(),
+			}
+			victim, held := plantLinkToVictim(t, a.Dir, rel)
+
+			_ = a.Run(context.Background(), func(Event) {})
+			if got, err := os.ReadFile(victim); err != nil || string(got) != held {
+				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
+			}
+		})
+	}
+}
+
+// A name listed in two dependency groups resolves each candidate twice,
+// into one directory.
+func TestAnalysisResolvesANameListedInTwoGroups(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"},"devDependencies":{"foo":"1.0.0"}}`)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     &fakePnpm{},
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "candidates", "foo@1.0.0", "pnpm-lock.yaml")); err != nil {
+		t.Errorf("candidates/foo@1.0.0/pnpm-lock.yaml: %v", err)
+	}
+}

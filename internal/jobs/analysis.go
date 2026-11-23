@@ -274,7 +274,7 @@ func commitAnalysis(st *store.Store, dir string, status statusFile) error {
 // pending directory, even on failure or cancellation, so a failed, cancelled
 // or interrupted analysis keeps its directory and log.
 func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
-	logFile, ferr := os.OpenFile(filepath.Join(a.Dir, "log.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o664)
+	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
 		return fmt.Errorf("jobs: open log.txt: %w", ferr)
 	}
