@@ -467,9 +467,25 @@ func linkOutOfProjects(t *testing.T, root string, rel []string, depth int, relat
 	}
 }
 
+// linkLoop makes path and a sibling two links to each other, a loop that
+// stays inside projects/.
+func linkLoop(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+		t.Fatal(err)
+	}
+	other := path + ".loop"
+	if err := os.Symlink(filepath.Base(other), path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(path), other); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The tools account can write every directory under projects/ and put a
-// link at any component of a path a reader opens there, or a FIFO or a
-// directory at its last one.
+// link at any component of a path a reader opens there, or a FIFO, a
+// directory or a loop of links at its last one.
 func TestProjectReadersServeOnlyARegularFileInsideProjects(t *testing.T) {
 	type plant struct {
 		name string
@@ -505,6 +521,9 @@ func TestProjectReadersServeOnlyARegularFileInsideProjects(t *testing.T) {
 				if err := os.MkdirAll(filepath.Join(append([]string{root, "projects"}, rel...)...), dirMode); err != nil {
 					t.Fatal(err)
 				}
+			}},
+			plant{"a loop of links", func(t *testing.T, root string, rel []string) {
+				linkLoop(t, filepath.Join(append([]string{root, "projects"}, rel...)...))
 			}},
 		)
 		for _, p := range plants {

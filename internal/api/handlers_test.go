@@ -852,8 +852,9 @@ func TestSettingsHaveNoSignatureKey(t *testing.T) {
 
 // assertServesNothingOutsideProjects plants, one row at a time, a link that
 // leaves projects/ at each component of rel, the path a route reads there,
-// and expects the route at url to answer 404 without the signing key's
-// bytes. The tools account can write every directory under projects/.
+// or a loop of links at its last one, and expects the route at url to
+// answer 404 without the signing key's bytes. The tools account can write
+// every directory under projects/.
 func assertServesNothingOutsideProjects(t *testing.T, url string, rel []string) {
 	t.Helper()
 	for depth := range rel {
@@ -896,21 +897,46 @@ func assertServesNothingOutsideProjects(t *testing.T, url string, rel []string) 
 				if err := os.Symlink(target, at); err != nil {
 					t.Fatal(err)
 				}
-
-				resp, err := http.Get(srv.URL + url)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(resp.Body)
-				if bytes.Contains(body, key) {
-					t.Fatalf("GET %s served the signing key (status %d)", url, resp.StatusCode)
-				}
-				if resp.StatusCode != http.StatusNotFound {
-					t.Errorf("GET %s status = %d, want 404", url, resp.StatusCode)
-				}
+				assertNotFoundWithoutKey(t, srv.URL+url, key)
 			})
 		}
+	}
+	// Two links to each other stay inside projects/, so only the loop
+	// itself refuses them.
+	t.Run("a loop of links", func(t *testing.T) {
+		srv, h := newTestServer(t)
+		root := h.Store.Root()
+		key, err := os.ReadFile(filepath.Join(root, "private", "signing-key.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := filepath.Join(append([]string{root, "projects"}, rel...)...)
+		if err := os.MkdirAll(filepath.Dir(at), 0o770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Base(at)+".loop", at); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Base(at), at+".loop"); err != nil {
+			t.Fatal(err)
+		}
+		assertNotFoundWithoutKey(t, srv.URL+url, key)
+	})
+}
+
+func assertNotFoundWithoutKey(t *testing.T, url string, key []byte) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(body, key) {
+		t.Fatalf("GET %s served the signing key (status %d)", url, resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET %s status = %d, want 404", url, resp.StatusCode)
 	}
 }
 
