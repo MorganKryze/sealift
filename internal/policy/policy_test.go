@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -126,6 +127,105 @@ parallelism:
 	}
 	if fresh.Settings.ResolveParallelism != store.DefaultSettings.ResolveParallelism || fresh.Settings.MinReleaseAgeDays != 30 {
 		t.Errorf("Settings on a fresh volume = %+v, want the file's values over the defaults", fresh.Settings)
+	}
+}
+
+func TestStoredValueOutsideTheRulesStopsTheStart(t *testing.T) {
+	for _, c := range []struct {
+		name                 string
+		change               func(*store.Settings)
+		key, policyKey, rule string
+		replace              string // a policy that sets the key
+	}{
+		{"a node range", func(s *store.Settings) { s.Target.Node = "22" }, "target", "targets.npm", `node must be exact, such as 22.17.1, not "22"`,
+			"targets:\n  npm: {os: linux, cpu: x64, libc: glibc, node: 22.17.1, pnpm: 10.34.5}\n"},
+		{"a target without pnpm", func(s *store.Settings) { s.Target.PnpmVer = "" }, "target", "targets.npm", "pnpm version is empty",
+			"targets:\n  npm: {os: linux, cpu: x64, libc: glibc, node: 22.17.1, pnpm: 10.34.5}\n"},
+		{"a release age past the maximum", func(s *store.Settings) { s.MinReleaseAgeDays = 120 }, "minReleaseAgeDays", "minReleaseAgeDays", "must be between 1 and 90, not 120",
+			"minReleaseAgeDays: 30\n"},
+		{"a negative release age", func(s *store.Settings) { s.MinReleaseAgeDays = -1 }, "minReleaseAgeDays", "minReleaseAgeDays", "must be between 1 and 90, not -1",
+			"minReleaseAgeDays: 30\n"},
+		{"a resolve parallelism past the maximum", func(s *store.Settings) { s.ResolveParallelism = 17 }, "resolveParallelism", "parallelism.resolve", "must be between 1 and 16, not 17",
+			"parallelism: {resolve: 4}\n"},
+		{"a download parallelism past the maximum", func(s *store.Settings) { s.DownloadParallelism = 33 }, "downloadParallelism", "parallelism.download", "must be between 1 and 32, not 33",
+			"parallelism: {download: 8}\n"},
+	} {
+		stored := stored070
+		c.change(&stored)
+		_, err := Load("", stored, true)
+		var held *StoredError
+		if !errors.As(err, &held) {
+			t.Errorf("%s: Load = %v, want a StoredError", c.name, err)
+			continue
+		}
+		if held.Key != c.key || held.PolicyKey != c.policyKey {
+			t.Errorf("%s: the error names %q and %q, want %q and %q", c.name, held.Key, held.PolicyKey, c.key, c.policyKey)
+		}
+		for _, want := range []string{c.key + " ", c.rule, "set " + c.policyKey + " in the policy file"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: Load = %q, want it to hold %q", c.name, err, want)
+			}
+		}
+
+		p, err := Load(writePolicy(t, c.replace), stored, true)
+		if err != nil {
+			t.Errorf("%s: Load with a policy that sets %s: %v", c.name, c.policyKey, err)
+			continue
+		}
+		if !slices.Contains(p.Overrides, c.policyKey) {
+			t.Errorf("%s: Overrides = %v, want %s", c.name, p.Overrides, c.policyKey)
+		}
+	}
+}
+
+func TestStoredValueAtEachLimitStays(t *testing.T) {
+	for _, stored := range []store.Settings{
+		{Target: stored070.Target, MinReleaseAgeDays: 90, ResolveParallelism: 16, DownloadParallelism: 32},
+		{Target: stored070.Target, MinReleaseAgeDays: 1, ResolveParallelism: 1, DownloadParallelism: 1},
+	} {
+		p, err := Load("", stored, true)
+		if err != nil {
+			t.Errorf("Load(%+v): %v", stored, err)
+		} else if p.Settings != stored {
+			t.Errorf("Settings = %+v, want the stored %+v", p.Settings, stored)
+		}
+	}
+}
+
+func TestStoredZeroGivesTheDefaultAndSaysSo(t *testing.T) {
+	stored := store.Settings{MinReleaseAgeDays: 0, ResolveParallelism: 6, DownloadParallelism: 0}
+	p, err := Load("", stored, true)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := store.DefaultSettings
+	want.ResolveParallelism = 6
+	if p.Settings != want {
+		t.Errorf("Settings = %+v, want %+v", p.Settings, want)
+	}
+	if wantKeys := []string{"targets.npm", "minReleaseAgeDays", "parallelism.download"}; !slices.Equal(p.Defaulted, wantKeys) {
+		t.Errorf("Defaulted = %v, want %v", p.Defaulted, wantKeys)
+	}
+
+	set, err := Load(writePolicy(t, "minReleaseAgeDays: 14\n"), stored, true)
+	if err != nil {
+		t.Fatalf("Load with a policy: %v", err)
+	}
+	if wantKeys := []string{"targets.npm", "parallelism.download"}; !slices.Equal(set.Defaulted, wantKeys) {
+		t.Errorf("Defaulted under a policy that sets the release age = %v, want %v", set.Defaulted, wantKeys)
+	}
+	if !slices.Equal(set.Overrides, []string{"minReleaseAgeDays"}) {
+		t.Errorf("Overrides = %v, want minReleaseAgeDays, which replaces a stored 0", set.Overrides)
+	}
+
+	for _, hasStored := range []bool{false, true} {
+		var held store.Settings
+		if hasStored {
+			held = stored070
+		}
+		if p, _ := Load("", held, hasStored); len(p.Defaulted) != 0 {
+			t.Errorf("hasStored %v: Defaulted = %v, want none", hasStored, p.Defaulted)
+		}
 	}
 }
 

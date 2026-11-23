@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -606,6 +607,34 @@ func writeFile(t *testing.T, path, data string) {
 	}
 }
 
+// refusedStart runs the server on root, expects it to stop before it
+// listens, and returns the error run gave.
+func refusedStart(t *testing.T, root string) error {
+	t.Helper()
+	addr := freeAddr(t)
+	done := make(chan error, 1)
+	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		p, _ := os.FindProcess(os.Getpid())
+		_ = p.Signal(syscall.SIGTERM)
+		if err := <-done; err != nil {
+			t.Logf("run returned %v after the signal", err)
+		}
+		t.Fatal("run started and served until stopped")
+	}
+	if err == nil {
+		t.Fatal("run started")
+	}
+	if conn, dialErr := net.Dial("tcp", addr); dialErr == nil {
+		conn.Close()
+		t.Errorf("something listens on %s after a refused start", addr)
+	}
+	return err
+}
+
 func TestRunRefusesABadPolicy(t *testing.T) {
 	localGitHub(t)
 	dir := t.TempDir()
@@ -620,33 +649,89 @@ func TestRunRefusesABadPolicy(t *testing.T) {
 				writeFile(t, path, c.body)
 			}
 			t.Setenv("SEALIFT_POLICY", path)
-			addr := freeAddr(t)
-			done := make(chan error, 1)
-			go func() {
-				done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
-			}()
-			var err error
-			select {
-			case err = <-done:
-			case <-time.After(10 * time.Second):
-				p, _ := os.FindProcess(os.Getpid())
-				_ = p.Signal(syscall.SIGTERM)
-				if err := <-done; err != nil {
-					t.Logf("run returned %v after the signal", err)
-				}
-				t.Fatal("run started under a bad policy and served until stopped")
-			}
-			if err == nil {
-				t.Fatal("run started under a bad policy")
-			}
+			err := refusedStart(t, filepath.Join(t.TempDir(), "data"))
 			if want := "policy " + path + ": " + c.want; !strings.Contains(err.Error(), want) {
 				t.Errorf("run = %q, want it to hold %q", err, want)
 			}
-			if conn, dialErr := net.Dial("tcp", addr); dialErr == nil {
-				conn.Close()
-				t.Errorf("something listens on %s after a refused start", addr)
+		})
+	}
+}
+
+// settings070 is private/settings.json as 0.7.0 writes it, with the node
+// version and the release age given.
+func settings070(node string, age int) string {
+	return fmt.Sprintf(`{
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": %q,
+    "pnpmVer": "10.34.5"
+  },
+  "minReleaseAgeDays": %d,
+  "resolveParallelism": 4,
+  "downloadParallelism": 16
+}`, node, age)
+}
+
+// loggedKeys returns the key of each JSON log entry whose message is msg.
+func loggedKeys(logs, msg string) []string {
+	var keys []string
+	for line := range strings.Lines(logs) {
+		var entry struct{ Msg, Key string }
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == msg {
+			keys = append(keys, entry.Key)
+		}
+	}
+	return keys
+}
+
+func TestRunRefusesAStoredSettingOutsideTheRules(t *testing.T) {
+	localGitHub(t)
+	t.Setenv("SEALIFT_POLICY", "")
+	for name, c := range map[string]struct {
+		node string
+		age  int
+		want string
+	}{
+		"a node range":                   {"22", 21, `target is refused: node must be exact, such as 22.17.1, not "22"; set targets.npm in the policy file to replace it`},
+		"a release age past the maximum": {"22.17.1", 120, "minReleaseAgeDays must be between 1 and 90, not 120; set minReleaseAgeDays in the policy file to replace it"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "data")
+			path := filepath.Join(root, "private", "settings.json")
+			writeFile(t, path, settings070(c.node, c.age))
+			err := refusedStart(t, root)
+			if want := path + ", left by an older release: " + c.want; !strings.Contains(err.Error(), want) {
+				t.Errorf("run = %q, want it to hold %q", err, want)
 			}
 		})
+	}
+}
+
+func TestRunLogsAStoredZero(t *testing.T) {
+	t.Setenv("SEALIFT_POLICY", "")
+	root := filepath.Join(t.TempDir(), "data")
+	writeFile(t, filepath.Join(root, "private", "settings.json"), settings070("22.17.1", 0))
+	var logs bytes.Buffer
+	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
+
+	resp, err := http.Get("http://" + addr + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got api.Settings
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MinReleaseAgeDays != store.DefaultSettings.MinReleaseAgeDays {
+		t.Errorf("GET /api/settings gave a release age of %d, want the default %d", got.MinReleaseAgeDays, store.DefaultSettings.MinReleaseAgeDays)
+	}
+	if keys := loggedKeys(logs.String(), "default replaces an empty stored setting"); len(keys) != 1 || keys[0] != "minReleaseAgeDays" {
+		t.Errorf("the start log names %v as defaulted, want only minReleaseAgeDays", keys)
 	}
 }
 
@@ -696,18 +781,7 @@ parallelism: {resolve: 2, download: 3}
 
 func TestRunLogsAnOverriddenKey(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "data")
-	stored := `{
-  "target": {
-    "os": "linux",
-    "cpu": "x64",
-    "libc": "glibc",
-    "node": "22.17.1",
-    "pnpmVer": "10.34.5"
-  },
-  "minReleaseAgeDays": 21,
-  "resolveParallelism": 4,
-  "downloadParallelism": 16
-}`
+	stored := settings070("22.17.1", 21)
 	writeFile(t, filepath.Join(root, "private", "settings.json"), stored)
 	policy := filepath.Join(t.TempDir(), "policy.yaml")
 	writeFile(t, policy, "minReleaseAgeDays: 30\nparallelism: {resolve: 4}\n")
@@ -717,13 +791,7 @@ func TestRunLogsAnOverriddenKey(t *testing.T) {
 	_, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
 	stop()
 
-	var overridden []string
-	for line := range strings.Lines(logs.String()) {
-		var entry struct{ Msg, Key string }
-		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "policy overrides a stored setting" {
-			overridden = append(overridden, entry.Key)
-		}
-	}
+	overridden := loggedKeys(logs.String(), "policy overrides a stored setting")
 	if len(overridden) != 1 || overridden[0] != "minReleaseAgeDays" {
 		t.Errorf("the start log names %v as overridden, want only minReleaseAgeDays", overridden)
 	}

@@ -180,10 +180,14 @@ func run(addr, root string, log *slog.Logger) error {
 
 // applyPolicy reads the policy file at path, "" meaning none, over the
 // settings an older release left on the volume, and makes the result the
-// settings in effect. It logs each key the file changed from a stored value.
+// settings in effect. It logs each key the file changed from a stored value,
+// and each key whose stored value was empty, so the default applies.
 func applyPolicy(st *store.Store, path string, log *slog.Logger) error {
 	stored, hasStored := st.StoredSettings()
 	p, err := policy.Load(path, stored, hasStored)
+	if held := (*policy.StoredError)(nil); errors.As(err, &held) {
+		return fmt.Errorf("%s, left by an older release: %w", filepath.Join(st.Root(), "private", "settings.json"), err)
+	}
 	if err != nil {
 		return fmt.Errorf("policy %s: %w", path, err)
 	}
@@ -192,6 +196,9 @@ func applyPolicy(st *store.Store, path string, log *slog.Logger) error {
 	}
 	for _, key := range p.Overrides {
 		log.Info("policy overrides a stored setting", "key", key)
+	}
+	for _, key := range p.Defaulted {
+		log.Warn("default replaces an empty stored setting", "key", key)
 	}
 	return nil
 }

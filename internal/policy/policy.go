@@ -34,6 +34,21 @@ type Policy struct {
 	// Overrides names each key the file set over a different value the
 	// stored settings held, for the start log.
 	Overrides []string
+	// Defaulted names each key the stored settings held empty or at zero
+	// and the file does not set, so the default applies, for the start log.
+	Defaulted []string
+}
+
+// StoredError reports a value the settings of an older release hold, which
+// this release refuses and the policy file does not replace.
+type StoredError struct {
+	// Key is the key in the settings file, PolicyKey the key of the policy
+	// file that replaces its value, and Rule the rule the value breaks.
+	Key, PolicyKey, Rule string
+}
+
+func (e *StoredError) Error() string {
+	return fmt.Sprintf("%s %s; set %s in the policy file to replace it", e.Key, e.Rule, e.PolicyKey)
 }
 
 type rawPolicy struct {
@@ -90,110 +105,114 @@ var (
 
 // Load reads the policy file at path, "" meaning none, over stored, what an
 // older release's settings held when hasStored is true. Each value comes
-// from the file, else from stored, else from the defaults. The error names
-// the key and the rule it breaks, and never repeats a value of the file.
+// from the file, else from stored, else from the defaults. A stored value
+// this release refuses stops the load with a *StoredError, unless the file
+// replaces it. The error names the key and the rule it breaks, and never
+// repeats a value of the file.
 func Load(path string, stored store.Settings, hasStored bool) (Policy, error) {
-	p := Policy{Settings: base(stored, hasStored), Pip: store.DefaultPipTarget, Brand: DefaultBrand()}
-	if path == "" {
-		return p, nil
-	}
-	data, err := readPolicyFile(path)
-	if err != nil {
-		return Policy{}, err
-	}
 	var raw rawPolicy
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
-		return Policy{}, yamlError(err)
-	}
-	// Decode reads the first document only: a second one would go unchecked
-	// and unapplied.
-	var rest yaml.Node
-	if err := dec.Decode(&rest); !errors.Is(err, io.EOF) {
-		return Policy{}, errors.New("holds more than one YAML document")
-	}
-
-	set := p.Settings
-	if raw.Targets.Npm != nil {
-		t, err := raw.Targets.Npm.target()
-		if err != nil {
+	if path != "" {
+		var err error
+		if raw, err = decodePolicy(path); err != nil {
 			return Policy{}, err
 		}
-		set.Target = t
 	}
-	for _, l := range []struct {
-		key   string
-		value *int
-		max   int
-		into  *int
-	}{
-		{"minReleaseAgeDays", raw.MinReleaseAgeDays, store.MaxMinReleaseAgeDays, &set.MinReleaseAgeDays},
-		{"parallelism.resolve", raw.Parallelism.Resolve, store.MaxResolveParallelism, &set.ResolveParallelism},
-		{"parallelism.download", raw.Parallelism.Download, store.MaxDownloadParallelism, &set.DownloadParallelism},
-	} {
-		if l.value == nil {
-			continue
-		}
-		if *l.value < 1 || *l.value > l.max {
-			return Policy{}, fmt.Errorf("%s must be between 1 and %d, not %d", l.key, l.max, *l.value)
-		}
-		*l.into = *l.value
+	p := Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget}
+	if err := p.merge(raw, stored, hasStored); err != nil {
+		return Policy{}, err
 	}
+	var err error
 	if raw.Targets.Pip != nil {
 		if p.Pip, err = raw.Targets.Pip.target(); err != nil {
 			return Policy{}, err
 		}
 	}
+	// Without a file, the brand holds no key and reads no logo.
 	if p.Brand, err = raw.Brand.brand(filepath.Dir(path)); err != nil {
 		return Policy{}, err
 	}
-	if hasStored {
-		p.Overrides = overrides(p.Settings, set)
-	}
-	p.Settings = set
 	return p, nil
 }
 
-// base is what applies before the file: each value the stored settings
-// hold, else the default. A settings file from before a key existed holds
-// its zero value.
-func base(stored store.Settings, hasStored bool) store.Settings {
-	set := store.DefaultSettings
-	if !hasStored {
-		return set
+// decodePolicy reads the policy file at path into its raw keys.
+func decodePolicy(path string) (rawPolicy, error) {
+	data, err := readPolicyFile(path)
+	if err != nil {
+		return rawPolicy{}, err
 	}
-	if stored.Target != (store.Target{}) {
-		set.Target = stored.Target
+	var raw rawPolicy
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
+		return rawPolicy{}, yamlError(err)
 	}
-	for _, v := range []struct{ from, into *int }{
-		{&stored.MinReleaseAgeDays, &set.MinReleaseAgeDays},
-		{&stored.ResolveParallelism, &set.ResolveParallelism},
-		{&stored.DownloadParallelism, &set.DownloadParallelism},
-	} {
-		if *v.from != 0 {
-			*v.into = *v.from
-		}
+	// Decode reads the first document only: a second one would go unchecked
+	// and unapplied.
+	var rest yaml.Node
+	if err := dec.Decode(&rest); !errors.Is(err, io.EOF) {
+		return rawPolicy{}, errors.New("holds more than one YAML document")
 	}
-	return set
+	return raw, nil
 }
 
-// overrides names each key whose value the file changed from before.
-func overrides(before, after store.Settings) []string {
-	var keys []string
-	if before.Target != after.Target {
-		keys = append(keys, "targets.npm")
+// merge sets the npm target and the limits from raw, else from stored,
+// else leaves the defaults, and records the keys the start log names.
+func (p *Policy) merge(raw rawPolicy, stored store.Settings, hasStored bool) error {
+	switch {
+	case raw.Targets.Npm != nil:
+		t, err := raw.Targets.Npm.target()
+		if err != nil {
+			return err
+		}
+		if hasStored && t != stored.Target {
+			p.Overrides = append(p.Overrides, "targets.npm")
+		}
+		p.Settings.Target = t
+	case !hasStored:
+	case stored.Target == (store.Target{}):
+		p.Defaulted = append(p.Defaulted, "targets.npm")
+	default:
+		if err := store.ValidateTarget(stored.Target); err != nil {
+			return &StoredError{Key: "target", PolicyKey: "targets.npm", Rule: "is refused: " + targetProblems(err)}
+		}
+		p.Settings.Target = stored.Target
 	}
-	if before.MinReleaseAgeDays != after.MinReleaseAgeDays {
-		keys = append(keys, "minReleaseAgeDays")
+
+	for _, l := range []struct {
+		key, storedKey string
+		value          *int
+		stored, max    int
+		into           *int
+	}{
+		{"minReleaseAgeDays", "minReleaseAgeDays", raw.MinReleaseAgeDays, stored.MinReleaseAgeDays, store.MaxMinReleaseAgeDays, &p.Settings.MinReleaseAgeDays},
+		{"parallelism.resolve", "resolveParallelism", raw.Parallelism.Resolve, stored.ResolveParallelism, store.MaxResolveParallelism, &p.Settings.ResolveParallelism},
+		{"parallelism.download", "downloadParallelism", raw.Parallelism.Download, stored.DownloadParallelism, store.MaxDownloadParallelism, &p.Settings.DownloadParallelism},
+	} {
+		switch {
+		case l.value != nil:
+			if *l.value < 1 || *l.value > l.max {
+				return fmt.Errorf("%s %s", l.key, outOfRange(l.max, *l.value))
+			}
+			if hasStored && *l.value != l.stored {
+				p.Overrides = append(p.Overrides, l.key)
+			}
+			*l.into = *l.value
+		case !hasStored:
+		// Every release wrote each key, and the first ones accepted a zero:
+		// the default replaces it, and the start log says so.
+		case l.stored == 0:
+			p.Defaulted = append(p.Defaulted, l.key)
+		case l.stored < 1 || l.stored > l.max:
+			return &StoredError{Key: l.storedKey, PolicyKey: l.key, Rule: outOfRange(l.max, l.stored)}
+		default:
+			*l.into = l.stored
+		}
 	}
-	if before.ResolveParallelism != after.ResolveParallelism {
-		keys = append(keys, "parallelism.resolve")
-	}
-	if before.DownloadParallelism != after.DownloadParallelism {
-		keys = append(keys, "parallelism.download")
-	}
-	return keys
+	return nil
+}
+
+func outOfRange(highest, value int) string {
+	return fmt.Sprintf("must be between 1 and %d, not %d", highest, value)
 }
 
 func (r rawNpmTarget) target() (store.Target, error) {
@@ -231,7 +250,13 @@ func required(key string, names []string, values ...string) error {
 }
 
 func invalidTarget(key string, err error) error {
-	return fmt.Errorf("%s is not a valid target: %s", key, strings.TrimPrefix(err.Error(), store.ErrInvalidTarget.Error()+": "))
+	return fmt.Errorf("%s is not a valid target: %s", key, targetProblems(err))
+}
+
+// targetProblems is what a target validation error says, without its
+// sentinel's prefix.
+func targetProblems(err error) string {
+	return strings.TrimPrefix(err.Error(), store.ErrInvalidTarget.Error()+": ")
 }
 
 // readPolicyFile reads the regular file at path. A link is followed, as a
