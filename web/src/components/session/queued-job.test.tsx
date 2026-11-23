@@ -115,3 +115,21 @@ describe("a queued export", () => {
     expect(screen.getByText("Packages")).toBeInTheDocument();
   });
 });
+
+describe("an export cancelled while queued", () => {
+  // It never ran: its status.json holds no step, so the server sends no
+  // failure and the screen has no step to stop at.
+  it("says it was cancelled and offers to start it again", () => {
+    renderExport("cancelled");
+    expect(
+      screen.getByRole("heading", { name: "Export cancelled" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("You cancelled this export.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Start the export again" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancel" }),
+    ).not.toBeInTheDocument();
+  });
+});
