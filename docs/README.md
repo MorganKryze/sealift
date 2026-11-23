@@ -1,6 +1,6 @@
 # sealift documentation
 
-sealift prepares npm dependency updates for air-gapped networks. Every page is one click from here.
+sealift prepares npm dependency updates for air-gapped networks, and Python ones through its API. Every page is one click from here.
 
 ## First steps
 
@@ -14,6 +14,7 @@ sealift prepares npm dependency updates for air-gapped networks. Every page is o
 - [Settings](settings.md): the target platform, the signing key, the limits.
 - [The air gap](air-gap.md): what crosses the kiosk, the signature and the trusted key, what to check, what the import side receives.
 - [Importing](importing.md): the Archives, Imports and import screens of the import service, the trusted key and every state.
+- [Python projects](python.md): a Python project through the API, from its requirements files to an install from Nexus.
 
 ## Deploying
 

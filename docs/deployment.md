@@ -94,6 +94,7 @@ sealift needs HTTPS to:
 | `api.github.com`, `github.com` and the download host it redirects to | Trivy releases and their checksums |
 | `mirror.gcr.io` | The Trivy vulnerability database |
 | `registry.npmjs.org` | pnpm, package metadata and tarballs |
+| `pypi.org` and `files.pythonhosted.org` | uv, Python package index pages and wheels |
 
 To resolve and download packages through an npm mirror, set both variables to its URL:
 
@@ -227,7 +228,7 @@ The service compares `issuer` and `audience` with the token's `iss` and `aud` cl
 
 ### MinIO
 
-Give the service its own MinIO user. The lab's policy, `lab/import/minio-policy.json`, lets it list `packages/npm/` and read and delete objects under `packages/npm/` in any `user-*` bucket, and nothing else. With that user, `mc` could not put an object, and could not list or read `packages/pip/`, list the bucket's root or list the buckets. The policy covers every user's bucket: the service itself restricts a request to the bucket of the checked user.
+Give the service its own MinIO user. The lab's policy, `lab/import/minio-policy.json`, lets it list `packages/npm/` and `packages/pip/` and read and delete objects under both in any `user-*` bucket, and nothing else. With that user, at commit f5c6f46, `mc` listed and read both folders, and could not put an object, list the bucket's root or list the buckets. The policy covers every user's bucket: the service itself restricts a request to the bucket of the checked user.
 
 MinIO refused a policy that gave `s3:GetBucketLocation` an `s3:prefix` condition: the condition belongs to `s3:ListBucket` alone.
 

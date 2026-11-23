@@ -72,7 +72,7 @@ Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks t
 
 ## Current limits
 
-- npm only. Python packages and Docker images are not handled.
+- pip projects are collected through the API only, with no collection screen yet; the import screens take them. Docker images are not handled.
 - The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
 - sealift proposes new versions for direct dependencies. Transitive packages change through them, and the minimum release age does not apply to them.
 - The signature shows that a manifest came from the holder of sealift's private key. It does not show who asked for the export, how old it is, or anything about the reports. A regenerated key, or a lost volume, means carrying a new public key to the import side.

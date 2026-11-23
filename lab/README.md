@@ -17,7 +17,7 @@ The import service exits with code 2 without `import/public-key.pem`, and a stop
 
 Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.6.2`. `SEALIFT_IMAGE` picks any other image, such as `sealift:dev` after `just image`.
 
-`setup.sh` waits for Nexus (about two minutes on a first start), sets its admin password, accepts its EULA, creates the `npm` and `pypi` hosted repositories, creates the MinIO buckets `user-alice` and `user-bob` with `packages/npm/` and `packages/pip/`, and creates the MinIO user `sealift-import` with `import/minio-policy.json`. Run it again at any time: it skips what exists.
+`setup.sh` waits for Nexus (about two minutes on a first start), sets its admin password, accepts its EULA, creates the `npm` and `pypi` hosted repositories, creates the MinIO buckets `user-alice` and `user-bob` with `packages/npm/` and `packages/pip/`, and creates the MinIO user `sealift-import` with `import/minio-policy.json`. Run it again at any time: it creates what is missing, and rewrites the import's roles and users, passwords included, from the files under `import/`.
 
 Nexus needs about 2 GB of memory. Give Docker at least 6 GB.
 
@@ -61,7 +61,7 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
    docker compose run --rm mc cp /transfer/packages_npm.tar.gz /transfer/manifest.json /transfer/manifest.json.sig lab/user-alice/packages/npm/
    ```
 
-4. Import. The service imports the archive from the user's folder; `sealift import` imports one from a local file. Both read `import/settings.yaml`, which points at Nexus as the `sealift-import` user that `setup.sh` creates with the privileges to read, browse, add and edit in the `npm` and `pypi` repositories and to upload components, and no others. `publicKeyFile` names `import/public-key.pem`, the file step 1 writes.
+4. Import. The service imports the archive from the user's folder; `sealift import` imports one from a local file. Both read `import/settings.yaml`, which points at Nexus as the `sealift-import` user for npm and the `sealift-import-pip` user for pip. `setup.sh` gives `sealift-import` the privileges to read, browse, add and edit in the `npm` and `pypi` repositories and to upload components, and `sealift-import-pip` browse, read and edit in `pypi` alone. `publicKeyFile` names `import/public-key.pem`, the file step 1 writes.
 
    Through the screens, open Archives, press `Start` on the archive's row, optionally paste its sha256 and press `Start the import`. The import page follows it: `Queued`, `Running` with its stages in place, then `Complete`, `Incomplete`, `Interrupted` or `Refused`. Through the API, start the import and follow it. The archive, `manifest.json` and `manifest.json.sig` must sit together in the user's folder, as step 3 leaves them:
 
@@ -126,7 +126,9 @@ A crossing passes when the sha256 of the key matches on both sides, step 2 match
 
 A pip archive crosses the same way: `packages_pip.tar.gz`, `manifest.json` and `manifest.json.sig` go together into the user's `packages/pip/` folder, and the import publishes each wheel to the `pypi` repository that `nexus.pip.repository` names in `import/settings.yaml`. The published 0.6.2 image has no pip import, so start `import-server` and run `import` with `SEALIFT_IMAGE=sealift:dev` after `just image`.
 
-Until the connected side exports pip, a test packs a lab archive from wheels you fetch yourself, signed with a key made for the run:
+Export the pip archive from the connected side through the API, as [Python projects](../docs/python.md) shows, and carry its three files into `transfer/`. The import publishes as `sealift-import-pip`, which holds browse, read and edit on `pypi` and nothing else: `import/settings.yaml` names it under `nexus.pip`, with its password in `import/nexus-pip-password`.
+
+To cross without the connected side, a test packs a lab archive from wheels you fetch yourself, signed with a key made for the run:
 
 ```sh
 # from the repository root, with .whl files for linux x86_64 and CPython 3.11 in <dir>
@@ -179,6 +181,23 @@ Steps 3 to 5 of [Cross the gap](#cross-the-gap) then read:
 
    pip uses an index served over plain HTTP only for a trusted host, and the lab's Nexus has no TLS on the air-gapped network. `pip-shell` mounts `transfer/` and `scripts/` as `airgap-shell` does.
 
+6. Install the project from Nexus alone in `pip-shell`. First check that the shell has no route out, then install into a fresh environment with wheels only:
+
+   ```sh
+   docker compose run --rm pip-shell sh -c 'python -c "import urllib.request; urllib.request.urlopen(\"https://pypi.org\", timeout=5)"; \
+     python -m venv /tmp/v && /tmp/v/bin/pip install --no-cache-dir --only-binary :all: --trusted-host nexus \
+       --index-url http://nexus:8081/repository/pypi/simple/ -r <requirements file> && /tmp/v/bin/pip check'
+   ```
+
+   The first command must fail to resolve `pypi.org`. The install then ends with exit 0 and `pip check` prints `No broken requirements found.`
+
+On commit f5c6f46, the lab showed:
+
+- the connected side resolved a project of two requirements files into 173 packages, each with one wheel, and exported them in one archive whose sha256 matched its manifest;
+- the import service published the 173 wheels as `sealift-import-pip`, with browse, read and edit alone; settings naming a pip user Nexus did not know failed every wheel with 401 before any upload;
+- the service's MinIO user listed and read `packages/npm/` and `packages/pip/`, and could not put an object, list a bucket's root or list the buckets;
+- `pip-shell`, with no route to the internet, installed the whole set from Nexus at Python 3.11.2, and `pip check` found no broken requirement.
+
 ### Prove the pypi upload path
 
 `sh scripts/pypi-proof.sh`, run from `lab/` after `setup.sh`, checks the calls the pip import makes on Nexus as `sealift-import`. It fetches four public wheels from files.pythonhosted.org with their sha256 checked. For three of them it reads the repository list, reads the project's simple page before the upload, uploads through the components API with the `pypi.asset` field, reads the page and the linked file back, posts the same file again, and downloads the wheel with pip in `pip-shell`. It then removes each privilege of the role in turn, uploads the fourth wheel, names the call that breaks and restores the role. Last, it deletes its components. It prints one Markdown table row per check and exits 1 when a check fails. Credentials reach `curl` on stdin.
@@ -187,7 +206,7 @@ On commit ee12d3d, the proof showed on Nexus 3.96.5:
 
 - The upload answers 204. The simple page lists the file in the same second, with a relative link ending in `#sha256=` and the file's sha256, and the link gives the uploaded bytes.
 - The same file posted again answers 409: a repository that allows one write never overwrites.
-- Without `nx-repository-view-pypi-pypi-browse`, the repository list omits `pypi`. Without `nx-repository-view-pypi-pypi-read`, the page and the file answer 403. Without `nx-repository-view-pypi-pypi-edit`, the upload answers 400 `Not authorized for requested path`. Without `nx-repository-view-pypi-pypi-add` or without `nx-component-upload`, every call the import makes still passes. The role keeps both.
+- Without `nx-repository-view-pypi-pypi-browse`, the repository list omits `pypi`. Without `nx-repository-view-pypi-pypi-read`, the page and the file answer 403. Without `nx-repository-view-pypi-pypi-edit`, the upload answers 400 `Not authorized for requested path`. Without `nx-repository-view-pypi-pypi-add` or without `nx-component-upload`, every call the import makes still passes. The role keeps both for this script; the crossing above published through `sealift-import-pip`, which holds neither.
 
 ### What the lab showed for pip
 

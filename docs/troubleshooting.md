@@ -191,6 +191,10 @@ The full reason reads `the signature does not match the manifest: manifest.json 
 
 The signature verified, but the manifest names no format, or a format this import does not read: 2 for npm, 3 for pip. Export the selection again with a sealift of the same release as the import.
 
+### MinIO could not list packages/pip/
+
+**Archives** shows `MinIO could not list packages/pip/: ` followed by MinIO's reason, and still lists `packages/npm/`. The import service's MinIO user has a policy that covers `packages/npm/` alone, as before sealift imported Python packages. Ask the administrators to extend it as [the request](admin-request.md#minio) gives it; nothing else changes.
+
 ### the settings name no pip repository
 
 The archive is a pip archive and the settings file has no `nexus.pip` section, so the import refuses it before reading it. Set `nexus.pip.repository` to the pypi hosted repository, or `nexus.pipRepository` in the chart's values, and start the import again.
