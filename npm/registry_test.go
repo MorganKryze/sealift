@@ -179,3 +179,33 @@ func TestParseIntegrityRejects(t *testing.T) {
 		}
 	}
 }
+
+// TestDownloadFileWritesThroughNoLink plants a link at the .part path, as
+// another account that writes the directory could: the download must not
+// write the tarball into the link's target.
+func TestDownloadFileWritesThroughNoLink(t *testing.T) {
+	tarball := []byte("tarball bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(tarball)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "signing-key.pem")
+	if err := os.WriteFile(victim, []byte("victim"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "demo-1.0.0.tgz")
+	if err := os.Symlink(victim, path+".part"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testClient(srv.URL).DownloadFile(context.Background(), "demo", "1.0.0", sriOf(tarball), path); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "victim" {
+		t.Errorf("the link's target now holds %q", got)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(tarball) {
+		t.Errorf("file = %q", got)
+	}
+}

@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -137,7 +139,13 @@ func (c *Client) DownloadFile(ctx context.Context, name, version, integrity, pat
 	part := path + ".part"
 	var sha512Hex string
 	err = c.do(ctx, TarballURL(c.registry(), name, version), "application/octet-stream", func(body io.Reader) error {
-		f, err := os.Create(part)
+		// Another account may write the directory. Whatever sits at the
+		// .part path goes, and O_EXCL refuses anything planted there again:
+		// through a link, the bytes would land in its target.
+		if err := os.Remove(part); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o666)
 		if err != nil {
 			return err
 		}
