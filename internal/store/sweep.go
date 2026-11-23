@@ -9,11 +9,12 @@ import (
 	"strings"
 )
 
-// runningJSON and interruptedJSON are the State constants as they appear in
-// a status.json's "state" field, so the sweep can compare and rewrite them
-// without importing the status schema internal/jobs owns.
+// runningJSON, queuedJSON and interruptedJSON are the State constants as
+// they appear in a status.json's "state" field, so the sweep can compare and
+// rewrite them without importing the status schema internal/jobs owns.
 var (
 	runningJSON     = jsonString(Running)
+	queuedJSON      = jsonString(Queued)
 	interruptedJSON = jsonString(Interrupted)
 )
 
@@ -67,9 +68,9 @@ func (s *Store) MarkRunningInterrupted() (int, error) {
 // MarkRunningInterrupted has run first. A .tmp still in state running is
 // one MarkRunningInterrupted could not rewrite (a full disk, a directory it
 // cannot write to): committing it would list a job that does not exist, so
-// it is removed like an analysis .tmp with no status.json (queued, never
-// started), an unreadable status.json, every export .tmp and a directory
-// whose rename fails. It returns how many it removed; a renamed directory
+// it is removed like an analysis .tmp still queued (never started), one with
+// no or an unreadable status.json, every export .tmp and a directory whose
+// rename fails. It returns how many it removed; a renamed directory
 // is kept, so it does not count.
 func (s *Store) RemoveOrphanDirs() (int, error) {
 	// Only these two folders hold job directories. A wider glob would also
@@ -108,7 +109,9 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 
 // settledAnalysis reports whether dir holds a readable status.json whose
 // state is no longer running: an analysis that started and was marked, safe
-// to commit under its final name.
+// to commit under its final name. A queued status.json is the one the
+// service seeds before the job starts: committed, it would stay queued with
+// nothing to run it.
 func settledAnalysis(dir string) bool {
 	raw, err := ReadRegularFile(filepath.Join(dir, "status.json"), storedFileLimit)
 	if err != nil {
@@ -119,7 +122,7 @@ func settledAnalysis(dir string) bool {
 		return false
 	}
 	state, ok := fields["state"]
-	return ok && string(state) != runningJSON
+	return ok && string(state) != runningJSON && string(state) != queuedJSON
 }
 
 // markIfRunning flips one status.json's "state" field to interrupted,

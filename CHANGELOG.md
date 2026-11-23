@@ -6,6 +6,13 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Cancelling an analysis still waiting in the queue keeps it in the session as Analysis cancelled, with Start it again. It used to vanish and leave No analysis yet with no action. For a pip project, the API keeps the cancelled record the same way.
+- Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.
+- An analysis or an export waiting for another job reads Waiting for another job, with no step in progress and no package counters, instead of looking like the running one.
+- The home and setup screens wait at most 3 seconds on GitHub for the latest Trivy release, then show the installed versions alone. A slow or closed network held them for about 30 seconds.
+
 ## [0.7.0] - 2026-11-23
 
 ### Added

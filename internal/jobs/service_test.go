@@ -848,3 +848,286 @@ func TestServiceRunsTheNextJobAfterAnExportLeftAFIFOAtStatusJSON(t *testing.T) {
 		t.Fatalf("status.json = %v, %v, want the FIFO left as it was", st, err)
 	}
 }
+
+// TestCancellingAQueuedAnalysisKeepsACancelledRecord proves an analysis
+// the queue drops before it ever starts still leaves a directory the
+// store lists as cancelled, with a log to open and the project's target,
+// instead of vanishing, for an npm project and a pip one alike.
+func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
+	pipFiles := []store.RequirementsFile{{Name: "requirements.txt", Data: []byte("requests==2.32.3\n")}}
+	tests := []struct {
+		name      string
+		create    func(t *testing.T, st *store.Store) store.Project
+		targetKey string
+	}{
+		{"npm", mustCreateProject, "target"},
+		{"pip", func(t *testing.T, st *store.Store) store.Project {
+			project, err := st.CreatePipProject("Data tools", pipFiles, store.DefaultPipTarget)
+			if err != nil {
+				t.Fatalf("CreatePipProject: %v", err)
+			}
+			return project
+		}, "pipTarget"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			svc.SetPip(&fakeUv{}, &pip.Client{Index: "http://127.0.0.1:1"})
+			project := tc.create(t, st)
+
+			blockQueue(t, svc)
+
+			info, err := svc.QueueAnalysis(project.ID)
+			if err != nil {
+				t.Fatalf("QueueAnalysis: %v", err)
+			}
+			if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+			analyses, err := st.Analyses(project.ID)
+			if err != nil {
+				t.Fatalf("Analyses: %v", err)
+			}
+			var found *store.AnalysisInfo
+			for i := range analyses {
+				if analyses[i].ID == info.ID {
+					found = &analyses[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("Analyses holds no record for the cancelled queued analysis %s", info.ID)
+			}
+			if found.State != store.Cancelled {
+				t.Errorf("State = %q, want %q", found.State, store.Cancelled)
+			}
+			var status map[string]json.RawMessage
+			if err := st.ReadJSON(filepath.Join(project.Dir, "analyses", info.ID, "status.json"), &status); err != nil {
+				t.Fatalf("read status.json: %v", err)
+			}
+			if status[tc.targetKey] == nil {
+				t.Errorf("status.json = %v, want the project's %s", status, tc.targetKey)
+			}
+			f, err := st.AnalysisLog(project.ID, info.ID)
+			if err != nil {
+				t.Fatalf("AnalysisLog: %v", err)
+			}
+			f.Close()
+		})
+	}
+}
+
+// TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord proves a
+// queued analysis whose state cannot be rewritten is not published as
+// "queued": nothing runs it, so nothing would ever move it on.
+func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	blockQueue(t, svc)
+
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	pendingDir := filepath.Join(project.Dir, "analyses", info.ID+".tmp")
+	if err := os.Chmod(pendingDir, 0o555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(pendingDir, 0o755)
+		_ = os.Chmod(strings.TrimSuffix(pendingDir, ".tmp"), 0o755)
+	})
+
+	if _, err := svc.Cancel(project.ID, "analysis", info.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	analyses, err := st.Analyses(project.ID)
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	for _, a := range analyses {
+		if a.ID == info.ID && a.State == store.Queued {
+			t.Errorf("analysis %s was published as %q with no job behind it", info.ID, a.State)
+		}
+	}
+}
+
+// TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled proves the
+// finalizer never discards an analysis that wrote something. Its own
+// commit can fail (a full volume fails the status write there and again
+// in the reconcile), leaving the pending directory with the log and the
+// ranking: that run explains the failure, so it is published, not removed.
+func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	for _, tc := range []struct {
+		name string
+		// afterRun runs on the pending directory once the job has written
+		// its files.
+		afterRun func(dir string) error
+	}{
+		{"unreadable status.json", func(dir string) error {
+			return os.Chmod(filepath.Join(dir, "status.json"), 0)
+		}},
+		{"running status.json", func(string) error { return nil }},
+		// The reconcile reads the state, then cannot write it back, as on
+		// a full volume.
+		{"running status.json that cannot be rewritten", func(dir string) error {
+			return os.Chmod(dir, 0o555)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			project := mustCreateProject(t, st)
+			pending, err := st.NewDir("analyses", project.ID)
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = os.Chmod(pending.Path(), 0o755)
+				_ = os.Chmod(pending.Final(), 0o755)
+			})
+
+			job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+				files := map[string]string{
+					"log.txt":      "resolving\n",
+					"ranking.json": "{}",
+					"status.json":  `{"state":"running"}`,
+				}
+				for file, body := range files {
+					if err := os.WriteFile(filepath.Join(pending.Path(), file), []byte(body), 0o664); err != nil {
+						return err
+					}
+				}
+				if err := tc.afterRun(pending.Path()); err != nil {
+					return err
+				}
+				// Returns without renaming, as Analysis.Run does when its
+				// own commit fails.
+				return errors.New("jobs: write status.json: no space left on device")
+			}}
+			if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+				svc.track(queueID, "analysis", project.ID, "", pending)
+			}); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+			for _, file := range []string{"log.txt", "ranking.json"} {
+				if _, err := os.Stat(filepath.Join(pending.Final(), file)); err != nil {
+					t.Errorf("the analysis that ran lost %s: %v", file, err)
+				}
+			}
+		})
+	}
+}
+
+// TestServiceKeepsAnExportCancelledWhileQueued proves an export dropped
+// before it ever ran is committed as a cancelled export, not discarded: the
+// export screen and the export list both need the record.
+func TestServiceKeepsAnExportCancelledWhileQueued(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	blockQueue(t, svc)
+
+	pending, err := st.NewDir("exports", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	const analysisID = "20260917T101502Z"
+	queued := storeIDJob{fakeJob: &fakeJob{kind: "export", run: func(context.Context, func(Event)) error { return nil }}, id: pending.ID()}
+	if _, err := svc.queue.SubmitWith(queued, func(queueID string) {
+		svc.track(queueID, "export", project.ID, analysisID, pending)
+	}); err != nil {
+		t.Fatalf("Submit(export): %v", err)
+	}
+
+	if _, err := svc.Cancel(project.ID, "export", pending.ID()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "export", pending.ID())
+
+	info, err := st.ExportInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("ExportInfo after a queued cancel = %v, want the cancelled record", err)
+	}
+	if info.State != store.Cancelled || info.AnalysisID != analysisID {
+		t.Errorf("ExportInfo = %+v, want state cancelled for analysis %s", info, analysisID)
+	}
+}
+
+// An export cancelled while running has already written its own
+// status.json, with the steps it got through. The queued-cancel record must
+// not overwrite it: the run's steps and failure cause would be lost.
+func TestServiceKeepsTheStepsOfAnExportCancelledWhileRunning(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+
+	pending, err := st.NewDir("exports", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	const analysisID = "20260917T101502Z"
+	steps := []stepRecord{{Name: "download", State: string(store.Failed), DurationMs: 12, Error: "registry unreachable"}}
+	started := make(chan struct{})
+	run := func(ctx context.Context, _ func(Event)) error {
+		close(started)
+		<-ctx.Done()
+		status := exportStatusFile{State: store.Cancelled, AnalysisID: analysisID, Steps: steps}
+		if err := st.WriteJSON(filepath.Join(pending.Path(), "status.json"), status); err != nil {
+			t.Errorf("WriteJSON: %v", err)
+		}
+		return ctx.Err()
+	}
+	job := storeIDJob{fakeJob: &fakeJob{kind: "export", run: run}, id: pending.ID()}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "export", project.ID, analysisID, pending)
+	}); err != nil {
+		t.Fatalf("Submit(export): %v", err)
+	}
+	<-started
+
+	if _, err := svc.Cancel(project.ID, "export", pending.ID()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "export", pending.ID())
+
+	info, err := st.ExportInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("ExportInfo: %v", err)
+	}
+	if info.State != store.Cancelled || info.AnalysisID != analysisID {
+		t.Errorf("ExportInfo = %+v, want state cancelled for analysis %s", info, analysisID)
+	}
+	if info.Failure == nil || info.Failure.Step != "download" || info.Failure.Message != "registry unreachable" {
+		t.Errorf("ExportInfo.Failure = %+v, want the download step's failure kept", info.Failure)
+	}
+}
+
+// blockQueue occupies the queue's one worker until the test ends, so a job
+// submitted after it stays queued.
+func blockQueue(t *testing.T, svc *Service) {
+	t.Helper()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocker := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit(blocker): %v", err)
+	}
+	<-blocker.started
+}
