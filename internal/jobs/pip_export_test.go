@@ -1901,3 +1901,24 @@ func TestPipExportFailsWhenTheScanFails(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckPipWheelNameBound pins the wheel name bound at its edge: a name
+// that fills out/<file> to the archive's entry name bound passes, one byte
+// more is refused.
+func TestCheckPipWheelNameBound(t *testing.T) {
+	bound := archive.DefaultLimits.NameBytes - len(pipArchiveDir)
+	name := func(n int) string {
+		head, tail := "idna-3.10-py3-none-", ".whl"
+		return head + strings.Repeat("a", n-len(head)-len(tail)) + tail
+	}
+	for _, c := range []struct {
+		size    int
+		refused bool
+	}{{bound, false}, {bound + 1, true}} {
+		p := PipPackage{Name: "idna", Version: "3.10", Wheel: &PipWheel{File: name(c.size), Sha256: strings.Repeat("ab", 32), Size: 1}}
+		err := checkPipWheel(p)
+		if refused := err != nil && strings.Contains(err.Error(), "longer than an archive entry name"); refused != c.refused {
+			t.Errorf("a %d-byte wheel name: err = %v, want refused %v", c.size, err, c.refused)
+		}
+	}
+}
