@@ -89,6 +89,8 @@ type PipManifest struct {
 	Target        PipTarget
 	Archive       Summary
 	Packages      []Wheel
+	Review        *Review // as Manifest.Review
+	ReviewProblem string  // as Manifest.ReviewProblem
 }
 
 // PipTarget is the interpreter and system the wheels were chosen for.
@@ -119,7 +121,8 @@ type rawPipManifest struct {
 		SHA256 string `json:"sha256"`
 		Size   *int64 `json:"size"`
 	} `json:"archive"`
-	Packages []rawWheel `json:"packages"`
+	Packages []rawWheel      `json:"packages"`
+	Review   json.RawMessage `json:"review"`
 }
 
 // rawWheel has Wheel's fields in Wheel's order, so one converts to the other.
@@ -194,6 +197,7 @@ func ParsePipManifest(data []byte) (PipManifest, error) {
 		names[w.Name] = true
 		m.Packages = append(m.Packages, w)
 	}
+	m.Review, m.ReviewProblem = readReview(raw.Review, pipNames)
 	return m, nil
 }
 
