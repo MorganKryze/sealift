@@ -11,9 +11,11 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +26,8 @@ import (
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
+	"github.com/MorganKryze/sealift/sbom"
 )
 
 // ErrPipSelection reports a selection sent for a pip export.
@@ -407,19 +411,157 @@ func openCachedWheel(w pipWheelFile) (io.ReadCloser, error) {
 	return openUnchanged(w.CachePath, recorded{name: w.Wheel.File, size: w.Wheel.Size, sha256: w.Wheel.Sha256, sha512: w.SHA512})
 }
 
-// writeReports is the last step: the manifest and its signature.
+// writeReports is the last step: manifest.json and its signature,
+// report.trivy.json, report.cdx.json, findings.csv and summary.md, in the
+// order Export writes them.
 func (e *PipExport) writeReports(ctx context.Context, emit func(Event), wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {
 	start := time.Now()
 	emitStep(emit, "reports", store.Running, 0)
-	if err := ctx.Err(); err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
-		return err
+	err := ctx.Err()
+	if err == nil {
+		err = e.writeManifest(wheels, arch, key)
 	}
-	if err := e.writeManifest(wheels, arch, key); err != nil {
+	var findings []rank.Finding
+	if err == nil {
+		findings, err = e.scan(ctx, wheels)
+	}
+	if err == nil {
+		err = e.writeFindingsCSV(findings)
+	}
+	if err == nil {
+		err = e.writeSummary(findings, wheels, arch)
+	}
+	if err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
 	emitStep(emit, "reports", store.Done, time.Since(start))
+	return nil
+}
+
+// scan scans the exported set as pkg:pypi components into
+// report.trivy.json, converts that report into report.cdx.json, and
+// returns its findings with each package name normalized, so the reports
+// describe what ships and not what the analysis scanned.
+func (e *PipExport) scan(ctx context.Context, wheels []pipWheelFile) ([]rank.Finding, error) {
+	var components []sbom.Component
+	for _, w := range wheels {
+		components = append(components, sbom.PyPIComponents(w.Name, w.Version)...)
+	}
+	sbomPath := filepath.Join(e.Dir, "export.cdx-input.json")
+	f, err := createNew(sbomPath)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: create the export scan's input: %w", withoutPath(err))
+	}
+	writeErr := sbom.WriteCycloneDX(f, components)
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return nil, fmt.Errorf("jobs: write the export scan's input: %w", writeErr)
+	}
+	reportPath := filepath.Join(e.Dir, "report.trivy.json")
+	if _, err := e.Trivy.ScanSBOM(ctx, sbomPath, reportPath); err != nil {
+		return nil, fmt.Errorf("jobs: scan the exported set: %w", err)
+	}
+	if _, err := e.Trivy.ConvertToCycloneDX(ctx, reportPath, filepath.Join(e.Dir, "report.cdx.json")); err != nil {
+		return nil, fmt.Errorf("jobs: convert the export scan to CycloneDX: %w", err)
+	}
+	findings, err := readTrivyReport(reportPath, trivyReportLimit)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: read report.trivy.json: %w", withoutPath(err))
+	}
+	// Trivy may name a package as its metadata or the SBOM spells it, such
+	// as Jinja2 or typing.extensions; the set holds normalized names.
+	for i := range findings {
+		findings[i].Package = pip.Normalize(findings[i].Package)
+	}
+	return findings, nil
+}
+
+// findingsByPackage gives each scanned package's distinct vulnerabilities,
+// sorted by package, then version, then id. Two spellings of one project
+// fold into one key, where each vulnerability counts once.
+func findingsByPackage(findings []rank.Finding) [][]rank.Finding {
+	ix := rank.NewIndex(findings)
+	keys := slices.Sorted(maps.Keys(ix))
+	out := make([][]rank.Finding, 0, len(keys))
+	for _, key := range keys {
+		set := ix.Set([]string{key})
+		out = append(out, slices.SortedFunc(maps.Values(set), func(a, b rank.Finding) int {
+			return strings.Compare(a.ID, b.ID)
+		}))
+	}
+	return out
+}
+
+// writeFindingsCSV writes findings.csv, one row per vulnerability and
+// package of the export scan. A package of the set names the files that
+// pin it; a finding on a package outside the set keeps its row with none.
+func (e *PipExport) writeFindingsCSV(findings []rank.Finding) error {
+	pinned := make(map[string][]string, len(e.Analysis.Result.Packages))
+	for _, p := range e.Analysis.Result.Packages {
+		pinned[pip.Normalize(p.Name)+"@"+p.Version] = p.Files
+	}
+	var rows []report.PipFindingsRow
+	for _, pkg := range findingsByPackage(findings) {
+		for _, f := range pkg {
+			rows = append(rows, report.PipFindingsRow{
+				Package: f.Package, Version: f.Version, PinnedIn: pinned[f.Package+"@"+f.Version],
+				VulnerabilityID: f.ID, Severity: f.Severity, FixedVersion: f.FixedVersion, Title: f.Title,
+			})
+		}
+	}
+	out, err := createNew(filepath.Join(e.Dir, "findings.csv"))
+	if err != nil {
+		return fmt.Errorf("jobs: create findings.csv: %w", withoutPath(err))
+	}
+	writeErr := report.WritePipFindingsCSV(out, rows)
+	if closeErr := out.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("jobs: write findings.csv: %w", withoutPath(writeErr))
+	}
+	return nil
+}
+
+// writeSummary writes summary.md. Its counts and its critical and high
+// CVEs come from the export scan, the rest from the analysis.
+func (e *PipExport) writeSummary(findings []rank.Finding, wheels []pipWheelFile, arch report.ArchiveManifest) error {
+	status := readAnalysisStatus(e.Analysis.Dir)
+	var critical, high []rank.Finding
+	for _, pkg := range findingsByPackage(findings) {
+		for _, f := range pkg {
+			switch f.Severity {
+			case rank.Critical:
+				critical = append(critical, f)
+			case rank.High:
+				high = append(high, f)
+			}
+		}
+	}
+	s := report.PipSummary{
+		AnalysisDate: status.CreatedAt, TrivyDBDate: status.TrivyDBDate,
+		TrivyVersion: status.TrivyVersion, ToolVersion: ToolVersion,
+		Target:            e.Analysis.Result.Target,
+		Files:             e.Analysis.Result.Files,
+		InArchive:         rank.VectorOf(rank.Index{"export": findings}.Set([]string{"export"})),
+		RemainingCritical: critical, RemainingHigh: high,
+		Warnings:    e.Analysis.Result.Warnings,
+		ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(wheels),
+	}
+	out, err := createNew(filepath.Join(e.Dir, "summary.md"))
+	if err != nil {
+		return fmt.Errorf("jobs: create summary.md: %w", withoutPath(err))
+	}
+	writeErr := report.WritePipSummary(out, s)
+	if closeErr := out.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("jobs: write summary.md: %w", withoutPath(writeErr))
+	}
 	return nil
 }
 

@@ -793,10 +793,14 @@ type analysisStatus struct {
 	TrivyDBDate  time.Time `json:"trivyDbDate"`
 }
 
-func (e *Export) readAnalysisStatus() analysisStatus {
+func readAnalysisStatus(dir string) analysisStatus {
 	var status analysisStatus
-	path := filepath.Join(e.Analysis.Dir, "status.json")
-	if err := e.Store.ReadJSON(path, &status); err != nil {
+	path := filepath.Join(dir, "status.json")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		err = json.Unmarshal(data, &status)
+	}
+	if err != nil {
 		// summary.md still gets written with zero dates and versions: a
 		// report of secondary importance should not fail the export over
 		// a status.json that is missing or corrupt, but a silent miss here
@@ -807,7 +811,7 @@ func (e *Export) readAnalysisStatus() analysisStatus {
 }
 
 func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManifest) error {
-	status := e.readAnalysisStatus()
+	status := readAnalysisStatus(e.Analysis.Dir)
 
 	var deps []report.DependencyChange
 	var signals []report.SignalNote

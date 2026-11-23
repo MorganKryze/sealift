@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/piptest"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -693,7 +692,7 @@ func TestQueueExportQueuesAPipExport(t *testing.T) {
 	if info.State != store.Done {
 		t.Fatalf("export state = %s (%+v), want done", info.State, info.Failure)
 	}
-	if want := []string{"manifest.json", archive.SignatureFile, archive.PipArchiveFile}; !slices.Equal(info.Files, want) {
+	if want := pipExportFiles; !slices.Equal(info.Files, want) {
 		t.Errorf("files = %v, want %v", info.Files, want)
 	}
 }

@@ -53,7 +53,7 @@ type pipFixture struct {
 func runPipAnalysis(t *testing.T, indexURL, requirements string, set []runner.Resolved) pipFixture {
 	t.Helper()
 	svc, st := newTestService(t)
-	svc.trivy = &cannedTrivy{report: pipTrivyReport()}
+	svc.trivy = &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}}
 	svc.tools.PipIndex = indexURL
 	svc.tools.Arch = "amd64"
 	svc.SetPip(&fakeUv{lock: "x==1\n", set: set}, &pip.Client{Index: indexURL})
@@ -117,7 +117,7 @@ func (f pipFixture) newPipExport(t *testing.T) *PipExport {
 	return &PipExport{
 		Store:    f.st,
 		Index:    &pip.Client{},
-		Trivy:    &cannedTrivy{report: pipTrivyReport()},
+		Trivy:    &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}},
 		Project:  f.project,
 		Settings: f.st.Settings(),
 		Analysis: f.ref,
@@ -1014,9 +1014,6 @@ func TestPipExportWritesASignedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if want := []string{"manifest.json", archive.SignatureFile, archive.PipArchiveFile}; !slices.Equal(dirNames(t, e.Dir), want) {
-		t.Errorf("export directory holds %v, want %v", dirNames(t, e.Dir), want)
-	}
 	wantSteps := []string{
 		"package-list:running", "package-list:done", "download:running", "download:done",
 		"archive:running", "archive:done", "reports:running", "reports:done",
@@ -1377,5 +1374,204 @@ func TestPipExportNeverWritesTheArchiveThroughALink(t *testing.T) {
 	}
 	if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
 		t.Errorf("export directory holds %v, want only status.json", names)
+	}
+}
+
+// exportTrivy is cannedTrivy with the conversion an export also runs.
+type exportTrivy struct {
+	*cannedTrivy
+	convertErr error
+}
+
+// convertedReport is what exportTrivy writes as report.cdx.json.
+const convertedReport = `{"bomFormat":"CycloneDX","specVersion":"1.6","from":"exportTrivy"}`
+
+func (x *exportTrivy) ConvertToCycloneDX(_ context.Context, _, outPath string) (string, error) {
+	if x.convertErr != nil {
+		return "FATAL convert failed", x.convertErr
+	}
+	return "", os.WriteFile(outPath, []byte(convertedReport), 0o664)
+}
+
+// pipExportFiles are the files a done pip export holds, sorted.
+var pipExportFiles = []string{
+	"findings.csv", "manifest.json", archive.SignatureFile, archive.PipArchiveFile,
+	"report.cdx.json", "report.trivy.json", "summary.md",
+}
+
+// scannedBy gives e an export scan that reports rows, and returns it.
+func scannedBy(e *PipExport, rows ...[5]string) *exportTrivy {
+	x := &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport(rows...)}}
+	e.Trivy = x
+	return x
+}
+
+func TestPipExportWritesTheFourReports(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	trivy := scannedBy(e, [5]string{"idna", "3.10", "CVE-2024-3651", "MEDIUM", "3.7"})
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if names := dirNames(t, e.Dir); !slices.Equal(names, pipExportFiles) {
+		t.Fatalf("export directory holds %v, want %v", names, pipExportFiles)
+	}
+	if got := string(readFile(t, filepath.Join(e.Dir, "report.trivy.json"))); got != trivy.report {
+		t.Errorf("report.trivy.json = %s, want the export scan's report", got)
+	}
+	if got := string(readFile(t, filepath.Join(e.Dir, "report.cdx.json"))); got != convertedReport {
+		t.Errorf("report.cdx.json = %s, want the conversion of the export scan", got)
+	}
+	csvText := string(readFile(t, filepath.Join(e.Dir, "findings.csv")))
+	if want := strings.Join(report.PipFindingsHeader, ",") + "\nidna,3.10,,CVE-2024-3651,medium,3.7,test finding\n"; csvText != want {
+		t.Errorf("findings.csv =\n%s\nwant\n%s", csvText, want)
+	}
+
+	var analysis statusFile
+	if err := f.st.ReadJSON(filepath.Join(f.ref.Dir, "status.json"), &analysis); err != nil {
+		t.Fatal(err)
+	}
+	data := readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile))
+	summary := string(readFile(t, filepath.Join(e.Dir, "summary.md")))
+	for _, want := range []string{
+		"- Analysis date: " + analysis.CreatedAt.Format(time.RFC3339) + "\n",
+		"- Target: Python 3.11.2, linux/x86_64 glibc 2.28, uv 0.13.7\n",
+		"## Requirements files\n\n- requirements.txt\n\n",
+		"| In the archive | 0 | 0 | 1 | 0 | 0 |\n",
+		"## Critical and high CVEs\n\nNone.\n",
+		fmt.Sprintf("- Size: %d bytes\n- SHA-256: %s\n- Packages: 3\n", len(data), sha256Hex(data)),
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary.md lacks %q:\n%s", want, summary)
+		}
+	}
+}
+
+// jinjaSet holds a project the index names Jinja2, a hyphenated name
+// Trivy may spell with a dot, and a transitive package.
+var jinjaSet = resolved("certifi", "2024.8.30", "jinja2", "3.1.2", "markupsafe", "3.0.2", "requests", "2.32.3", "typing-extensions", "4.12.2")
+
+func TestPipExportScansPyPIComponents(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	for _, p := range jinjaSet {
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
+	}
+	f := runPipAnalysis(t, ix.URL, "Jinja2==3.1.2\nrequests==2.32.3\ntyping_extensions==4.12.2\n", jinjaSet)
+	e := f.newPipExport(t)
+	trivy := scannedBy(e,
+		[5]string{"Jinja2", "3.1.2", "CVE-2024-56326", "HIGH", "3.1.5"},
+		[5]string{"MarkupSafe", "3.0.2", "CVE-2099-0001", "LOW", ""},
+		[5]string{"typing.extensions", "4.12.2", "CVE-2099-0002", "LOW", ""},
+		[5]string{"typing-extensions", "4.12.2", "CVE-2099-0002", "LOW", ""},
+	)
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var doc struct {
+		Components []struct {
+			PURL string `json:"purl"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(trivy.sbom, &doc); err != nil {
+		t.Fatalf("decode the scanned SBOM: %v", err)
+	}
+	purls := map[string]bool{}
+	for _, c := range doc.Components {
+		purls[c.PURL] = true
+	}
+	var want []string
+	for _, p := range jinjaSet {
+		want = append(want, "pkg:pypi/"+pip.Normalize(p.Name)+"@"+p.Version)
+	}
+	if got := slices.Sorted(maps.Keys(purls)); !slices.Equal(got, want) {
+		t.Errorf("the scanned SBOM lists %v, want %v", got, want)
+	}
+
+	csvText := string(readFile(t, filepath.Join(e.Dir, "findings.csv")))
+	for _, row := range []string{
+		"\njinja2,3.1.2,requirements.txt,CVE-2024-56326,high,3.1.5,test finding\n",
+		"\nmarkupsafe,3.0.2,,CVE-2099-0001,low,,test finding\n",
+		"\ntyping-extensions,4.12.2,requirements.txt,CVE-2099-0002,low,,test finding\n",
+	} {
+		if strings.Count(csvText, row) != 1 {
+			t.Errorf("findings.csv holds %q %d times, want once:\n%s", strings.TrimSpace(row), strings.Count(csvText, row), csvText)
+		}
+	}
+	if lines := strings.Count(csvText, "\n"); lines != 4 {
+		t.Errorf("findings.csv holds %d lines, want the header and 3 rows:\n%s", lines, csvText)
+	}
+	summary := string(readFile(t, filepath.Join(e.Dir, "summary.md")))
+	for _, want := range []string{
+		"- [high] CVE-2024-56326 in jinja2==3.1.2, fixed in 3.1.5: test finding\n",
+		"| In the archive | 0 | 1 | 0 | 2 | 0 |\n",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary.md lacks %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestPipExportFindingsComeFromTheExportScan(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	for _, p := range f.ref.Result.Packages {
+		if len(p.CVEs) != 0 {
+			t.Fatalf("the analysis found %v on %s, want none so the export's scan stands alone", p.CVEs, p.Name)
+		}
+	}
+	e := f.newPipExport(t)
+	scannedBy(e, [5]string{"requests", "2.32.3", "CVE-2099-0003", "CRITICAL", "2.32.4"})
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	csvText := string(readFile(t, filepath.Join(e.Dir, "findings.csv")))
+	if want := "\nrequests,2.32.3,requirements.txt,CVE-2099-0003,critical,2.32.4,test finding\n"; !strings.Contains(csvText, want) {
+		t.Errorf("findings.csv lacks the export scan's finding:\n%s", csvText)
+	}
+	summary := string(readFile(t, filepath.Join(e.Dir, "summary.md")))
+	for _, want := range []string{
+		"| In the archive | 1 | 0 | 0 | 0 | 0 |\n",
+		"- [critical] CVE-2099-0003 in requests==2.32.3, fixed in 2.32.4: test finding\n",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary.md lacks %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestPipExportFailsWhenTheScanFails(t *testing.T) {
+	cases := []struct {
+		name   string
+		trivy  *exportTrivy
+		reason string
+	}{
+		{"the scan fails", &exportTrivy{cannedTrivy: &cannedTrivy{scanErr: errors.New("database locked")}}, "scan the exported set: database locked"},
+		{"the conversion fails", &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}, convertErr: errors.New("bad report")}, "convert the export scan to CycloneDX: bad report"},
+		{"the report is not JSON", &exportTrivy{cannedTrivy: &cannedTrivy{report: "FATAL"}}, "read report.trivy.json"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := donePipAnalysis(t, piptest.NewIndex(t))
+			e := f.newPipExport(t)
+			e.Trivy = c.trivy
+			rec, err := runPipExport(context.Background(), e)
+			if err == nil || !strings.Contains(err.Error(), c.reason) {
+				t.Fatalf("Run = %v, want an error saying %q", err, c.reason)
+			}
+			last := rec.steps[len(rec.steps)-1]
+			if last.Name != "reports" || last.State != string(store.Failed) || !strings.Contains(last.Error, c.reason) {
+				t.Errorf("last step = %+v, want reports failed saying %q", last, c.reason)
+			}
+			if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+				t.Errorf("export directory holds %v, want only status.json", names)
+			}
+			var status exportStatusFile
+			if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.State != store.Failed {
+				t.Errorf("status state = %s, want failed", status.State)
+			}
+		})
 	}
 }
