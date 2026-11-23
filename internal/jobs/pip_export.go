@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -405,55 +404,8 @@ func (e *PipExport) writeArchive(ctx context.Context, emit func(Event), wheels [
 // the bytes read differ from the download's, in length or in either
 // digest.
 func openCachedWheel(w pipWheelFile) (io.ReadCloser, error) {
-	// As in checkCachedWheel: no link is followed, and a FIFO cannot hold
-	// the open.
-	f, err := os.OpenFile(w.CachePath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	switch {
-	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ELOOP):
-		return nil, wheelChanged(w.Wheel.File)
-	case err != nil:
-		return nil, fmt.Errorf("open the cached %s: %w", w.Wheel.File, withoutPath(err))
-	}
-	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, wheelChanged(w.Wheel.File)
-	}
-	return &rehashedWheel{f: f, w: w, h256: sha256.New(), h512: sha512.New()}, nil
+	return openUnchanged(w.CachePath, recorded{name: w.Wheel.File, size: w.Wheel.Size, sha256: w.Wheel.Sha256, sha512: w.SHA512})
 }
-
-func wheelChanged(file string) error {
-	return fmt.Errorf("%s changed after its download", file)
-}
-
-// rehashedWheel reads a cached wheel and checks, at its end, that its
-// length, sha256 and sha512 are the download's.
-type rehashedWheel struct {
-	f          *os.File
-	w          pipWheelFile
-	h256, h512 hash.Hash
-	n          int64
-}
-
-func (r *rehashedWheel) Read(p []byte) (int, error) {
-	n, err := r.f.Read(p)
-	if room := r.w.Wheel.Size - r.n; int64(n) > room {
-		// The bytes past the recorded size never reach the archive, so the
-		// tar writer cannot report a longer entry before this check does.
-		r.n += int64(n)
-		return int(room), wheelChanged(r.w.Wheel.File)
-	}
-	r.h256.Write(p[:n])
-	r.h512.Write(p[:n])
-	r.n += int64(n)
-	if errors.Is(err, io.EOF) && (r.n != r.w.Wheel.Size ||
-		hex.EncodeToString(r.h256.Sum(nil)) != r.w.Wheel.Sha256 ||
-		hex.EncodeToString(r.h512.Sum(nil)) != r.w.SHA512) {
-		return n, wheelChanged(r.w.Wheel.File)
-	}
-	return n, err
-}
-
-func (r *rehashedWheel) Close() error { return r.f.Close() }
 
 // writeReports is the last step: the manifest and its signature.
 func (e *PipExport) writeReports(ctx context.Context, emit func(Event), wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {

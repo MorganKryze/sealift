@@ -65,6 +65,8 @@ type Export struct {
 	Request  ExportRequest
 	Dir      string
 	ID       string
+
+	beforeStrip, beforeArchive func() // a test's hooks after the download and strip steps
 }
 
 // ExportRequest is the input to an export: the versions selected per
@@ -135,9 +137,15 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err != nil {
 		return err
 	}
+	if e.beforeStrip != nil {
+		e.beforeStrip()
+	}
 	shipped, err := e.stripAll(ctx, record, downloaded)
 	if err != nil {
 		return err
+	}
+	if e.beforeArchive != nil {
+		e.beforeArchive()
 	}
 	arch, err := e.writeArchive(ctx, record, shipped)
 	if err != nil {
@@ -498,9 +506,10 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, err
 	}
 
-	f, err := os.Open(d.CachePath)
+	file := npm.PackFileName(d.Name, d.Version)
+	f, st, err := openRegular(d.CachePath, file)
 	if err != nil {
-		return shippedPackage{}, fmt.Errorf("jobs: open %s: %w", d.CachePath, err)
+		return shippedPackage{}, fmt.Errorf("jobs: %s@%s: %w", d.Name, d.Version, err)
 	}
 	defer f.Close()
 
@@ -508,12 +517,8 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: inspect %s@%s: %w", d.Name, d.Version, err)
 	}
-	file := npm.PackFileName(d.Name, d.Version)
 	if !info.HasPublishConfig {
-		st, err := os.Stat(d.CachePath)
-		if err != nil {
-			return shippedPackage{}, fmt.Errorf("jobs: stat %s: %w", d.CachePath, err)
-		}
+		// The archive step reads it again and checks its sha512.
 		return shippedPackage{
 			LockPackage: d.LockPackage, File: file, Path: d.CachePath, Size: st.Size(),
 			SHA512: d.SHA512, OriginalSHA512: d.SHA512,
@@ -533,19 +538,22 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, fmt.Errorf("jobs: rewind %s: %w", d.CachePath, err)
 	}
 	sum := sha512.New()
-	stripErr := npm.StripPublishConfig(io.MultiWriter(out, sum), f)
+	// The stripped bytes come from this read, so it carries the download's
+	// sha512 check. StripPublishConfig reads the tarball to its end.
+	in := newRehashed(f, recorded{name: file, size: st.Size(), sha512: d.SHA512})
+	stripErr := npm.StripPublishConfig(io.MultiWriter(out, sum), in)
 	if closeErr := out.Close(); stripErr == nil {
 		stripErr = closeErr
 	}
 	if stripErr != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: strip publishConfig from %s@%s: %w", d.Name, d.Version, stripErr)
 	}
-	st, err := os.Stat(outPath)
+	outSt, err := os.Stat(outPath)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: stat %s: %w", outPath, err)
 	}
 	return shippedPackage{
-		LockPackage: d.LockPackage, File: file, Path: outPath, Size: st.Size(),
+		LockPackage: d.LockPackage, File: file, Path: outPath, Size: outSt.Size(),
 		SHA512: hex.EncodeToString(sum.Sum(nil)), OriginalSHA512: d.SHA512, Stripped: true,
 	}, nil
 }
@@ -562,7 +570,6 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 
 	entries := make([]archive.Entry, 0, len(shipped))
 	for _, s := range shipped {
-		path := s.Path
 		entries = append(entries, archive.Entry{
 			Name: s.File,
 			Size: s.Size,
@@ -570,7 +577,7 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 				if err := ctx.Err(); err != nil {
 					return nil, err
 				}
-				return os.Open(path)
+				return openUnchanged(s.Path, recorded{name: s.File, size: s.Size, sha512: s.SHA512})
 			},
 		})
 	}

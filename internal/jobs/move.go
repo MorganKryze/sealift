@@ -1,8 +1,12 @@
 package jobs
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -100,3 +104,83 @@ func writeNew(path string, data []byte) error {
 func openLog(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o664)
 }
+
+// recorded is what a file read again must still hold: its length and hex
+// digests, and its name for the error. An empty sha256 goes unchecked, as
+// an npm lockfile records sha512 alone.
+type recorded struct {
+	name           string
+	size           int64
+	sha256, sha512 string
+}
+
+// changedAfterDownload is the error for a file whose bytes are no longer
+// the ones checked when it was downloaded.
+func changedAfterDownload(name string) error {
+	return fmt.Errorf("%s changed after its download", name)
+}
+
+// openRegular opens path for reading when it is a regular file. The tools
+// account can write the caches and the export directory: O_NOFOLLOW reads
+// no link's target and O_NONBLOCK keeps a FIFO from holding the open.
+// What is gone, a link or anything but a regular file has changed after
+// its download.
+func openRegular(path, name string) (*os.File, os.FileInfo, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ELOOP):
+		return nil, nil, changedAfterDownload(name)
+	case err != nil:
+		return nil, nil, fmt.Errorf("open %s: %w", name, withoutPath(err))
+	}
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, changedAfterDownload(name)
+	}
+	return f, st, nil
+}
+
+// openUnchanged opens path, under openRegular's rule, behind a reader that
+// fails once the bytes read differ from want.
+func openUnchanged(path string, want recorded) (io.ReadCloser, error) {
+	f, _, err := openRegular(path, want.name)
+	if err != nil {
+		return nil, err
+	}
+	return newRehashed(f, want), nil
+}
+
+func newRehashed(f *os.File, want recorded) *rehashed {
+	return &rehashed{f: f, want: want, h256: sha256.New(), h512: sha512.New()}
+}
+
+// rehashed reads a file and checks, at its end, that its length and
+// digests are the ones recorded.
+type rehashed struct {
+	f          *os.File
+	want       recorded
+	h256, h512 hash.Hash
+	n          int64
+}
+
+func (r *rehashed) Read(p []byte) (int, error) {
+	n, err := r.f.Read(p)
+	if room := r.want.size - r.n; int64(n) > room {
+		// The bytes past the recorded size never reach the archive, so the
+		// tar writer cannot report a longer entry before this check does.
+		r.n += int64(n)
+		return int(room), changedAfterDownload(r.want.name)
+	}
+	r.h256.Write(p[:n])
+	r.h512.Write(p[:n])
+	r.n += int64(n)
+	if errors.Is(err, io.EOF) && (r.n != r.want.size ||
+		(r.want.sha256 != "" && hex.EncodeToString(r.h256.Sum(nil)) != r.want.sha256) ||
+		hex.EncodeToString(r.h512.Sum(nil)) != r.want.sha512) {
+		return n, changedAfterDownload(r.want.name)
+	}
+	return n, err
+}
+
+func (r *rehashed) Close() error { return r.f.Close() }

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1124,5 +1125,103 @@ func readJSON(t *testing.T, path string, v any) {
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The tools account can write the tarball cache and the stripped files, so
+// a tarball can change between its download's sha512 check and the reads
+// that ship it.
+func TestExportFailsWhenATarballChangesAfterItsDownload(t *testing.T) {
+	cached := func(h *testHarness, data []byte) string {
+		sum := sha512.Sum512(data)
+		return filepath.Join(h.root, "cache", "tarballs", hex.EncodeToString(sum[:])+".tgz")
+	}
+	stripped := func(_ *testHarness, exportDir string) string {
+		return filepath.Join(exportDir, "stripped", "scope-gadget-2.1.0.tgz")
+	}
+	// replaceWithLink puts at path a link to a new file holding data.
+	replaceWithLink := func(t *testing.T, path string, data []byte) {
+		t.Helper()
+		target := filepath.Join(t.TempDir(), "signing-key.pem")
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replaceWithFIFO := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(path, 0o660); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, step string
+		plant      func(t *testing.T, h *testHarness, exportDir string)
+	}{
+		{"the cached gadget 2.1.0 holds another tarball", "strip", func(t *testing.T, h *testHarness, _ string) {
+			if err := os.WriteFile(cached(h, h.gadget21), h.gadget22, 0o664); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the cached gadget 2.1.0 is a link to the same bytes", "strip", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithLink(t, cached(h, h.gadget21), h.gadget21)
+		}},
+		{"the cached gadget 2.1.0 is a FIFO", "strip", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithFIFO(t, cached(h, h.gadget21))
+		}},
+		{"the cached widgets 1.1.0 holds other bytes of its length", "archive", func(t *testing.T, h *testHarness, _ string) {
+			if err := os.WriteFile(cached(h, h.widgets), bytes.Repeat([]byte("x"), len(h.widgets)), 0o664); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"the cached widgets 1.1.0 is a link to a file of its length", "archive", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithLink(t, cached(h, h.widgets), bytes.Repeat([]byte("k"), len(h.widgets)))
+		}},
+		{"the cached widgets 1.1.0 is a FIFO", "archive", func(t *testing.T, h *testHarness, _ string) {
+			replaceWithFIFO(t, cached(h, h.widgets))
+		}},
+		{"the stripped gadget 2.1.0 is a link to a file of its length", "archive", func(t *testing.T, h *testHarness, exportDir string) {
+			st, err := os.Stat(stripped(h, exportDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			replaceWithLink(t, stripped(h, exportDir), bytes.Repeat([]byte("k"), int(st.Size())))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, false)
+			hook := func() { tc.plant(t, h, exportDir) }
+			if tc.step == "strip" {
+				exp.beforeStrip = hook
+			} else {
+				exp.beforeArchive = hook
+			}
+
+			// No process writes to a FIFO, so an open that waits for a
+			// writer never returns.
+			done := make(chan error, 1)
+			go func() { done <- exp.Run(context.Background(), noopEmit) }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("Run = <nil>, want the changed tarball refused")
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("the export still runs after 20s")
+			}
+			assertExportFailedStatus(t, exportDir, tc.step, "changed after its download")
+		})
 	}
 }
