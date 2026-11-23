@@ -24,7 +24,7 @@ describe("copy control", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy expected sha256" }))
     const box = (await screen.findByRole("textbox", { name: "Text of expected sha256" })) as HTMLTextAreaElement
     expect(box.value).toBe("c".repeat(64))
-    expect(box).toHaveFocus()
+    await waitFor(() => expect(box).toHaveFocus())
     expect(box.selectionStart).toBe(0)
     expect(box.selectionEnd).toBe(64)
     expect(screen.getByText(/Ctrl\+C, or Command\+C on a Mac/)).toBeInTheDocument()
@@ -35,7 +35,8 @@ describe("copy control", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } })
     render(<CopyControl text="reason" label="reason" />)
     fireEvent.click(screen.getByRole("button", { name: "Copy reason" }))
-    expect(await screen.findByRole("textbox", { name: "Text of reason" })).toHaveFocus()
+    const box = await screen.findByRole("textbox", { name: "Text of reason" })
+    await waitFor(() => expect(box).toHaveFocus())
     expect(screen.queryByText("Copied")).toBeNull()
   })
 })
