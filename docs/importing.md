@@ -1,6 +1,6 @@
 # Importing
 
-This page covers the three screens of `sealift import-server`, the import service on the air-gapped side: Archives, Imports and one import. The service publishes the npm packages of an archive to Nexus. Each user sees their own archives and imports and no one else's.
+This page covers the three screens of `sealift import-server`, the import service on the air-gapped side: Archives, Imports and one import. The service publishes the packages of an archive to Nexus: npm packages from `packages/npm/`, Python wheels from `packages/pip/`. Each user sees their own archives and imports and no one else's.
 
 Sign in through your organisation's gateway and open its address. The header names the screens, `Archives` and `Imports`, your user name and `Settings`. The Settings sheet holds `Appearance` (the theme, saved in this browser only), `Your MinIO folder`, the `Bucket` and `Folder` the service reads your archives from, and `Trusted key`, described below.
 
