@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
@@ -254,8 +255,9 @@ func localGitHub(t *testing.T) <-chan string {
 }
 
 // TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
-// manager: GET /api/tools looks up the latest Trivy release, and the server
-// named by the variable must be the one asked.
+// manager: GET /api/tools asks GitHub nothing, the Trivy install looks up
+// the pinned release, and the server named by the variable must be the one
+// asked.
 func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 	asked := localGitHub(t)
 
@@ -285,10 +287,20 @@ func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 		t.Fatalf("GET /api/tools never answered: %v", err)
 	}
 	resp.Body.Close()
-
 	select {
 	case path := <-asked:
-		if want := "/repos/aquasecurity/trivy/releases/latest"; path != want {
+		t.Errorf("GET /api/tools asked GitHub for %q, want nothing", path)
+	default:
+	}
+
+	resp, err = client.Post("http://"+addr+"/api/tools/trivy/update", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST /api/tools/trivy/update: %v", err)
+	}
+	resp.Body.Close()
+	select {
+	case path := <-asked:
+		if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
 			t.Errorf("fake GitHub asked for %q, want %q", path, want)
 		}
 	default:
@@ -516,7 +528,7 @@ func TestServerStopsOnADamagedSigningKey(t *testing.T) {
 }
 
 // TestNewToolsManagerReadsGitHubToken proves SEALIFT_GITHUB_TOKEN reaches the
-// tools manager's release lookups.
+// tools manager's lookup of the pinned Trivy release.
 func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 	var got atomic.Value
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -527,11 +539,16 @@ func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
 	t.Setenv("SEALIFT_GITHUB_TOKEN", "token-for-test")
 
-	m, err := newToolsManager(nil, gh.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = m.UpdateTrivy(context.Background(), "", false)
+	m, err := newToolsManager(st, gh.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Arch = "amd64"
+	_, _ = m.EnsureTrivy(context.Background())
 	if v, _ := got.Load().(string); v != "Bearer token-for-test" {
 		t.Errorf("Authorization = %q, want the bearer token", v)
 	}

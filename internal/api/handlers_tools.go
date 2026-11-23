@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/MorganKryze/sealift/internal/tools"
 )
@@ -24,27 +26,23 @@ func toolsStateToAPI(s tools.TrivyState, pnpmInstalled, uvInstalled []string, re
 	if missing == nil {
 		missing = []string{}
 	}
-	state := ToolsState{
-		PnpmInstalled:   pnpmInstalled,
-		UvInstalled:     &uvInstalled,
-		TrivyActive:     s.Active,
-		TrivyInstalled:  trivyInstalled,
-		TrivyLatest:     s.Latest,
-		TrivyLatestAge:  s.LatestAge.String(),
-		TrivyDbDate:     s.DBDate,
-		LatestSizeBytes: int(s.LatestSizeBytes),
-		Ready:           ready,
-		Missing:         missing,
+	// TrivyLatest carries the pin: nothing asks GitHub for a newer release,
+	// so no size, age or recommendation goes with it.
+	return ToolsState{
+		PnpmInstalled:  pnpmInstalled,
+		UvInstalled:    &uvInstalled,
+		TrivyActive:    s.Active,
+		TrivyInstalled: trivyInstalled,
+		TrivyLatest:    s.Pinned,
+		TrivyDbDate:    s.DBDate,
+		Ready:          ready,
+		Missing:        missing,
 	}
-	if s.Recommended != "" {
-		state.TrivyRecommended = &s.Recommended
-	}
-	return state
 }
 
-// currentToolsState reads the installed and available pnpm, uv and Trivy
-// versions, and the current readiness, shared by every tools operation's
-// response. It asks nothing of the package index.
+// currentToolsState reads the installed pnpm, uv and Trivy versions, the
+// pinned Trivy and the current readiness, shared by every tools
+// operation's response. It asks nothing of GitHub or the package index.
 func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	trivyState, err := h.Tools.TrivyState(ctx)
 	if err != nil {
@@ -62,8 +60,8 @@ func (h *Handlers) currentToolsState(ctx context.Context) (ToolsState, error) {
 	return toolsStateToAPI(trivyState, pnpmInstalled, uvInstalled, ready, missing), nil
 }
 
-// GetTools returns installed and available tool versions and the
-// vulnerability database's date.
+// GetTools returns the installed and pinned tool versions and the
+// vulnerability database's date, from the data volume alone.
 func (h *Handlers) GetTools(ctx context.Context, _ GetToolsRequestObject) (GetToolsResponseObject, error) {
 	state, err := h.currentToolsState(ctx)
 	if err != nil {
@@ -72,33 +70,34 @@ func (h *Handlers) GetTools(ctx context.Context, _ GetToolsRequestObject) (GetTo
 	return GetTools200JSONResponse(state), nil
 }
 
-// ActivateTrivy switches the active Trivy version to an installed one.
-func (h *Handlers) ActivateTrivy(ctx context.Context, req ActivateTrivyRequestObject) (ActivateTrivyResponseObject, error) {
-	if req.Body == nil {
-		return ActivateTrivydefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "activate trivy", errors.New("a version body is required"))), nil
-	}
-	if err := h.Tools.ActivateTrivy(req.Body.Version); err != nil {
-		return ActivateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("activate trivy", err)), nil
-	}
-	state, err := h.currentToolsState(ctx)
+// pinnedOnly is the refusal of a request for another Trivy than the pin.
+func (h *Handlers) pinnedOnly(ctx context.Context, title string) problemBody {
+	state, err := h.Tools.TrivyState(ctx)
 	if err != nil {
-		return ActivateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("activate trivy", err)), nil
+		return autoProblem(title, err)
 	}
-	return ActivateTrivy200JSONResponse(state), nil
+	return problem(http.StatusConflict, title, fmt.Errorf("sealift runs only Trivy %s, the release pinned in this build", state.Pinned))
 }
 
-// UpdateTrivy installs a new Trivy release, refusing one younger than the
-// minimum release age unless the request forces it.
+// ActivateTrivy refuses every switch: the pinned Trivy is the only one
+// sealift activates.
+func (h *Handlers) ActivateTrivy(ctx context.Context, _ ActivateTrivyRequestObject) (ActivateTrivyResponseObject, error) {
+	return ActivateTrivydefaultApplicationProblemPlusJSONResponse(h.pinnedOnly(ctx, "activate trivy")), nil
+}
+
+// UpdateTrivy installs and activates the pinned Trivy release, and refuses
+// a request that names another version.
 func (h *Handlers) UpdateTrivy(ctx context.Context, req UpdateTrivyRequestObject) (UpdateTrivyResponseObject, error) {
-	var version string
-	force := false
-	if req.Body != nil {
-		force = req.Body.Force
-		if req.Body.Version != nil {
-			version = *req.Body.Version
+	if req.Body != nil && req.Body.Version != nil {
+		state, err := h.Tools.TrivyState(ctx)
+		if err != nil {
+			return UpdateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("update trivy", err)), nil
+		}
+		if strings.TrimPrefix(*req.Body.Version, "v") != state.Pinned {
+			return UpdateTrivydefaultApplicationProblemPlusJSONResponse(h.pinnedOnly(ctx, "update trivy")), nil
 		}
 	}
-	if _, err := h.Tools.UpdateTrivy(ctx, version, force); err != nil {
+	if _, err := h.Tools.EnsureTrivy(ctx); err != nil {
 		return UpdateTrivydefaultApplicationProblemPlusJSONResponse(autoProblem("update trivy", err)), nil
 	}
 	state, err := h.currentToolsState(ctx)

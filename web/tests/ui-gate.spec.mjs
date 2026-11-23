@@ -127,18 +127,16 @@ const spawnServer = (command, args, options) => {
   return child
 }
 
-// A stand-in for api.github.com: the collection server looks up the latest Trivy release when a page asks
-// for the tools, and the gate keeps that lookup on this machine. The release is old enough to need no
-// recommendation, so the server asks for nothing else. `paths` records what it was asked.
+// A stand-in for api.github.com, so a Trivy lookup from the collection server stays on this machine. No page
+// asks for one: the server answers from the data volume. `paths` records what it was asked.
 const startFakeGitHub = () =>
   new Promise((done, fail) => {
     const paths = []
     const server = createServer((req, res) => {
       paths.push(req.url)
-      const release = { tag_name: "v0.74.0", draft: false, prerelease: false, published_at: "2026-01-01T00:00:00Z", assets: [] }
       res.setHeader("content-type", "application/json")
-      if (req.url === "/repos/aquasecurity/trivy/releases/latest") res.end(JSON.stringify(release))
-      else { res.statusCode = 404; res.end("{}") }
+      res.statusCode = 404
+      res.end("{}")
     })
     server.on("error", fail)
     server.listen(0, "127.0.0.1", () => done({ url: `http://127.0.0.1:${server.address().port}`, paths, close: () => new Promise((end) => { server.close(end); server.closeAllConnections() }) }))
@@ -303,7 +301,7 @@ for (const route of UI.routes) {
           url: new URL(route, UI.baseURL).href,
           width,
           theme,
-          // /api/tools asks GitHub for the latest Trivy, which can take 30 s, so idle is a best effort.
+          // The page's event stream stays open, so idle is a best effort.
           ready: (p) => p.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {}),
         })
         expect(failures, failures.join("\n")).toEqual([])
@@ -404,8 +402,8 @@ for (const route of IMPORT.routes) {
   }
 }
 
-test("the collection server looked up Trivy through the local stand-in, not api.github.com", () => {
+test("the collection server asked GitHub nothing while the pages loaded", () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return
-  expect(github.paths).toContain("/repos/aquasecurity/trivy/releases/latest")
+  expect(github.paths).toEqual([])
 })

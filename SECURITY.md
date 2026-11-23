@@ -13,14 +13,14 @@ Include the version, what an attacker needs, and the steps that show the problem
 ## What sealift guarantees
 
 - Every package in an archive matches the sha512 integrity the npm registry published for it. A mismatch stops the export.
-- Trivy matches the sha256 in its release's checksum file before sealift installs it.
+- The sealift binary pins one Trivy release by version and by the sha256 of its tarball for each architecture. sealift installs a download only when its sha256 equals the pinned one. It never activates another version, and removes the others from the volume. Moving the pin takes a new sealift build.
 - uv matches the sha256 the package index publishes for its wheel before sealift installs it. sealift installs a uv release younger than the minimum release age only when the request forces it, and a pip analysis never forces it.
 - uv runs with `--no-build` and `--no-config`, so no package code runs on the connected side: a package with no wheel for the target fails the analysis, which names it. uv reads no `UV_` or `PIP_` variable and resolves against the one index sealift names.
 - A pip analysis records each package's wheel with the sha256 the index publishes, and fetches no wheel to choose it. For a package no file pins, it chooses among the files uploaded before the minimum release age, the files uv resolved that package from. A wheel added later to an older release, or a file the index gives no upload date, is never recorded for it.
 - A pip export downloads each wheel the analysis recorded and checks it against the sha256 the package index published. A mismatch fails the export at once, with no retry. Each wheel is hashed again as it enters the archive, and the export never opens a wheel, so no package code runs on the connected side.
 - A pip export's `manifest.json` is signed with the same key and the same scheme as an npm export's. An import that reads only npm archives refuses a pip archive by its format version: `sealift import` 0.6.2 exited 3 with `formatVersion is missing or not 2` on the pip archive of a run at commit 526302c, and published nothing.
 - In the published image, sealift opens the files pnpm, uv and Trivy work with only when they are regular files, and creates its own files there only where none exists. A compromised tool cannot make it copy the private key, overwrite a file through a link at that name, or hold the job queue on a FIFO. A link at a directory on the way is still followed: the key stays out of reach, since sealift reads only fixed names and creates only new files there.
-- sealift proposes no version younger than the minimum release age, 14 days by default, and holds the packages under it to the same age, and installs a younger Trivy release only when you press **Install anyway**.
+- sealift proposes no version younger than the minimum release age, 14 days by default, and holds the packages under it to the same age.
 - sealift downloads nothing before you press Install, Analyse or Confirm and build the archive.
 - In the published image, pnpm, uv and Trivy run as a separate user that cannot read `private/`, which holds the settings file and the private signing key.
 - The archive is reproducible: the same selection built by the same sealift gives the same sha256.
@@ -45,7 +45,7 @@ Include the version, what an attacker needs, and the steps that show the problem
 
 - Ephemeral mode deletes files: it does not overwrite them. Without the overlay's RAM mounts, the disk can keep a deleted file's blocks. With them, a host with unencrypted swap can still write those pages to disk. The mode leaves the browser's history, its download folder and other tabs' storage alone, and it keeps Trivy, its database, the settings, the signing key and pnpm's update state under `home/`.
 
-- The Trivy release lookup trusts the address in `SEALIFT_GITHUB_API` when you set it: that server supplies the release date, the checksums and the download address, so a mirror you do not control defeats the sha256 check and the minimum release age for Trivy. sealift accepts only `https`, or `http` on a loopback host. `SEALIFT_GITHUB_TOKEN` goes to that same address, so a mirror receives the token.
+- The Trivy release lookup goes to the address in `SEALIFT_GITHUB_API` when you set it. That server supplies the download address of the pinned release: a mirror you do not control can delay Trivy, and cannot swap it, since the download must match the pinned sha256. sealift accepts only `https`, or `http` on a loopback host. `SEALIFT_GITHUB_TOKEN` goes to that address only, so a mirror receives the token.
 - The signature shows that the manifest came from the holder of the private key. It does not show who asked for the export: anyone who reaches sealift's port can have any selection signed.
 - There is no freshness check. An old archive with a valid signature stays importable until the key is regenerated.
 - The reports (`summary.md`, `findings.csv`, `report.cdx.json`, `report.trivy.json`) are not signed. They inform the import side and are not covered.

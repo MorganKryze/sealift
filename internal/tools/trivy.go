@@ -17,17 +17,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
-
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
-// ErrReleaseTooRecent reports a Trivy release younger than the configured
+// ErrReleaseTooRecent reports a release younger than the configured
 // minimum age, refused unless the caller forces the install.
 var ErrReleaseTooRecent = errors.New("trivy release is too recent")
 
 // ErrChecksumMismatch reports a downloaded Trivy asset whose sha256 does
-// not match the release's checksums file.
+// not match the pinned one.
 var ErrChecksumMismatch = errors.New("trivy asset checksum mismatch")
 
 // ErrReleaseSourceUnavailable reports that GitHub, where Trivy releases
@@ -41,47 +39,41 @@ var ErrInvalidTrivyVersion = errors.New("trivy version must be a release number 
 const trivyRepo = "aquasecurity/trivy"
 
 // releaseNumber accepts a plain release number, with or without its "v".
-// The version ends up in a GitHub API path, so nothing else may pass.
+// The version ends up in a GitHub API path and names a directory, so
+// nothing else may pass.
 var releaseNumber = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
-// TrivyState summarizes the installed and available Trivy versions.
+// TrivyState summarizes the Trivy versions on the data volume and the pin.
 type TrivyState struct {
-	Active          string        // version behind tools/trivy/current, empty if none
-	Installed       []string      // every version present under tools/trivy/, sorted
-	Latest          string        // latest version on GitHub
-	LatestAge       time.Duration // time since the latest release was published
-	LatestSizeBytes int64         // size of the release asset for this host, 0 if unknown
-	DBDate          time.Time     // last update of the vulnerability database, zero if unknown
-	// Recommended is the newest release old enough to install without
-	// force, set only while Latest itself is younger than the minimum
-	// age: installing it needs no force and keeps the age check's
-	// purpose (not the newest possible code, code that has had time for
-	// a compromised release to be caught) intact. Empty when Latest is
-	// already old enough, or when none of the releases this checks is.
-	Recommended    string
-	RecommendedAge time.Duration
+	Active    string    // version behind tools/trivy/current, empty if none
+	Installed []string  // every version present under tools/trivy/, sorted
+	Pinned    string    // the release sealift runs
+	DBDate    time.Time // last update of the vulnerability database, zero if unknown
 }
 
 type ghRelease struct {
-	TagName     string    `json:"tag_name"`
-	Draft       bool      `json:"draft"`
-	Prerelease  bool      `json:"prerelease"`
-	PublishedAt time.Time `json:"published_at"`
-	Assets      []ghAsset `json:"assets"`
+	TagName string    `json:"tag_name"`
+	Assets  []ghAsset `json:"assets"`
 }
 
 type ghAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
-	Size               int64  `json:"size"`
 }
 
-// TrivyState reports the active and installed Trivy versions, the latest
-// release on GitHub and its age, and the vulnerability database's date. A
-// GitHub outage leaves Latest and LatestAge zero rather than failing the
-// whole call: the installed and active versions, and the database date,
-// come from the data volume alone and stay meaningful without GitHub.
-func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
+// trivyPin returns the pin this Manager runs: Trivy when set, PinnedTrivy
+// otherwise.
+func (m *Manager) trivyPin() TrivyPin {
+	if m.Trivy.Version == "" {
+		return PinnedTrivy
+	}
+	return m.Trivy
+}
+
+// TrivyState reports the active and installed Trivy versions, the pinned
+// one and the vulnerability database's date. Everything comes from the
+// data volume: it asks nothing of the network.
+func (m *Manager) TrivyState(_ context.Context) (TrivyState, error) {
 	installed, err := m.InstalledTrivy()
 	if err != nil {
 		return TrivyState{}, err
@@ -90,44 +82,21 @@ func (m *Manager) TrivyState(ctx context.Context) (TrivyState, error) {
 	if err != nil {
 		return TrivyState{}, err
 	}
-	state := TrivyState{
+	return TrivyState{
 		Active:    active,
 		Installed: installed,
+		Pinned:    m.trivyPin().Version,
 		DBDate:    m.trivyDBDate(),
-	}
-	rel, err := m.latestTrivyRelease(ctx)
-	if err != nil {
-		m.log.Warn("trivy latest release unavailable, reporting installed versions only", "error", err)
-		return state, nil
-	}
-	state.Latest = strings.TrimPrefix(rel.TagName, "v")
-	state.LatestAge = time.Since(rel.PublishedAt)
-	if assetName, aerr := trivyAssetName(state.Latest, m.hostArch()); aerr == nil {
-		if asset, ok := findAsset(rel.Assets, assetName); ok {
-			state.LatestSizeBytes = asset.Size
-		}
-	}
-
-	minAge := time.Duration(m.vol.Settings().MinReleaseAgeDays) * 24 * time.Hour
-	if state.LatestAge < minAge {
-		if recRel, ok, rerr := m.recommendedTrivyRelease(ctx, minAge); rerr != nil {
-			m.log.Warn("trivy recommended release unavailable", "error", rerr)
-		} else if ok {
-			state.Recommended = strings.TrimPrefix(recRel.TagName, "v")
-			state.RecommendedAge = time.Since(recRel.PublishedAt)
-		}
-	}
-	return state, nil
+	}, nil
 }
 
 // Ready reports whether an analysis or export can run without sealift
-// installing anything on its own: an active Trivy, a vulnerability
-// database, both already on the data volume. It never
-// reaches the network: what an analysis needs is what is already there,
-// not what GitHub currently offers.
+// installing anything on its own: the pinned Trivy active and a
+// vulnerability database, both already on the data volume. Another active
+// version counts as no Trivy. It never reaches the network.
 func (m *Manager) Ready() (ready bool, missing []string) {
 	active, err := m.activeTrivy()
-	if err != nil || active == "" {
+	if err != nil || active != m.trivyPin().Version {
 		missing = append(missing, "trivy")
 	}
 	if m.trivyDBDate().IsZero() {
@@ -136,93 +105,79 @@ func (m *Manager) Ready() (ready bool, missing []string) {
 	return len(missing) == 0, missing
 }
 
-// UpdateTrivy installs a Trivy release and activates it: the latest one
-// when version is empty, or the named one, such as the Recommended
-// TrivyState reported, otherwise. It refuses a release younger than
-// Settings().MinReleaseAgeDays unless force is true. The checksum catches
-// corruption, not a compromised release; the minimum age is the
-// protection against that, so a caller offering a specific version keeps
-// the user in control of trading it away, the same as force does for the
-// latest.
-func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (string, error) {
+// EnsureTrivy installs the pinned Trivy release when it is not on the
+// volume, activates it, and removes every other version. The download is
+// installed only when its sha256 equals the pinned digest for this host;
+// a mismatch installs nothing and leaves the active version as it was.
+// GitHub is asked for the pinned tag alone, and nothing at all once the
+// pin is on the volume.
+func (m *Manager) EnsureTrivy(ctx context.Context) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var rel ghRelease
-	var err error
-	if version == "" {
-		rel, err = m.latestTrivyRelease(ctx)
-		if err != nil {
-			return "", fmt.Errorf("%w: %w", ErrReleaseSourceUnavailable, err)
-		}
-	} else {
-		if !releaseNumber.MatchString(version) {
-			return "", ErrInvalidTrivyVersion
-		}
-		rel, err = m.trivyReleaseByTag(ctx, version)
-		if err != nil {
-			return "", fmt.Errorf("%w: release %s: %w", ErrReleaseSourceUnavailable, version, err)
-		}
+	pin := m.trivyPin()
+	version := strings.TrimPrefix(pin.Version, "v")
+	if !releaseNumber.MatchString(version) {
+		return "", ErrInvalidTrivyVersion
 	}
-	version = strings.TrimPrefix(rel.TagName, "v")
-
-	minAge := time.Duration(m.vol.Settings().MinReleaseAgeDays) * 24 * time.Hour
-	if age := time.Since(rel.PublishedAt); !force && age < minAge {
-		return "", fmt.Errorf("%w: %s was published %s ago, minimum age is %s", ErrReleaseTooRecent, version, age.Round(time.Hour), minAge)
+	arch := m.hostArch()
+	want := pin.SHA256[arch]
+	if want == "" {
+		return "", fmt.Errorf("trivy %s: no pinned digest for %q", version, arch)
 	}
-
-	installed, err := m.InstalledTrivy()
+	assetName, err := trivyAssetName(version, arch)
 	if err != nil {
 		return "", err
 	}
-	for _, v := range installed {
-		if v == version {
-			// Already on disk: activating is idempotent, downloading again
-			// is not what a retry after ActivateTrivy failed needs.
-			if err := m.activateTrivyLocked(version); err != nil {
-				return "", err
-			}
-			return version, nil
+
+	// A directory of the pinned version's name comes from an earlier
+	// install and is kept; anything else there, a link included, is
+	// replaced by a checked download.
+	dir := filepath.Join(m.vol.Root(), "tools", "trivy", version)
+	info, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err != nil || !info.IsDir() {
+		if err := m.installTrivyLocked(ctx, version, assetName, want, dir); err != nil {
+			return "", err
 		}
 	}
 
-	assetName, err := trivyAssetName(version, m.hostArch())
+	if active, err := m.activeTrivy(); err != nil || active != version {
+		if err := m.activateTrivyLocked(version); err != nil {
+			return "", err
+		}
+	}
+	m.removeOtherTrivyLocked(version)
+	return version, nil
+}
+
+// installTrivyLocked downloads the release asset, checks it against the
+// pinned digest and extracts it into dir. The caller holds mu.
+func (m *Manager) installTrivyLocked(ctx context.Context, version, assetName, want, dir string) error {
+	rel, err := m.trivyReleaseByTag(ctx, version)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("%w: release %s: %w", ErrReleaseSourceUnavailable, version, err)
 	}
 	asset, ok := findAsset(rel.Assets, assetName)
 	if !ok {
-		return "", fmt.Errorf("trivy %s: no release asset %q", version, assetName)
-	}
-	checksumsAsset, ok := findAsset(rel.Assets, fmt.Sprintf("trivy_%s_checksums.txt", version))
-	if !ok {
-		return "", fmt.Errorf("trivy %s: no checksums file", version)
-	}
-
-	sums, err := m.fetchBytes(ctx, checksumsAsset.BrowserDownloadURL)
-	if err != nil {
-		return "", fmt.Errorf("trivy %s checksums: %w", version, err)
-	}
-	want, err := checksumFor(sums, assetName)
-	if err != nil {
-		return "", fmt.Errorf("trivy %s: %w", version, err)
+		return fmt.Errorf("trivy %s: no release asset %q", version, assetName)
 	}
 
 	tmp, err := os.MkdirTemp("", "sealift-trivy-")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.RemoveAll(tmp)
 
 	archivePath := filepath.Join(tmp, assetName)
 	if err := m.download(ctx, asset.BrowserDownloadURL, archivePath); err != nil {
-		return "", fmt.Errorf("trivy %s: %w", version, err)
+		return fmt.Errorf("trivy %s: %w", version, err)
 	}
 	if err := verifySHA256(archivePath, want); err != nil {
-		return "", fmt.Errorf("trivy %s: %w", version, err)
+		return fmt.Errorf("trivy %s: %w", version, err)
 	}
-
-	dir := filepath.Join(m.vol.Root(), "tools", "trivy", version)
 	if err := installDir(dir, func(target string) error {
 		f, err := os.Open(archivePath)
 		if err != nil {
@@ -231,13 +186,29 @@ func (m *Manager) UpdateTrivy(ctx context.Context, version string, force bool) (
 		defer f.Close()
 		return extractTarGz(f, target)
 	}); err != nil {
-		return "", fmt.Errorf("extract trivy %s: %w", version, err)
+		return fmt.Errorf("extract trivy %s: %w", version, err)
 	}
+	return nil
+}
 
-	if err := m.activateTrivyLocked(version); err != nil {
-		return "", err
+// removeOtherTrivyLocked removes every directory under tools/trivy/ but the
+// pinned version's, leftovers of an interrupted install included. A
+// directory it cannot remove is logged and left: the pin is active either
+// way. The caller holds mu.
+func (m *Manager) removeOtherTrivyLocked(keep string) {
+	installed, err := m.InstalledTrivy()
+	if err != nil {
+		m.log.Warn("trivy: could not list the installed versions", "error", err)
+		return
 	}
-	return version, nil
+	for _, v := range installed {
+		if v == keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(m.vol.Root(), "tools", "trivy", v)); err != nil {
+			m.log.Warn("trivy: an old version stays on the volume", "version", v, "error", err)
+		}
+	}
 }
 
 // ActivateTrivy points tools/trivy/current at an installed version,
@@ -251,7 +222,7 @@ func (m *Manager) ActivateTrivy(version string) error {
 }
 
 // activateTrivyLocked is ActivateTrivy's body, called both directly and
-// from inside UpdateTrivy, which already holds mu.
+// from inside EnsureTrivy, which already holds mu.
 func (m *Manager) activateTrivyLocked(version string) error {
 	// The version names a directory and the link's target, so anything but
 	// a release number could point the active Trivy anywhere.
@@ -330,21 +301,7 @@ func (m *Manager) trivyDBDate() time.Time {
 	return meta.UpdatedAt
 }
 
-func (m *Manager) latestTrivyRelease(ctx context.Context) (ghRelease, error) {
-	data, err := m.fetchAPI(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases/latest")
-	if err != nil {
-		return ghRelease{}, err
-	}
-	var rel ghRelease
-	if err := json.Unmarshal(data, &rel); err != nil {
-		return ghRelease{}, err
-	}
-	return rel, nil
-}
-
-// trivyReleaseByTag fetches one named release, for UpdateTrivy's version
-// parameter: installing a specific release (the one recommendedTrivyRelease
-// found, not necessarily the latest).
+// trivyReleaseByTag fetches one named release, the pinned one.
 func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRelease, error) {
 	tag := version
 	if !strings.HasPrefix(tag, "v") {
@@ -361,36 +318,6 @@ func (m *Manager) trivyReleaseByTag(ctx context.Context, version string) (ghRele
 	return rel, nil
 }
 
-// recommendedTrivyRelease returns the highest-numbered release at least
-// minAge old among GitHub's default page of recent releases (30, several
-// months of Trivy's cadence). GitHub orders that page by date, and a patch
-// on an older line can come out after a newer release, so the version
-// number decides. ok is false when none qualifies.
-func (m *Manager) recommendedTrivyRelease(ctx context.Context, minAge time.Duration) (rel ghRelease, ok bool, err error) {
-	data, err := m.fetchAPI(ctx, m.githubAPI()+"/repos/"+trivyRepo+"/releases")
-	if err != nil {
-		return ghRelease{}, false, err
-	}
-	var releases []ghRelease
-	if err := json.Unmarshal(data, &releases); err != nil {
-		return ghRelease{}, false, err
-	}
-	var best *semver.Version
-	for _, r := range releases {
-		if r.Draft || r.Prerelease || time.Since(r.PublishedAt) < minAge || !releaseNumber.MatchString(r.TagName) {
-			continue
-		}
-		v, err := semver.NewVersion(r.TagName)
-		if err != nil {
-			continue
-		}
-		if best == nil || v.GreaterThan(best) {
-			best, rel, ok = v, r, true
-		}
-	}
-	return rel, ok, nil
-}
-
 func (m *Manager) hostArch() string {
 	if m.Arch != "" {
 		return m.Arch
@@ -398,11 +325,10 @@ func (m *Manager) hostArch() string {
 	return runtime.GOARCH
 }
 
-// checksumsSizeLimit bounds a GitHub release's checksums file and the
-// release JSON itself, both plain text listing a handful of assets, so a
-// misbehaving or compromised server cannot make fetchBytes buffer an
-// unbounded body in memory.
-const checksumsSizeLimit = 1 << 20
+// releaseJSONLimit bounds a GitHub API answer, a release's JSON listing a
+// few dozen assets, so a misbehaving or compromised server cannot make get
+// buffer an unbounded body in memory.
+const releaseJSONLimit = 1 << 20
 
 // assetSizeLimit bounds a Trivy release tarball, which runs tens of
 // megabytes, generously, so download cannot be made to write an unbounded
@@ -413,10 +339,6 @@ const assetSizeLimit = 512 << 20
 // the GitHub token: release assets come from other addresses and get none.
 func (m *Manager) fetchAPI(ctx context.Context, url string) ([]byte, error) {
 	return m.get(ctx, url, m.GitHubToken)
-}
-
-func (m *Manager) fetchBytes(ctx context.Context, url string) ([]byte, error) {
-	return m.get(ctx, url, "")
 }
 
 // get never puts the token in an error: the messages carry the URL and the
@@ -437,7 +359,7 @@ func (m *Manager) get(ctx context.Context, url, token string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, checksumsSizeLimit))
+	return io.ReadAll(io.LimitReader(resp.Body, releaseJSONLimit))
 }
 
 func (m *Manager) download(ctx context.Context, url, path string) error {
@@ -485,16 +407,6 @@ func findAsset(assets []ghAsset, name string) (ghAsset, bool) {
 		}
 	}
 	return ghAsset{}, false
-}
-
-func checksumFor(checksums []byte, name string) (string, error) {
-	for _, line := range strings.Split(string(checksums), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == name {
-			return fields[0], nil
-		}
-	}
-	return "", fmt.Errorf("no checksum for %q", name)
 }
 
 func verifySHA256(path, want string) error {

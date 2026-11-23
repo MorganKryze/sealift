@@ -64,12 +64,12 @@ func newTestHandlers(t *testing.T, q *jobs.Queue) *Handlers {
 }
 
 // seedToolsReady makes st report ready (tools.Manager.Ready) without any
-// network access: an installed, active Trivy version, a vulnerability
+// network access: the pinned Trivy version installed and active, a vulnerability
 // database date. A test of the readiness gate itself starts from a store
 // this was never called on instead.
 func seedToolsReady(t *testing.T, st *store.Store) {
 	t.Helper()
-	const version = "0.0.0-test"
+	version := tools.PinnedTrivy.Version
 	dir := filepath.Join(st.Root(), "tools", "trivy", version)
 	if err := os.MkdirAll(dir, 0o770); err != nil {
 		t.Fatalf("seed trivy dir: %v", err)

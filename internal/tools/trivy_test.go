@@ -8,15 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,191 +24,443 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
-// trivyTestVersion is the release version every trivyRelease server
-// advertises as latest.
+// trivyTestVersion is the release every fake release server serves and
+// every test pin names.
 const trivyTestVersion = "0.55.0"
 
-// trivyRelease builds an httptest server that serves a single GitHub
-// release for aquasecurity/trivy, tagged trivyTestVersion: the
-// release-latest endpoint, the Linux-64bit tarball, and its checksums
-// file. When badChecksum is true, the checksums file lists a checksum
-// that does not match the tarball, so callers can exercise the mismatch
-// path. The returned counter counts requests for the tarball asset, so a
-// caller can assert a second install skipped the download.
-func trivyRelease(t *testing.T, publishedAt time.Time, badChecksum bool) (*httptest.Server, *atomic.Int32) {
-	t.Helper()
-	var assetRequests atomic.Int32
-	const version = trivyTestVersion
-	tarball := buildTarGz(t, map[string]string{
-		"trivy":       "#!/bin/sh\necho fake trivy\n",
-		"LICENSE":     "fake license\n",
-		"contrib/x.y": "unused\n",
-	})
-	assetName := fmt.Sprintf("trivy_%s_Linux-64bit.tar.gz", version)
-	checksumsName := fmt.Sprintf("trivy_%s_checksums.txt", version)
+// fakeTrivyRelease stands in for GitHub: the pinned tag's release, both
+// Linux tarballs and the release's checksums file, on one origin. It
+// records the path and the Authorization header of every request.
+type fakeTrivyRelease struct {
+	srv *httptest.Server
+	// pin holds the sha256 of the tarballs as built, before any tampering.
+	pin    TrivyPin
+	served string // sha256 of the amd64 tarball the server sends
 
-	sum := sha256.Sum256(tarball)
-	hexSum := hex.EncodeToString(sum[:])
-	if badChecksum {
-		hexSum = hex.EncodeToString(sha256.New().Sum(nil))
-	}
-	checksums := fmt.Sprintf("%s  %s\n", hexSum, assetName)
-
-	// srv is assigned below; the handler reads its URL lazily on each
-	// request, once the server is listening.
-	var srv *httptest.Server
-	mux := http.NewServeMux()
-	release := func() ghRelease {
-		return ghRelease{
-			TagName:     "v" + version,
-			PublishedAt: publishedAt,
-			Assets: []ghAsset{
-				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName, Size: int64(len(tarball))},
-				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
-			},
-		}
-	}
-	writeJSON := func(w http.ResponseWriter, v any) {
-		data, _ := json.Marshal(v)
-		_, _ = w.Write(data)
-	}
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, release())
-	})
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/tags/v"+version, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, release())
-	})
-	// The release list, newest first as GitHub orders it: this release,
-	// a prerelease and a draft that must never be recommended, then an
-	// older release past any minimum age.
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases", func(w http.ResponseWriter, _ *http.Request) {
-		old := time.Now().Add(-60 * 24 * time.Hour)
-		writeJSON(w, []ghRelease{
-			release(),
-			{TagName: "v0.54.9-rc.1", PublishedAt: old, Prerelease: true},
-			{TagName: "v0.54.8", PublishedAt: old, Draft: true},
-			{TagName: "v0.54.0", PublishedAt: old},
-			// Published before v0.54.0 but numbered higher, as a patch on
-			// an older line can be: the recommendation follows the number.
-			{TagName: "v0.54.1", PublishedAt: old.Add(-24 * time.Hour)},
-		})
-	})
-	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
-		assetRequests.Add(1)
-		_, _ = w.Write(tarball)
-	})
-	mux.HandleFunc("/"+checksumsName, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(checksums))
-	})
-
-	srv = httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv, &assetRequests
+	mu    sync.Mutex
+	paths []string
+	auth  map[string]string
 }
 
-func newTestManager(t *testing.T, srv *httptest.Server) (*Manager, string) {
+// newFakeTrivyRelease builds the release. With tampered set, the server
+// sends other amd64 bytes than the pin's, and the release's checksums file
+// lists those bytes' digest, as a swapped release would.
+func newFakeTrivyRelease(t *testing.T, tampered bool) *fakeTrivyRelease {
+	t.Helper()
+	const version = trivyTestVersion
+	amd64 := buildTarGz(t, map[string]string{"trivy": "#!/bin/sh\necho fake trivy amd64\n", "LICENSE": "fake license\n"})
+	arm64 := buildTarGz(t, map[string]string{"trivy": "#!/bin/sh\necho fake trivy arm64\n", "LICENSE": "fake license\n"})
+	f := &fakeTrivyRelease{
+		pin:  TrivyPin{Version: version, SHA256: map[string]string{"amd64": sha256Hex(amd64), "arm64": sha256Hex(arm64)}},
+		auth: map[string]string{},
+	}
+	if tampered {
+		amd64 = buildTarGz(t, map[string]string{"trivy": "#!/bin/sh\necho swapped\n"})
+	}
+	f.served = sha256Hex(amd64)
+	amd64Name := fmt.Sprintf("trivy_%s_Linux-64bit.tar.gz", version)
+	arm64Name := fmt.Sprintf("trivy_%s_Linux-ARM64.tar.gz", version)
+	checksumsName := fmt.Sprintf("trivy_%s_checksums.txt", version)
+	checksums := fmt.Sprintf("%s  %s\n%s  %s\n", sha256Hex(amd64), amd64Name, sha256Hex(arm64), arm64Name)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/aquasecurity/trivy/releases/tags/v"+version, func(w http.ResponseWriter, _ *http.Request) {
+		rel := ghRelease{
+			TagName: "v" + version,
+			Assets: []ghAsset{
+				{Name: amd64Name, BrowserDownloadURL: f.srv.URL + "/" + amd64Name},
+				{Name: arm64Name, BrowserDownloadURL: f.srv.URL + "/" + arm64Name},
+				{Name: checksumsName, BrowserDownloadURL: f.srv.URL + "/" + checksumsName},
+			},
+		}
+		data, _ := json.Marshal(rel)
+		_, _ = w.Write(data)
+	})
+	for name, body := range map[string][]byte{amd64Name: amd64, arm64Name: arm64, checksumsName: []byte(checksums)} {
+		mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+	}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.paths = append(f.paths, r.URL.Path)
+		f.auth[r.URL.Path] = r.Header.Get("Authorization")
+		f.mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeTrivyRelease) requests() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.paths)
+}
+
+func (f *fakeTrivyRelease) authorization(path string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.auth[path]
+	return v, ok
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// newTestManager returns a Manager on a fresh volume that asks srv for
+// releases, on an amd64 host, running pin.
+func newTestManager(t *testing.T, srv *httptest.Server, pin TrivyPin) (*Manager, string) {
 	t.Helper()
 	root := t.TempDir()
 	m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 7}}, srv.Client(), nil)
 	m.GitHubAPI = srv.URL
 	m.Arch = "amd64"
+	m.Trivy = pin
 	return m, root
 }
 
-func TestUpdateTrivyRefusesRecentReleaseWithoutForce(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
-	m, root := newTestManager(t, srv)
-
-	_, err := m.UpdateTrivy(context.Background(), "", false)
-	if !errors.Is(err, ErrReleaseTooRecent) {
-		t.Fatalf("UpdateTrivy(force=false) error = %v, want ErrReleaseTooRecent", err)
+// plantTrivy installs a version by hand, and makes it the active one when
+// active is set, as an older sealift would have left it.
+func plantTrivy(t *testing.T, root, version string, active bool) {
+	t.Helper()
+	dir := filepath.Join(root, "tools", "trivy", version)
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", "0.55.0")); !os.IsNotExist(err) {
-		t.Fatalf("a refused release must not be installed, stat error = %v", err)
+	if err := os.WriteFile(filepath.Join(dir, "trivy"), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		link := filepath.Join(root, "tools", "trivy", "current")
+		_ = os.Remove(link)
+		if err := os.Symlink(version, link); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-func TestUpdateTrivyInstallsRecentReleaseWithForce(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
-	m, root := newTestManager(t, srv)
+func plantTrivyDB(t *testing.T, root string, updatedAt time.Time) {
+	t.Helper()
+	dbDir := filepath.Join(root, "trivy-cache", "db")
+	if err := os.MkdirAll(dbDir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	metadata := fmt.Sprintf(`{"Version":2,"UpdatedAt":%q}`, updatedAt.UTC().Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(metadata), 0o664); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	version, err := m.UpdateTrivy(context.Background(), "", true)
+func TestPinnedTrivyIsWellFormed(t *testing.T) {
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(PinnedTrivy.Version) {
+		t.Errorf("PinnedTrivy.Version = %q, want a release number such as 0.76.2", PinnedTrivy.Version)
+	}
+	digest := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	if len(PinnedTrivy.SHA256) != 2 {
+		t.Errorf("PinnedTrivy.SHA256 has %d entries, want amd64 and arm64 only", len(PinnedTrivy.SHA256))
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		if !digest.MatchString(PinnedTrivy.SHA256[arch]) {
+			t.Errorf("PinnedTrivy.SHA256[%q] = %q, want 64 lowercase hex characters", arch, PinnedTrivy.SHA256[arch])
+		}
+	}
+}
+
+func TestEnsureTrivyInstallsThePinnedRelease(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+
+	version, err := m.EnsureTrivy(context.Background())
 	if err != nil {
-		t.Fatalf("UpdateTrivy(force=true): %v", err)
+		t.Fatalf("EnsureTrivy: %v", err)
 	}
-	if version != "0.55.0" {
-		t.Fatalf("version = %q, want 0.55.0", version)
+	if version != trivyTestVersion {
+		t.Fatalf("version = %q, want %q", version, trivyTestVersion)
 	}
-	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", "0.55.0", "trivy")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", trivyTestVersion, "trivy")); err != nil {
 		t.Fatalf("installed trivy binary missing: %v", err)
 	}
-
-	active, err := m.activeTrivy()
-	if err != nil {
-		t.Fatalf("activeTrivy: %v", err)
-	}
-	if active != "0.55.0" {
-		t.Fatalf("active version = %q, want 0.55.0", active)
+	if active, err := m.activeTrivy(); err != nil || active != trivyTestVersion {
+		t.Fatalf("active = %q, %v, want %q", active, err, trivyTestVersion)
 	}
 }
 
-func TestUpdateTrivyChecksumMismatchInstallsNothing(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), true)
-	m, root := newTestManager(t, srv)
+func TestEnsureTrivyRefusesBytesThatDoNotMatchThePin(t *testing.T) {
+	f := newFakeTrivyRelease(t, true)
+	m, root := newTestManager(t, f.srv, f.pin)
+	plantTrivy(t, root, "0.54.0", true)
 
-	_, err := m.UpdateTrivy(context.Background(), "", false)
+	_, err := m.EnsureTrivy(context.Background())
 	if !errors.Is(err, ErrChecksumMismatch) {
-		t.Fatalf("UpdateTrivy error = %v, want ErrChecksumMismatch", err)
+		t.Fatalf("EnsureTrivy error = %v, want ErrChecksumMismatch", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", "0.55.0")); !os.IsNotExist(err) {
-		t.Fatalf("a checksum mismatch must not be installed, stat error = %v", err)
+	for _, digest := range []string{f.pin.SHA256["amd64"], f.served} {
+		if !strings.Contains(err.Error(), digest) {
+			t.Errorf("error %q does not name the digest %s", err, digest)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", "0.55.0.tmp")); !os.IsNotExist(err) {
-		t.Fatalf("a checksum mismatch must not leave a partial extraction, stat error = %v", err)
+	for _, dir := range []string{trivyTestVersion, trivyTestVersion + ".tmp"} {
+		if _, err := os.Stat(filepath.Join(root, "tools", "trivy", dir)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("tools/trivy/%s exists after a refused download: %v", dir, err)
+		}
+	}
+	if active, err := m.activeTrivy(); err != nil || active != "0.54.0" {
+		t.Errorf("active = %q, %v, want 0.54.0 unchanged", active, err)
+	}
+	if installed, _ := m.InstalledTrivy(); !slices.Equal(installed, []string{"0.54.0"}) {
+		t.Errorf("InstalledTrivy = %v, want [0.54.0] kept after a refused download", installed)
+	}
+}
+
+func TestEnsureTrivyAsksGitHubForThePinnedTagOnly(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, _ := newTestManager(t, f.srv, f.pin)
+
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
+		t.Fatalf("EnsureTrivy: %v", err)
+	}
+	want := []string{
+		"/repos/aquasecurity/trivy/releases/tags/v" + trivyTestVersion,
+		"/trivy_" + trivyTestVersion + "_Linux-64bit.tar.gz",
+	}
+	if got := f.requests(); !slices.Equal(got, want) {
+		t.Errorf("requests = %v, want exactly %v", got, want)
+	}
+}
+
+func TestEnsureTrivyDoesNothingWhenThePinIsInstalled(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+	plantTrivy(t, root, trivyTestVersion, true)
+
+	version, err := m.EnsureTrivy(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureTrivy: %v", err)
+	}
+	if version != trivyTestVersion {
+		t.Errorf("version = %q, want %q", version, trivyTestVersion)
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Errorf("requests = %v, want none while the pin is installed and active", got)
+	}
+}
+
+func TestEnsureTrivyActivatesAnInstalledPinWithoutDownloading(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+	plantTrivy(t, root, trivyTestVersion, false)
+	plantTrivy(t, root, "0.54.0", true)
+
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
+		t.Fatalf("EnsureTrivy: %v", err)
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Errorf("requests = %v, want none while the pin is on the volume", got)
+	}
+	if active, _ := m.activeTrivy(); active != trivyTestVersion {
+		t.Errorf("active = %q, want %q", active, trivyTestVersion)
+	}
+	if installed, _ := m.InstalledTrivy(); !slices.Equal(installed, []string{trivyTestVersion}) {
+		t.Errorf("InstalledTrivy = %v, want the pin alone", installed)
+	}
+}
+
+func TestEnsureTrivyRemovesOtherVersions(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+	plantTrivy(t, root, "0.53.1", false)
+	plantTrivy(t, root, "0.54.0", true)
+
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
+		t.Fatalf("EnsureTrivy: %v", err)
+	}
+	installed, err := m.InstalledTrivy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(installed, []string{trivyTestVersion}) {
+		t.Errorf("InstalledTrivy = %v, want [%s] once the pin is active", installed, trivyTestVersion)
+	}
+	if active, _ := m.activeTrivy(); active != trivyTestVersion {
+		t.Errorf("active = %q, want %q", active, trivyTestVersion)
+	}
+}
+
+// A version the account cannot remove stays on the volume: the pin is
+// active all the same, and the log names what was left.
+func TestEnsureTrivyLogsAVersionItCannotRemove(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a read-only directory's files")
+	}
+	f := newFakeTrivyRelease(t, false)
+	var logs bytes.Buffer
+	m, root := newTestManager(t, f.srv, f.pin)
+	m.log = slog.New(slog.NewTextHandler(&logs, nil))
+	plantTrivy(t, root, "0.54.0", true)
+	locked := filepath.Join(root, "tools", "trivy", "0.54.0", "contrib")
+	if err := os.MkdirAll(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "x"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
+		t.Fatalf("EnsureTrivy: %v, want the pin active despite the leftover", err)
+	}
+	if active, _ := m.activeTrivy(); active != trivyTestVersion {
+		t.Errorf("active = %q, want %q", active, trivyTestVersion)
+	}
+	if !strings.Contains(logs.String(), "0.54.0") {
+		t.Errorf("log %q does not name the version left on the volume", logs.String())
+	}
+}
+
+func TestEnsureTrivyRefusesAPinItCannotUse(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	for _, tc := range []struct {
+		name, arch, want string
+		pin              TrivyPin
+	}{
+		{"no digest for the host", "arm64", `no pinned digest for "arm64"`, TrivyPin{Version: trivyTestVersion, SHA256: map[string]string{"amd64": f.pin.SHA256["amd64"]}}},
+		{"a path as version", "amd64", ErrInvalidTrivyVersion.Error(), TrivyPin{Version: "../../evil", SHA256: f.pin.SHA256}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestManager(t, f.srv, tc.pin)
+			m.Arch = tc.arch
+			if _, err := m.EnsureTrivy(context.Background()); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("EnsureTrivy error = %v, want it to say %q", err, tc.want)
+			}
+		})
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Errorf("requests = %v, want none for a pin that cannot be used", got)
+	}
+}
+
+func TestEnsureTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	m, _ := newTestManager(t, srv, newFakeTrivyRelease(t, false).pin)
+
+	if _, err := m.EnsureTrivy(context.Background()); !errors.Is(err, ErrReleaseSourceUnavailable) {
+		t.Fatalf("EnsureTrivy error = %v, want ErrReleaseSourceUnavailable", err)
+	}
+}
+
+// A release answer past releaseJSONLimit is cut, so it fails to parse
+// instead of being buffered whole.
+func TestEnsureTrivyRefusesAnOversizedReleaseAnswer(t *testing.T) {
+	oversized := append([]byte(`{"tag_name":"v`+trivyTestVersion+`","x":"`), bytes.Repeat([]byte("0"), releaseJSONLimit+1024)...)
+	oversized = append(oversized, []byte(`"}`)...)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(oversized) }))
+	t.Cleanup(srv.Close)
+	m, root := newTestManager(t, srv, newFakeTrivyRelease(t, false).pin)
+
+	if _, err := m.EnsureTrivy(context.Background()); err == nil {
+		t.Fatal("EnsureTrivy with an oversized release answer: want error, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", trivyTestVersion)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nothing may be installed, stat error = %v", err)
+	}
+}
+
+func TestReadyWantsThePinnedTrivyActive(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, nil, nil)
+	m.GitHubAPI = "http://127.0.0.1:1"
+	m.Trivy = TrivyPin{Version: trivyTestVersion, SHA256: map[string]string{"amd64": strings.Repeat("0", 64)}}
+
+	if ready, missing := m.Ready(); ready || !slices.Equal(missing, []string{"trivy", "trivy-db"}) {
+		t.Fatalf("Ready on a fresh volume = (%v, %v), want (false, [trivy trivy-db])", ready, missing)
+	}
+	plantTrivyDB(t, root, time.Now())
+	plantTrivy(t, root, "0.54.0", true)
+	if ready, missing := m.Ready(); ready || !slices.Equal(missing, []string{"trivy"}) {
+		t.Fatalf("Ready with another version active = (%v, %v), want (false, [trivy])", ready, missing)
+	}
+	plantTrivy(t, root, trivyTestVersion, true)
+	if ready, missing := m.Ready(); !ready || len(missing) != 0 {
+		t.Fatalf("Ready with the pin active = (%v, %v), want (true, [])", ready, missing)
+	}
+}
+
+func TestTrivyStateReadsTheVolumeOnly(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+	plantTrivy(t, root, "0.54.0", true)
+	updatedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	plantTrivyDB(t, root, updatedAt)
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if state.Active != "0.54.0" || !slices.Equal(state.Installed, []string{"0.54.0"}) {
+		t.Errorf("Active, Installed = %q, %v, want 0.54.0, [0.54.0]", state.Active, state.Installed)
+	}
+	if state.Pinned != trivyTestVersion {
+		t.Errorf("Pinned = %q, want %q", state.Pinned, trivyTestVersion)
+	}
+	if !state.DBDate.Equal(updatedAt) {
+		t.Errorf("DBDate = %v, want %v", state.DBDate, updatedAt)
+	}
+	if got := f.requests(); len(got) != 0 {
+		t.Errorf("TrivyState made requests %v, want none", got)
+	}
+}
+
+func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, _ := newTestManager(t, f.srv, f.pin)
+
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatalf("TrivyState: %v", err)
+	}
+	if !state.DBDate.IsZero() || len(state.Installed) != 0 || state.Active != "" {
+		t.Fatalf("TrivyState on a fresh volume = %+v, want no database, nothing installed, nothing active", state)
+	}
+}
+
+// A Manager whose Trivy is left zero runs the pin built into sealift.
+func TestTrivyStateNamesTheBuiltInPinByDefault(t *testing.T) {
+	m := NewManager(fakeVolume{root: t.TempDir()}, nil, nil)
+	state, err := m.TrivyState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Pinned != PinnedTrivy.Version {
+		t.Errorf("Pinned = %q, want %q", state.Pinned, PinnedTrivy.Version)
 	}
 }
 
 func TestActivateTrivyRollsBack(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, root := newTestManager(t, srv)
-
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
-		t.Fatalf("install 0.55.0: %v", err)
-	}
-
-	// A second version installed by hand, as a later UpdateTrivy would.
-	oldDir := filepath.Join(root, "tools", "trivy", "0.54.0")
-	if err := os.MkdirAll(oldDir, 0o770); err != nil {
-		t.Fatalf("mkdir 0.54.0: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oldDir, "trivy"), []byte("old"), 0o755); err != nil {
-		t.Fatalf("write 0.54.0/trivy: %v", err)
-	}
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, nil, nil)
+	plantTrivy(t, root, "0.54.0", false)
+	plantTrivy(t, root, trivyTestVersion, true)
 
 	if err := m.ActivateTrivy("0.54.0"); err != nil {
 		t.Fatalf("rollback to 0.54.0: %v", err)
 	}
-	active, err := m.activeTrivy()
-	if err != nil {
-		t.Fatalf("activeTrivy: %v", err)
+	if active, err := m.activeTrivy(); err != nil || active != "0.54.0" {
+		t.Fatalf("active version after rollback = %q, %v, want 0.54.0", active, err)
 	}
-	if active != "0.54.0" {
-		t.Fatalf("active version after rollback = %q, want 0.54.0", active)
-	}
-
-	installed, err := m.InstalledTrivy()
-	if err != nil {
-		t.Fatalf("InstalledTrivy: %v", err)
-	}
-	want := []string{"0.54.0", "0.55.0"}
-	if len(installed) != len(want) || installed[0] != want[0] || installed[1] != want[1] {
-		t.Fatalf("InstalledTrivy = %v, want %v", installed, want)
+	if installed, _ := m.InstalledTrivy(); !slices.Equal(installed, []string{"0.54.0", trivyTestVersion}) {
+		t.Fatalf("InstalledTrivy = %v, want [0.54.0 %s]", installed, trivyTestVersion)
 	}
 }
 
 func TestActivateTrivyRefusesUninstalledVersion(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now(), false)
-	m, _ := newTestManager(t, srv)
+	m := NewManager(fakeVolume{root: t.TempDir()}, nil, nil)
 	if err := m.ActivateTrivy("9.9.9"); err == nil {
 		t.Fatal("ActivateTrivy on a version never installed: want error, got nil")
 	}
@@ -217,8 +469,8 @@ func TestActivateTrivyRefusesUninstalledVersion(t *testing.T) {
 // A version is a path element: one that is not a release number could
 // point the active link at any directory, inside the volume or out of it.
 func TestActivateTrivyRefusesAPathAsVersion(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now(), false)
-	m, root := newTestManager(t, srv)
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, nil, nil)
 	if err := os.MkdirAll(filepath.Join(root, "elsewhere"), 0o770); err != nil {
 		t.Fatal(err)
 	}
@@ -232,375 +484,53 @@ func TestActivateTrivyRefusesAPathAsVersion(t *testing.T) {
 	}
 }
 
-func TestTrivyStateReportsDBDate(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, root := newTestManager(t, srv)
-
-	dbDir := filepath.Join(root, "trivy-cache", "db")
-	if err := os.MkdirAll(dbDir, 0o770); err != nil {
-		t.Fatalf("mkdir trivy-cache/db: %v", err)
-	}
-	updatedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	metadata := fmt.Sprintf(`{"Version":2,"UpdatedAt":%q}`, updatedAt.Format(time.RFC3339))
-	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(metadata), 0o664); err != nil {
-		t.Fatalf("write metadata.json: %v", err)
-	}
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState: %v", err)
-	}
-	if !state.DBDate.Equal(updatedAt) {
-		t.Fatalf("DBDate = %v, want %v", state.DBDate, updatedAt)
-	}
-	if state.Latest != "0.55.0" {
-		t.Fatalf("Latest = %q, want 0.55.0", state.Latest)
-	}
-}
-
-// TestTrivyStateReportsLatestSizeBytes proves TrivyState reports the size
-// of the release asset this host would actually download, not the
-// release's total footprint across every platform.
-func TestTrivyStateReportsLatestSizeBytes(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now(), false)
-	m, _ := newTestManager(t, srv)
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState: %v", err)
-	}
-	if state.LatestSizeBytes <= 0 {
-		t.Fatalf("LatestSizeBytes = %d, want a positive size", state.LatestSizeBytes)
-	}
-}
-
-// TestManagerReady proves Ready names Trivy and its database, whichever
-// is still missing, without ever reaching the network: an analysis only
-// needs what is already on the data volume.
-func TestManagerReady(t *testing.T) {
-	root := t.TempDir()
-	m := NewManager(fakeVolume{root: root}, nil, nil)
-	m.GitHubAPI = "http://127.0.0.1:1"
-
-	if ready, missing := m.Ready(); ready || len(missing) != 2 {
-		t.Fatalf("Ready on a fresh volume = (%v, %v), want (false, [trivy trivy-db])", ready, missing)
-	}
-
-	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", "0.55.0"), 0o770); err != nil {
-		t.Fatalf("mkdir trivy version: %v", err)
-	}
-	if err := os.Symlink("0.55.0", filepath.Join(root, "tools", "trivy", "current")); err != nil {
-		t.Fatalf("symlink current: %v", err)
-	}
-	if ready, missing := m.Ready(); ready || len(missing) != 1 || missing[0] != "trivy-db" {
-		t.Fatalf("Ready with trivy active = (%v, %v), want (false, [trivy-db])", ready, missing)
-	}
-
-	dbDir := filepath.Join(root, "trivy-cache", "db")
-	if err := os.MkdirAll(dbDir, 0o770); err != nil {
-		t.Fatalf("mkdir trivy-cache/db: %v", err)
-	}
-	metadata := fmt.Sprintf(`{"UpdatedAt":%q}`, time.Now().UTC().Format(time.RFC3339))
-	if err := os.WriteFile(filepath.Join(dbDir, "metadata.json"), []byte(metadata), 0o664); err != nil {
-		t.Fatalf("write metadata.json: %v", err)
-	}
-	if ready, missing := m.Ready(); !ready || len(missing) != 0 {
-		t.Fatalf("Ready once everything is in place = (%v, %v), want (true, [])", ready, missing)
-	}
-}
-
-func TestTrivyStateWithNoDBIsZeroTime(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now(), false)
-	m, _ := newTestManager(t, srv)
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState: %v", err)
-	}
-	if !state.DBDate.IsZero() {
-		t.Fatalf("DBDate = %v, want zero", state.DBDate)
-	}
-	if len(state.Installed) != 0 {
-		t.Fatalf("Installed = %v, want empty", state.Installed)
-	}
-	if state.Active != "" {
-		t.Fatalf("Active = %q, want empty", state.Active)
-	}
-}
-
-// TestUpdateTrivyChecksumsBodyOverLimitFailsInstall proves fetchBytes caps
-// the checksums body instead of buffering it whole: a body padded well past
-// checksumsSizeLimit loses the real checksum line to truncation, so the
-// install fails instead of succeeding on an unbounded read.
-func TestUpdateTrivyChecksumsBodyOverLimitFailsInstall(t *testing.T) {
-	const version = trivyTestVersion
-	tarball := buildTarGz(t, map[string]string{"trivy": "#!/bin/sh\necho fake trivy\n"})
-	assetName := fmt.Sprintf("trivy_%s_Linux-64bit.tar.gz", version)
-	checksumsName := fmt.Sprintf("trivy_%s_checksums.txt", version)
-
-	oversized := bytes.Repeat([]byte("0"), checksumsSizeLimit+1024)
-
-	var srv *httptest.Server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		rel := ghRelease{
-			TagName:     "v" + version,
-			PublishedAt: time.Now().Add(-30 * 24 * time.Hour),
-			Assets: []ghAsset{
-				{Name: assetName, BrowserDownloadURL: srv.URL + "/" + assetName, Size: int64(len(tarball))},
-				{Name: checksumsName, BrowserDownloadURL: srv.URL + "/" + checksumsName},
-			},
-		}
-		data, _ := json.Marshal(rel)
-		_, _ = w.Write(data)
-	})
-	mux.HandleFunc("/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(tarball)
-	})
-	mux.HandleFunc("/"+checksumsName, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(oversized)
-	})
-	srv = httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	m, root := newTestManager(t, srv)
-
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err == nil {
-		t.Fatal("UpdateTrivy with an oversized checksums body: want error, got nil")
-	}
-	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", version)); !os.IsNotExist(err) {
-		t.Fatalf("a rejected checksums body must not be installed, stat error = %v", err)
-	}
-}
-
-// TestTrivyStateSurvivesGitHubUnreachable proves a GitHub outage does not
-// fail TrivyState outright: the installed and active versions, and the
-// database date, all come from the data volume alone and stay reportable.
-func TestTrivyStateSurvivesGitHubUnreachable(t *testing.T) {
-	root := t.TempDir()
-	m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 7}}, &http.Client{Timeout: time.Second}, nil)
-	m.GitHubAPI = "http://127.0.0.1:1" // nothing listens here
-
-	if err := os.MkdirAll(filepath.Join(root, "tools", "trivy", trivyTestVersion), 0o770); err != nil {
-		t.Fatalf("mkdir installed version: %v", err)
-	}
-	if err := m.ActivateTrivy(trivyTestVersion); err != nil {
-		t.Fatalf("ActivateTrivy: %v", err)
-	}
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState with GitHub unreachable: %v, want it to succeed with partial data", err)
-	}
-	if state.Active != trivyTestVersion {
-		t.Errorf("Active = %q, want %q", state.Active, trivyTestVersion)
-	}
-	if len(state.Installed) != 1 || state.Installed[0] != trivyTestVersion {
-		t.Errorf("Installed = %v, want [%q]", state.Installed, trivyTestVersion)
-	}
-	if state.Latest != "" || state.LatestAge != 0 {
-		t.Errorf("Latest/LatestAge = %q/%v, want both zero since GitHub could not be reached", state.Latest, state.LatestAge)
-	}
-}
-
-func TestUpdateTrivyInstallingSameVersionTwiceDownloadsOnce(t *testing.T) {
-	srv, assetRequests := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
-		t.Fatalf("first UpdateTrivy: %v", err)
-	}
-	if got := assetRequests.Load(); got != 1 {
-		t.Fatalf("asset requests after first install = %d, want 1", got)
-	}
-
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
-		t.Fatalf("second UpdateTrivy: %v", err)
-	}
-	if got := assetRequests.Load(); got != 1 {
-		t.Fatalf("asset requests after second install = %d, want still 1: a version already installed must not download again", got)
-	}
-
-	active, err := m.activeTrivy()
-	if err != nil {
-		t.Fatalf("activeTrivy: %v", err)
-	}
-	if active != trivyTestVersion {
-		t.Fatalf("active version = %q, want %q", active, trivyTestVersion)
-	}
-}
-
-func TestTrivyStateRecommendsAnOlderReleaseWhileTheLatestIsTooRecent(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState: %v", err)
-	}
-	if state.Recommended != "0.54.1" {
-		t.Fatalf("Recommended = %q, want 0.54.1: the highest version past the minimum age, whatever the list order, skipping the prerelease and the draft", state.Recommended)
-	}
-}
-
-func TestTrivyStateRecommendsNothingWhileTheLatestIsOldEnough(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	state, err := m.TrivyState(context.Background())
-	if err != nil {
-		t.Fatalf("TrivyState: %v", err)
-	}
-	if state.Recommended != "" {
-		t.Fatalf("Recommended = %q, want empty when the latest release is old enough", state.Recommended)
-	}
-}
-
-func TestUpdateTrivyInstallsANamedRelease(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	version, err := m.UpdateTrivy(context.Background(), trivyTestVersion, false)
-	if err != nil {
-		t.Fatalf("UpdateTrivy(%s): %v", trivyTestVersion, err)
-	}
-	if version != trivyTestVersion {
-		t.Fatalf("installed %q, want %q", version, trivyTestVersion)
-	}
-}
-
-func TestUpdateTrivyRefusesANamedRecentReleaseWithoutForce(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-1*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	if _, err := m.UpdateTrivy(context.Background(), trivyTestVersion, false); !errors.Is(err, ErrReleaseTooRecent) {
-		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseTooRecent", err)
-	}
-}
-
-func TestUpdateTrivyRejectsAVersionThatIsNotPlainSemver(t *testing.T) {
-	srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-	m, _ := newTestManager(t, srv)
-
-	for _, version := range []string{"../../../evil/repo/releases/tags/v1.0.0", "0.55.0/../latest", "v0.55.0-rc.1", "latest"} {
-		if _, err := m.UpdateTrivy(context.Background(), version, true); !errors.Is(err, ErrInvalidTrivyVersion) {
-			t.Errorf("UpdateTrivy(%q) error = %v, want ErrInvalidTrivyVersion", version, err)
-		}
-	}
-}
-
-func TestUpdateTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "rate limited", http.StatusForbidden)
-	}))
-	t.Cleanup(srv.Close)
-	m, _ := newTestManager(t, srv)
-
-	if _, err := m.UpdateTrivy(context.Background(), "", false); !errors.Is(err, ErrReleaseSourceUnavailable) {
-		t.Fatalf("UpdateTrivy error = %v, want ErrReleaseSourceUnavailable", err)
-	}
-}
-
-// authSpy wraps a release server's handler and records the Authorization
-// header of every request, keyed by path.
-func authSpy(t *testing.T, publishedAt time.Time) (*httptest.Server, func() map[string]string) {
-	t.Helper()
-	inner, _ := trivyRelease(t, publishedAt, false)
-	var mu sync.Mutex
-	seen := map[string]string{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen[r.URL.Path] = r.Header.Get("Authorization")
-		mu.Unlock()
-		// The inner server's asset URLs point at itself: proxy by path.
-		resp, err := http.Get(inner.URL + r.URL.Path)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		// Rewrite the asset host so downloads come back to this server.
-		body = bytes.ReplaceAll(body, []byte(inner.URL), []byte("http://"+r.Host))
-		_, _ = w.Write(body)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, func() map[string]string {
-		mu.Lock()
-		defer mu.Unlock()
-		out := map[string]string{}
-		for k, v := range seen {
-			out[k] = v
-		}
-		return out
-	}
-}
-
 const testToken = "ghp_test_secret_token_value"
 
-func TestGitHubTokenSentOnReleaseLookups(t *testing.T) {
-	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
-	m, _ := newTestManager(t, srv)
+func TestGitHubTokenSentOnTheReleaseLookup(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, _ := newTestManager(t, f.srv, f.pin)
 	m.GitHubToken = testToken
 
-	if _, err := m.latestTrivyRelease(context.Background()); err != nil {
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.trivyReleaseByTag(context.Background(), "0.55.0"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := m.recommendedTrivyRelease(context.Background(), time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{
-		"/repos/aquasecurity/trivy/releases/latest",
-		"/repos/aquasecurity/trivy/releases/tags/v0.55.0",
-		"/repos/aquasecurity/trivy/releases",
-	} {
-		if got, want := seen()[path], "Bearer "+testToken; got != want {
-			t.Errorf("Authorization on %s = %q, want %q", path, got, want)
-		}
+	path := "/repos/aquasecurity/trivy/releases/tags/v" + trivyTestVersion
+	if got, _ := f.authorization(path); got != "Bearer "+testToken {
+		t.Errorf("Authorization on %s = %q, want the bearer token", path, got)
 	}
 }
 
 func TestGitHubTokenAbsentWhenUnset(t *testing.T) {
-	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
-	m, _ := newTestManager(t, srv)
+	f := newFakeTrivyRelease(t, false)
+	m, _ := newTestManager(t, f.srv, f.pin)
 
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for path, got := range seen() {
-		if got != "" {
+	for _, path := range f.requests() {
+		if got, _ := f.authorization(path); got != "" {
 			t.Errorf("Authorization on %s = %q, want none", path, got)
 		}
 	}
 }
 
-// The test server serves the assets on the API's own origin, the worst
-// case: only the request kind decides, never the address.
+// The fake serves the assets on the API's own origin, the worst case: only
+// the request kind decides, never the address.
 func TestGitHubTokenNotSentOnAssetDownloads(t *testing.T) {
-	srv, seen := authSpy(t, time.Now().Add(-30*24*time.Hour))
-	m, _ := newTestManager(t, srv)
+	f := newFakeTrivyRelease(t, false)
+	m, _ := newTestManager(t, f.srv, f.pin)
 	m.GitHubToken = testToken
 
-	if _, err := m.UpdateTrivy(context.Background(), "", false); err != nil {
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	got := seen()
-	for _, path := range []string{
-		"/trivy_0.55.0_Linux-64bit.tar.gz",
-		"/trivy_0.55.0_checksums.txt",
-	} {
-		if _, ok := got[path]; !ok {
-			t.Fatalf("%s was never requested", path)
-		}
-		if got[path] != "" {
-			t.Errorf("Authorization on asset %s = %q, want none", path, got[path])
-		}
+	path := "/trivy_" + trivyTestVersion + "_Linux-64bit.tar.gz"
+	got, ok := f.authorization(path)
+	if !ok {
+		t.Fatalf("%s was never requested", path)
 	}
-	if got["/repos/aquasecurity/trivy/releases/latest"] == "" {
-		t.Error("the release lookup carried no token")
+	if got != "" {
+		t.Errorf("Authorization on asset %s = %q, want none", path, got)
 	}
 }
 
@@ -618,15 +548,13 @@ func TestGitHubTokenNeverInErrorsOrLogs(t *testing.T) {
 			m := NewManager(fakeVolume{root: t.TempDir(), settings: store.Settings{MinReleaseAgeDays: 7}}, srv.Client(), log)
 			m.GitHubAPI = srv.URL
 			m.GitHubToken = testToken
+			m.Arch = "amd64"
 
-			_, err := m.UpdateTrivy(context.Background(), "", false)
-			if err == nil {
-				t.Fatal("UpdateTrivy succeeded against a failing API")
-			}
+			_, err := m.EnsureTrivy(context.Background())
 			if !errors.Is(err, ErrReleaseSourceUnavailable) {
 				t.Errorf("error = %v, want ErrReleaseSourceUnavailable", err)
 			}
-			if strings.Contains(err.Error(), testToken) {
+			if err != nil && strings.Contains(err.Error(), testToken) {
 				t.Errorf("error text carries the token: %q", err)
 			}
 			if _, err := m.TrivyState(context.Background()); err != nil {
@@ -662,8 +590,8 @@ func TestTrivyStateRefusesAFIFOOrALinkAtTheDBMetadata(t *testing.T) {
 		}},
 	} {
 		t.Run(plant.name, func(t *testing.T) {
-			srv, _ := trivyRelease(t, time.Now().Add(-30*24*time.Hour), false)
-			m, root := newTestManager(t, srv)
+			root := t.TempDir()
+			m := NewManager(fakeVolume{root: root}, nil, nil)
 			dbDir := filepath.Join(root, "trivy-cache", "db")
 			if err := os.MkdirAll(dbDir, 0o770); err != nil {
 				t.Fatal(err)

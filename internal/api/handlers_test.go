@@ -1,8 +1,12 @@
 package api
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -378,42 +382,135 @@ func TestQueueExportAnalysisNotDoneAnswers409(t *testing.T) {
 	}
 }
 
-// TestUpdateTrivyRefusesARecentReleaseAnswers409 proves the fix for G2:
-// tools.ErrReleaseTooRecent is a deliberate protection the request ran
-// into, not a server failure, and its detail keeps naming the minimum
-// age a client needs to explain the refusal.
-func TestUpdateTrivyRefusesARecentReleaseAnswers409(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		body := fmt.Sprintf(`{"tag_name":"v1.2.3","published_at":%q,"assets":[]}`, time.Now().UTC().Format(time.RFC3339))
-		_, _ = w.Write([]byte(body))
-	})
-	ghSrv := httptest.NewServer(mux)
-	defer ghSrv.Close()
+// pinnedTrivyRelease points h at a GitHub stand-in that serves release
+// 1.2.3 of Trivy for amd64, makes 1.2.3 the pin, and returns the paths the
+// stand-in was asked for.
+func pinnedTrivyRelease(t *testing.T, h *Handlers) func() []string {
+	t.Helper()
+	const version = "1.2.3"
+	var tarball bytes.Buffer
+	gz := gzip.NewWriter(&tarball)
+	tw := tar.NewWriter(gz)
+	body := "#!/bin/sh\necho fake trivy\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "trivy", Mode: 0o755, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(tarball.Bytes())
+	asset := "trivy_" + version + "_Linux-64bit.tar.gz"
 
-	q := jobs.NewQueue(nil)
-	defer q.Close()
-	h := newTestHandlers(t, q)
-	h.Tools.GitHubAPI = ghSrv.URL
-	srv := httptest.NewServer(Routes(h, testStatic()))
-	defer srv.Close()
+	var mu sync.Mutex
+	var paths []string
+	var gh *httptest.Server
+	gh = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/repos/aquasecurity/trivy/releases/tags/v" + version:
+			_, _ = fmt.Fprintf(w, `{"tag_name":"v%s","assets":[{"name":%q,"browser_download_url":%q}]}`, version, asset, gh.URL+"/"+asset)
+		case "/" + asset:
+			_, _ = w.Write(tarball.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(gh.Close)
+	h.Tools.GitHubAPI = gh.URL
+	h.Tools.Arch = "amd64"
+	h.Tools.Trivy = tools.TrivyPin{Version: version, SHA256: map[string]string{"amd64": hex.EncodeToString(sum[:])}}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(paths)
+	}
+}
 
-	resp, err := http.Post(srv.URL+"/api/tools/trivy/update", "application/json", bytes.NewReader([]byte("{}")))
+func postTools(t *testing.T, url, body string) (int, []byte) {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
 	if err != nil {
-		t.Fatalf("POST update trivy: %v", err)
+		t.Fatalf("POST %s: %v", url, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 409, body: %s", resp.StatusCode, data)
+	data, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, data
+}
+
+func TestUpdateTrivyRouteInstallsThePin(t *testing.T) {
+	srv, h := newTestServer(t)
+	requests := pinnedTrivyRelease(t, h)
+
+	status, data := postTools(t, srv.URL+"/api/tools/trivy/update", `{"version":"9.9.9","force":true}`)
+	if status != http.StatusConflict {
+		t.Fatalf("update to another version: status = %d, want 409, body %s", status, data)
 	}
 	var problem Problem
-	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
-		t.Fatalf("decode problem: %v", err)
+	if err := json.Unmarshal(data, &problem); err != nil || problem.Detail == nil || !strings.Contains(*problem.Detail, "1.2.3") {
+		t.Errorf("problem %s does not name the pinned 1.2.3", data)
 	}
-	if problem.Detail == nil || !strings.Contains(*problem.Detail, "minimum age") {
-		t.Fatalf("problem.Detail = %v, want it to name the minimum age", problem.Detail)
+	if got := requests(); len(got) != 0 {
+		t.Errorf("a refused update asked GitHub for %v", got)
+	}
+
+	for _, body := range []string{`{}`, `{"version":"v1.2.3"}`} {
+		status, data = postTools(t, srv.URL+"/api/tools/trivy/update", body)
+		if status != http.StatusOK {
+			t.Fatalf("update with %s: status = %d, want 200, body %s", body, status, data)
+		}
+		var state ToolsState
+		if err := json.Unmarshal(data, &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.TrivyActive != "1.2.3" || !slices.Equal(state.TrivyInstalled, []string{"1.2.3"}) || !state.Ready {
+			t.Errorf("after update with %s: active %q, installed %v, ready %v, want the pin alone, ready", body, state.TrivyActive, state.TrivyInstalled, state.Ready)
+		}
+	}
+}
+
+func TestActivateTrivyRouteNamesThePin(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	status, data := postTools(t, srv.URL+"/api/tools/trivy/activate", `{"version":"0.54.0"}`)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body %s", status, data)
+	}
+	var problem Problem
+	if err := json.Unmarshal(data, &problem); err != nil || problem.Detail == nil || !strings.Contains(*problem.Detail, tools.PinnedTrivy.Version) {
+		t.Errorf("problem %s does not name the pinned %s", data, tools.PinnedTrivy.Version)
+	}
+}
+
+func TestGetToolsAsksNothingOfGitHub(t *testing.T) {
+	srv, h := newTestServer(t)
+	requests := pinnedTrivyRelease(t, h)
+
+	resp, err := http.Get(srv.URL + "/api/tools")
+	if err != nil {
+		t.Fatalf("GET /api/tools: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, data)
+	}
+	if got := requests(); len(got) != 0 {
+		t.Errorf("GET /api/tools asked GitHub for %v, want nothing", got)
+	}
+	var state ToolsState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.TrivyLatest != "1.2.3" || state.TrivyRecommended != nil || state.LatestSizeBytes != 0 {
+		t.Errorf("latest %q, recommended %v, size %d, want the pin, no recommendation, no size", state.TrivyLatest, state.TrivyRecommended, state.LatestSizeBytes)
 	}
 }
 
