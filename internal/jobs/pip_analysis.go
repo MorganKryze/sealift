@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -452,20 +451,12 @@ func scanComponents(ctx context.Context, trivy runner.Trivy, components []sbom.C
 // takes about 4 KiB of it, so this holds some 16,000 findings.
 const trivyReportLimit = 64 << 20
 
-// readTrivyReport reads the findings of the report at path, refusing a
-// report larger than limit bytes.
+// readTrivyReport reads the findings of the report at path, under
+// readRegularFile's rule.
 func readTrivyReport(path string, limit int64) ([]rank.Finding, error) {
-	f, err := os.Open(path)
+	data, err := readRegularFile(path, limit)
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s is larger than %d MiB", filepath.Base(path), limit>>20)
 	}
 	return rank.ReadTrivyJSON(bytes.NewReader(data))
 }

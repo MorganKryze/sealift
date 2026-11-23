@@ -793,10 +793,14 @@ type analysisStatus struct {
 	TrivyDBDate  time.Time `json:"trivyDbDate"`
 }
 
+// analysisStatusLimit bounds the analysis's status.json an export reads.
+// A done analysis writes a few KiB there.
+const analysisStatusLimit = 1 << 20
+
 func readAnalysisStatus(dir string) analysisStatus {
 	var status analysisStatus
 	path := filepath.Join(dir, "status.json")
-	data, err := os.ReadFile(path)
+	data, err := readRegularFile(path, analysisStatusLimit)
 	if err == nil {
 		err = json.Unmarshal(data, &status)
 	}

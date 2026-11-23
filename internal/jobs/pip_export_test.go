@@ -1569,6 +1569,50 @@ func TestPipExportSummaryCarriesTheAnalysisWarnings(t *testing.T) {
 	}
 }
 
+// fifoTrivy leaves a FIFO where its scan should write the report, as a
+// compromised Trivy could.
+type fifoTrivy struct{ *exportTrivy }
+
+func (x fifoTrivy) ScanSBOM(_ context.Context, _, outPath string) (string, error) {
+	return "", syscall.Mkfifo(outPath, 0o660)
+}
+
+func TestPipExportReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
+	t.Run("at the export scan's report", func(t *testing.T) {
+		f := donePipAnalysis(t, piptest.NewIndex(t))
+		e := f.newPipExport(t)
+		e.Trivy = fifoTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{}}}
+		var err error
+		returnsPromptly(t, filepath.Join(e.Dir, "report.trivy.json"), func() { _, err = runPipExport(context.Background(), e) })
+		if err == nil || !strings.Contains(err.Error(), "report.trivy.json is not a regular file") {
+			t.Fatalf("Run = %v, want the report refused", err)
+		}
+		if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+			t.Errorf("export directory holds %v, want only status.json", names)
+		}
+	})
+	t.Run("at the analysis's status.json", func(t *testing.T) {
+		f := donePipAnalysis(t, piptest.NewIndex(t))
+		e := f.newPipExport(t)
+		scannedBy(e)
+		status := filepath.Join(f.ref.Dir, "status.json")
+		if err := os.Remove(status); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(status, 0o660); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		returnsPromptly(t, status, func() { _, err = runPipExport(context.Background(), e) })
+		if err != nil {
+			t.Fatalf("Run: %v, want the export done without the analysis's dates", err)
+		}
+		if names := dirNames(t, e.Dir); !slices.Equal(names, pipExportFiles) {
+			t.Errorf("export directory holds %v, want %v", names, pipExportFiles)
+		}
+	})
+}
+
 func TestPipExportFailsWhenTheScanFails(t *testing.T) {
 	cases := []struct {
 		name   string

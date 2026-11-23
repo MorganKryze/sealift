@@ -1225,3 +1225,41 @@ func TestExportFailsWhenATarballChangesAfterItsDownload(t *testing.T) {
 		})
 	}
 }
+
+// TestReadAnalysisStatusReadsOnlyARegularFile gives the read what the
+// tools account can leave at the analysis's status.json. A FIFO would hold
+// an open that no cancel interrupts.
+func TestReadAnalysisStatusReadsOnlyARegularFile(t *testing.T) {
+	const status = `{"createdAt":"2026-11-20T10:00:00Z","trivyVersion":"0.76.2","trivyDbDate":"2026-11-19T00:00:00Z"}`
+	for _, c := range []struct {
+		name  string
+		plant func(path string) error
+		want  string // the Trivy version read; empty for a refusal
+	}{
+		{"a regular file", func(p string) error { return os.WriteFile(p, []byte(status), 0o600) }, "0.76.2"},
+		{"a link to a status", func(p string) error {
+			target := filepath.Join(filepath.Dir(p), "elsewhere.json")
+			if err := os.WriteFile(target, []byte(status), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink(target, p)
+		}, ""},
+		{"a FIFO", func(p string) error { return syscall.Mkfifo(p, 0o600) }, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "status.json")
+			if err := c.plant(path); err != nil {
+				t.Fatal(err)
+			}
+			var got analysisStatus
+			returnsPromptly(t, path, func() { got = readAnalysisStatus(dir) })
+			if got.TrivyVersion != c.want {
+				t.Errorf("Trivy version = %q, want %q", got.TrivyVersion, c.want)
+			}
+			if c.want == "" && !got.CreatedAt.IsZero() {
+				t.Errorf("analysis date = %v, want none read", got.CreatedAt)
+			}
+		})
+	}
+}

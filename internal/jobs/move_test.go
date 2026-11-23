@@ -144,3 +144,64 @@ func TestMoveFileRefusesASourceThatIsNotAFile(t *testing.T) {
 		})
 	}
 }
+
+// returnsPromptly runs read and fails the test when it has not returned
+// within two seconds. It then opens fifo for writing, which releases a
+// read held on it, so the test ends.
+func returnsPromptly(t *testing.T, fifo string, read func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		read()
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		if w, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+			_ = w.Close()
+		}
+		<-done
+		t.Fatal("the read waited on a FIFO")
+	}
+}
+
+func TestReadRegularFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, []byte("held"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		plant   func(path string) error
+		want    string
+		wantErr string
+	}{
+		{"regular", func(p string) error { return os.WriteFile(p, []byte("report"), 0o600) }, "report", ""},
+		{"at the limit", func(p string) error { return os.WriteFile(p, []byte("12345678"), 0o600) }, "12345678", ""},
+		{"above the limit", func(p string) error { return os.WriteFile(p, []byte("123456789"), 0o600) }, "", "out.json is larger than 0 MiB"},
+		{"link", func(p string) error { return os.Symlink(target, p) }, "", "out.json is not a regular file"},
+		{"fifo", func(p string) error { return syscall.Mkfifo(p, 0o600) }, "", "out.json is not a regular file"},
+		{"directory", func(p string) error { return os.Mkdir(p, 0o700) }, "", "out.json is not a regular file"},
+		{"missing", func(string) error { return nil }, "", "no such file or directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "out.json")
+			if err := tc.plant(path); err != nil {
+				t.Fatal(err)
+			}
+			var got []byte
+			var err error
+			returnsPromptly(t, path, func() { got, err = readRegularFile(path, 8) })
+			if tc.wantErr == "" {
+				if err != nil || string(got) != tc.want {
+					t.Fatalf("readRegularFile = %q, %v, want %q", got, err, tc.want)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("readRegularFile error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}

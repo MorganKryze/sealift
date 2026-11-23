@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
 )
 
 // fakeUv stands in for uv: it records each input and returns lock, set and
@@ -935,24 +937,37 @@ func TestReadTrivyReportBound(t *testing.T) {
 	}
 }
 
-// TestReadTrivyReportStopsAtTheBound reads a source with no end: a read
-// that does not stop at the bound never returns.
-func TestReadTrivyReportStopsAtTheBound(t *testing.T) {
-	if _, err := os.Stat("/dev/zero"); err != nil {
-		t.Skip("no /dev/zero on this system")
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := readTrivyReport("/dev/zero", 1<<20)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "larger than 1 MiB") {
-			t.Errorf("err = %v, want the refusal naming the bound", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the read did not stop at the bound")
+// TestReadTrivyReportReadsOnlyARegularFile gives the read what the tools
+// account can leave at the report's path. A FIFO would hold an open that
+// no cancel interrupts, and a device such as /dev/zero has no end.
+func TestReadTrivyReportReadsOnlyARegularFile(t *testing.T) {
+	report := pipTrivyReport([5]string{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"})
+	for _, c := range []struct {
+		name  string
+		plant func(path string) error
+	}{
+		{"a link to a report", func(p string) error {
+			target := filepath.Join(filepath.Dir(p), "elsewhere.json")
+			if err := os.WriteFile(target, []byte(report), 0o600); err != nil {
+				return err
+			}
+			return os.Symlink(target, p)
+		}},
+		{"a FIFO", func(p string) error { return syscall.Mkfifo(p, 0o600) }},
+		{"a link to a device", func(p string) error { return os.Symlink("/dev/zero", p) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "project.trivy.json")
+			if err := c.plant(path); err != nil {
+				t.Fatal(err)
+			}
+			var findings []rank.Finding
+			var err error
+			returnsPromptly(t, path, func() { findings, err = readTrivyReport(path, 1<<20) })
+			if err == nil || !strings.Contains(err.Error(), "project.trivy.json is not a regular file") {
+				t.Errorf("findings = %+v, err = %v, want a refusal", findings, err)
+			}
+		})
 	}
 }
 
