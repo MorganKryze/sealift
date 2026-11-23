@@ -312,3 +312,23 @@ func TestUvCompileReadsNoLockButARegularOne(t *testing.T) {
 		})
 	}
 }
+
+func TestUvCompileWritesNoInputThroughALink(t *testing.T) {
+	for _, name := range []string{"requirements.in", "constraints.txt"} {
+		t.Run(name, func(t *testing.T) {
+			victim, held := plantSecret(t)
+			dir := t.TempDir()
+			if err := os.Symlink(victim, filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+			bin := writeFakeUv(t, t.TempDir(), "printf 'requests==2.32.3\\n' > requirements.lock\n")
+			in := CompileInput{Bin: bin, Dir: dir, Requirements: []byte("requests==2.32.3\n"), Constraints: []byte("idna==3.10\n"), Target: store.DefaultPipTarget, Index: "http://127.0.0.1:1/simple/"}
+			if _, err := NewUvCLI("/usr/bin/python3", t.TempDir(), nil).Compile(context.Background(), in); err == nil {
+				t.Error("Compile succeeded, want the write refused")
+			}
+			if got, rerr := os.ReadFile(victim); rerr != nil || string(got) != held {
+				t.Errorf("the link's target now holds %q (%v), want it untouched", got, rerr)
+			}
+		})
+	}
+}

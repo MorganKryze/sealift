@@ -47,3 +47,20 @@ func readOutput(dir, name string, limit int64) ([]byte, error) {
 func notRegular(name string) error {
 	return fmt.Errorf("%s is not a regular file", name)
 }
+
+// writeNew writes data to a file it creates at dir/name, failing when any
+// entry holds the name already. The tools account can write dir, and
+// through a link planted there a plain write would fill the link's target.
+// The caller's resolve directory is fresh, so a legitimate write always
+// finds the name free.
+func writeNew(dir, name string, data []byte) error {
+	f, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o664)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}

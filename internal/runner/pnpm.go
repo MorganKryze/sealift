@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -82,7 +81,7 @@ type supportedArchitectures struct {
 // lockfile back. The store and cache sit under cacheDir, so resolutions
 // share downloaded metadata across calls.
 func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
-	if err := os.WriteFile(filepath.Join(in.Dir, "package.json"), in.Manifest, 0o664); err != nil {
+	if err := writeNew(in.Dir, "package.json", in.Manifest); err != nil {
 		return ResolveResult{}, fmt.Errorf("write package.json: %w", err)
 	}
 
@@ -108,7 +107,7 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 	if err != nil {
 		return ResolveResult{}, fmt.Errorf("marshal pnpm-workspace.yaml: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(in.Dir, "pnpm-workspace.yaml"), wsBytes, 0o664); err != nil {
+	if err := writeNew(in.Dir, "pnpm-workspace.yaml", wsBytes); err != nil {
 		return ResolveResult{}, fmt.Errorf("write pnpm-workspace.yaml: %w", err)
 	}
 

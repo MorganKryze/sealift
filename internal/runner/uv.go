@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -84,11 +82,11 @@ func (c *UvCLI) Compile(ctx context.Context, in CompileInput) (CompileResult, er
 	if c.python == "" {
 		return CompileResult{}, errors.New("uv needs a Python interpreter to start; none was found on the server's PATH")
 	}
-	if err := os.WriteFile(filepath.Join(in.Dir, "requirements.in"), in.Requirements, 0o664); err != nil {
+	if err := writeNew(in.Dir, "requirements.in", in.Requirements); err != nil {
 		return CompileResult{}, fmt.Errorf("write requirements.in: %w", err)
 	}
 	if len(in.Constraints) > 0 {
-		if err := os.WriteFile(filepath.Join(in.Dir, "constraints.txt"), in.Constraints, 0o664); err != nil {
+		if err := writeNew(in.Dir, "constraints.txt", in.Constraints); err != nil {
 			return CompileResult{}, fmt.Errorf("write constraints.txt: %w", err)
 		}
 	}

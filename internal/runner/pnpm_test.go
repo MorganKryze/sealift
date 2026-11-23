@@ -253,4 +253,25 @@ func TestPnpmCLI_Resolve_ReadsNoLockfileButARegularOne(t *testing.T) {
 	}
 }
 
+func TestPnpmCLI_Resolve_WritesNoInputThroughALink(t *testing.T) {
+	for _, name := range []string{"package.json", "pnpm-workspace.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			victim, held := plantSecret(t)
+			dir := t.TempDir()
+			if err := os.Symlink(victim, filepath.Join(dir, name)); err != nil {
+				t.Fatal(err)
+			}
+			installFakeNode(t, `printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml`+"\n")
+			_, err := NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil).Resolve(context.Background(),
+				ResolveInput{Dir: dir, Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+			if err == nil {
+				t.Error("Resolve succeeded, want the write refused")
+			}
+			if got, rerr := os.ReadFile(victim); rerr != nil || string(got) != held {
+				t.Errorf("the link's target now holds %q (%v), want it untouched", got, rerr)
+			}
+		})
+	}
+}
+
 var probeTarget = store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}
