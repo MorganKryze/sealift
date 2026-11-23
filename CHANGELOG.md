@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-23
+
 ### Added
 
 - pip projects through the API: requirements files resolved together at the interpreter's exact version, scanned, one wheel recorded per package. No screen opens them yet. [API](docs/dev/api.md#pip-projects) describes them.
@@ -207,7 +209,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MorganKryze/sealift/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/MorganKryze/sealift/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/MorganKryze/sealift/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/MorganKryze/sealift/compare/v0.4.0...v0.6.0

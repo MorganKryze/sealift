@@ -15,7 +15,7 @@ docker compose up -d
 
 The import service exits with code 2 without `import/public-key.pem`, and a stopped `import-server` takes the gateway down with it, so the second line carries the connected sealift's public key before the rest of the stack starts. The key is generated per volume; [Cross the gap](#cross-the-gap) says when to carry it again.
 
-Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.6.2`. `SEALIFT_IMAGE` picks any other image, such as `sealift:dev` after `just image`.
+Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.7.0`. `SEALIFT_IMAGE` picks any other image, such as `sealift:dev` after `just image`.
 
 `setup.sh` waits for Nexus (about two minutes on a first start), sets its admin password, accepts its EULA, creates the `npm` and `pypi` hosted repositories, creates the MinIO buckets `user-alice` and `user-bob` with `packages/npm/` and `packages/pip/`, and creates the MinIO user `sealift-import` with `import/minio-policy.json`. Run it again at any time: it creates what is missing, and rewrites the import's roles and users, passwords included, from the files under `import/`.
 
@@ -124,7 +124,7 @@ A crossing passes when the sha256 of the key matches on both sides, step 2 match
 
 ## Cross the gap with pip
 
-A pip archive crosses the same way: `packages_pip.tar.gz`, `manifest.json` and `manifest.json.sig` go together into the user's `packages/pip/` folder, and the import publishes each wheel to the `pypi` repository that `nexus.pip.repository` names in `import/settings.yaml`. The published 0.6.2 image has no pip import, so start `import-server` and run `import` with `SEALIFT_IMAGE=sealift:dev` after `just image`.
+A pip archive crosses the same way: `packages_pip.tar.gz`, `manifest.json` and `manifest.json.sig` go together into the user's `packages/pip/` folder, and the import publishes each wheel to the `pypi` repository that `nexus.pip.repository` names in `import/settings.yaml`. An image older than 0.7.0 has no pip import.
 
 Export the pip archive from the connected side through the API, as [Python projects](../docs/python.md) shows, and carry its three files into `transfer/`. The import publishes as `sealift-import-pip`, which holds browse, read and edit on `pypi` and nothing else: `import/settings.yaml` names it under `nexus.pip`, with its password in `import/nexus-pip-password`.
 

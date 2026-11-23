@@ -13,7 +13,7 @@ The image holds the sealift binary, the web interface and Node 22. The rest land
 ```yaml
 services:
   sealift:
-    image: ghcr.io/morgankryze/sealift:0.6.2
+    image: ghcr.io/morgankryze/sealift:0.7.0
     restart: unless-stopped
     ports:
       - 127.0.0.1:8080:8080
