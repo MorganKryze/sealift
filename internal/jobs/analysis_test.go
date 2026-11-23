@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1044,4 +1045,50 @@ func TestAnalysisWritesNoLockfileItCannotParse(t *testing.T) {
 			assertNowhere(t, st.Root(), secret)
 		})
 	}
+}
+
+// The tools account writes the project's files and the analysis's scan
+// reports. A FIFO it leaves there must not hold the analysis.
+func TestAnalysisReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
+	t.Run("at the project's package.json", func(t *testing.T) {
+		st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"baz":"1.0.0"}}`)
+		fifo := replaceWithFIFO(t, filepath.Join(proj.Dir, "package.json"))
+		a := &Analysis{
+			Store:    st,
+			Tools:    newTestToolsManager(t, st),
+			Pnpm:     &fakePnpm{},
+			Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+			Registry: &npm.Client{Registry: "http://127.0.0.1:1", Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+			Project:  proj,
+			Settings: st.Settings(),
+			Dir:      pending.Path(),
+			ID:       pending.ID(),
+		}
+		var err error
+		returnsPromptly(t, fifo, func() { err = a.Run(context.Background(), func(Event) {}) })
+		if err == nil || !strings.Contains(err.Error(), "package.json is not a regular file") {
+			t.Fatalf("Run = %v, want package.json refused", err)
+		}
+	})
+	t.Run("at a scan's report", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "project.trivy.json")
+		a := &Analysis{Trivy: fifoTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{}}}}
+		var err error
+		returnsPromptly(t, out, func() { _, err = a.scanPackages(context.Background(), nil, out) })
+		if err == nil || !strings.Contains(err.Error(), "project.trivy.json is not a regular file") {
+			t.Fatalf("scanPackages = %v, want the report refused", err)
+		}
+	})
+	t.Run("at a report to merge", func(t *testing.T) {
+		dir := t.TempDir()
+		key := filepath.Join(dir, "candidates.trivy.key.json")
+		if err := syscall.Mkfifo(key, 0o660); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		returnsPromptly(t, key, func() { err = mergeTrivyReports([]string{key}, filepath.Join(dir, "candidates.trivy.json")) })
+		if err == nil || !strings.Contains(err.Error(), "candidates.trivy.key.json is not a regular file") {
+			t.Fatalf("mergeTrivyReports = %v, want the report refused", err)
+		}
+	})
 }

@@ -300,7 +300,7 @@ func (e *Export) candidateLockfilePath(name, version string) string {
 }
 
 func (e *Export) readLockfile(path string) ([]npm.LockPackage, error) {
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: read %s: %w", path, err)
 	}
@@ -426,14 +426,11 @@ func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downlo
 
 // fileSHA512 returns the hex sha512 of the regular file at path.
 func fileSHA512(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-		return "", fmt.Errorf("jobs: %s is not a regular file", path)
-	}
 	h := sha512.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -714,7 +711,7 @@ func (e *Export) writeTrivyReports(ctx context.Context, shipped []shippedPackage
 // findings.csv gets one row per selected version and vulnerability, as
 // the spec's selected_version column implies.
 func (e *Export) writeFindingsCSV() error {
-	f, err := os.Open(filepath.Join(e.Analysis.Dir, "candidates.trivy.json"))
+	f, err := openRegularFile(filepath.Join(e.Analysis.Dir, "candidates.trivy.json"))
 	if err != nil {
 		return fmt.Errorf("jobs: read candidates.trivy.json: %w", err)
 	}
@@ -882,7 +879,7 @@ func findCandidate(cands []Candidate, version string) (Candidate, bool) {
 // summary.md rather than failing the export over a report.
 func (e *Export) projected() *rank.Vector {
 	path := filepath.Join(e.Analysis.Dir, "project.trivy.json")
-	f, err := os.Open(path)
+	f, err := openRegularFile(path)
 	if err != nil {
 		slog.Warn("jobs: no project scan for summary.md", "path", path, "error", err)
 		return nil
@@ -902,7 +899,7 @@ func (e *Export) projected() *rank.Vector {
 // shipped, not the analysis' own picks. The row counts distinct
 // vulnerabilities, the most serious severity winning, as the analysis does.
 func (e *Export) exportedFindings() (after rank.Vector, critical, high []rank.Finding, err error) {
-	f, err := os.Open(filepath.Join(e.Dir, "report.trivy.json"))
+	f, err := openRegularFile(filepath.Join(e.Dir, "report.trivy.json"))
 	if err != nil {
 		return after, nil, nil, fmt.Errorf("jobs: read report.trivy.json: %w", err)
 	}

@@ -18,7 +18,7 @@ import (
 func (r *run) stepValidate() (npm.Manifest, error) {
 	var manifest npm.Manifest
 	err := r.runStep("validate", func() error {
-		raw, ferr := os.ReadFile(filepath.Join(r.a.Project.Dir, "package.json"))
+		raw, ferr := readAllRegular(filepath.Join(r.a.Project.Dir, "package.json"))
 		if ferr != nil {
 			return fmt.Errorf("read package.json: %w", ferr)
 		}

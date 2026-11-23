@@ -141,11 +141,11 @@ func openRegular(path, name string) (*os.File, os.FileInfo, error) {
 	return f, st, nil
 }
 
-// readRegularFile reads the regular file at path, refusing one above limit
-// bytes. The tools account can write the directories it reads from:
-// O_NOFOLLOW reads no link's target, and O_NONBLOCK keeps a FIFO from
-// holding an open that no cancel interrupts.
-func readRegularFile(path string, limit int64) ([]byte, error) {
+// openRegularFile opens the regular file at path for reading. The tools
+// account can write the directories it opens from: O_NOFOLLOW opens no
+// link's target, and O_NONBLOCK keeps a FIFO from holding an open that no
+// cancel interrupts.
+func openRegularFile(path string) (*os.File, error) {
 	name := filepath.Base(path)
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {
@@ -154,20 +154,43 @@ func readRegularFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	if !st.Mode().IsRegular() {
+		_ = f.Close()
 		return nil, fmt.Errorf("%s is not a regular file", name)
 	}
+	return f, nil
+}
+
+// readAllRegular reads the regular file at path, under openRegularFile's
+// rule, whatever its size.
+func readAllRegular(path string) ([]byte, error) {
+	f, err := openRegularFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// readRegularFile reads the regular file at path, under openRegularFile's
+// rule, refusing one above limit bytes.
+func readRegularFile(path string, limit int64) ([]byte, error) {
+	f, err := openRegularFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s is larger than %d MiB", name, limit>>20)
+		return nil, fmt.Errorf("%s is larger than %d MiB", filepath.Base(path), limit>>20)
 	}
 	return data, nil
 }

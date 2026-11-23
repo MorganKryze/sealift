@@ -1263,3 +1263,82 @@ func TestReadAnalysisStatusReadsOnlyARegularFile(t *testing.T) {
 		})
 	}
 }
+
+// replaceWithFIFO puts a FIFO where path was, as the tools account could.
+func replaceWithFIFO(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The tools account writes the analysis's lockfiles and reports, the
+// export's scan report and the tarball cache. A FIFO it leaves at any of
+// them must not hold the export: no cancel interrupts an open, and the
+// queue runs one job at a time.
+func TestExportReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// plant leaves a FIFO, or has the export's scan leave one, and
+		// returns its path.
+		plant        func(t *testing.T, h *testHarness, analysisDir string, exp *Export) string
+		step, reason string // the failed step and its reason; empty for a done export
+	}{
+		{"at a candidate's lockfile", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "candidates", "widgets@1.1.0", "pnpm-lock.yaml"))
+		}, "package-list", "pnpm-lock.yaml is not a regular file"},
+		{"at the project's lockfile", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "project", "pnpm-lock.yaml"))
+		}, "package-list", "pnpm-lock.yaml is not a regular file"},
+		{"at a tarball cache entry", func(t *testing.T, h *testHarness, analysisDir string, _ *Export) string {
+			if err := h.newExport(t, analysisDir, filepath.Join(t.TempDir(), "exports", "20260917T101501Z.tmp"), true).Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("first Run: %v", err)
+			}
+			entries, err := filepath.Glob(filepath.Join(h.store.Root(), "cache", "tarballs", "*.tgz"))
+			if err != nil || len(entries) == 0 {
+				t.Fatalf("cache entries = %v, %v", entries, err)
+			}
+			return replaceWithFIFO(t, entries[0])
+		}, "", ""},
+		{"at the analysis's candidate scan", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			return replaceWithFIFO(t, filepath.Join(analysisDir, "candidates.trivy.json"))
+		}, "reports", "candidates.trivy.json is not a regular file"},
+		{"at the analysis's project scan", func(t *testing.T, _ *testHarness, analysisDir string, _ *Export) string {
+			path := filepath.Join(analysisDir, "project.trivy.json")
+			if err := os.WriteFile(path, []byte(exportScanJSON), 0o664); err != nil {
+				t.Fatal(err)
+			}
+			return replaceWithFIFO(t, path)
+		}, "", ""},
+		{"at the export scan's report", func(_ *testing.T, _ *testHarness, _ string, exp *Export) string {
+			exp.Trivy = fifoTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{}}}
+			return filepath.Join(exp.Dir, "report.trivy.json")
+		}, "reports", "report.trivy.json is not a regular file"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, true)
+			fifo := c.plant(t, h, analysisDir, exp)
+
+			var err error
+			returnsPromptly(t, fifo, func() { err = exp.Run(context.Background(), noopEmit) })
+			if c.reason == "" {
+				if err != nil {
+					t.Fatalf("Run: %v, want the export done", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.reason) {
+				t.Fatalf("Run = %v, want an error saying %q", err, c.reason)
+			}
+			assertExportFailedStatus(t, exportDir, c.step, c.reason)
+		})
+	}
+}
