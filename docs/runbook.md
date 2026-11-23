@@ -121,8 +121,8 @@ Everything before the key happens on the connected side. Nothing here was run en
 
    <!-- illustrative -->
    ```sh
-   docker pull --platform linux/amd64 ghcr.io/morgankryze/sealift:0.6.2
-   docker buildx imagetools inspect ghcr.io/morgankryze/sealift:0.6.2
+   docker pull --platform linux/amd64 ghcr.io/morgankryze/sealift:0.7.0
+   docker buildx imagetools inspect ghcr.io/morgankryze/sealift:0.7.0
    ```
 
    Write down the digest on the `Platform: linux/amd64` line. Docker Desktop keeps every platform it pulled under one tag, so `docker image inspect` on a Mac can print `arm64` even after this pull: the save below picks the platform.
@@ -130,10 +130,10 @@ Everything before the key happens on the connected side. Nothing here was run en
 
    <!-- illustrative -->
    ```sh
-   docker save --platform linux/amd64 ghcr.io/morgankryze/sealift:0.6.2 -o sealift-0.6.2.image.tar
-   helm pull oci://ghcr.io/morgankryze/charts/sealift --version 0.6.2
-   tar -xOf sealift-0.6.2.image.tar index.json
-   shasum -a 256 sealift-0.6.2.tgz sealift-0.6.2.image.tar
+   docker save --platform linux/amd64 ghcr.io/morgankryze/sealift:0.7.0 -o sealift-0.7.0.image.tar
+   helm pull oci://ghcr.io/morgankryze/charts/sealift --version 0.7.0
+   tar -xOf sealift-0.7.0.image.tar index.json
+   shasum -a 256 sealift-0.7.0.tgz sealift-0.7.0.image.tar
    ```
 
    `index.json` must name the amd64 digest of step 1 and no other platform. A second entry without a platform is that image's build attestation. A save without `--platform` writes every platform present, about twice the size. `--platform` needs Docker 28 or later.
@@ -144,9 +144,9 @@ Everything before the key happens on the connected side. Nothing here was run en
 
    <!-- illustrative -->
    ```sh
-   shasum -a 256 sealift-0.6.2.tgz sealift-0.6.2.image.tar
-   docker load -i sealift-0.6.2.image.tar
-   docker image inspect --format '{{.Architecture}}' ghcr.io/morgankryze/sealift:0.6.2
+   shasum -a 256 sealift-0.7.0.tgz sealift-0.7.0.image.tar
+   docker load -i sealift-0.7.0.image.tar
+   docker image inspect --format '{{.Architecture}}' ghcr.io/morgankryze/sealift:0.7.0
    ```
 
    The architecture must be `amd64`. The two sha256 lines prove the files; the id depends on the host's image store, so it is not compared. Stop on any difference.
@@ -155,15 +155,15 @@ Everything before the key happens on the connected side. Nothing here was run en
    <!-- illustrative -->
    ```sh
    docker login <harbor-host>
-   docker tag ghcr.io/morgankryze/sealift:0.6.2 <harbor-host>/<harbor-project>/sealift:0.6.2
-   docker push <harbor-host>/<harbor-project>/sealift:0.6.2
+   docker tag ghcr.io/morgankryze/sealift:0.7.0 <harbor-host>/<harbor-project>/sealift:0.7.0
+   docker push <harbor-host>/<harbor-project>/sealift:0.7.0
    helm registry login <harbor-host>
-   helm push sealift-0.6.2.tgz oci://<harbor-host>/<harbor-project>/charts
+   helm push sealift-0.7.0.tgz oci://<harbor-host>/<harbor-project>/charts
    ```
 
    Use the robot account that pushes. When Harbor's certificate comes from an internal authority, give `helm` its file with `--ca-file`, and install the authority for Docker as Docker's documentation says.
 
-The tgz holds `files/published.mjs`, the script of [the rollback list](#the-rollback-list). Extract it now: `tar -xzf sealift-0.6.2.tgz sealift/files/published.mjs`.
+The tgz holds `files/published.mjs`, the script of [the rollback list](#the-rollback-list). Extract it now: `tar -xzf sealift-0.7.0.tgz sealift/files/published.mjs`.
 
 ## The Secret
 
@@ -439,7 +439,7 @@ Step 8 needs a network plugin that enforces NetworkPolicy. Without it, any pod o
 <!-- illustrative -->
 ```sh
 kubectl -n <other-namespace> run reach-check --rm -i --restart=Never \
-  --image=<harbor-host>/<harbor-project>/sealift:0.6.2 \
+  --image=<harbor-host>/<harbor-project>/sealift:0.7.0 \
   --command -- node -e 'fetch("http://sealift.<namespace>.svc:8080/healthz",{signal:AbortSignal.timeout(5000)}).then(r=>console.log("reached",r.status),e=>console.log(["blocked:",e.name,e.cause&&e.cause.code].filter(Boolean).join(" ")))'
 ```
 
