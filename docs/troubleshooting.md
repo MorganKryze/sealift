@@ -155,6 +155,10 @@ The export could not download a package. The message and the log name it. A regi
 
 ## Start
 
+### store: ... must be a directory, not a link
+
+sealift exits at start because `projects/` in its data directory is a symbolic link. sealift opens that folder once and refuses a link there, so no job can reach a path outside it. Mount the other disk or volume at `projects/` itself, then start sealift again.
+
 ### store: signing key cannot be read
 
 sealift stops at start, naming the file, when `private/signing-key.pem` exists in the data volume and cannot be read, is not a PEM private key or is not an Ed25519 key. The messages read `store: signing key <path> cannot be read`, `store: signing key <path> is not a PEM private key` and `store: signing key <path> is not an Ed25519 key`. sealift never replaces the file by itself, because a silent new key would make the import side refuse every archive.

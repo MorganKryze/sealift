@@ -278,7 +278,7 @@ The manifest:
 2. `formatVersion` is 3 and `ecosystem` is `pip`. Every field in the table above is present and not empty: a missing field refuses the manifest. `packages` is not empty.
 3. `toolVersion`, `analysisId`, `createdAt` and every `target` value are at most 256 bytes and hold only printable characters, as for npm. `createdAt` is an RFC 3339 time. The target is checked as text only.
 4. Each `file` is a plain file name of at most 251 bytes that starts with a letter or a digit, holds only letters, digits and `._!+-`, and ends in `.whl`. It also reads as a wheel name: project name, version, an optional build tag, then the Python, ABI and platform tags. An sdist or any other file is refused.
-5. Each `name` is a valid project name in its normalized form. Each `version` is an exact public version of at most 256 bytes, with no range, no wildcard and no local part.
+5. Each `name` is a valid project name in its normalized form. Each `version` is an exact public version of at most 128 bytes, with no range, no wildcard and no local part.
 6. Each `file` names its entry's package and version: the project name in the file, once normalized, is `name`, and its version equals `version` as PEP 440 compares them, so `3.1.6.0` matches `3.1.6`.
 7. `sha256` is 64 lowercase hex digits and `shippedSha512` 128.
 8. Each `name` appears once. A pip archive carries one wheel per package, so a second entry for a name, at the same version or another, refuses the manifest.
