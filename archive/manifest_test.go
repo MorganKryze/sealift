@@ -363,6 +363,14 @@ func TestAnUnreadableReviewRefusesNothing(t *testing.T) {
 		{"an id with an escape sequence", func(r, _ map[string]any) {
 			entryOf(r, "left", 0)["id"] = "owned\x1b[2J"
 		}, "review.left[0].id holds a control or unprintable character"},
+		{"a kept CVE's reason with a bidi override", func(r, _ map[string]any) {
+			entryOf(r, "left", 0)["reason"] = "owned\u202eevil"
+		}, "review.left[0].reason holds a control, line-separating, bidirectional or format character"},
+		{"a fixing version with an escape sequence", func(r, _ map[string]any) {
+			entryOf(r, "left", 1)["fixedIn"] = "owned\x1b[2J"
+		}, "review.left[1].fixedIn holds a control or unprintable character"},
+		{"an invalid package of a kept CVE", func(r, _ map[string]any) { entryOf(r, "left", 0)["package"] = "../owned" }, "review.left[0].package is not a valid package name"},
+		{"a jump that is not an exact version", func(r, _ map[string]any) { entryOf(r, "kept", 0)["jump"] = "owned\n" }, "review.kept[0].jump is not an exact version"},
 		{"a family of 300 bytes", func(r, _ map[string]any) {
 			entryOf(r, "jumps", 0)["family"] = "owned" + strings.Repeat("a", 300)
 		}, "review.jumps[0].family is longer than 256 bytes"},
