@@ -131,7 +131,7 @@ A dependency left out of the selection, or given an empty list, stays at its cur
 
 ### pip exports
 
-A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body is `{"selection":{}}`; a selection that names a package answers 400, since the set is the analysis's. 409 when the analysis is not done, or when a package of the set has no recorded wheel. A refused request creates no export.
+A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body is `{"selection":{}}`; a selection that names a package answers 400, since the set is the analysis's. 409 when the analysis is not done, lists no package, or holds a package with no recorded wheel. A refused request creates no export.
 
 | Step | What it does |
 | --- | --- |

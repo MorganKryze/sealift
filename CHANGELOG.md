@@ -23,7 +23,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 ### Security
 
 - Installing uv, or installing or updating Trivy, is refused with a 403 when the request comes from another site, carries no JSON body, or sends an `Origin` that differs from its `Host`. Behind a reverse proxy, pass the browser's host header through, as the nginx example under [Reverse proxy](docs/deployment.md#reverse-proxy) does, or these installs fail from the setup screen.
-- In the published image, sealift never follows a link or opens a FIFO that pnpm, uv or Trivy leaves where sealift reads or writes their files. A compromised tool could otherwise have made sealift copy the private signing key into a folder the tool can read, overwrite a file through a link, or hold the job queue and the next start on a FIFO.
+- In the published image, sealift opens the files pnpm, uv and Trivy leave only when they are regular files, and creates its own files there only where none exists. A compromised tool could otherwise have made sealift copy the private signing key into a folder the tool can read, overwrite a file through a link, or hold the job queue and the next start on a FIFO.
 
 ## [0.6.2] - 2026-11-19
 

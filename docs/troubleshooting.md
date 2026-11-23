@@ -157,7 +157,7 @@ The export could not download a package. The message and the log name it. A regi
 
 ### store: ... must be a directory, not a link
 
-sealift exits at start because `projects/` in its data directory is a symbolic link. sealift opens that folder once and refuses a link there, so no job can reach a path outside it. Mount the other disk or volume at `projects/` itself, then start sealift again.
+sealift exits at start because `projects/` in its data directory is a symbolic link. sealift opens that folder once and serves the files of an analysis or an export from inside it, so it refuses a link there. Mount the other disk or volume at `projects/` itself, then start sealift again.
 
 ### store: signing key cannot be read
 
