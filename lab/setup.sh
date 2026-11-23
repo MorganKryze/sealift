@@ -39,26 +39,47 @@ for format in npm pypi; do
 done
 echo "Nexus ready: repositories npm and pypi"
 
-# The import publishes as its own user, with the privileges to browse, read,
-# add and edit in the npm and pypi repositories and to upload components, and
-# no others.
-# Nexus refuses a component upload without the edit privilege. The role is
-# written on every run, so an older lab picks up a changed list.
-IMPORT_PASSWORD=$(cat import/nexus-password)
-role='{"id":"sealift-import","name":"sealift-import","description":"Publishes imported npm and pip packages","privileges":["nx-repository-view-npm-npm-read","nx-repository-view-npm-npm-browse","nx-repository-view-npm-npm-add","nx-repository-view-npm-npm-edit","nx-repository-view-pypi-pypi-read","nx-repository-view-pypi-pypi-browse","nx-repository-view-pypi-pypi-add","nx-repository-view-pypi-pypi-edit","nx-component-upload"],"roles":[]}'
-if curl -sf -u "$auth" "$NEXUS/service/rest/v1/security/roles/sealift-import" >/dev/null; then
-	curl -sf -u "$auth" -X PUT -H 'Content-Type: application/json' --data "$role" \
-		"$NEXUS/service/rest/v1/security/roles/sealift-import" >/dev/null
-else
-	curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' --data "$role" \
-		"$NEXUS/service/rest/v1/security/roles" >/dev/null
-fi
-if ! curl -sf -u "$auth" "$NEXUS/service/rest/v1/security/users?userId=sealift-import" | grep -q '"userId" *: *"sealift-import"'; then
-	curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' \
-		--data "{\"userId\":\"sealift-import\",\"firstName\":\"sealift\",\"lastName\":\"import\",\"emailAddress\":\"sealift-import@lab.invalid\",\"password\":\"$IMPORT_PASSWORD\",\"status\":\"active\",\"roles\":[\"sealift-import\"]}" \
-		"$NEXUS/service/rest/v1/security/users" >/dev/null
-fi
+# Roles and users are written on every run, so an older lab picks up a
+# changed privilege list, role or password.
+put_role() { # id, description, privileges as a JSON array
+	body="{\"id\":\"$1\",\"name\":\"$1\",\"description\":\"$2\",\"privileges\":$3,\"roles\":[]}"
+	if curl -sf -u "$auth" "$NEXUS/service/rest/v1/security/roles/$1" >/dev/null; then
+		curl -sf -u "$auth" -X PUT -H 'Content-Type: application/json' --data "$body" \
+			"$NEXUS/service/rest/v1/security/roles/$1" >/dev/null
+	else
+		curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' --data "$body" \
+			"$NEXUS/service/rest/v1/security/roles" >/dev/null
+	fi
+}
+put_user() { # id, password file, the one role it holds
+	password=$(cat "$2")
+	if curl -sf -u "$auth" "$NEXUS/service/rest/v1/security/users?userId=$1" | grep -q "\"userId\" *: *\"$1\""; then
+		curl -sf -u "$auth" -X PUT -H 'Content-Type: application/json' \
+			--data "{\"userId\":\"$1\",\"firstName\":\"sealift\",\"lastName\":\"$1\",\"emailAddress\":\"$1@lab.invalid\",\"source\":\"default\",\"status\":\"active\",\"readOnly\":false,\"roles\":[\"$3\"]}" \
+			"$NEXUS/service/rest/v1/security/users/$1" >/dev/null
+		curl -sf -u "$auth" -X PUT -H 'Content-Type: text/plain' --data "$password" \
+			"$NEXUS/service/rest/v1/security/users/$1/change-password" >/dev/null
+	else
+		curl -sf -u "$auth" -X POST -H 'Content-Type: application/json' \
+			--data "{\"userId\":\"$1\",\"firstName\":\"sealift\",\"lastName\":\"$1\",\"emailAddress\":\"$1@lab.invalid\",\"password\":\"$password\",\"status\":\"active\",\"roles\":[\"$3\"]}" \
+			"$NEXUS/service/rest/v1/security/users" >/dev/null
+	fi
+}
+
+# The npm import publishes as sealift-import, with the privileges to browse,
+# read, add and edit in the npm repository and to upload components. Nexus
+# refuses a component upload without the edit privilege. The role also holds
+# the pypi privileges that scripts/pypi-proof.sh takes away one at a time.
+put_role sealift-import "Publishes imported npm packages" '["nx-repository-view-npm-npm-read","nx-repository-view-npm-npm-browse","nx-repository-view-npm-npm-add","nx-repository-view-npm-npm-edit","nx-repository-view-pypi-pypi-read","nx-repository-view-pypi-pypi-browse","nx-repository-view-pypi-pypi-add","nx-repository-view-pypi-pypi-edit","nx-component-upload"]'
+put_user sealift-import import/nexus-password sealift-import
 echo "Nexus ready: user sealift-import"
+
+# The pip import publishes as sealift-import-pip, whose role holds browse,
+# read and edit on the pypi repository and nothing else: a pypi upload needs
+# neither the add privilege nor nx-component-upload.
+put_role sealift-import-pip "Publishes imported pip packages" '["nx-repository-view-pypi-pypi-browse","nx-repository-view-pypi-pypi-read","nx-repository-view-pypi-pypi-edit"]'
+put_user sealift-import-pip import/nexus-pip-password sealift-import-pip
+echo "Nexus ready: user sealift-import-pip"
 
 for user in alice bob; do
 	docker compose run --rm -T mc mb --ignore-existing "lab/user-$user" >/dev/null 2>&1
