@@ -40,6 +40,7 @@ type fakeTrivyRelease struct {
 	mu    sync.Mutex
 	paths []string
 	auth  map[string]string
+	pad   int // bytes of padding the release answer carries after its assets
 }
 
 // newFakeTrivyRelease builds the release. With tampered set, the server
@@ -73,7 +74,13 @@ func newFakeTrivyRelease(t *testing.T, tampered bool) *fakeTrivyRelease {
 				{Name: checksumsName, BrowserDownloadURL: f.srv.URL + "/" + checksumsName},
 			},
 		}
-		data, _ := json.Marshal(rel)
+		f.mu.Lock()
+		pad := f.pad
+		f.mu.Unlock()
+		data, _ := json.Marshal(struct {
+			ghRelease
+			Padding string `json:"padding,omitempty"`
+		}{rel, strings.Repeat("x", pad)})
 		_, _ = w.Write(data)
 	})
 	for name, body := range map[string][]byte{amd64Name: amd64, arm64Name: arm64, checksumsName: []byte(checksums)} {
@@ -355,17 +362,21 @@ func TestEnsureTrivyReportsAnUnreachableReleaseSource(t *testing.T) {
 	}
 }
 
-// A release answer past releaseJSONLimit is cut, so it fails to parse
-// instead of being buffered whole.
+// A release answer past releaseJSONLimit is cut and fails to parse, even
+// when read whole it would name valid assets: nothing is downloaded.
 func TestEnsureTrivyRefusesAnOversizedReleaseAnswer(t *testing.T) {
-	oversized := append([]byte(`{"tag_name":"v`+trivyTestVersion+`","x":"`), bytes.Repeat([]byte("0"), releaseJSONLimit+1024)...)
-	oversized = append(oversized, []byte(`"}`)...)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(oversized) }))
-	t.Cleanup(srv.Close)
-	m, root := newTestManager(t, srv, newFakeTrivyRelease(t, false).pin)
+	f := newFakeTrivyRelease(t, false)
+	f.pad = releaseJSONLimit
+	m, root := newTestManager(t, f.srv, f.pin)
 
-	if _, err := m.EnsureTrivy(context.Background()); err == nil {
-		t.Fatal("EnsureTrivy with an oversized release answer: want error, got nil")
+	_, err := m.EnsureTrivy(context.Background())
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &syntaxErr) {
+		t.Fatalf("EnsureTrivy error = %v, want the cut answer's parse error", err)
+	}
+	want := []string{"/repos/aquasecurity/trivy/releases/tags/v" + trivyTestVersion}
+	if got := f.requests(); !slices.Equal(got, want) {
+		t.Errorf("requests = %v, want the tag lookup alone", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "tools", "trivy", trivyTestVersion)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("nothing may be installed, stat error = %v", err)
