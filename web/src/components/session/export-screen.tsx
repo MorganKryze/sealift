@@ -146,7 +146,7 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
           {failed
             ? (failureMessage ?? (stoppedAt ? `Stopped at ${stoppedAt.name}.` : "Stopped. The next action is below."))
             : queued
-              ? "sealift runs one job at a time. This export starts when the one before it ends. You can leave this page; it starts on its own."
+              ? "sealift runs one job at a time. This export starts when the one before it ends. You can leave this page."
               : events.progress?.estimatedRemainingMs !== undefined
               ? `Downloading each package from the registry, checking its integrity, then packing. About ${formatDuration(events.progress.estimatedRemainingMs)} remaining.`
               : "Downloading each package from the registry, checking its integrity, then packing."}

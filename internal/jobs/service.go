@@ -596,7 +596,8 @@ func (s *Service) neverStarted(dir string) bool {
 // reconcileStatus overwrites the status.json in dir with the queue's own
 // authoritative outcome in its "state" field, leaving every other field
 // untouched. It does nothing when dir holds no status.json (a done export
-// writes none, and a job that never started leaves an empty directory).
+// writes none). A job that never started still has the status.json its
+// queueing seeded, so its outcome is rewritten here too.
 func reconcileStatus(st *store.Store, dir string, state store.State) error {
 	path := filepath.Join(dir, "status.json")
 	var fields map[string]json.RawMessage

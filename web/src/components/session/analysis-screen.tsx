@@ -121,7 +121,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
       : analysis.state === "done"
         ? "sealift picked a version for each dependency."
         : queued
-          ? "sealift runs one job at a time. This analysis starts when the one before it ends. You can leave this page; it starts on its own."
+          ? "sealift runs one job at a time. This analysis starts when the one before it ends. You can leave this page."
           : "Resolving each candidate against the whole project takes most of the time. You can leave this page; the session keeps running."
 
   const elapsedMs = events.steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0)
