@@ -81,9 +81,11 @@ The analysis runs nine steps. Each shows a check mark and its duration once done
 
 Resolve candidate versions takes most of the time: sealift installs each newer version of each dependency against the whole project. A counter shows the candidates resolved so far and the time left. You can leave the page; the session keeps running on the server.
 
+sealift runs one job at a time. An analysis started while another analysis or an export runs reads Waiting for another job and starts on its own when that job ends. Until then, no step shows as in progress.
+
 ![The analysis at step 6, with 6 of 254 candidates resolved and about 2 minutes 45 seconds left](assets/analysis.png)
 
-**Cancel** asks Cancel this analysis? before it stops. A cancelled analysis reads Analysis cancelled, with **Start it again**.
+**Cancel** asks Cancel this analysis? before it stops. A cancelled analysis reads Analysis cancelled, with **Start it again**, whether it was running or still waiting.
 
 When a step fails, the screen reads Analysis stopped, with the cause under What went wrong and the actions that fit:
 
@@ -130,11 +132,11 @@ The review also comes in dark:
 
 ## Export
 
-The export runs five steps: List the packages to export, Download and verify each package, Strip publishConfig, Pack the archive, Sign the manifest and write the reports. While it runs, it counts the packages downloaded, those served from the cache, and the percentage done.
+The export runs five steps: List the packages to export, Download and verify each package, Strip publishConfig, Pack the archive, Sign the manifest and write the reports. While it runs, it counts the packages downloaded, those served from the cache, and the percentage done. An export started while another job runs reads Waiting for another job, with no counters, until that job ends.
 
 ![Building the archive: 74 of 100 packages, none from cache, 74 percent](assets/export-running.png)
 
-**Cancel** asks Cancel this export? before it stops. A cancelled export reads Export cancelled, with **Start the export again**. A failed one reads Export failed and names the step, with **Retry** and **Choose different versions**, which returns to the review.
+**Cancel** asks Cancel this export? before it stops. A cancelled export reads Export cancelled, with **Start the export again**, a waiting one included. A failed one reads Export failed and names the step, with **Retry** and **Choose different versions**, which returns to the review.
 
 A finished export reads Archive ready:
 
