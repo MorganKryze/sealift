@@ -284,3 +284,31 @@ func TestUvCompileNeedsAnInterpreter(t *testing.T) {
 		t.Fatalf("Compile error = %v, want %q", err, want)
 	}
 }
+
+func TestUvCompileReadsNoLockButARegularOne(t *testing.T) {
+	for name, body := range map[string]string{
+		"link": `ln -s SECRET requirements.lock`,
+		"fifo": `mkfifo requirements.lock`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			secretPath, secret := plantSecret(t)
+			bin := writeFakeUv(t, t.TempDir(), strings.ReplaceAll(body, "SECRET", "'"+secretPath+"'")+"\n")
+			in := CompileInput{Bin: bin, Dir: t.TempDir(), Requirements: []byte("requests==2.32.3\n"), Target: store.DefaultPipTarget, Index: "http://127.0.0.1:1/simple/"}
+			res, err := NewUvCLI("/usr/bin/python3", t.TempDir(), nil).Compile(context.Background(), in)
+			if err == nil {
+				t.Fatalf("Compile read the lock (%d bytes), want it refused", len(res.Lock))
+			}
+			if !strings.Contains(err.Error(), "requirements.lock is not a regular file") {
+				t.Errorf("error = %q, want the lock refused", err)
+			}
+			if len(res.Lock) != 0 {
+				t.Errorf("Lock holds %d bytes, want none", len(res.Lock))
+			}
+			for _, leak := range []string{secret, secretPath} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("error %q quotes %q", err, leak)
+				}
+			}
+		})
+	}
+}

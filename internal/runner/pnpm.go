@@ -127,12 +127,16 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 		return ResolveResult{Output: output}, fmt.Errorf("pnpm install: %w", runErr)
 	}
 
-	lockfile, err := os.ReadFile(filepath.Join(in.Dir, "pnpm-lock.yaml"))
+	lockfile, err := readOutput(in.Dir, "pnpm-lock.yaml", pnpmLockLimit)
 	if err != nil {
-		return ResolveResult{Output: output}, fmt.Errorf("read pnpm-lock.yaml: %w", err)
+		return ResolveResult{Output: output}, err
 	}
 	return ResolveResult{Lockfile: lockfile, Output: output}, nil
 }
+
+// pnpmLockLimit bounds the lockfile pnpm writes. A project of a few
+// thousand packages locks to a few MiB.
+const pnpmLockLimit = 64 << 20
 
 // pinnedDependencies lists the name@version pairs a manifest pins exactly,
 // sorted so the workspace file stays reproducible.

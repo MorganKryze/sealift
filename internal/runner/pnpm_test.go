@@ -211,3 +211,46 @@ func TestPnpmFailure(t *testing.T) {
 		})
 	}
 }
+
+// plantSecret writes a file only the server may read and returns its path
+// and bytes. pnpm and uv run as the tools account, which can write the
+// resolve directory and so plant a link to such a file there.
+func plantSecret(t *testing.T) (string, string) {
+	t.Helper()
+	const secret = "-----BEGIN PRIVATE KEY----- a key the tools account must never read"
+	path := filepath.Join(t.TempDir(), "signing-key.pem")
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, secret
+}
+
+func TestPnpmCLI_Resolve_ReadsNoLockfileButARegularOne(t *testing.T) {
+	for name, body := range map[string]string{
+		"link": `ln -s SECRET pnpm-lock.yaml`,
+		"fifo": `mkfifo pnpm-lock.yaml`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			secretPath, secret := plantSecret(t)
+			installFakeNode(t, strings.ReplaceAll(body, "SECRET", "'"+secretPath+"'")+"\n")
+			res, err := NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil).Resolve(context.Background(),
+				ResolveInput{Dir: t.TempDir(), Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+			if err == nil {
+				t.Fatalf("Resolve read the lockfile (%d bytes), want it refused", len(res.Lockfile))
+			}
+			if !strings.Contains(err.Error(), "pnpm-lock.yaml is not a regular file") {
+				t.Errorf("error = %q, want the lockfile refused", err)
+			}
+			if len(res.Lockfile) != 0 {
+				t.Errorf("Lockfile holds %d bytes, want none", len(res.Lockfile))
+			}
+			for _, leak := range []string{secret, secretPath} {
+				if strings.Contains(err.Error(), leak) {
+					t.Errorf("error %q quotes %q", err, leak)
+				}
+			}
+		})
+	}
+}
+
+var probeTarget = store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}

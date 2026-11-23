@@ -1,9 +1,11 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -927,5 +929,119 @@ func TestAnalysisResolvesANameListedInTwoGroups(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "candidates", "foo@1.0.0", "pnpm-lock.yaml")); err != nil {
 		t.Errorf("candidates/foo@1.0.0/pnpm-lock.yaml: %v", err)
+	}
+}
+
+// assertNowhere fails when a regular file under root holds secret.
+func assertNowhere(t *testing.T, root, secret string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if bytes.Contains(data, []byte(secret)) {
+			t.Errorf("%s holds the secret", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pnpm runs as the tools account, which can replace the lockfile it writes
+// with a link to the signing key.
+func TestAnalysisCopiesNoLinkedLockfile(t *testing.T) {
+	const secret = "-----BEGIN PRIVATE KEY----- a key the tools account must never read"
+	key := filepath.Join(t.TempDir(), "signing-key.pem")
+	if err := os.WriteFile(key, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\nln -s '"+key+"' pnpm-lock.yaml\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     runner.NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil),
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	var events []Event
+	err := a.Run(context.Background(), func(e Event) { events = append(events, e) })
+	if err == nil {
+		t.Fatal("Run succeeded, want the lockfile refused")
+	}
+	if !strings.Contains(err.Error(), "pnpm-lock.yaml is not a regular file") {
+		t.Errorf("Run error = %q, want the lockfile refused", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("Run error %q quotes the secret", err)
+	}
+	for _, e := range events {
+		if strings.Contains(string(e.Data), secret) {
+			t.Errorf("event %s quotes the secret", e.Kind)
+		}
+	}
+	assertNowhere(t, st.Root(), secret)
+}
+
+// lockSwap answers the resolutions match picks with lock instead.
+type lockSwap struct {
+	*fakePnpm
+	match func(manifest string) bool
+	lock  []byte
+}
+
+func (l lockSwap) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	res, err := l.fakePnpm.Resolve(ctx, in)
+	if err == nil && l.match(string(in.Manifest)) {
+		res.Lockfile = l.lock
+	}
+	return res, err
+}
+
+func TestAnalysisWritesNoLockfileItCannotParse(t *testing.T) {
+	const secret = "a value no lockfile may carry to disk"
+	notProbe := func(m string) bool { return !strings.Contains(m, `"name":"probe"`) }
+	for _, tc := range []struct {
+		rel   string
+		match func(string) bool
+	}{
+		{filepath.Join("project", "pnpm-lock.yaml"), func(m string) bool { return notProbe(m) && strings.Contains(m, `"foo":"1.0.0"`) }},
+		{filepath.Join("combined", "pnpm-lock.yaml"), func(m string) bool { return notProbe(m) && strings.Contains(m, `"foo":"1.1.0"`) }},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+			registry := registryServer(t, map[string]string{"foo": fooDoc})
+			a := &Analysis{
+				Store: st,
+				Tools: newTestToolsManager(t, st),
+				Pnpm:  lockSwap{fakePnpm: &fakePnpm{}, match: tc.match, lock: []byte("lockfileVersion: '5.4'\nleak: " + secret + "\n")},
+				Trivy: &fakeTrivy{db: map[string][]fakeFinding{
+					"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}},
+				}},
+				Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+				Project:  proj,
+				Settings: st.Settings(),
+				Dir:      pending.Path(),
+				ID:       pending.ID(),
+			}
+			_ = a.Run(context.Background(), func(Event) {})
+			assertNowhere(t, st.Root(), secret)
+		})
 	}
 }

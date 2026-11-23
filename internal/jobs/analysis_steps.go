@@ -95,15 +95,15 @@ func (r *run) stepResolveProject(manifest npm.Manifest) ([]npm.LockPackage, erro
 			return fmt.Errorf("resolve project: %w", rerr)
 		}
 		r.projectOutput = output
+		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
+		if perr != nil {
+			return fmt.Errorf("parse project lockfile: %w", perr)
+		}
 		if werr := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); werr != nil {
 			return werr
 		}
 		if werr := writeNew(filepath.Join(r.a.Dir, "project", "pnpm-lock.yaml"), lockRaw); werr != nil {
 			return werr
-		}
-		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
-		if perr != nil {
-			return fmt.Errorf("parse project lockfile: %w", perr)
 		}
 		pkgs = platformOf(r.a.Project.Target).Filter(parsed)
 		return nil
