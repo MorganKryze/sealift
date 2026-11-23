@@ -20,11 +20,11 @@ Yes. Open the dependency in the review and pick any candidate without a blocking
 
 ## Does it handle Python, Docker images or other ecosystems?
 
-Not yet. sealift handles npm packages only. The archive format and the review are built around npm.
+Python, yes, through the API: a project of requirements files is resolved, scanned, exported and imported into a pypi repository in Nexus, with no screen yet. [Python projects](python.md) walks through it. Docker images and other ecosystems are not handled.
 
 ## What leaves the machine?
 
-Requests to GitHub for Trivy, to `mirror.gcr.io` for its database, and to the npm registry for package metadata and tarballs. The `package.json` you drop stays on the machine: sealift sends package names and versions to the registry, as any install does, and nothing else. [Deployment](deployment.md#outbound-access) lists the hosts.
+Requests to GitHub for Trivy, to `mirror.gcr.io` for its database, to the npm registry for package metadata and tarballs, and for Python projects to `pypi.org` and `files.pythonhosted.org` for uv, index pages and wheels. The `package.json` you drop stays on the machine: sealift sends package names and versions to the registry, as any install does, and nothing else. [Deployment](deployment.md#outbound-access) lists the hosts.
 
 ## Does it need internet on the air-gapped side?
 

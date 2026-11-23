@@ -14,9 +14,11 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The chart takes `nexus.pipRepository` and an optional `nexus.pipUser`. With `nexus.pipUser` set, the Secret also holds `nexus-pip-password`.
 - The import screens show a pip archive's Python version and glibc.
 - pip exports through the API: a signed archive of the analysis's wheels, with its manifest in format version 3 and the four reports. No screen exports them yet. [API](docs/dev/api.md#pip-exports) describes them.
+- The runbook, the request to the administrators and a Python projects page cover pip: the pypi repository with three privileges, the MinIO policy for `packages/pip/`, and an install from Nexus. [Python projects](docs/python.md) walks through one.
 
 ### Changed
 
+- The request to the administrators asks for three privileges on the pypi repository in place of five: browse, read and edit. A second Nexus user for pip, `nexus.pipUser`, keeps the npm role as it is.
 - The image carries Debian's `python3`, which uv needs to resolve pip projects at the target's exact version. The image grows by about 73 MB.
 - sealift refuses to start when `projects/` in its data directory is a symbolic link, with `store: <dir> must be a directory, not a link`. Mount the other disk at `projects/` itself instead of linking to it.
 
