@@ -383,6 +383,48 @@ func TestEnsureTrivyRefusesAnOversizedReleaseAnswer(t *testing.T) {
 	}
 }
 
+// The tools account can write under tools/trivy/, so a link at the pin's
+// name may point anywhere: it is replaced by a checked download, and the
+// directory it pointed to is left alone.
+func TestEnsureTrivyReplacesALinkAtThePinnedVersion(t *testing.T) {
+	f := newFakeTrivyRelease(t, false)
+	m, root := newTestManager(t, f.srv, f.pin)
+	planted := t.TempDir()
+	if err := os.WriteFile(filepath.Join(planted, "trivy"), []byte("planted"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "tools", "trivy", trivyTestVersion)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(planted, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.EnsureTrivy(context.Background()); err != nil {
+		t.Fatalf("EnsureTrivy: %v", err)
+	}
+	want := []string{
+		"/repos/aquasecurity/trivy/releases/tags/v" + trivyTestVersion,
+		"/trivy_" + trivyTestVersion + "_Linux-64bit.tar.gz",
+	}
+	if got := f.requests(); !slices.Equal(got, want) {
+		t.Errorf("requests = %v, want the checked download %v", got, want)
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("tools/trivy/%s after EnsureTrivy: %v, %v, want a directory", trivyTestVersion, info, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "trivy")); err != nil || !strings.Contains(string(got), "fake trivy amd64") {
+		t.Errorf("installed trivy = %q, %v, want the release's binary", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(planted, "trivy")); err != nil || string(got) != "planted" {
+		t.Errorf("the link's target trivy = %q, %v, want it untouched", got, err)
+	}
+	if active, _ := m.activeTrivy(); active != trivyTestVersion {
+		t.Errorf("active = %q, want %q", active, trivyTestVersion)
+	}
+}
+
 func TestReadyWantsThePinnedTrivyActive(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(fakeVolume{root: root}, nil, nil)
