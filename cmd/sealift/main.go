@@ -100,7 +100,7 @@ func run(addr, root string, log *slog.Logger) error {
 	// one, a known limit of the fixed constructor jobs.NewService takes.
 	target := st.Settings().Target
 	asUser := toolsCredential()
-	log.Info("child processes", "runs_as_tools_account", asUser != nil)
+	log.Info("child processes", "runs_as_tools_account", asUser != nil, "pnpm", target.PnpmVer)
 	if status, err := os.ReadFile("/proc/self/status"); asUser != nil && err == nil && noNewPrivs(string(status)) {
 		log.Error("child processes cannot switch to the tools account: the container runs with no-new-privileges, so every analysis and the Trivy database install fail; set security_opt: [no-new-privileges=false], which also overrides a daemon.json default")
 	}

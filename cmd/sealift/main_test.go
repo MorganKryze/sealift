@@ -652,31 +652,45 @@ func TestRunRefusesABadPolicy(t *testing.T) {
 
 func TestRunAppliesThePolicy(t *testing.T) {
 	policy := filepath.Join(t.TempDir(), "policy.yaml")
+	// pnpm differs from the default, so a runner built before the policy
+	// applies runs another version than the one the policy names.
 	writeFile(t, policy, `targets:
-  npm: {os: linux, cpu: arm64, libc: musl, node: 22.18.0, pnpm: 10.34.5}
+  npm: {os: linux, cpu: arm64, libc: musl, node: 22.18.0, pnpm: 10.30.1}
 minReleaseAgeDays: 30
 parallelism: {resolve: 2, download: 3}
 `)
 	t.Setenv("SEALIFT_POLICY", policy)
 	root := filepath.Join(t.TempDir(), "data")
-	addr, stop := startRun(t, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	defer stop()
+	var logs bytes.Buffer
+	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	resp, err := http.Get("http://" + addr + "/api/settings")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	var got api.Settings
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	stop()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Target.Cpu != "arm64" || got.Target.Libc != "musl" || got.Target.Node != "22.18.0" ||
+	if got.Target.Cpu != "arm64" || got.Target.Libc != "musl" || got.Target.Node != "22.18.0" || got.Target.PnpmVer != "10.30.1" ||
 		got.MinReleaseAgeDays != 30 || got.ResolveParallelism != 2 || got.DownloadParallelism != 3 {
 		t.Errorf("GET /api/settings = %+v, want the policy's values", got)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(err) {
 		t.Errorf("the policy was written to the volume (stat: %v)", err)
+	}
+	var pnpm []string
+	for line := range strings.Lines(logs.String()) {
+		var entry struct{ Msg, Pnpm string }
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "child processes" {
+			pnpm = append(pnpm, entry.Pnpm)
+		}
+	}
+	if len(pnpm) != 1 || pnpm[0] != "10.30.1" {
+		t.Errorf("the start log names pnpm %q for child processes, want the policy's 10.30.1", pnpm)
 	}
 }
 
