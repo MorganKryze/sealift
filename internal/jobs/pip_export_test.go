@@ -1338,6 +1338,28 @@ func TestPipExportCancelled(t *testing.T) {
 	}
 }
 
+// A panic past the downloads reaches the queue, which recovers it; the
+// export must by then hold only its status, as a failed run does.
+func TestPipExportThatPanicsKeepsOnlyItsStatus(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	e.beforeArchive = func() { panic("a bug between the steps") }
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := runJob(context.Background(), log, e, (&stepRecorder{}).emit); err == nil || !strings.Contains(err.Error(), "a bug between the steps") {
+		t.Fatalf("runJob = %v, want the panic as the job's error", err)
+	}
+	if names := dirNames(t, e.Dir); !slices.Equal(names, []string{"status.json"}) {
+		t.Errorf("export directory holds %v, want only status.json", names)
+	}
+	var status exportStatusFile
+	if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.State != store.Failed {
+		t.Errorf("status state = %s, want failed", status.State)
+	}
+}
+
 func TestPipExportRefusesAnEmptySet(t *testing.T) {
 	f := runPipAnalysis(t, piptest.NewIndex(t).URL, "# nothing pinned\n", nil)
 	e := f.newPipExport(t)

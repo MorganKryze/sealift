@@ -81,6 +81,12 @@ func (e *PipExport) Run(ctx context.Context, emit func(Event)) (err error) {
 		emit(ev)
 	}
 	defer func() {
+		// A panic fails the run too: runJob recovers it and logs its stack,
+		// and the service then commits whatever this directory holds.
+		if r := recover(); r != nil {
+			e.failed(ctx, steps)
+			panic(r)
+		}
 		if err != nil {
 			e.failed(ctx, steps)
 		}
