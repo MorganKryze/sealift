@@ -85,8 +85,8 @@ func Signals(current, candidate Facts, p Policy) []Hit {
 	if candidate.Publisher != "" && current.Publisher != "" && candidate.Publisher != current.Publisher {
 		hits = append(hits, Hit{PublisherChanged, fmt.Sprintf("published by %s; %s was published by %s", candidate.Publisher, current.Version, current.Publisher)})
 	}
-	if JumpOf(current.Version, candidate.Version) == OtherMajor {
-		hits = append(hits, Hit{MajorJump, "leaves major version " + majorOf(current.Version)})
+	if !SameLine(current.Version, candidate.Version) {
+		hits = append(hits, Hit{MajorJump, leavesLine(current.Version)})
 	}
 	return hits
 }
@@ -115,11 +115,6 @@ func JumpOf(from, to string) Jump {
 	return SameMinor
 }
 
-func majorOf(version string) string {
-	major, _, _ := strings.Cut(version, ".")
-	return major
-}
-
 // Candidate is a newer version with its vulnerability vector and signals.
 type Candidate struct {
 	Version string
@@ -136,6 +131,36 @@ func (c Candidate) Blocked() bool {
 // the smallest jump from current, then to the lower version. It returns
 // false when no unblocked candidate has a lower vector than current.
 func Best(current string, currentVector Vector, candidates []Candidate) (Candidate, bool) {
+	first, ok := firstOpen(current, candidates)
+	if !ok || first.Vector.Compare(currentVector) >= 0 {
+		return Candidate{}, false
+	}
+	return first, true
+}
+
+// Propose picks the best candidate inside current's line, or among every
+// candidate when otherLines is set, and names the jump: the first unblocked
+// candidate outside the line in Best's order, whether or not it has fewer
+// vulnerabilities than current.
+func Propose(current string, currentVector Vector, candidates []Candidate, otherLines bool) (best Candidate, hasBest bool, jump Candidate, hasJump bool) {
+	var inLine, outside []Candidate
+	for _, c := range candidates {
+		if SameLine(current, c.Version) {
+			inLine = append(inLine, c)
+		} else {
+			outside = append(outside, c)
+		}
+	}
+	if otherLines {
+		inLine = candidates
+	}
+	best, hasBest = Best(current, currentVector, inLine)
+	jump, hasJump = firstOpen(current, outside)
+	return best, hasBest, jump, hasJump
+}
+
+// firstOpen returns the unblocked candidate Best's order puts first.
+func firstOpen(current string, candidates []Candidate) (Candidate, bool) {
 	var open []Candidate
 	for _, c := range candidates {
 		if !c.Blocked() {
@@ -145,17 +170,13 @@ func Best(current string, currentVector Vector, candidates []Candidate) (Candida
 	if len(open) == 0 {
 		return Candidate{}, false
 	}
-	slices.SortFunc(open, func(a, b Candidate) int {
+	return slices.MinFunc(open, func(a, b Candidate) int {
 		return cmp.Or(
 			a.Vector.Compare(b.Vector),
 			cmp.Compare(JumpOf(current, a.Version), JumpOf(current, b.Version)),
 			compareVersions(a.Version, b.Version),
 		)
-	})
-	if open[0].Vector.Compare(currentVector) >= 0 {
-		return Candidate{}, false
-	}
-	return open[0], true
+	}), true
 }
 
 // KeyVersions picks the candidates to resolve first: for each fixed version
