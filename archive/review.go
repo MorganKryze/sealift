@@ -94,6 +94,31 @@ func CheckReason(text string) error {
 	return nil
 }
 
+// CheckReview reads r as the import of ecosystem e reads a signed review, so
+// a writer can tell before it signs whether the import will keep it out. The
+// error names the field and repeats no value.
+func CheckReview(r Review, e Ecosystem) error {
+	var rules nameRules
+	switch e {
+	case NPM:
+		rules = npmNames
+	case Pip:
+		rules = pipNames
+	default:
+		return fmt.Errorf("no review rules for the ecosystem %q", e)
+	}
+	// The check reads the bytes a writer signs, through the import's own
+	// reader, so the two cannot drift apart.
+	data, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	if _, problem := readReview(data, rules); problem != "" {
+		return errors.New(problem)
+	}
+	return nil
+}
+
 // reasonRule names the rule text breaks, or returns "". Line and paragraph
 // separators, bidirectional and other format characters are not printable,
 // so a reason printed into a table or a terminal stays one plain line.

@@ -3,6 +3,7 @@ package archive
 import (
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -52,6 +53,84 @@ func TestCheckReasonAcceptsAtTheBound(t *testing.T) {
 		if err := CheckReason(s); err != nil {
 			t.Errorf("CheckReason(%d runes): %v", utf8.RuneCountInString(s), err)
 		}
+	}
+}
+
+// TestCheckReviewReadsAsTheImportDoes holds the writer's check to the
+// import's reader: each review it refuses, the import keeps out with the same
+// problem, and each one it accepts, the import reads back whole.
+func TestCheckReviewReadsAsTheImportDoes(t *testing.T) {
+	fixedIn := strings.TrimSuffix(strings.Repeat("4.17.3, ", 35), ", ")
+	if len(fixedIn) <= maxTextBytes {
+		t.Fatalf("the fixing versions hold %d bytes, want more than %d", len(fixedIn), maxTextBytes)
+	}
+	tests := []struct {
+		name, value, problem string
+		edit                 func(r *Review)
+	}{
+		{"a valid review", "", "", func(*Review) {}},
+		{"a long list of fixing versions", fixedIn, "review.left[1].fixedIn is longer than 256 bytes", func(r *Review) { r.Left[1].FixedIn = fixedIn }},
+		{"a lowercase severity", "high", "review.left[0].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN", func(r *Review) { r.Left[0].Severity = "high" }},
+		{"a range for a version", "^5.0.0-owned", "review.updates[0].to is not an exact version", func(r *Review) { r.Updates[0].To = "^5.0.0-owned" }},
+		{"an invalid name", "../owned", "review.kept[0].name is not a valid package name", func(r *Review) { r.Kept[0].Name = "../owned" }},
+		{"a reason over two lines", "owned\u2028second line", "review.jumps[0].reason holds a control, line-separating, bidirectional or format character", func(r *Review) { r.Jumps[0].Reason = "owned\u2028second line" }},
+		{"a jump without packages", "", "review.jumps[1].packages is empty", func(r *Review) { r.Jumps[1].Packages = nil }},
+		{"a negative count", "", "review.updates[0].fixed holds a negative count", func(r *Review) { r.Updates[0].Fixed[2] = -1 }},
+		{"a negative unchanged count", "", "review.unchanged is negative", func(r *Review) { r.Unchanged = -1 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := wantReview("express", "4.17.1", "5.1.0")
+			tt.edit(r)
+			err := CheckReview(*r, NPM)
+			doc := manifestDoc()
+			doc["review"] = r
+			m, perr := ParseManifest(encode(t, doc))
+			if perr != nil {
+				t.Fatalf("ParseManifest: %v", perr)
+			}
+			if tt.problem == "" {
+				if err != nil {
+					t.Errorf("CheckReview refused a review the import reads: %v", err)
+				}
+				if m.ReviewProblem != "" || !reflect.DeepEqual(m.Review, r) {
+					t.Errorf("the import read %+v, %q, want %+v", m.Review, m.ReviewProblem, r)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("CheckReview accepted a review the import keeps out with %q", m.ReviewProblem)
+			}
+			if err.Error() != tt.problem || m.ReviewProblem != tt.problem {
+				t.Errorf("CheckReview = %q, the import's problem = %q, want both %q", err, m.ReviewProblem, tt.problem)
+			}
+			assertRepeatsNoValue(t, err)
+			if tt.value != "" && strings.Contains(err.Error(), tt.value) {
+				t.Errorf("CheckReview repeats the value: %q", err)
+			}
+		})
+	}
+}
+
+func TestCheckReviewReadsNamesByTheEcosystem(t *testing.T) {
+	r := *wantReview("@types/node", "20.1.0", "22.0.0")
+	if err := CheckReview(r, NPM); err != nil {
+		t.Errorf("CheckReview(npm) refused a scoped npm name: %v", err)
+	}
+	const problem = "review.updates[0].name is not a valid package name"
+	if err := CheckReview(r, Pip); err == nil || err.Error() != problem {
+		t.Errorf("CheckReview(pip) = %v, want %q", err, problem)
+	}
+	doc := pipManifestDoc()
+	doc["review"] = r
+	if m, err := ParsePipManifest(encode(t, doc)); err != nil || m.ReviewProblem != problem {
+		t.Errorf("the pip import read %q, %v, want %q", m.ReviewProblem, err, problem)
+	}
+	if err := CheckReview(*wantReview("jinja2", "3.1.4", "3.1.6"), Pip); err != nil {
+		t.Errorf("CheckReview(pip) refused a pip review: %v", err)
+	}
+	if err := CheckReview(r, Ecosystem("cargo")); err == nil {
+		t.Error("CheckReview accepted an ecosystem it has no rules for")
 	}
 }
 

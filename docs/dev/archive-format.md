@@ -143,6 +143,8 @@ The review changes nothing the import must check, so it keeps `formatVersion` 2,
 3. A reason holds 1 to 300 characters once trimmed, on one line. A control character, a line or paragraph separator (U+2028, U+2029), a bidirectional override or any other format character breaks the rule. `archive.CheckReason` is that rule, the one a writer of the review applies too.
 4. A review that breaks a rule is kept out with a problem that names the field and repeats no value, such as `review.left[1].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN`. The import still checks and publishes the packages as before: a review never refuses an archive.
 
+`archive.CheckReview` reads a whole review through the import's own reader and returns the problem rule 4 would name. A writer that runs it before signing learns at the export that the import would keep the review out.
+
 A manifest without `review`, as every archive from 0.7.0 or earlier, reads as a review not carried by this archive, and that is no problem. The import report does not show the review.
 
 ## manifest.json.sig
