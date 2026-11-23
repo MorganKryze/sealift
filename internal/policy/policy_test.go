@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -138,9 +139,34 @@ func TestPolicyRefusesAnUnknownKey(t *testing.T) {
 func TestPolicyRefusesAValueOutOfRange(t *testing.T) {
 	refused(t, "minReleaseAgeDays: 0\n", "minReleaseAgeDays", "between 1 and 90", "not 0")
 	refused(t, "minReleaseAgeDays: 91\n", "minReleaseAgeDays", "between 1 and 90")
-	refused(t, "parallelism:\n  resolve: 17\n", "parallelism.resolve", "between 1 and 16")
-	refused(t, "parallelism:\n  download: 0\n", "parallelism.download", "between 1 and 32")
+	refused(t, "parallelism:\n  resolve: 0\n", "parallelism.resolve", "between 1 and 16", "not 0")
+	refused(t, "parallelism:\n  resolve: 17\n", "parallelism.resolve", "between 1 and 16", "not 17")
+	refused(t, "parallelism:\n  download: 0\n", "parallelism.download", "between 1 and 32", "not 0")
+	refused(t, "parallelism:\n  download: 33\n", "parallelism.download", "between 1 and 32", "not 33")
 	refused(t, "minReleaseAgeDays: soon\n", "line 1", "wrong type")
+}
+
+func TestPolicyAcceptsEachLimitFromOneToItsMaximum(t *testing.T) {
+	for _, l := range []struct {
+		key, line string
+		max       int
+		got       func(store.Settings) int
+	}{
+		{"minReleaseAgeDays", "minReleaseAgeDays: %d\n", 90, func(s store.Settings) int { return s.MinReleaseAgeDays }},
+		{"parallelism.resolve", "parallelism:\n  resolve: %d\n", 16, func(s store.Settings) int { return s.ResolveParallelism }},
+		{"parallelism.download", "parallelism:\n  download: %d\n", 32, func(s store.Settings) int { return s.DownloadParallelism }},
+	} {
+		for _, v := range []int{1, l.max} {
+			p, err := Load(writePolicy(t, fmt.Sprintf(l.line, v)), store.Settings{}, false)
+			if err != nil {
+				t.Errorf("%s: %d: Load: %v", l.key, v, err)
+				continue
+			}
+			if got := l.got(p.Settings); got != v {
+				t.Errorf("%s: %d gave %d", l.key, v, got)
+			}
+		}
+	}
 }
 
 func TestPolicyRefusesAHalfTarget(t *testing.T) {
