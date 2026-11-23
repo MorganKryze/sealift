@@ -9,7 +9,7 @@ An air-gapped network installs npm packages from an internal registry, and someo
 - The collection role runs on a connected machine. It reads a `package.json`, finds the known CVEs in the packages it pulls in, ranks the newer version of each direct dependency, lets a person review the proposal, and packs the chosen versions into an archive with a signed manifest and reports.
 - The import role runs on the air-gapped network. It checks the manifest's signature and the archive against the manifest, and publishes its packages to a Nexus repository. It runs as `sealift import`, a command for one archive, or as `sealift import-server`, a service behind a gateway that signs users in. Each user imports from their own MinIO folder.
 
-The image `ghcr.io/morgankryze/sealift` carries both roles. The two sides share the archive format and no network: a person carries the files from one to the other. The collection side handles npm only, and takes a `package.json` whose direct dependencies are pinned to exact versions ([FAQ](faq.md)).
+The image `ghcr.io/morgankryze/sealift` carries both roles. The two sides share the archive format and no network: a person carries the files from one to the other. The collection side's screens handle npm, and its API also takes Python projects ([Python projects](python.md)). An npm project is a `package.json` whose direct dependencies are pinned to exact versions ([FAQ](faq.md)).
 
 ## The two sides
 

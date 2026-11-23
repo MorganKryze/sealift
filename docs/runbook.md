@@ -167,7 +167,7 @@ The tgz holds `files/published.mjs`, the script of [the rollback list](#the-roll
 
 ## The Secret
 
-The chart never creates a Secret. Create it in the namespace by hand, from three files that hold one value each and that you delete afterwards, so no value reaches your shell history or a log. Run these lines in bash (`read -rs -p` behaves differently in zsh and would write an empty file there); `read -rs` prompts for a value without echoing it. Write each file readable by you alone:
+The chart never creates a Secret. Create it in the namespace by hand, from files that hold one value each, three or four, and that you delete afterwards, so no value reaches your shell history or a log. Run these lines in bash (`read -rs -p` behaves differently in zsh and would write an empty file there); `read -rs` prompts for a value without echoing it. Write each file readable by you alone:
 
 <!-- illustrative -->
 ```sh
@@ -175,9 +175,6 @@ umask 077
 read -rs -p 'Nexus password: ' v; printf '%s' "$v" > nexus-password; echo
 read -rs -p 'MinIO access key: ' v; printf '%s' "$v" > minio-access-key; echo
 read -rs -p 'MinIO secret key: ' v; printf '%s' "$v" > minio-secret-key; echo
-unset v
-# only when nexus.pipUser is set
-read -rs -p 'Nexus pip password: ' v; printf '%s' "$v" > nexus-pip-password; echo
 unset v
 kubectl create namespace <namespace>
 kubectl -n <namespace> create secret generic <secret-name> \
@@ -187,7 +184,22 @@ kubectl -n <namespace> create secret generic <secret-name> \
 rm nexus-password minio-access-key minio-secret-key
 ```
 
-With `nexus.pipUser` set, add `--from-file=nexus-pip-password=./nexus-pip-password` to the `kubectl create secret` line and remove that file as well. The key names are fixed. When Harbor needs a pull credential, create it as well, from a Docker config file of the pull robot that you delete afterwards, and name it in `imagePullSecrets`:
+With `nexus.pipUser` set, the Secret holds a fourth key. Run these lines in place of the `kubectl create secret` and `rm` lines above:
+
+<!-- illustrative -->
+```sh
+umask 077
+read -rs -p 'Nexus pip password: ' v; printf '%s' "$v" > nexus-pip-password; echo
+unset v
+kubectl -n <namespace> create secret generic <secret-name> \
+  --from-file=nexus-password=./nexus-password \
+  --from-file=nexus-pip-password=./nexus-pip-password \
+  --from-file=minio-access-key=./minio-access-key \
+  --from-file=minio-secret-key=./minio-secret-key
+rm nexus-password nexus-pip-password minio-access-key minio-secret-key
+```
+
+The key names are fixed. When Harbor needs a pull credential, create it as well, from a Docker config file of the pull robot that you delete afterwards, and name it in `imagePullSecrets`:
 
 <!-- illustrative -->
 ```sh
@@ -195,7 +207,7 @@ kubectl -n <namespace> create secret generic <pull-secret> \
   --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson=./docker-config.json
 ```
 
-A plain Secret is base64. Anyone who can read Secrets in the namespace can read these three, so ask the administrators to restrict that right. Three more Secrets need the same restriction: the pull Secret, the TLS Secret `<import-tls-secret>` in `<namespace>`, and its copy in `<oauth2-proxy-namespace>`, which holds the same private key a second time. oauth2-proxy's own Secret, with the client secret and the cookie secret, belongs to your team.
+A plain Secret is base64. Anyone who can read Secrets in the namespace can read these keys, so ask the administrators to restrict that right. Three more Secrets need the same restriction: the pull Secret, the TLS Secret `<import-tls-secret>` in `<namespace>`, and its copy in `<oauth2-proxy-namespace>`, which holds the same private key a second time. oauth2-proxy's own Secret, with the client secret and the cookie secret, belongs to your team.
 
 ## The certificate
 
@@ -405,6 +417,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 5. A minute after sign-in | Reload the screen: it still answers | `upstream sent too big header`, or a 502 | Set `proxy-buffer-size` to `16k` and `auth-always-set-cookie` to `"true"` |
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
+| | | **Archives** shows `MinIO could not list packages/pip/: ` and MinIO's reason | The MinIO policy does not cover `packages/pip/`. Ask the administrators for the policy of [the request](admin-request.md#minio) |
 | 7. The trusted key | The Settings sheet's `Public key sha256` equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
 | 8. The network policy | First run the command under this table with `-n <ingress-namespace>`: it must print `reached 200`, which proves the address and the port. Then run it from a pod in another namespace: the pod starts and prints a line that begins `blocked: TimeoutError`. No other line passes, and a timeout without the first run proves nothing (a wrong port also times out) | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
 | | | `blocked: TypeError ENOTFOUND` | The address is wrong: the name `sealift.<namespace>.svc` did not resolve. The check proved nothing. Correct `<namespace>` and run it again |
@@ -412,11 +425,10 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | | | The pod never starts (`ErrImagePull`, `Pending`), or kubectl ends with `timed out waiting for the condition`, and no line is printed | The check proved nothing. Fix the pull (see below) and run it again |
 | 9. A forged header | Run the commands under this table. The first answers 200 with your user name. The second, with forged headers added, answers 200 with the same name | Any 401, a name other than yours, or a 200 without the cookie | The ingress does not replace the header on every request. Check `auth-response-headers` |
 | 10. An import | In **Archives**, start the archive from [the connected side](#the-connected-side) with its sha256 in `Expected sha256 (optional)`, an npm archive and a Python one. Each import ends `Complete` | `Refused` with the signature check named | The trusted key differs from the exporting key. Redo step 7 |
-| | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
-| 11. A real install | In a project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | Nexus does not hold it. Look for an import that is not `Complete`, a version that an administrator removed since (see [the rollback list](#the-rollback-list)), a lockfile that names a package the archive did not carry, or a registry address other than `<nexus-url>/repository/<nexus-repository>/` |
 | | | `Refused` with `the settings name no pip repository: set nexus.pip.repository` | The values hold no `nexus.pipRepository`. Set it and sync |
-| | | **Archives** shows `MinIO could not list packages/pip/: ` and MinIO's reason | The MinIO policy does not cover `packages/pip/`. Ask the administrators for the policy of [the request](admin-request.md#minio) |
-| 11b. A Python install | In a Python 3.11 project: `pip install --only-binary :all: --index-url <nexus-url>/repository/<nexus-pypi-repository>/simple/ -r requirements.txt` installs every package of the archive | `No matching distribution found` | Nexus does not hold that version: look for an import that is not `Complete`, or a requirements file that names a package the archive did not carry |
+| | | `Incomplete` | Retry. Never remove anything: [the worst cases](#worst-cases-on-the-shared-repository) say why |
+| 11. A real install | In an npm project whose lockfile names the archive's packages: `pnpm install --frozen-lockfile --registry <nexus-url>/repository/<nexus-repository>/` installs them | A `404` for a package | Nexus does not hold it. Look for an import that is not `Complete`, a version that an administrator removed since (see [the rollback list](#the-rollback-list)), a lockfile that names a package the archive did not carry, or a registry address other than `<nexus-url>/repository/<nexus-repository>/` |
+| | In a Python 3.11 project: `pip install --only-binary :all: --index-url <nexus-url>/repository/<nexus-pypi-repository>/simple/ -r requirements.txt` installs every package of the archive | `No matching distribution found` | Nexus does not hold that version: look for an import that is not `Complete`, or a requirements file that names a package the archive did not carry |
 | | | A certificate error | Add `--cert ca.pem`, or set `PIP_CERT`, with the authority of [the certificate](#the-certificate) |
 | 12. Memory | After step 10, `kubectl -n <namespace> top pod` shows the peak. Write it down | An `OOMKilled` pod | Raise `resources.limits.memory`. The attempt ended `interrupted`, and a retry continues it |
 

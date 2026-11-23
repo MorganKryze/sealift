@@ -1,6 +1,6 @@
 # Python projects
 
-sealift carries Python packages across the air gap as it carries npm packages: it resolves a project's requirements files, scans the set for known CVEs, packs the wheels in a signed archive, and the import publishes them to a pypi hosted repository in Nexus. This page follows one Python project from its files to an install on the air-gapped side. Python projects run through the API for now: no screen creates or exports them yet.
+sealift carries Python packages across the air gap as it carries npm packages: it resolves a project's requirements files, scans the set for known CVEs, packs the wheels in a signed archive, and the import publishes them to a pypi hosted repository in Nexus. This page follows one Python project from its files to an install on the air-gapped side. On the connected side, Python projects run through the API for now: no screen creates or exports them yet. The import screens take Python archives as they take npm ones.
 
 ## What a project holds
 
@@ -33,7 +33,7 @@ The calls below go to a sealift that listens on `localhost:8080`. Install uv onc
 curl -s -X POST -H 'Content-Type: application/json' -d '{"version":"0.13.7"}' \
   http://localhost:8080/api/tools/uv/install
 curl -s -F ecosystem=pip -F name=my-service \
-  -F requirements=@requirements.txt -F requirements=@dev.requirements.txt \
+  -F requirements=@requirements.txt -F requirements=@requirements-test.txt \
   http://localhost:8080/api/projects
 ```
 
@@ -71,7 +71,7 @@ Install from the pypi repository's simple index, with wheels only:
 ```sh
 pip install --only-binary :all: \
   --index-url <nexus-url>/repository/<nexus-pypi-repository>/simple/ \
-  -r requirements.txt -r dev.requirements.txt
+  -r requirements.txt -r requirements-test.txt
 ```
 
 The lab ran this crossing at commit f5c6f46 with a project of two requirements files and 173 packages: the import published every wheel, and a Python 3.11.2 machine with no route to the internet installed the whole set from Nexus alone, with no broken requirement.
@@ -80,4 +80,4 @@ The lab ran this crossing at commit f5c6f46 with a project of two requirements f
 
 - One wheel per package, for one target: `linux`, `x86_64` and glibc. No macOS, Windows or musl wheels.
 - No source distribution: a package without a wheel for the target is refused.
-- No screen yet: the API carries every step.
+- No collection screen yet: the API carries the connected side's steps.

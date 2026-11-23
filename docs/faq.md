@@ -20,7 +20,7 @@ Yes. Open the dependency in the review and pick any candidate without a blocking
 
 ## Does it handle Python, Docker images or other ecosystems?
 
-Python, yes, through the API: a project of requirements files is resolved, scanned, exported and imported into a pypi repository in Nexus, with no screen yet. [Python projects](python.md) walks through it. Docker images and other ecosystems are not handled.
+Python, yes, through the API: a project of requirements files is resolved, scanned, exported and imported into a pypi repository in Nexus, with no collection screen yet; the import screens take Python archives. [Python projects](python.md) walks through it. Docker images and other ecosystems are not handled.
 
 ## What leaves the machine?
 
