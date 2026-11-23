@@ -875,25 +875,7 @@ func TestCancellingAQueuedAnalysisKeepsACancelledRecord(t *testing.T) {
 			svc.SetPip(&fakeUv{}, &pip.Client{Index: "http://127.0.0.1:1"})
 			project := tc.create(t, st)
 
-			release := make(chan struct{})
-			blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
-				select {
-				case <-release:
-				case <-ctx.Done():
-				}
-				return nil
-			}}
-			if _, err := svc.queue.Submit(blocker); err != nil {
-				t.Fatalf("Submit blocker: %v", err)
-			}
-			t.Cleanup(func() {
-				select {
-				case <-release:
-				default:
-					close(release)
-				}
-			})
-			<-blocker.started
+			blockQueue(t, svc)
 
 			info, err := svc.QueueAnalysis(project.ID)
 			if err != nil {
@@ -946,25 +928,7 @@ func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T)
 	svc, st := newTestService(t)
 	project := mustCreateProject(t, st)
 
-	release := make(chan struct{})
-	blocker := &fakeJob{kind: "analysis", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
-		return nil
-	}}
-	if _, err := svc.queue.Submit(blocker); err != nil {
-		t.Fatalf("Submit blocker: %v", err)
-	}
-	t.Cleanup(func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	})
-	<-blocker.started
+	blockQueue(t, svc)
 
 	info, err := svc.QueueAnalysis(project.ID)
 	if err != nil {
@@ -1060,19 +1024,7 @@ func TestServiceKeepsAnExportCancelledWhileQueued(t *testing.T) {
 	svc, st := newTestService(t)
 	project := mustCreateProject(t, st)
 
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	blocker := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
-		return nil
-	}}
-	if _, err := svc.queue.Submit(blocker); err != nil {
-		t.Fatalf("Submit(blocker): %v", err)
-	}
-	<-blocker.started
+	blockQueue(t, svc)
 
 	pending, err := st.NewDir("exports", project.ID)
 	if err != nil {
@@ -1146,4 +1098,23 @@ func TestServiceKeepsTheStepsOfAnExportCancelledWhileRunning(t *testing.T) {
 	if info.Failure == nil || info.Failure.Step != "download" || info.Failure.Message != "registry unreachable" {
 		t.Errorf("ExportInfo.Failure = %+v, want the download step's failure kept", info.Failure)
 	}
+}
+
+// blockQueue occupies the queue's one worker until the test ends, so a job
+// submitted after it stays queued.
+func blockQueue(t *testing.T, svc *Service) {
+	t.Helper()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocker := &fakeJob{kind: "fake", started: make(chan struct{}), run: func(ctx context.Context, _ func(Event)) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	if _, err := svc.queue.Submit(blocker); err != nil {
+		t.Fatalf("Submit(blocker): %v", err)
+	}
+	<-blocker.started
 }
