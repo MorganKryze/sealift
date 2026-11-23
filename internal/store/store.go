@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -373,7 +374,7 @@ func writeJSONFile(path string, v any, mode os.FileMode) error {
 }
 
 func readJSONFile(path string, v any) error {
-	data, err := os.ReadFile(path)
+	data, err := ReadRegularFile(path, storedFileLimit)
 	if err != nil {
 		return fmt.Errorf("store: read %s: %w", path, err)
 	}
@@ -381,6 +382,42 @@ func readJSONFile(path string, v any) error {
 		return fmt.Errorf("store: unmarshal %s: %w", path, err)
 	}
 	return nil
+}
+
+// storedFileLimit bounds every file the store reads back. Each is JSON or a
+// requirements file the server wrote, far smaller; the bound keeps a file
+// the tools account planted from filling memory.
+const storedFileLimit = 64 << 20
+
+// ReadRegularFile reads the regular file at path, refusing one above limit
+// bytes. The tools account can write the job directories and the caches:
+// O_NOFOLLOW reads no link's target, and O_NONBLOCK keeps a FIFO from
+// holding an open that nothing interrupts.
+func ReadRegularFile(path string, limit int64) ([]byte, error) {
+	name := filepath.Base(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d MiB", name, limit>>20)
+	}
+	return data, nil
 }
 
 // openProjectFile opens rel, a path under projects/ joined from validated

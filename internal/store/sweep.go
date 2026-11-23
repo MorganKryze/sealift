@@ -110,7 +110,7 @@ func (s *Store) RemoveOrphanDirs() (int, error) {
 // state is no longer running: an analysis that started and was marked, safe
 // to commit under its final name.
 func settledAnalysis(dir string) bool {
-	raw, err := os.ReadFile(filepath.Join(dir, "status.json"))
+	raw, err := ReadRegularFile(filepath.Join(dir, "status.json"), storedFileLimit)
 	if err != nil {
 		return false
 	}
@@ -125,7 +125,7 @@ func settledAnalysis(dir string) bool {
 // markIfRunning flips one status.json's "state" field to interrupted,
 // leaving every other field untouched, and reports whether it did.
 func markIfRunning(path string) (bool, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := ReadRegularFile(path, storedFileLimit)
 	if err != nil {
 		return false, fmt.Errorf("store: read %s: %w", path, err)
 	}

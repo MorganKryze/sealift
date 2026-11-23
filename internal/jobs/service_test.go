@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -800,4 +801,50 @@ func TestQueueExportRefusesAnEmptyPipAnalysis(t *testing.T) {
 		t.Fatalf("QueueExport = %v, want ErrPipNotExportable saying %q", err, want)
 	}
 	noExportReserved(t, f.project)
+}
+
+// statusFIFOTrivy converts as exportTrivy does, after leaving a FIFO at
+// status.json in the export directory, as the tools account could.
+type statusFIFOTrivy struct{ *exportTrivy }
+
+func (x statusFIFOTrivy) ConvertToCycloneDX(ctx context.Context, inPath, outPath string) (string, error) {
+	if err := syscall.Mkfifo(filepath.Join(filepath.Dir(outPath), "status.json"), 0o660); err != nil {
+		return "", err
+	}
+	return x.exportTrivy.ConvertToCycloneDX(ctx, inPath, outPath)
+}
+
+// A done export writes no status.json, so the finalize hook finds the FIFO
+// the tools account left there. Reading it must not hold the serial queue.
+func TestServiceRunsTheNextJobAfterAnExportLeftAFIFOAtStatusJSON(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	f.svc.trivy = statusFIFOTrivy{&exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}}}
+	queued, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	next := make(chan struct{})
+	if _, err := f.svc.queue.Submit(&fakeJob{kind: "analysis", started: next, run: func(context.Context, func(Event)) error { return nil }}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	fifo := filepath.Join(f.project.Dir, "exports", queued.ID, "status.json")
+	select {
+	case <-next:
+	case <-time.After(5 * time.Second):
+		// Let the held read end, so the queue can close with the test.
+		for {
+			if w, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = w.Close()
+			}
+			select {
+			case <-next:
+				t.Fatal("the next job waited on the export's FIFO")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	if st, err := os.Lstat(fifo); err != nil || st.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("status.json = %v, %v, want the FIFO left as it was", st, err)
+	}
 }

@@ -557,3 +557,190 @@ func TestProjectReadersServeOnlyARegularFileInsideProjects(t *testing.T) {
 		}
 	}
 }
+
+// replaceWithFIFO puts a FIFO where path was, as the tools account could.
+func replaceWithFIFO(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// replaceWithLink puts a link where path was, to a copy of its content
+// outside the store, as the tools account could, and returns the target.
+func replaceWithLink(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), filepath.Base(path))
+	if err := os.WriteFile(target, data, fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	return target
+}
+
+// finishesPromptly runs f and fails t when f still waits after 5s. It then
+// opens every FIFO in fifos for writing until f returns, so a read that
+// waits on one ends with the test.
+func finishesPromptly(t *testing.T, fifos []string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+		return
+	case <-time.After(5 * time.Second):
+	}
+	for {
+		for _, p := range fifos {
+			if w, err := os.OpenFile(p, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = w.Close()
+			}
+		}
+		select {
+		case <-done:
+			t.Fatal("the read still waited on a FIFO after 5s")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// The tools account can write every file under a project. The store reads
+// none that is a FIFO or a link: the read ends at once with a reason, and a
+// listing skips the entry.
+func TestStoreReadsRefuseAFIFOOrALink(t *testing.T) {
+	const analysisID, exportID = "20260917T101502Z", "20260917T101503Z"
+	type fixture struct {
+		s        *Store
+		npm, pip Project
+	}
+	write := func(t *testing.T, path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), fileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setup := func(t *testing.T) fixture {
+		t.Helper()
+		s := openTestStore(t)
+		npmProject, err := s.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+		if err != nil {
+			t.Fatalf("CreateProject: %v", err)
+		}
+		pipProject, err := s.CreatePipProject("Data tools", []RequirementsFile{{Name: "requirements.txt", Data: []byte("requests==2.32.3\n")}}, DefaultPipTarget)
+		if err != nil {
+			t.Fatalf("CreatePipProject: %v", err)
+		}
+		analysis := filepath.Join(npmProject.Dir, "analyses", analysisID)
+		write(t, filepath.Join(analysis, "status.json"), `{"state":"done"}`)
+		write(t, filepath.Join(analysis, "ranking.json"), `{}`)
+		write(t, filepath.Join(analysis, "pip-result.json"), `{}`)
+		export := filepath.Join(npmProject.Dir, "exports", exportID)
+		write(t, filepath.Join(export, "manifest.json"), `{}`)
+		write(t, filepath.Join(export, "status.json"), `{"state":"failed"}`)
+		return fixture{s, npmProject, pipProject}
+	}
+	analysisRead := func(f fixture) error { _, err := f.s.AnalysisInfo(f.npm.ID, analysisID); return err }
+	analysisListed := func(f fixture) (int, error) { infos, err := f.s.Analyses(f.npm.ID); return len(infos), err }
+	exportRead := func(f fixture) error { _, err := f.s.ExportInfo(f.npm.ID, exportID); return err }
+	exportListed := func(f fixture) (int, error) { infos, err := f.s.Exports(f.npm.ID); return len(infos), err }
+	in := func(dir string, names ...string) func(f fixture) string {
+		return func(f fixture) string {
+			return filepath.Join(append([]string{f.npm.Dir, dir}, names...)...)
+		}
+	}
+
+	for _, r := range []struct {
+		name    string
+		prepare func(t *testing.T, f fixture)
+		path    func(f fixture) string
+		read    func(f fixture) error
+		listed  func(f fixture) (int, error) // nil when no listing reads the file
+		refused bool                         // the read fails, rather than going on without the file
+	}{
+		{name: "an analysis status.json", path: in("analyses", analysisID, "status.json"), read: analysisRead, listed: analysisListed, refused: true},
+		{name: "an analysis ranking.json", path: in("analyses", analysisID, "ranking.json"), read: analysisRead, listed: analysisListed, refused: true},
+		{name: "an analysis pip-result.json", path: in("analyses", analysisID, "pip-result.json"), read: analysisRead, listed: analysisListed, refused: true},
+		{name: "an export status.json", path: in("exports", exportID, "status.json"), read: exportRead, listed: exportListed, refused: true},
+		{name: "an export manifest.json", path: in("exports", exportID, "manifest.json"), read: exportRead, listed: exportListed, refused: true},
+		{name: "a project.json", path: in("project.json"), read: func(f fixture) error { _, err := f.s.Project(f.npm.ID); return err }, refused: true},
+		{name: "a requirements file", path: func(f fixture) string { return filepath.Join(f.pip.Dir, "requirements", "requirements.txt") }, read: func(f fixture) error { _, err := f.s.ProjectRequirements(f.pip.ID); return err }, refused: true},
+		{
+			// A record from before the manifest hash makes Project hash
+			// package.json; a refused one leaves the hash empty.
+			name: "the package.json of a project without a recorded hash",
+			prepare: func(t *testing.T, f fixture) {
+				path := filepath.Join(f.npm.Dir, "project.json")
+				var record map[string]json.RawMessage
+				if err := f.s.ReadJSON(path, &record); err != nil {
+					t.Fatal(err)
+				}
+				delete(record, "manifestSha256")
+				if err := f.s.WriteJSON(path, record); err != nil {
+					t.Fatal(err)
+				}
+			},
+			path: in("package.json"),
+			read: func(f fixture) error {
+				p, err := f.s.Project(f.npm.ID)
+				if err == nil && p.ManifestSha256 != "" {
+					return fmt.Errorf("package.json hashed to %s", p.ManifestSha256)
+				}
+				return err
+			},
+		},
+	} {
+		for _, plant := range []struct {
+			name string
+			do   func(t *testing.T, path string)
+		}{
+			{"FIFO", replaceWithFIFO},
+			{"link", func(t *testing.T, path string) { replaceWithLink(t, path) }},
+		} {
+			t.Run(r.name+" as a "+plant.name, func(t *testing.T) {
+				f := setup(t)
+				if r.prepare != nil {
+					r.prepare(t, f)
+				}
+				path := r.path(f)
+				plant.do(t, path)
+
+				var readErr, listErr error
+				listed := 0
+				finishesPromptly(t, []string{path}, func() {
+					readErr = r.read(f)
+					if r.listed != nil {
+						listed, listErr = r.listed(f)
+					}
+				})
+				if r.refused {
+					if readErr == nil || !strings.Contains(readErr.Error(), "not a regular file") {
+						t.Errorf("read = %v, want it refused as not a regular file", readErr)
+					}
+				} else if readErr != nil {
+					t.Errorf("read = %v, want it to go on without the file", readErr)
+				}
+				if listErr != nil || listed != 0 {
+					t.Errorf("listing = %d entries, %v, want the entry skipped", listed, listErr)
+				}
+			})
+		}
+	}
+}

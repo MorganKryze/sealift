@@ -54,7 +54,7 @@ type projectRecord struct {
 // manifest, so the browser (crypto.subtle.digest over the exact file
 // bytes) and the server agree on the same hash.
 func manifestSHA256(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := ReadRegularFile(path, storedFileLimit)
 	if err != nil {
 		return "", fmt.Errorf("store: read %s: %w", path, err)
 	}
@@ -214,7 +214,7 @@ func (s *Store) ProjectRequirements(id string) ([]RequirementsFile, error) {
 		if err := validRequirementsNames([]RequirementsFile{{Name: name}}); err != nil {
 			return nil, err
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "requirements", name))
+		data, err := ReadRegularFile(filepath.Join(dir, "requirements", name), storedFileLimit)
 		if err != nil {
 			return nil, fmt.Errorf("store: read requirements file %s of %s: %w", name, id, err)
 		}

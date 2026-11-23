@@ -182,7 +182,7 @@ func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
 
 // readOptional reads dir/name, or returns nil when the file is absent.
 func readOptional(dir, name string) (json.RawMessage, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, name))
+	raw, err := ReadRegularFile(filepath.Join(dir, name), storedFileLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
