@@ -968,20 +968,35 @@ func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) 
 	if os.Geteuid() == 0 {
 		t.Skip("permissions do not bind root")
 	}
-	for name, unreadable := range map[string]bool{
-		"unreadable status.json": true,
-		"running status.json":    false,
+	for _, tc := range []struct {
+		name string
+		// afterRun runs on the pending directory once the job has written
+		// its files.
+		afterRun func(dir string) error
+	}{
+		{"unreadable status.json", func(dir string) error {
+			return os.Chmod(filepath.Join(dir, "status.json"), 0)
+		}},
+		{"running status.json", func(string) error { return nil }},
+		// The reconcile reads the state, then cannot write it back, as on
+		// a full volume.
+		{"running status.json that cannot be rewritten", func(dir string) error {
+			return os.Chmod(dir, 0o555)
+		}},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			svc, st := newTestService(t)
 			project := mustCreateProject(t, st)
 			pending, err := st.NewDir("analyses", project.ID)
 			if err != nil {
 				t.Fatalf("NewDir: %v", err)
 			}
+			t.Cleanup(func() {
+				_ = os.Chmod(pending.Path(), 0o755)
+				_ = os.Chmod(pending.Final(), 0o755)
+			})
 
 			job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
-				statusPath := filepath.Join(pending.Path(), "status.json")
 				files := map[string]string{
 					"log.txt":      "resolving\n",
 					"ranking.json": "{}",
@@ -992,10 +1007,8 @@ func TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled(t *testing.T) 
 						return err
 					}
 				}
-				if unreadable {
-					if err := os.Chmod(statusPath, 0); err != nil {
-						return err
-					}
+				if err := tc.afterRun(pending.Path()); err != nil {
+					return err
 				}
 				// Returns without renaming, as Analysis.Run does when its
 				// own commit fails.
