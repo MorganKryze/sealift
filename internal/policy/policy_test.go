@@ -169,6 +169,28 @@ func TestPolicyAcceptsEachLimitFromOneToItsMaximum(t *testing.T) {
 	}
 }
 
+func TestPolicyRefusesASecondDocument(t *testing.T) {
+	for _, body := range []string{
+		"---\n---\nminReleaseAgeDays: 30\n",
+		"minReleaseAgeDays: 14\nparallelism: {resolve: 4}\n---\nminReleaseAgeDays: 30\n",
+		"minReleaseAgeDays: 14\n---\nreleaseAge: 30\n",
+		"minReleaseAgeDays: 14\n...\n---\n",
+	} {
+		refused(t, body, "holds more than one YAML document")
+	}
+	for _, body := range []string{
+		"---\nminReleaseAgeDays: 30\n",
+		"minReleaseAgeDays: 30\n...\n",
+	} {
+		p, err := Load(writePolicy(t, body), store.Settings{}, false)
+		if err != nil {
+			t.Errorf("Load(%q): %v", body, err)
+		} else if p.Settings.MinReleaseAgeDays != 30 {
+			t.Errorf("Load(%q) set the release age to %d, want 30", body, p.Settings.MinReleaseAgeDays)
+		}
+	}
+}
+
 func TestPolicyRefusesAHalfTarget(t *testing.T) {
 	refused(t, "targets:\n  npm: {os: linux, cpu: x64, libc: glibc, node: 22.17.1}\n", "targets.npm.pnpm", "required")
 	refused(t, "targets:\n  pip: {python: 3.11.2, os: linux, cpu: x86_64, uv: 0.13.7}\n", "targets.pip.glibc", "required")

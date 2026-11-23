@@ -107,6 +107,12 @@ func Load(path string, stored store.Settings, hasStored bool) (Policy, error) {
 	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
 		return Policy{}, yamlError(err)
 	}
+	// Decode reads the first document only: a second one would go unchecked
+	// and unapplied.
+	var rest yaml.Node
+	if err := dec.Decode(&rest); !errors.Is(err, io.EOF) {
+		return Policy{}, errors.New("holds more than one YAML document")
+	}
 
 	set := p.Settings
 	if raw.Targets.Npm != nil {
