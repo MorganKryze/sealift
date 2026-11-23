@@ -1846,6 +1846,12 @@ func TestPipExportFailsWhenTheScanFails(t *testing.T) {
 		{"the scan fails", &exportTrivy{cannedTrivy: &cannedTrivy{scanErr: errors.New("database locked")}}, "scan the exported set: database locked"},
 		{"the conversion fails", &exportTrivy{cannedTrivy: &cannedTrivy{report: pipTrivyReport()}, convertErr: errors.New("bad report")}, "convert the export scan to CycloneDX: bad report"},
 		{"the report is not JSON", &exportTrivy{cannedTrivy: &cannedTrivy{report: "FATAL"}}, "read report.trivy.json"},
+		// A package with no name or version matches a vulnerability with
+		// none, which the fold would then write into.
+		{"a vulnerability is not an object", &exportTrivy{cannedTrivy: &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Packages":[{"ID":"x"}],"Vulnerabilities":[null]}]}`}}, "read report.trivy.json: Vulnerabilities holds a value that is not an object"},
+		{"a package is not an object", &exportTrivy{cannedTrivy: &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Packages":[null]}]}`}}, "read report.trivy.json: Packages holds a value that is not an object"},
+		{"a result is not an object", &exportTrivy{cannedTrivy: &cannedTrivy{report: `{"SchemaVersion":2,"Results":[null]}`}}, "read report.trivy.json: Results holds a value that is not an object"},
+		{"the packages are not a list", &exportTrivy{cannedTrivy: &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Packages":{}}]}`}}, "read report.trivy.json: Packages is not a list"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

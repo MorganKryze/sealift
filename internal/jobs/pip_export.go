@@ -504,10 +504,13 @@ func foldSpellings(data []byte) ([]byte, error) {
 	if err := dec.Decode(&doc); err != nil {
 		return nil, err
 	}
-	results, _ := doc["Results"].([]any)
-	for _, r := range results {
-		if result, ok := r.(map[string]any); ok {
-			foldResult(result)
+	results, err := objects(doc, "Results")
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		if err := foldResult(result); err != nil {
+			return nil, err
 		}
 	}
 	var buf bytes.Buffer
@@ -521,11 +524,17 @@ func foldSpellings(data []byte) ([]byte, error) {
 }
 
 // foldResult folds the spellings of one result of a Trivy report in place.
-func foldResult(result map[string]any) {
-	packages, _ := result["Packages"].([]any)
+func foldResult(result map[string]any) error {
+	packages, err := objects(result, "Packages")
+	if err != nil {
+		return err
+	}
+	vulns, err := objects(result, "Vulnerabilities")
+	if err != nil {
+		return err
+	}
 	keptAt := make(map[string]int, len(packages))
-	for i, p := range packages {
-		pkg, _ := p.(map[string]any)
+	for i, pkg := range packages {
 		key, normalized := packageKey(pkg["Name"], pkg["Version"])
 		// The normalized spelling wins, whatever the report's order.
 		if _, seen := keptAt[key]; !seen || normalized {
@@ -534,28 +543,24 @@ func foldResult(result map[string]any) {
 	}
 	if packages != nil {
 		kept := make([]any, 0, len(keptAt))
-		for i, p := range packages {
-			pkg, _ := p.(map[string]any)
+		for i, pkg := range packages {
 			if key, _ := packageKey(pkg["Name"], pkg["Version"]); keptAt[key] == i {
-				kept = append(kept, p)
+				kept = append(kept, pkg)
 			}
 		}
 		result["Packages"] = kept
 	}
 
-	vulns, ok := result["Vulnerabilities"].([]any)
-	if !ok {
-		return
+	if vulns == nil {
+		return nil
 	}
 	folded := make([]any, 0, len(vulns))
 	seen := make(map[string]bool, len(vulns))
-	for _, v := range vulns {
-		vuln, _ := v.(map[string]any)
+	for _, vuln := range vulns {
 		key, _ := packageKey(vuln["PkgName"], vuln["InstalledVersion"])
 		if i, ok := keptAt[key]; ok {
-			pkg, _ := packages[i].(map[string]any)
 			for _, f := range [][2]string{{"PkgName", "Name"}, {"PkgID", "ID"}, {"PkgIdentifier", "Identifier"}} {
-				if value, ok := pkg[f[1]]; ok {
+				if value, ok := packages[i][f[1]]; ok {
 					vuln[f[0]] = value
 				}
 			}
@@ -565,9 +570,34 @@ func foldResult(result map[string]any) {
 			continue
 		}
 		seen[key+" "+id] = true
-		folded = append(folded, v)
+		folded = append(folded, vuln)
 	}
 	result["Vulnerabilities"] = folded
+	return nil
+}
+
+// objects returns the elements of the list at doc[field], none when the
+// field is absent or null. Trivy writes this report as the tools account,
+// so a field that is not a list, or holds anything but objects, is refused
+// before the fold writes into it.
+func objects(doc map[string]any, field string) ([]map[string]any, error) {
+	value := doc[field]
+	if value == nil {
+		return nil, nil
+	}
+	list, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a list", field)
+	}
+	out := make([]map[string]any, len(list))
+	for i, element := range list {
+		obj, ok := element.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s holds a value that is not an object", field)
+		}
+		out[i] = obj
+	}
+	return out, nil
 }
 
 // packageKey names a package of a Trivy report by its normalized name and
