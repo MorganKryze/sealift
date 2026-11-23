@@ -111,3 +111,27 @@ func TestActivateTrivyConcurrentCallsDoNotRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestExtractTarGzWritesThroughNoLink plants a link where a tool's file
+// goes, as a tools-account process alive during an install could: the
+// extraction must fail and leave the link's target untouched.
+func TestExtractTarGzWritesThroughNoLink(t *testing.T) {
+	data := buildTarGz(t, map[string]string{"package/package.json": `{"name":"x"}`})
+	dest := filepath.Join(t.TempDir(), "out")
+	victim := filepath.Join(t.TempDir(), "signing-key.pem")
+	if err := os.WriteFile(victim, []byte("victim"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dest, "package"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(dest, "package", "package.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarGz(bytes.NewReader(data), dest); err == nil {
+		t.Error("extractTarGz wrote through a planted link without an error")
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "victim" {
+		t.Errorf("the link's target now holds %q", got)
+	}
+}

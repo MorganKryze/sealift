@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -132,7 +133,9 @@ func writeTarFile(target string, r io.Reader, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o770); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm()|0o600)
+	// The extraction directory is fresh, so O_EXCL refuses only what another
+	// account planted there, and O_NOFOLLOW keeps a link from taking the bytes.
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_EXCL|syscall.O_NOFOLLOW, mode.Perm()|0o600)
 	if err != nil {
 		return err
 	}
