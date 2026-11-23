@@ -894,56 +894,54 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 }
 
 func TestSettingsHaveNoSignatureKey(t *testing.T) {
-	srv, h := newTestServer(t)
+	srv, _ := newTestServer(t)
 
-	read := func(resp *http.Response) map[string]any {
-		t.Helper()
-		defer resp.Body.Close()
-		var got map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-			t.Fatalf("decode settings: %v", err)
-		}
-		return got
-	}
-
-	getResp, err := http.Get(srv.URL + "/api/settings")
+	resp, err := http.Get(srv.URL + "/api/settings")
 	if err != nil {
 		t.Fatalf("GET /api/settings: %v", err)
 	}
-	got := read(getResp)
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
 	if _, ok := got["signatureKey"]; ok {
 		t.Fatalf("GET /api/settings = %v, want no signatureKey", got)
 	}
+}
 
-	got["signatureKey"] = "top-secret"
-	got["minReleaseAgeDays"] = 21
-	body, _ := json.Marshal(got)
+// TestUpdateSettingsAnswers409 proves a valid settings body changes nothing:
+// the policy file sets the settings at deploy, and nothing writes them to
+// the volume.
+func TestUpdateSettingsAnswers409(t *testing.T) {
+	srv, h := newTestServer(t)
+	before := h.Store.Settings()
+	next := settingsToAPI(before)
+	next.MinReleaseAgeDays = 21
+
+	body, _ := json.Marshal(next)
 	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build PUT: %v", err)
 	}
 	putReq.Header.Set("Content-Type", "application/json")
-	putResp, err := http.DefaultClient.Do(putReq)
+	resp, err := http.DefaultClient.Do(putReq)
 	if err != nil {
 		t.Fatalf("PUT /api/settings: %v", err)
 	}
-	if putResp.StatusCode != http.StatusOK {
-		t.Fatalf("PUT status = %d, want 200", putResp.StatusCode)
+	defer resp.Body.Close()
+	var p Problem
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatalf("decode problem: %v", err)
 	}
-	updated := read(putResp)
-	if _, ok := updated["signatureKey"]; ok {
-		t.Fatalf("PUT answer = %v, want no signatureKey", updated)
+	if resp.StatusCode != http.StatusConflict || p.Detail == nil || *p.Detail != "Settings are set at deploy, in the policy file" {
+		t.Errorf("PUT answered %d %+v, want 409 naming the policy file", resp.StatusCode, p)
 	}
-	if updated["minReleaseAgeDays"] != float64(21) {
-		t.Errorf("minReleaseAgeDays = %v, want 21", updated["minReleaseAgeDays"])
+	if got := h.Store.Settings(); got != before {
+		t.Errorf("Settings() = %+v after a refused PUT, want %+v", got, before)
 	}
-
-	saved, err := os.ReadFile(filepath.Join(h.Store.Root(), "private", "settings.json"))
-	if err != nil {
-		t.Fatalf("read settings.json: %v", err)
-	}
-	if strings.Contains(string(saved), "signatureKey") || strings.Contains(string(saved), "top-secret") {
-		t.Fatalf("settings.json = %s, want no signatureKey", saved)
+	if _, err := os.Lstat(filepath.Join(h.Store.Root(), "private", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("a refused PUT left a settings file (stat: %v)", err)
 	}
 }
 
@@ -1674,31 +1672,6 @@ func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("Projects = %v, want none: a refused request must create nothing", projects)
-	}
-}
-
-// TestUpdateSettingsInvalidTargetAnswers400 proves an invalid target
-// answers 400: the caller's own mistake, not a server failure.
-func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
-	srv, h := newTestServer(t)
-	settings := h.Store.Settings()
-	settingsAPI := settingsToAPI(settings)
-	settingsAPI.Target.Os = ""
-
-	body, _ := json.Marshal(settingsAPI)
-	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build PUT: %v", err)
-	}
-	putReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("PUT /api/settings: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
 	}
 }
 
