@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -440,9 +441,10 @@ func (e *PipExport) writeReports(ctx context.Context, emit func(Event), wheels [
 }
 
 // scan scans the exported set as pkg:pypi components into
-// report.trivy.json, converts that report into report.cdx.json, and
-// returns its findings with each package name normalized, so the reports
-// describe what ships and not what the analysis scanned.
+// report.trivy.json, folds each package's spellings there into one,
+// converts that report into report.cdx.json, and returns its findings
+// with each package name normalized, so the reports describe what ships
+// and not what the analysis scanned.
 func (e *PipExport) scan(ctx context.Context, wheels []pipWheelFile) ([]rank.Finding, error) {
 	var components []sbom.Component
 	for _, w := range wheels {
@@ -464,12 +466,22 @@ func (e *PipExport) scan(ctx context.Context, wheels []pipWheelFile) ([]rank.Fin
 	if _, err := e.Trivy.ScanSBOM(ctx, sbomPath, reportPath); err != nil {
 		return nil, fmt.Errorf("jobs: scan the exported set: %w", err)
 	}
+	data, err := readRegularFile(reportPath, trivyReportLimit)
+	if err == nil {
+		data, err = foldSpellings(data)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jobs: read report.trivy.json: %w", withoutPath(err))
+	}
+	if err := e.Store.WriteFile(reportPath, data); err != nil {
+		return nil, fmt.Errorf("jobs: write report.trivy.json: %w", withoutPath(err))
+	}
 	if _, err := e.Trivy.ConvertToCycloneDX(ctx, reportPath, filepath.Join(e.Dir, "report.cdx.json")); err != nil {
 		return nil, fmt.Errorf("jobs: convert the export scan to CycloneDX: %w", err)
 	}
-	findings, err := readTrivyReport(reportPath, trivyReportLimit)
+	findings, err := rank.ReadTrivyJSON(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("jobs: read report.trivy.json: %w", withoutPath(err))
+		return nil, fmt.Errorf("jobs: read report.trivy.json: %w", err)
 	}
 	// Trivy may name a package as its metadata or the SBOM spells it, such
 	// as Jinja2 or typing.extensions; the set holds normalized names.
@@ -477,6 +489,93 @@ func (e *PipExport) scan(ctx context.Context, wheels []pipWheelFile) ([]rank.Fin
 		findings[i].Package = pip.Normalize(findings[i].Package)
 	}
 	return findings, nil
+}
+
+// foldSpellings rewrites a Trivy JSON report of an SBOM that
+// sbom.PyPIComponents built, so that each package of the set appears once,
+// under its normalized name. The SBOM gives a hyphenated name a second,
+// dotted spelling for Trivy to match a CVE published under it, but the
+// archive holds one wheel: the spelling's package entry goes, and its
+// vulnerabilities move to the normalized package, each id once.
+func foldSpellings(data []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var doc map[string]any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, err
+	}
+	results, _ := doc["Results"].([]any)
+	for _, r := range results {
+		if result, ok := r.(map[string]any); ok {
+			foldResult(result)
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// foldResult folds the spellings of one result of a Trivy report in place.
+func foldResult(result map[string]any) {
+	packages, _ := result["Packages"].([]any)
+	keptAt := make(map[string]int, len(packages))
+	for i, p := range packages {
+		pkg, _ := p.(map[string]any)
+		key, normalized := packageKey(pkg["Name"], pkg["Version"])
+		// The normalized spelling wins, whatever the report's order.
+		if _, seen := keptAt[key]; !seen || normalized {
+			keptAt[key] = i
+		}
+	}
+	if packages != nil {
+		kept := make([]any, 0, len(keptAt))
+		for i, p := range packages {
+			pkg, _ := p.(map[string]any)
+			if key, _ := packageKey(pkg["Name"], pkg["Version"]); keptAt[key] == i {
+				kept = append(kept, p)
+			}
+		}
+		result["Packages"] = kept
+	}
+
+	vulns, ok := result["Vulnerabilities"].([]any)
+	if !ok {
+		return
+	}
+	folded := make([]any, 0, len(vulns))
+	seen := make(map[string]bool, len(vulns))
+	for _, v := range vulns {
+		vuln, _ := v.(map[string]any)
+		key, _ := packageKey(vuln["PkgName"], vuln["InstalledVersion"])
+		if i, ok := keptAt[key]; ok {
+			pkg, _ := packages[i].(map[string]any)
+			for _, f := range [][2]string{{"PkgName", "Name"}, {"PkgID", "ID"}, {"PkgIdentifier", "Identifier"}} {
+				if value, ok := pkg[f[1]]; ok {
+					vuln[f[0]] = value
+				}
+			}
+		}
+		id, _ := vuln["VulnerabilityID"].(string)
+		if seen[key+" "+id] {
+			continue
+		}
+		seen[key+" "+id] = true
+		folded = append(folded, v)
+	}
+	result["Vulnerabilities"] = folded
+}
+
+// packageKey names a package of a Trivy report by its normalized name and
+// its version, and says whether the report spells the name normalized.
+func packageKey(name, version any) (key string, normalized bool) {
+	n, _ := name.(string)
+	v, _ := version.(string)
+	return pip.Normalize(n) + "@" + v, n == pip.Normalize(n)
 }
 
 // findingsByPackage gives each scanned package's distinct vulnerabilities,

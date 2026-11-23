@@ -1423,8 +1423,15 @@ func TestPipExportWritesTheFourReports(t *testing.T) {
 	if names := dirNames(t, e.Dir); !slices.Equal(names, pipExportFiles) {
 		t.Fatalf("export directory holds %v, want %v", names, pipExportFiles)
 	}
-	if got := string(readFile(t, filepath.Join(e.Dir, "report.trivy.json"))); got != trivy.report {
-		t.Errorf("report.trivy.json = %s, want the export scan's report", got)
+	var got, want any
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "report.trivy.json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(trivy.report), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("report.trivy.json = %v, want the export scan's report %v", got, want)
 	}
 	if got := string(readFile(t, filepath.Join(e.Dir, "report.cdx.json"))); got != convertedReport {
 		t.Errorf("report.cdx.json = %s, want the conversion of the export scan", got)
@@ -1516,6 +1523,223 @@ func TestPipExportScansPyPIComponents(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary.md lacks %q:\n%s", want, summary)
 		}
+	}
+}
+
+// trivyIdentifier, trivyPackage and trivyVulnerability are the parts of a
+// Trivy JSON report that name a package, as Trivy 0.76 writes them.
+type trivyIdentifier struct {
+	PURL   string `json:"PURL"`
+	BOMRef string `json:"BOMRef"`
+}
+
+type trivyPackage struct {
+	ID         string          `json:"ID"`
+	Name       string          `json:"Name"`
+	Identifier trivyIdentifier `json:"Identifier"`
+	Version    string          `json:"Version"`
+}
+
+type trivyVulnerability struct {
+	VulnerabilityID  string          `json:"VulnerabilityID"`
+	PkgID            string          `json:"PkgID"`
+	PkgName          string          `json:"PkgName"`
+	PkgIdentifier    trivyIdentifier `json:"PkgIdentifier"`
+	InstalledVersion string          `json:"InstalledVersion"`
+	FixedVersion     string          `json:"FixedVersion"`
+	Severity         string          `json:"Severity"`
+	Title            string          `json:"Title"`
+}
+
+type trivyResults struct {
+	Results []struct {
+		Packages        []trivyPackage       `json:"Packages"`
+		Vulnerabilities []trivyVulnerability `json:"Vulnerabilities"`
+	} `json:"Results"`
+}
+
+// listingTrivy scans as Trivy does: its report lists a package for each
+// component of the SBOM, with the component's name, purl and bom-ref, and
+// a row's vulnerability on each component of the row's name and version.
+// Its conversion lists a CycloneDX component for each package of the
+// report and a vulnerability for each of the report's, as trivy convert
+// does.
+type listingTrivy struct {
+	rows [][5]string
+}
+
+func (l *listingTrivy) ScanSBOM(_ context.Context, sbomPath, outPath string) (string, error) {
+	var doc struct {
+		Components []struct {
+			BOMRef  string `json:"bom-ref"`
+			Name    string `json:"name"`
+			Version string `json:"version"`
+			PURL    string `json:"purl"`
+		} `json:"components"`
+	}
+	data, err := os.ReadFile(sbomPath)
+	if err == nil {
+		err = json.Unmarshal(data, &doc)
+	}
+	if err != nil {
+		return "", err
+	}
+	var pkgs []trivyPackage
+	var vulns []trivyVulnerability
+	for _, c := range doc.Components {
+		p := trivyPackage{ID: c.Name + "@" + c.Version, Name: c.Name, Version: c.Version, Identifier: trivyIdentifier{PURL: c.PURL, BOMRef: c.BOMRef}}
+		pkgs = append(pkgs, p)
+		for _, r := range l.rows {
+			if r[0] == c.Name && r[1] == c.Version {
+				vulns = append(vulns, trivyVulnerability{
+					VulnerabilityID: r[2], PkgID: p.ID, PkgName: p.Name, PkgIdentifier: p.Identifier,
+					InstalledVersion: p.Version, Severity: r[3], FixedVersion: r[4], Title: "test finding",
+				})
+			}
+		}
+	}
+	report := map[string]any{"SchemaVersion": 2, "Results": []any{map[string]any{
+		"Target": "Python", "Class": "lang-pkgs", "Type": "python-pkg", "Packages": pkgs, "Vulnerabilities": vulns,
+	}}}
+	out, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return "", os.WriteFile(outPath, out, 0o664)
+}
+
+func (l *listingTrivy) ConvertToCycloneDX(_ context.Context, reportPath, outPath string) (string, error) {
+	var report trivyResults
+	data, err := os.ReadFile(reportPath)
+	if err == nil {
+		err = json.Unmarshal(data, &report)
+	}
+	if err != nil {
+		return "", err
+	}
+	type component struct {
+		BOMRef  string `json:"bom-ref"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		PURL    string `json:"purl"`
+	}
+	type affect struct {
+		Ref string `json:"ref"`
+	}
+	type vulnerability struct {
+		ID      string   `json:"id"`
+		Affects []affect `json:"affects"`
+	}
+	doc := struct {
+		BOMFormat       string          `json:"bomFormat"`
+		Components      []component     `json:"components"`
+		Vulnerabilities []vulnerability `json:"vulnerabilities"`
+	}{BOMFormat: "CycloneDX"}
+	for _, r := range report.Results {
+		for _, p := range r.Packages {
+			doc.Components = append(doc.Components, component{BOMRef: p.Identifier.BOMRef, Name: p.Name, Version: p.Version, PURL: p.Identifier.PURL})
+		}
+		for _, v := range r.Vulnerabilities {
+			doc.Vulnerabilities = append(doc.Vulnerabilities, vulnerability{ID: v.VulnerabilityID, Affects: []affect{{Ref: v.PkgIdentifier.BOMRef}}})
+		}
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return "", os.WriteFile(outPath, out, 0o664)
+}
+
+func (l *listingTrivy) UpdateDB(context.Context) (string, error) { return "", nil }
+
+func TestPipExportReportsListEachWheelOnce(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	for _, p := range jinjaSet {
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
+	}
+	f := runPipAnalysis(t, ix.URL, "Jinja2==3.1.2\nrequests==2.32.3\ntyping_extensions==4.12.2\n", jinjaSet)
+	e := f.newPipExport(t)
+	e.Trivy = &listingTrivy{rows: [][5]string{
+		{"jinja2", "3.1.2", "CVE-2024-56326", "HIGH", "3.1.5"},
+		// Published under the dotted spelling only, as plone.namedfile's are.
+		{"typing.extensions", "4.12.2", "CVE-2099-0005", "LOW", ""},
+		{"typing.extensions", "4.12.2", "CVE-2099-0006", "LOW", ""},
+		{"typing-extensions", "4.12.2", "CVE-2099-0006", "LOW", ""},
+	}}
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var wheels []string
+	for _, p := range jinjaSet {
+		wheels = append(wheels, pip.Normalize(p.Name)+"@"+p.Version)
+	}
+	slices.Sort(wheels)
+
+	var cdx struct {
+		Components []struct {
+			BOMRef  string `json:"bom-ref"`
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"components"`
+		Vulnerabilities []struct {
+			ID      string `json:"id"`
+			Affects []struct {
+				Ref string `json:"ref"`
+			} `json:"affects"`
+		} `json:"vulnerabilities"`
+	}
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "report.cdx.json")), &cdx); err != nil {
+		t.Fatal(err)
+	}
+	var components []string
+	refs := map[string]string{}
+	for _, c := range cdx.Components {
+		components = append(components, c.Name+"@"+c.Version)
+		refs[c.BOMRef] = c.Name
+	}
+	slices.Sort(components)
+	if !slices.Equal(components, wheels) {
+		t.Errorf("report.cdx.json lists %v, want the %d wheels %v", components, len(wheels), wheels)
+	}
+	var affected []string
+	for _, v := range cdx.Vulnerabilities {
+		for _, a := range v.Affects {
+			affected = append(affected, v.ID+" on "+refs[a.Ref])
+		}
+	}
+	slices.Sort(affected)
+	if want := []string{"CVE-2024-56326 on jinja2", "CVE-2099-0005 on typing-extensions", "CVE-2099-0006 on typing-extensions"}; !slices.Equal(affected, want) {
+		t.Errorf("report.cdx.json's vulnerabilities affect %v, want %v", affected, want)
+	}
+
+	var trivy trivyResults
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "report.trivy.json")), &trivy); err != nil {
+		t.Fatal(err)
+	}
+	var packages, vulns []string
+	for _, r := range trivy.Results {
+		for _, p := range r.Packages {
+			packages = append(packages, p.Name+"@"+p.Version)
+		}
+		for _, v := range r.Vulnerabilities {
+			vulns = append(vulns, v.VulnerabilityID+" on "+v.PkgName+" "+v.PkgID+" "+v.PkgIdentifier.BOMRef)
+		}
+	}
+	slices.Sort(packages)
+	if !slices.Equal(packages, wheels) {
+		t.Errorf("report.trivy.json lists %v, want the %d wheels %v", packages, len(wheels), wheels)
+	}
+	slices.Sort(vulns)
+	if want := []string{
+		"CVE-2024-56326 on jinja2 jinja2@3.1.2 pkg:pypi/jinja2@3.1.2",
+		"CVE-2099-0005 on typing-extensions typing-extensions@4.12.2 pkg:pypi/typing-extensions@4.12.2",
+		"CVE-2099-0006 on typing-extensions typing-extensions@4.12.2 pkg:pypi/typing-extensions@4.12.2",
+	}; !slices.Equal(vulns, want) {
+		t.Errorf("report.trivy.json's vulnerabilities = %v, want %v", vulns, want)
+	}
+	csvText := string(readFile(t, filepath.Join(e.Dir, "findings.csv")))
+	if want := "\ntyping-extensions,4.12.2,requirements.txt,CVE-2099-0005,low,,test finding\n"; !strings.Contains(csvText, want) {
+		t.Errorf("findings.csv lacks the finding published under the dotted spelling:\n%s", csvText)
 	}
 }
 
