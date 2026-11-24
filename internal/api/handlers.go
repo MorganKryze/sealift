@@ -124,12 +124,27 @@ func requirementsProblem(problems []pip.Problem) problemBody {
 	return problemBody{Body: p, StatusCode: http.StatusBadRequest}
 }
 
+// notReady names the items the start's preparation still lacks, nil once
+// it is ready. The routes that start work read it, so they agree with
+// /healthz and GET /api/instance on what "ready" means.
+func (h *Handlers) notReady() []string {
+	state := h.Ready.State()
+	if state.Ready {
+		return nil
+	}
+	missing := []string{}
+	for _, it := range state.Items {
+		if it.State != tools.ItemReady {
+			missing = append(missing, it.Name)
+		}
+	}
+	return missing
+}
+
 // toolsMissingProblem builds the 409 response for an operation that
-// needs trivy and its database before it can queue
-// anything: the same list tools.Manager.Ready reports on GET /tools, so
-// the web and the API agree on what "ready" means.
+// needs the start's preparation done before it can queue anything.
 func toolsMissingProblem(missing []string) problemBody {
-	p := NewProblem(http.StatusConflict, "tools not ready", "trivy or its database is not installed yet")
+	p := NewProblem(http.StatusConflict, "tools not ready", "the start has not prepared every tool yet; missing lists what it waits for")
 	p.Type = ptr("tools-missing")
 	m := missing
 	p.Missing = &m

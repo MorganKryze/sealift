@@ -2374,3 +2374,60 @@ func TestToolAndSettingsRoutesAreGone(t *testing.T) {
 		t.Errorf("a settings file appeared on the volume (stat: %v)", err)
 	}
 }
+
+// TestJobRoutesWaitForThePreparation proves the routes that start work
+// read the start's preparation, not the tools manager alone: with Trivy and
+// its database in place but pnpm still preparing, creating a project of
+// either ecosystem, queueing an analysis and queueing an export each answer
+// 409 naming pnpm.
+func TestJobRoutesWaitForThePreparation(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject while ready: status = %d", resp.StatusCode)
+	}
+	if ready, _ := h.Tools.Ready(); !ready {
+		t.Fatal("the tools manager must report ready for this test to mean anything")
+	}
+	h.Ready = fixedReadiness{Items: []tools.Item{
+		{Name: "trivy", State: tools.ItemReady},
+		{Name: "trivy-db", State: tools.ItemReady},
+		{Name: "pnpm", Version: "10.34.5", State: tools.ItemPreparing},
+	}}
+
+	check := func(what string, status int, data []byte) {
+		t.Helper()
+		if status != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409, body: %s", what, status, data)
+			return
+		}
+		var p Problem
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatalf("%s: decode problem: %v", what, err)
+		}
+		if p.Missing == nil || !slices.Equal(*p.Missing, []string{"pnpm"}) {
+			t.Errorf("%s: missing = %v, want [pnpm]", what, p.Missing)
+		}
+	}
+	post := func(path string, body any) (int, []byte) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r, err := http.Post(srv.URL+path, "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer r.Body.Close()
+		data, _ := io.ReadAll(r.Body)
+		return r.StatusCode, data
+	}
+
+	_, resp = createProject(t, srv, `{"name":"is-odd","dependencies":{"is-odd":"3.0.1"}}`)
+	data, _ := io.ReadAll(resp.Body)
+	check("create an npm project", resp.StatusCode, data)
+	status, data := postParts(t, srv, pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n")))
+	check("create a pip project", status, data)
+	status, data = post("/api/projects/"+project.Id+"/analyses", struct{}{})
+	check("queue an analysis", status, data)
+	status, data = post("/api/projects/"+project.Id+"/analyses/20260917T101502Z/exports", ExportRequest{Selection: map[string][]string{}})
+	check("queue an export", status, data)
+}

@@ -143,7 +143,7 @@ func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObje
 		name = parsed.Name
 	}
 
-	if ready, missing := h.Tools.Ready(); !ready {
+	if missing := h.notReady(); missing != nil {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
 	}
 
@@ -184,7 +184,7 @@ func (h *Handlers) createPipProject(parts createParts) CreateProjectResponseObje
 	if err := store.ValidatePipTarget(target); err != nil {
 		return refuse(autoProblem("create project", err))
 	}
-	if ready, missing := h.Tools.Ready(); !ready {
+	if missing := h.notReady(); missing != nil {
 		return refuse(toolsMissingProblem(missing))
 	}
 	project, err := h.Store.CreatePipProject(parts.name, parts.files, target)

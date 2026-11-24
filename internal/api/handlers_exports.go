@@ -15,6 +15,9 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 	if req.Body == nil {
 		return QueueExportdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "queue export", errors.New("an export request body is required"))), nil
 	}
+	if missing := h.notReady(); missing != nil {
+		return QueueExportdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
+	}
 	body := *req.Body
 	jobsReq := jobs.ExportRequest{
 		Selection:      body.Selection,
