@@ -1467,3 +1467,31 @@ func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
 		t.Errorf("manifest.json was written: %v", err)
 	}
 }
+
+func TestExportFailsOnAReviewTheImportWouldKeepOut(t *testing.T) {
+	long := strings.Repeat("9", 257)
+	for name, set := range map[string]func(*CVE){
+		"a fixedIn over 256 bytes": func(c *CVE) { c.FixedIn = long },
+		"a cve id over 256 bytes":  func(c *CVE) { c.ID = "CVE-" + long },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := reviewedExport(t, h, analysisDir, exportDir, "Only our own build calls the gadget.")
+			gadget := &exp.Analysis.Result.Dependencies[1]
+			gadget.Candidates[1].CVEs = append(gadget.Candidates[1].CVEs, CVE{ID: "CVE-GADGET-FIXED", Severity: "LOW", Package: "@scope/gadget@2.2.0", FixedIn: "2.2.1"})
+			set(&gadget.Candidates[1].CVEs[len(gadget.Candidates[1].CVEs)-1])
+
+			err := exp.Run(context.Background(), noopEmit)
+			const cause = "the import would keep the review out"
+			if err == nil || !strings.Contains(err.Error(), cause) {
+				t.Fatalf("Run = %v, want an error saying %q", err, cause)
+			}
+			if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+				t.Errorf("manifest.json was written: %v", err)
+			}
+		})
+	}
+}
