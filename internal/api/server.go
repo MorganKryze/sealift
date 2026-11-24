@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // NewHandlers builds the Handlers every operation of the contract runs
-// against.
+// against, under the default policy.
 func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy runner.Trivy) *Handlers {
 	return &Handlers{
 		EventsHandler: &EventsHandler{Jobs: svc},
@@ -21,6 +22,7 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 		Tools:         tm,
 		Trivy:         trivy,
 		Ready:         toolsReadiness{tm},
+		Policy:        policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()},
 	}
 }
 

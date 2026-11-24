@@ -294,8 +294,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** How this instance was deployed */
+        /** How this instance was deployed and what it has prepared */
         get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instance/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The logo the policy file names
+         * @description The bytes read at start, with their type. The headers keep a script in an SVG from running when this address is opened directly.
+         */
+        get: operations["getInstanceLogo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -515,6 +535,90 @@ export interface components {
             ephemeral: boolean;
             /** @description Present in ephemeral mode only. */
             idleMinutes?: number;
+            /** @description Whether every item of the preparation is ready. */
+            ready: boolean;
+            /** @description A database refresh that failed while an older database stays in use, with its cause. */
+            warning?: string;
+            /** @description Each item the start prepares, in order. */
+            preparing: components["schemas"]["PreparingItem"][];
+            brand: components["schemas"]["Brand"];
+            policy: components["schemas"]["Policy"];
+            tools: components["schemas"]["InstanceTools"];
+        };
+        /** @description One thing an analysis needs, as the start prepares it. */
+        PreparingItem: {
+            /** @enum {string} */
+            name: "trivy" | "trivy-db" | "signing-key" | "pnpm" | "uv";
+            /** @description The pinned Trivy, the database's date, the public key's sha256, or the pnpm or uv version. */
+            version?: string;
+            /** @enum {string} */
+            state: "preparing" | "ready" | "failed";
+            /** @description A failed item's cause. */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description A failed item's next attempt.
+             */
+            nextTry?: string;
+        };
+        /** @description The name and the marks the interface shows. */
+        Brand: {
+            /** @example sealift */
+            name: string;
+            /**
+             * @description The label of the connected side.
+             * @example Online
+             */
+            online: string;
+            /**
+             * @description The label of the air-gapped side.
+             * @example Offline
+             */
+            offline: string;
+            /**
+             * @description The word for a reviewed request.
+             * @example PR
+             */
+            reviewWord: string;
+            /** @description Whether GET /instance/logo serves a logo. */
+            logo: boolean;
+            /**
+             * @description A colour written #rrggbb. Absent for the default one.
+             * @example #0b6e99
+             */
+            accent?: string;
+            contact?: components["schemas"]["Contact"];
+        };
+        /** @description Who the interface points a user to. */
+        Contact: {
+            label: string;
+            /** @description An https or mailto address. */
+            url: string;
+        };
+        /** @description The defaults and limits the deployment sets for every new project and analysis. */
+        Policy: {
+            target: components["schemas"]["Target"];
+            pipTarget: components["schemas"]["PipTarget"];
+            minReleaseAgeDays: number;
+            resolveParallelism: number;
+            downloadParallelism: number;
+        };
+        /** @description The tool versions on the data volume. */
+        InstanceTools: {
+            /**
+             * @description The Trivy release this instance runs.
+             * @example 0.55.0
+             */
+            trivy: string;
+            /**
+             * Format: date-time
+             * @description Last update of the vulnerability database. Absent before the first one.
+             */
+            trivyDbDate?: string;
+            /** @description The pnpm versions installed, sorted. */
+            pnpm: string[];
+            /** @description The uv versions installed, sorted. */
+            uv: string[];
         };
         /** @description Every value the interface can change. */
         Settings: {
@@ -1284,7 +1388,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The deployment mode */
+            /** @description The deployment mode, the preparation, the policy, the brand and the tool versions */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1293,6 +1397,31 @@ export interface operations {
                     "application/json": components["schemas"]["Instance"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInstanceLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo */
+            200: {
+                headers: {
+                    "Content-Security-Policy": string;
+                    "X-Content-Type-Options": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/svg+xml": string;
+                };
+            };
+            404: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };

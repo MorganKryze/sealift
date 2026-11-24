@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -36,6 +37,9 @@ type Handlers struct {
 	// Ephemeral is the idle delay of ephemeral mode, zero when the mode is
 	// off. In that mode, deleting a project also empties the shared caches.
 	Ephemeral time.Duration
+	// Policy is the deployment's policy: the default targets, the limits
+	// and the brand.
+	Policy policy.Policy
 }
 
 // problemBody is the shape every operation's default response carries.

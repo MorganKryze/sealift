@@ -89,6 +89,54 @@ func (e PipBlockingKind) Valid() bool {
 	}
 }
 
+// Defines values for PreparingItemName.
+const (
+	PreparingItemNamePnpm       PreparingItemName = "pnpm"
+	PreparingItemNameSigningKey PreparingItemName = "signing-key"
+	PreparingItemNameTrivy      PreparingItemName = "trivy"
+	PreparingItemNameTrivyDb    PreparingItemName = "trivy-db"
+	PreparingItemNameUv         PreparingItemName = "uv"
+)
+
+// Valid indicates whether the value is a known member of the PreparingItemName enum.
+func (e PreparingItemName) Valid() bool {
+	switch e {
+	case PreparingItemNamePnpm:
+		return true
+	case PreparingItemNameSigningKey:
+		return true
+	case PreparingItemNameTrivy:
+		return true
+	case PreparingItemNameTrivyDb:
+		return true
+	case PreparingItemNameUv:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PreparingItemState.
+const (
+	ItemFailed    PreparingItemState = "failed"
+	ItemPreparing PreparingItemState = "preparing"
+	ItemReady     PreparingItemState = "ready"
+)
+
+// Valid indicates whether the value is a known member of the PreparingItemState enum.
+func (e PreparingItemState) Valid() bool {
+	switch e {
+	case ItemFailed:
+		return true
+	case ItemPreparing:
+		return true
+	case ItemReady:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for State.
 const (
 	Cancelled   State = "cancelled"
@@ -164,6 +212,28 @@ type AnalysisResult struct {
 	Warnings []string `json:"warnings"`
 }
 
+// Brand The name and the marks the interface shows.
+type Brand struct {
+	// Accent A colour written #rrggbb. Absent for the default one.
+	Accent *string `json:"accent,omitempty"`
+
+	// Contact Who the interface points a user to.
+	Contact *Contact `json:"contact,omitempty"`
+
+	// Logo Whether GET /instance/logo serves a logo.
+	Logo bool   `json:"logo"`
+	Name string `json:"name"`
+
+	// Offline The label of the air-gapped side.
+	Offline string `json:"offline"`
+
+	// Online The label of the connected side.
+	Online string `json:"online"`
+
+	// ReviewWord The word for a reviewed request.
+	ReviewWord string `json:"reviewWord"`
+}
+
 // Candidate One newer version of a dependency, ranked against the current one
 type Candidate struct {
 	// Cves The vulnerabilities behind vector, sorted by severity then id
@@ -190,6 +260,14 @@ type CandidateData struct {
 	// Vector CVE counts by severity, critical to unknown
 	Vector  []int  `json:"vector"`
 	Version string `json:"version"`
+}
+
+// Contact Who the interface points a user to.
+type Contact struct {
+	Label string `json:"label"`
+
+	// Url An https or mailto address.
+	Url string `json:"url"`
 }
 
 // Cve One vulnerability behind a Vector count
@@ -281,10 +359,42 @@ type Failure struct {
 
 // Instance How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes.
 type Instance struct {
-	Ephemeral bool `json:"ephemeral"`
+	// Brand The name and the marks the interface shows.
+	Brand     Brand `json:"brand"`
+	Ephemeral bool  `json:"ephemeral"`
 
 	// IdleMinutes Present in ephemeral mode only.
 	IdleMinutes *int `json:"idleMinutes,omitempty"`
+
+	// Policy The defaults and limits the deployment sets for every new project and analysis.
+	Policy Policy `json:"policy"`
+
+	// Preparing Each item the start prepares, in order.
+	Preparing []PreparingItem `json:"preparing"`
+
+	// Ready Whether every item of the preparation is ready.
+	Ready bool `json:"ready"`
+
+	// Tools The tool versions on the data volume.
+	Tools InstanceTools `json:"tools"`
+
+	// Warning A database refresh that failed while an older database stays in use, with its cause.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// InstanceTools The tool versions on the data volume.
+type InstanceTools struct {
+	// Pnpm The pnpm versions installed, sorted.
+	Pnpm []string `json:"pnpm"`
+
+	// Trivy The Trivy release this instance runs.
+	Trivy string `json:"trivy"`
+
+	// TrivyDbDate Last update of the vulnerability database. Absent before the first one.
+	TrivyDbDate *time.Time `json:"trivyDbDate,omitempty"`
+
+	// Uv The uv versions installed, sorted.
+	Uv []string `json:"uv"`
 }
 
 // LogData Payload of a log event
@@ -371,6 +481,40 @@ type PipWheel struct {
 	Size int64  `json:"size"`
 	Url  string `json:"url"`
 }
+
+// Policy The defaults and limits the deployment sets for every new project and analysis.
+type Policy struct {
+	DownloadParallelism int `json:"downloadParallelism"`
+	MinReleaseAgeDays   int `json:"minReleaseAgeDays"`
+
+	// PipTarget The system a pip resolution is prepared for
+	PipTarget          PipTarget `json:"pipTarget"`
+	ResolveParallelism int       `json:"resolveParallelism"`
+
+	// Target The system a resolution or an export is prepared for
+	Target Target `json:"target"`
+}
+
+// PreparingItem One thing an analysis needs, as the start prepares it.
+type PreparingItem struct {
+	Name PreparingItemName `json:"name"`
+
+	// NextTry A failed item's next attempt.
+	NextTry *time.Time `json:"nextTry,omitempty"`
+
+	// Reason A failed item's cause.
+	Reason *string            `json:"reason,omitempty"`
+	State  PreparingItemState `json:"state"`
+
+	// Version The pinned Trivy, the database's date, the public key's sha256, or the pnpm or uv version.
+	Version *string `json:"version,omitempty"`
+}
+
+// PreparingItemName defines model for PreparingItem.Name.
+type PreparingItemName string
+
+// PreparingItemState defines model for PreparingItem.State.
+type PreparingItemState string
 
 // Problem RFC 9457 Problem Details for HTTP APIs
 type Problem struct {
@@ -766,9 +910,12 @@ func (t *Event_Data) UnmarshalJSON(b []byte) error {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// GetInstance How this instance was deployed
+	// GetInstance How this instance was deployed and what it has prepared
 	// (GET /instance)
 	GetInstance(w http.ResponseWriter, r *http.Request)
+	// GetInstanceLogo The logo the policy file names
+	// (GET /instance/logo)
+	GetInstanceLogo(w http.ResponseWriter, r *http.Request)
 	// WatchJob Server-sent events of the running job
 	// (GET /jobs/current/events)
 	WatchJob(w http.ResponseWriter, r *http.Request)
@@ -863,6 +1010,20 @@ func (siw *ServerInterfaceWrapper) GetInstance(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetInstance(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetInstanceLogo operation middleware
+func (siw *ServerInterfaceWrapper) GetInstanceLogo(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetInstanceLogo(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1653,6 +1814,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/settings", wrapper.GetSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/settings", wrapper.UpdateSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance", wrapper.GetInstance)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance/logo", wrapper.GetInstanceLogo)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/signing-key", wrapper.GetSigningKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/signing-key/regenerate", wrapper.RegenerateSigningKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetTools)
@@ -1693,6 +1855,97 @@ type GetInstancedefaultApplicationProblemPlusJSONResponse struct {
 }
 
 func (response GetInstancedefaultApplicationProblemPlusJSONResponse) VisitGetInstanceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetInstanceLogoRequestObject struct {
+}
+
+type GetInstanceLogoResponseObject interface {
+	VisitGetInstanceLogoResponse(w http.ResponseWriter) error
+}
+
+type GetInstanceLogo200ResponseHeaders struct {
+	ContentSecurityPolicy string
+	XContentTypeOptions   string
+}
+
+type GetInstanceLogo200ImagepngResponse struct {
+	Body          io.Reader
+	Headers       GetInstanceLogo200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetInstanceLogo200ImagepngResponse) VisitGetInstanceLogoResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/png")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Content-Security-Policy", fmt.Sprint(response.Headers.ContentSecurityPolicy))
+	w.Header().Set("X-Content-Type-Options", fmt.Sprint(response.Headers.XContentTypeOptions))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetInstanceLogo200ImagesvgXmlResponse struct {
+	Body          io.Reader
+	Headers       GetInstanceLogo200ResponseHeaders
+	ContentLength int64
+}
+
+func (response GetInstanceLogo200ImagesvgXmlResponse) VisitGetInstanceLogoResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("Content-Security-Policy", fmt.Sprint(response.Headers.ContentSecurityPolicy))
+	w.Header().Set("X-Content-Type-Options", fmt.Sprint(response.Headers.XContentTypeOptions))
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetInstanceLogo404ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetInstanceLogo404ApplicationProblemPlusJSONResponse) VisitGetInstanceLogoResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetInstanceLogodefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response GetInstanceLogodefaultApplicationProblemPlusJSONResponse) VisitGetInstanceLogoResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2771,9 +3024,12 @@ func (response InstallUvdefaultApplicationProblemPlusJSONResponse) VisitInstallU
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
-	// GetInstance How this instance was deployed
+	// GetInstance How this instance was deployed and what it has prepared
 	// (GET /instance)
 	GetInstance(ctx context.Context, request GetInstanceRequestObject) (GetInstanceResponseObject, error)
+	// GetInstanceLogo The logo the policy file names
+	// (GET /instance/logo)
+	GetInstanceLogo(ctx context.Context, request GetInstanceLogoRequestObject) (GetInstanceLogoResponseObject, error)
 	// WatchJob Server-sent events of the running job
 	// (GET /jobs/current/events)
 	WatchJob(ctx context.Context, request WatchJobRequestObject) (WatchJobResponseObject, error)
@@ -2910,6 +3166,30 @@ func (sh *strictHandler) GetInstance(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetInstanceResponseObject); ok {
 		if err := validResponse.VisitGetInstanceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetInstanceLogo operation middleware
+func (sh *strictHandler) GetInstanceLogo(w http.ResponseWriter, r *http.Request) {
+	var request GetInstanceLogoRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetInstanceLogo(ctx, request.(GetInstanceLogoRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetInstanceLogo")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetInstanceLogoResponseObject); ok {
+		if err := validResponse.VisitGetInstanceLogoResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

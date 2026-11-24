@@ -407,14 +407,50 @@ paths:
       operationId: getInstance
       tags:
         - settings
-      summary: How this instance was deployed
+      summary: How this instance was deployed and what it has prepared
       responses:
         "200":
-          description: The deployment mode
+          description: The deployment mode, the preparation, the policy, the brand and the tool versions
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Instance"
+        default:
+          $ref: "#/components/responses/Problem"
+  /instance/logo:
+    get:
+      operationId: getInstanceLogo
+      tags:
+        - settings
+      summary: The logo the policy file names
+      description: >-
+        The bytes read at start, with their type. The headers keep a script in
+        an SVG from running when this address is opened directly.
+      responses:
+        "200":
+          description: The logo
+          headers:
+            Content-Security-Policy:
+              required: true
+              schema:
+                type: string
+                example: "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+            X-Content-Type-Options:
+              required: true
+              schema:
+                type: string
+                example: nosniff
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/svg+xml:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/Problem"
         default:
           $ref: "#/components/responses/Problem"
   /signing-key:
@@ -752,8 +788,161 @@ components:
         idleMinutes:
           type: integer
           description: Present in ephemeral mode only.
+        ready:
+          type: boolean
+          description: Whether every item of the preparation is ready.
+        warning:
+          type: string
+          description: >-
+            A database refresh that failed while an older database stays in
+            use, with its cause.
+        preparing:
+          type: array
+          description: Each item the start prepares, in order.
+          items:
+            $ref: "#/components/schemas/PreparingItem"
+        brand:
+          $ref: "#/components/schemas/Brand"
+        policy:
+          $ref: "#/components/schemas/Policy"
+        tools:
+          $ref: "#/components/schemas/InstanceTools"
       required:
         - ephemeral
+        - ready
+        - preparing
+        - brand
+        - policy
+        - tools
+    PreparingItem:
+      type: object
+      description: One thing an analysis needs, as the start prepares it.
+      properties:
+        name:
+          type: string
+          enum:
+            - trivy
+            - trivy-db
+            - signing-key
+            - pnpm
+            - uv
+        version:
+          type: string
+          description: >-
+            The pinned Trivy, the database's date, the public key's sha256, or
+            the pnpm or uv version.
+        state:
+          type: string
+          enum:
+            - preparing
+            - ready
+            - failed
+          x-enum-varnames:
+            - ItemPreparing
+            - ItemReady
+            - ItemFailed
+        reason:
+          type: string
+          description: A failed item's cause.
+        nextTry:
+          type: string
+          format: date-time
+          description: A failed item's next attempt.
+      required:
+        - name
+        - state
+    Brand:
+      type: object
+      description: The name and the marks the interface shows.
+      properties:
+        name:
+          type: string
+          example: sealift
+        online:
+          type: string
+          description: The label of the connected side.
+          example: Online
+        offline:
+          type: string
+          description: The label of the air-gapped side.
+          example: Offline
+        reviewWord:
+          type: string
+          description: The word for a reviewed request.
+          example: PR
+        logo:
+          type: boolean
+          description: Whether GET /instance/logo serves a logo.
+        accent:
+          type: string
+          description: "A colour written #rrggbb. Absent for the default one."
+          example: "#0b6e99"
+        contact:
+          $ref: "#/components/schemas/Contact"
+      required:
+        - name
+        - online
+        - offline
+        - reviewWord
+        - logo
+    Contact:
+      type: object
+      description: Who the interface points a user to.
+      properties:
+        label:
+          type: string
+        url:
+          type: string
+          description: An https or mailto address.
+      required:
+        - label
+        - url
+    Policy:
+      type: object
+      description: The defaults and limits the deployment sets for every new project and analysis.
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        pipTarget:
+          $ref: "#/components/schemas/PipTarget"
+        minReleaseAgeDays:
+          type: integer
+        resolveParallelism:
+          type: integer
+        downloadParallelism:
+          type: integer
+      required:
+        - target
+        - pipTarget
+        - minReleaseAgeDays
+        - resolveParallelism
+        - downloadParallelism
+    InstanceTools:
+      type: object
+      description: The tool versions on the data volume.
+      properties:
+        trivy:
+          type: string
+          description: The Trivy release this instance runs.
+          example: 0.55.0
+        trivyDbDate:
+          type: string
+          format: date-time
+          description: Last update of the vulnerability database. Absent before the first one.
+        pnpm:
+          type: array
+          description: The pnpm versions installed, sorted.
+          items:
+            type: string
+        uv:
+          type: array
+          description: The uv versions installed, sorted.
+          items:
+            type: string
+      required:
+        - trivy
+        - pnpm
+        - uv
     Settings:
       type: object
       description: Every value the interface can change.
