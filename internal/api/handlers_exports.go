@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -15,6 +14,9 @@ import (
 func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) (QueueExportResponseObject, error) {
 	if req.Body == nil {
 		return QueueExportdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "queue export", errors.New("an export request body is required"))), nil
+	}
+	if missing := h.notReady(); missing != nil {
+		return QueueExportdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
 	}
 	body := *req.Body
 	jobsReq := jobs.ExportRequest{
@@ -47,7 +49,7 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 // tracking before falling back to the store.
 func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (GetExportResponseObject, error) {
 	if state, analysisID, ok := h.Service.LiveState(req.ProjectId, "export", req.ExportId); ok {
-		createdAt, _ := time.Parse(idLayout, req.ExportId)
+		createdAt, _ := store.JobCreatedAt(req.ExportId)
 		return GetExport200JSONResponse(Export{
 			Id: req.ExportId, ProjectId: req.ProjectId, AnalysisId: analysisID, State: State(state), CreatedAt: createdAt,
 		}), nil
@@ -65,7 +67,7 @@ func (h *Handlers) GetExport(_ context.Context, req GetExportRequestObject) (Get
 func (h *Handlers) CancelExport(_ context.Context, req CancelExportRequestObject) (CancelExportResponseObject, error) {
 	analysisID, err := h.Service.Cancel(req.ProjectId, "export", req.ExportId)
 	if err == nil {
-		createdAt, _ := time.Parse(idLayout, req.ExportId)
+		createdAt, _ := store.JobCreatedAt(req.ExportId)
 		return CancelExport200JSONResponse(Export{
 			Id: req.ExportId, ProjectId: req.ProjectId, AnalysisId: analysisID, State: Cancelled, CreatedAt: createdAt,
 		}), nil

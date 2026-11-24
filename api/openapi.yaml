@@ -17,9 +17,7 @@ tags:
   - name: jobs
     description: The running job's event stream
   - name: settings
-    description: User-configurable defaults
-  - name: tools
-    description: pnpm and Trivy installs and updates
+    description: The settings the deployment set, the instance and its signing key
   - name: probes
     description: Readiness and liveness checks, served at the root
 paths:
@@ -450,26 +448,6 @@ paths:
                 $ref: "#/components/schemas/Settings"
         default:
           $ref: "#/components/responses/Problem"
-    put:
-      operationId: updateSettings
-      tags:
-        - settings
-      summary: Update settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Settings"
-      responses:
-        "200":
-          description: Updated settings
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Settings"
-        default:
-          $ref: "#/components/responses/Problem"
   /instance:
     get:
       operationId: getInstance
@@ -564,125 +542,6 @@ paths:
           $ref: "#/components/responses/Problem"
         "500":
           $ref: "#/components/responses/Problem"
-        default:
-          $ref: "#/components/responses/Problem"
-  /tools:
-    get:
-      operationId: getTools
-      tags:
-        - tools
-      summary: Installed and available tool versions, DB date
-      responses:
-        "200":
-          description: Tools state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolsState"
-        default:
-          $ref: "#/components/responses/Problem"
-  /tools/trivy/update:
-    post:
-      operationId: updateTrivy
-      tags:
-        - tools
-      summary: Install a new Trivy release
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - force
-              properties:
-                version:
-                  type: string
-                  description: >
-                    Install this release instead of the latest, such as the
-                    ToolsState.trivyRecommended version. Still subject to
-                    the minimum age check unless force is set.
-                force:
-                  type: boolean
-                  description: Install the latest release regardless of its age
-      responses:
-        "200":
-          description: Tools state after the update
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolsState"
-        default:
-          $ref: "#/components/responses/Problem"
-  /tools/trivy/activate:
-    post:
-      operationId: activateTrivy
-      tags:
-        - tools
-      summary: Activate an installed Trivy version
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - version
-              properties:
-                version:
-                  type: string
-      responses:
-        "200":
-          description: Tools state after the activation
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolsState"
-        default:
-          $ref: "#/components/responses/Problem"
-  /tools/uv/install:
-    post:
-      operationId: installUv
-      tags:
-        - tools
-      summary: Install a uv release from the package index
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - version
-              properties:
-                version:
-                  type: string
-                  description: The uv release to install, such as 0.13.7
-                force:
-                  type: boolean
-                  description: Install the release even when it is younger than the minimum release age
-      responses:
-        "200":
-          description: Tools state after the install
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolsState"
-        default:
-          $ref: "#/components/responses/Problem"
-  /tools/trivy/db/update:
-    post:
-      operationId: updateTrivyDB
-      tags:
-        - tools
-      summary: Force a Trivy DB download
-      responses:
-        "200":
-          description: Tools state after the DB update
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolsState"
         default:
           $ref: "#/components/responses/Problem"
 components:
@@ -1040,7 +899,7 @@ components:
         - uv
     Settings:
       type: object
-      description: Every value the interface can change.
+      description: The values the deployment set, read only; the policy file changes them.
       properties:
         target:
           $ref: "#/components/schemas/Target"
@@ -1561,62 +1420,6 @@ components:
         - analysisId
         - state
         - createdAt
-    ToolsState:
-      type: object
-      description: Installed and available pnpm, uv and Trivy versions, and the DB date.
-      properties:
-        pnpmInstalled:
-          type: array
-          items:
-            type: string
-        uvInstalled:
-          type: array
-          description: The uv versions installed on the data volume, sorted
-          items:
-            type: string
-        trivyActive:
-          type: string
-        trivyInstalled:
-          type: array
-          items:
-            type: string
-        trivyLatest:
-          type: string
-        trivyLatestAge:
-          type: string
-          description: Duration since the latest Trivy release, as a Go duration string
-        trivyDbDate:
-          type: string
-          format: date-time
-        latestSizeBytes:
-          type: integer
-          description: >
-            Size in bytes of the latest Trivy release asset for this host,
-            0 when the latest release is itself unavailable
-        trivyRecommended:
-          type: string
-          description: >
-            Newest Trivy release old enough to install without force, set
-            only while the latest release is younger than the minimum
-            release age
-        ready:
-          type: boolean
-          description: Whether trivy and its database are both in place
-        missing:
-          type: array
-          description: Names of what ready needs and does not have yet
-          items:
-            type: string
-      required:
-        - pnpmInstalled
-        - trivyActive
-        - trivyInstalled
-        - trivyLatest
-        - trivyLatestAge
-        - trivyDbDate
-        - latestSizeBytes
-        - ready
-        - missing
     EventKind:
       type: string
       description: Discriminator for the data payload of an Event.

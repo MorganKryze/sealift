@@ -4,8 +4,8 @@ This page takes you from nothing to a first archive in about ten minutes. It use
 
 ## Requirements
 
-- Docker on a machine with outbound HTTPS to GitHub (Trivy), `mirror.gcr.io` (its vulnerability database) and `registry.npmjs.org` (pnpm and packages). [Deployment](deployment.md#outbound-access) lists the hosts.
-- About 2 GB of free disk for Trivy, its database and the package cache.
+- Docker on a machine with outbound HTTPS to GitHub (Trivy), `mirror.gcr.io` (its vulnerability database), `registry.npmjs.org` (pnpm and packages) and `pypi.org` with `files.pythonhosted.org` (uv). [Deployment](deployment.md#outbound-access) lists the hosts.
+- About 2 GB of free disk for Trivy, its database, pnpm, uv and the package cache.
 
 sealift runs on the connected side of your network. Only the archive it builds, its `manifest.json` and the manifest's signature, `manifest.json.sig`, need to cross to the air-gapped side.
 
@@ -21,7 +21,13 @@ docker run -d \
 
 `127.0.0.1:8080` keeps the interface on this machine. The `sealift-data` volume holds every session, archive and setting, and survives an upgrade. [Deployment](deployment.md) covers Compose, a reverse proxy and backups.
 
-Check that it answers:
+## 2. Wait for the preparation
+
+On its first start, sealift downloads what an analysis needs, with no click: Trivy 0.76.2, the release its binary pins, checked against the sha256 built into sealift; Trivy's vulnerability database, about 120 MB (1.4 GB once unpacked); pnpm 10.34.5; and uv 0.13.7. It also generates an Ed25519 signing key for this volume.
+
+Open <http://localhost:8080>. Until every item is ready, the page shows Preparing sealift, with each item and its state: Preparing, Ready or Failed. A failed item shows its cause and the time of its next try, and sealift tries again every minute. The home opens by itself once every item is ready. In the lab, at commit 8f5f3df, an empty volume was ready in about 15 seconds.
+
+`/healthz` answers 503 while sealift prepares, and this once it is ready:
 
 <!-- run -->
 <!-- expect: {"status":"ok"} -->
@@ -33,17 +39,7 @@ curl -s http://localhost:8080/healthz
 {"status":"ok"}
 ```
 
-## 2. Prepare sealift
-
-Open <http://localhost:8080>. The first run opens on Prepare sealift.
-
-![The setup screen, listing Trivy 0.76.2 at 45.2 MB, its vulnerability database at about 120 MB, and the signing key, above one install button](assets/setup.png)
-
-1. Press **Install Trivy (45.2 MB) and its database (about 120 MB, 1.4 GB once unpacked)**. Nothing downloads before this click. The sizes are those of the Trivy release shown; yours may differ.
-2. The Signing key card shows Ready: sealift generated an Ed25519 key for this volume when it started, and shows the sha256 of its public key. Nothing to type. Before your first crossing, press **Copy public key** and carry it to the import side, over a channel you trust. [The air gap](air-gap.md#the-signature-and-the-trusted-key) shows how.
-3. Press **Continue** once Trivy and its database are installed.
-
-sealift checks Trivy against its published sha256. When the latest Trivy release is younger than 14 days, it offers the newest release past that age instead.
+Before your first crossing, open **Settings** and carry the public key to the import side, over a channel you trust. [The air gap](air-gap.md#the-signature-and-the-trusted-key) shows how.
 
 ## 3. Drop a package.json
 
@@ -103,4 +99,4 @@ summary.md            before, after, remaining CVEs
 ## Next
 
 - [Workflow](workflow.md): every screen, every button.
-- [Settings](settings.md): the target platform, the signing key, the limits.
+- [Settings](settings.md): the policy file, with the target platform and the limits, and the signing key.

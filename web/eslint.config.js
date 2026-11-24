@@ -38,7 +38,7 @@ export default tseslint.config(
                 "@/components/failure-block",
                 "@/components/problem-notice",
                 "@/components/route-error",
-                "@/components/setup-screen",
+                "@/components/preparing-screen",
                 "@/components/step-bar",
                 "@/components/severity-counts",
                 "@/hooks/use-job-events",

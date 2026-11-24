@@ -8,6 +8,12 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- sealift prepares itself at start, with no click: it installs the Trivy release its binary pins, downloads the vulnerability database, checks the signing key, and installs the pnpm and uv versions the default targets name. A failed step keeps its cause and tries again every minute. [Deployment](docs/deployment.md#readiness) describes it.
+- A policy file, named by `SEALIFT_POLICY`, sets the npm and pip target defaults, the minimum release age, the resolve and download parallelism, and the brand: name, logo, accent, side labels, review word and contact. sealift refuses to start on an unknown key or a value out of range, and names the file, the key and the rule. [Settings](docs/settings.md) lists every key.
+- `deploy/connected/compose.policy.yaml` mounts a policy folder read-only, and `deploy/connected/policy/policy.yaml` is an example with every key commented out.
+- `GET /api/instance` reports readiness, item by item with each cause, the policy in effect, the brand and the tool versions. `GET /api/instance/logo` serves the policy's logo.
+- `GET /livez` answers 200 while the server runs, for a liveness probe.
+- The home shows Preparing sealift, with each item and its state, until the instance is ready, then opens by itself.
 - Each dependency names its jump: the best version outside its current line, which sealift does not propose. [How sealift chooses](docs/how-sealift-chooses.md#the-jump) describes it.
 - Families: dependencies whose jumps must move together, read from the jump's peer dependencies and from `@types` packages, such as `react 19` for react, react-dom and `@types/react`.
 - An export that takes a version outside its line, or keeps a CVE that no version fixes, needs a reason for each family, lone jump or dependency. The review screen asks for them above **Confirm and build the archive**, which stays disabled until each is written, and the server refuses an export without them.
@@ -17,9 +23,45 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- `/healthz` is a readiness check: it answers 503 with the names of the missing items until every one is ready, then 200. Use `/livez` for liveness, or an orchestrator restarts an instance that is still downloading.
+- `deploy/connected/compose.yaml` gives the first start 10 minutes before a failed healthcheck counts, and checks every 5 seconds until the first success. `start_interval` needs Docker Engine 25 or later.
+- The Settings panel shows the policy read-only in its Policy section, and the scanner as the Trivy version and the database date, with no control.
+- Settings that 0.7.0 saved in `private/settings.json` still apply, and a value the policy file sets wins over them. The start log names each key the file overrides. sealift reads that file and never writes it, so a new volume holds none, and 0.7.0 still reads it after a rollback.
+- Once the pinned Trivy is active, the start removes every other Trivy version from the volume. An analysis is refused while another version is active.
+- `SEALIFT_NPM_REGISTRY` now also serves the download of pnpm.
+- The brand is read, checked and served through the API. The screens keep sealift's name and colours until a later release draws it.
 - Proposals stay in each dependency's current line by default, the range npm's caret gives its current version. express 4.17.1 no longer gets 5.1.0 proposed: it stays in major 4, and 5.1.0 is its jump.
 - The `major-jump` signal follows the line below 1.0.0: 0.18.0 to 0.19.0 carries it, with the evidence `leaves 0.18.x`.
 - An analysis made by sealift 0.7.0 recorded no fixing versions, so an export from it counts each CVE as one without fix and asks a reason for it. A new analysis records them.
+
+### Removed
+
+Each removed route below answers 410 Gone, with Problem Details that name `GET /api/instance`.
+
+- The setup screen and its install button: the start installs what it showed.
+- The settings form: the policy file replaces it.
+- `GET /api/tools`: `GET /api/instance` reports the same versions, with readiness.
+- `POST /api/tools/trivy/update`: the start installs the pinned Trivy.
+- `POST /api/tools/trivy/activate`: sealift runs the pinned Trivy only.
+- `POST /api/tools/trivy/db/update`: the start refreshes the database, and so does each analysis.
+- `POST /api/tools/uv/install`: the start installs the default pip target's uv, and an analysis installs another target's uv.
+- `PUT /api/settings`: the policy file sets every value. `GET /api/settings` stays, read-only.
+
+### Fixed
+
+- Cancelling an analysis still waiting in the queue keeps it in the session as Analysis cancelled, with Start it again. It used to vanish and leave No analysis yet with no action. For a pip project, the API keeps the cancelled record the same way.
+- Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.
+- An analysis or an export waiting for another job reads Waiting for another job, with no step in progress and no package counters, instead of looking like the running one.
+- A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
+- An analysis that fails before its first step, for example when sealift cannot write its log, shows the cause under What went wrong. It used to show Analysis stopped with nothing under it.
+- On the home screen, a past session whose analysis or export waits in the queue reads Waiting for another job. It used to read Analysing or Exporting.
+
+### Security
+
+- Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.
+- No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them. A project's target can still name another pnpm or uv, and both are held to the minimum release age.
+- `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.
+- The policy's logo must be a regular PNG or SVG file of at most 256 KiB, and is served with a `Content-Security-Policy` that blocks scripts and `X-Content-Type-Options: nosniff`. A contact address must be `https:` or `mailto:`, and brand text with a control character is refused.
 
 ## [0.7.0] - 2026-11-23
 

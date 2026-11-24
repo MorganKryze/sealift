@@ -37,7 +37,8 @@ var ErrInvalidTarget = errors.New("invalid target")
 // private/, so the tools user's group can create and write files in it.
 // fileMode is the mode of every file the store writes there, for the same
 // reason. privateMode keeps private/ unreadable outside the owner;
-// settingsMode is the mode of a settings.json from an older release.
+// settingsMode is the mode of the signing key and of a settings.json from
+// an older release.
 const (
 	dirMode      = 0o770
 	privateMode  = 0o700
@@ -47,6 +48,12 @@ const (
 
 // DefaultSettings are the values that apply when neither the deployment nor
 // an older release's settings.json sets them.
+//
+// ResolveParallelism is 4 because each resolution is one pnpm process, and 8
+// would double peak memory inside a desktop container where an OOM kill is
+// worse than a slower analysis. DownloadParallelism is 16, and stays a
+// setting so a deployment behind a limiting proxy can lower it.
+// TestOpenStartsWithSettledParallelism pins both.
 var DefaultSettings = Settings{
 	Target: Target{
 		OS:      "linux",

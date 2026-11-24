@@ -89,7 +89,7 @@ When a screen changes, re-read the pages that describe it, since they quote its 
 
 | Screen | Pages |
 | --- | --- |
-| Setup | `docs/getting-started.md`, `docs/workflow.md` |
+| Preparing | `docs/getting-started.md`, `docs/workflow.md` |
 | Home and drop | `docs/workflow.md`, `docs/troubleshooting.md` |
 | Analysis | `docs/workflow.md`, `docs/troubleshooting.md` |
 | Review | `docs/workflow.md`, `docs/how-sealift-chooses.md` |

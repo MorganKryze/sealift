@@ -104,7 +104,7 @@ The role adds a boundary to the threat model: other users on the air-gapped netw
 
 ```
 /data
-  private/settings.json          settings, mode 0600, app only
+  private/settings.json          the settings 0.7.0 and earlier saved, read and never written, mode 0600, app only
   private/signing-key.pem        the private signing key (PKCS#8 PEM), mode 0600, app only
   projects/<project>/
     project.json                 name, target, the manifest's sha256
@@ -119,8 +119,8 @@ The role adds a boundary to the threat model: other users on the air-gapped netw
       ranking.json               the result the review reads
       combined/, combined.trivy.json
     exports/<id>/                the archive, manifest.json, manifest.json.sig and four reports
-  tools/trivy/<version>/, tools/trivy/current
-  tools/pnpm/<version>/
+  tools/trivy/<version>/, tools/trivy/current   the pinned Trivy only
+  tools/pnpm/<version>/, tools/uv/<version>/
   trivy-cache/db/
   cache/pnpm/, cache/resolve/, cache/tarballs/
   home/                          HOME for pnpm and Trivy

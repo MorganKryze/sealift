@@ -290,9 +290,11 @@ func commitAnalysis(st *store.Store, dir string, status statusFile) error {
 // pending directory, even on failure or cancellation, so a failed, cancelled
 // or interrupted analysis keeps its directory and log.
 func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
+	// An error returned before the first write becomes the cause the
+	// analysis is published with, so it names no server path.
 	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
-		return fmt.Errorf("jobs: open log.txt: %w", ferr)
+		return fmt.Errorf("jobs: open log.txt: %w", withoutPath(ferr))
 	}
 	defer logFile.Close()
 
@@ -307,7 +309,7 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		CreatedAt: createdAt,
 		Target:    a.Project.Target,
 	}); werr != nil {
-		return fmt.Errorf("jobs: write initial status.json: %w", werr)
+		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
 	r := &run{

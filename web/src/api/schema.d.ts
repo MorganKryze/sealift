@@ -318,8 +318,7 @@ export interface paths {
         };
         /** Get settings */
         get: operations["getSettings"];
-        /** Update settings */
-        put: operations["updateSettings"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -395,91 +394,6 @@ export interface paths {
          * @description Answers 403 for a Host or an Origin that is not this server's own, for Sec-Fetch-Site cross-site, and for a body that is not application/json. The old key stays in use when the new one cannot be written.
          */
         post: operations["regenerateSigningKey"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Installed and available tool versions, DB date */
-        get: operations["getTools"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Install a new Trivy release */
-        post: operations["updateTrivy"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/activate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Activate an installed Trivy version */
-        post: operations["activateTrivy"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/uv/install": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Install a uv release from the package index */
-        post: operations["installUv"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/db/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Force a Trivy DB download */
-        post: operations["updateTrivyDB"];
         delete?: never;
         options?: never;
         head?: never;
@@ -673,7 +587,7 @@ export interface components {
             /** @description The uv versions installed, sorted. */
             uv: string[];
         };
-        /** @description Every value the interface can change. */
+        /** @description The values the deployment set, read only; the policy file changes them. */
         Settings: {
             target: components["schemas"]["Target"];
             minReleaseAgeDays: number;
@@ -911,27 +825,6 @@ export interface components {
             /** @description File names available under files/{name} once the export is done */
             files?: string[];
             failure?: components["schemas"]["Failure"];
-        };
-        /** @description Installed and available pnpm, uv and Trivy versions, and the DB date. */
-        ToolsState: {
-            pnpmInstalled: string[];
-            /** @description The uv versions installed on the data volume, sorted */
-            uvInstalled?: string[];
-            trivyActive: string;
-            trivyInstalled: string[];
-            trivyLatest: string;
-            /** @description Duration since the latest Trivy release, as a Go duration string */
-            trivyLatestAge: string;
-            /** Format: date-time */
-            trivyDbDate: string;
-            /** @description Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable */
-            latestSizeBytes: number;
-            /** @description Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age */
-            trivyRecommended?: string;
-            /** @description Whether trivy and its database are both in place */
-            ready: boolean;
-            /** @description Names of what ready needs and does not have yet */
-            missing: string[];
         };
         /**
          * @description Discriminator for the data payload of an Event.
@@ -1506,31 +1399,6 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    updateSettings: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Settings"];
-            };
-        };
-        responses: {
-            /** @description Updated settings */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Settings"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
     getInstance: {
         parameters: {
             query?: never;
@@ -1622,135 +1490,6 @@ export interface operations {
             };
             403: components["responses"]["Problem"];
             500: components["responses"]["Problem"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    getTools: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Tools state */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    updateTrivy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set. */
-                    version?: string;
-                    /** @description Install the latest release regardless of its age */
-                    force: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the update */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    activateTrivy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    version: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the activation */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    installUv: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description The uv release to install, such as 0.13.7 */
-                    version: string;
-                    /** @description Install the release even when it is younger than the minimum release age */
-                    force?: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the install */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    updateTrivyDB: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Tools state after the DB update */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
             default: components["responses"]["Problem"];
         };
     };

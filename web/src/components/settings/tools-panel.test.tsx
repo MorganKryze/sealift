@@ -1,107 +1,29 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { render, screen } from "@testing-library/react"
+import { describe, expect, it } from "vitest"
 
-import { ProblemError } from "@/api/client"
-import { getTools, updateTrivy, updateTrivyDB, type ToolsState } from "@/api/settings"
 import { ToolsPanel } from "@/components/settings/tools-panel"
+import { formatDbDate } from "@/lib/format-tools"
 
-vi.mock("@/api/settings", async () => {
-  const actual = await vi.importActual<typeof import("@/api/settings")>("@/api/settings")
-  return { ...actual, getTools: vi.fn(), updateTrivy: vi.fn(), updateTrivyDB: vi.fn() }
-})
+const DB_DATE = "2026-11-24T06:12:00Z"
 
-const baseTools: ToolsState = {
-  pnpmInstalled: ["10.34.5"],
-  trivyActive: "0.55.0",
-  trivyInstalled: ["0.55.0"],
-  trivyLatest: "0.56.0",
-  trivyLatestAge: "12h0m0s",
-  trivyDbDate: new Date().toISOString(),
-  latestSizeBytes: 83886080,
-  ready: true,
-  missing: [],
-}
-
-function renderPanel() {
-  const queryClient = new QueryClient()
-  render(
-    <QueryClientProvider client={queryClient}>
-      <ToolsPanel minReleaseAgeDays={3} pnpmVersion="10.34.5" />
-    </QueryClientProvider>,
-  )
-}
-
-beforeEach(() => {
-  vi.mocked(getTools).mockReset().mockResolvedValue(baseTools)
-  vi.mocked(updateTrivy).mockReset()
-  vi.mocked(updateTrivyDB).mockReset()
-})
+const valueOf = (term: string) => screen.getByText(term, { selector: "dt" }).nextElementSibling?.textContent
 
 describe("ToolsPanel", () => {
-  it("shows a 409's detail as a notice on Update Trivy", async () => {
-    vi.mocked(updateTrivy).mockRejectedValue(
-      new ProblemError(409, {
-        type: "about:blank",
-        title: "Update in progress",
-        status: 409,
-        detail: "A tool update is already running.",
-      }),
-    )
-
-    renderPanel()
-
-    await waitFor(() => screen.getByRole("button", { name: "Update Trivy" }))
-    fireEvent.click(screen.getByRole("button", { name: "Update Trivy" }))
-
-    await waitFor(() => {
-      expect(screen.getByText("A tool update is already running.")).toBeInTheDocument()
-    })
+  it("shows the pinned Trivy and the database date", () => {
+    render(<ToolsPanel tools={{ trivy: "0.76.2", trivyDbDate: DB_DATE, pnpm: ["10.34.5"], uv: ["0.13.7"] }} />)
+    expect(screen.getByRole("heading", { name: "Scanner" })).toBeInTheDocument()
+    expect(valueOf("Trivy")).toBe("0.76.2")
+    expect(valueOf("Vulnerability database")).toBe(`Downloaded ${formatDbDate(DB_DATE)}`)
   })
 
-  it("shows the update running, then says Trivy was already current", async () => {
-    let finish: (state: ToolsState) => void = () => {}
-    vi.mocked(updateTrivy).mockReturnValue(new Promise((resolve) => (finish = resolve)))
-
-    renderPanel()
-    await waitFor(() => screen.getByRole("button", { name: "Update Trivy" }))
-    fireEvent.click(screen.getByRole("button", { name: "Update Trivy" }))
-
-    await waitFor(() => expect(screen.getByRole("button", { name: /Checking for a newer Trivy/ })).toBeDisabled())
-    finish(baseTools)
-    await waitFor(() => expect(screen.getByText("Trivy 0.55.0 is already the newest release sealift installs.")).toBeInTheDocument())
+  it("says when no database was downloaded yet", () => {
+    render(<ToolsPanel tools={{ trivy: "0.76.2", pnpm: [], uv: [] }} />)
+    expect(valueOf("Vulnerability database")).toBe("Not downloaded yet")
   })
 
-  it("says which Trivy it installed", async () => {
-    vi.mocked(updateTrivy).mockResolvedValue({ ...baseTools, trivyActive: "0.56.0", trivyInstalled: ["0.55.0", "0.56.0"] })
-
-    renderPanel()
-    await waitFor(() => screen.getByRole("button", { name: "Update Trivy" }))
-    fireEvent.click(screen.getByRole("button", { name: "Update Trivy" }))
-
-    await waitFor(() => expect(screen.getByText("Trivy 0.56.0 installed and active.")).toBeInTheDocument())
-  })
-
-  it("shows the database update running, then its new date", async () => {
-    let finish: (state: ToolsState) => void = () => {}
-    vi.mocked(updateTrivyDB).mockReturnValue(new Promise((resolve) => (finish = resolve)))
-
-    renderPanel()
-    await waitFor(() => screen.getByRole("button", { name: "Update database" }))
-    fireEvent.click(screen.getByRole("button", { name: "Update database" }))
-
-    await waitFor(() => expect(screen.getByRole("button", { name: /Updating the database/ })).toBeDisabled())
-    finish({ ...baseTools, trivyDbDate: new Date(Date.parse(baseTools.trivyDbDate) + 3600_000).toISOString() })
-    await waitFor(() => expect(screen.getByText(/^Database updated/)).toBeInTheDocument())
-  })
-
-  it("says the database was already current when its date did not move", async () => {
-    vi.mocked(updateTrivyDB).mockResolvedValue(baseTools)
-
-    renderPanel()
-    await waitFor(() => screen.getByRole("button", { name: "Update database" }))
-    fireEvent.click(screen.getByRole("button", { name: "Update database" }))
-
-    await waitFor(() => expect(screen.getByText(/^The database is already current/)).toBeInTheDocument())
+  it("offers no button", () => {
+    const { container } = render(<ToolsPanel tools={{ trivy: "0.76.2", trivyDbDate: DB_DATE, pnpm: [], uv: [] }} />)
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+    expect(container.querySelector("input, select, textarea, button, form")).toBeNull()
   })
 })

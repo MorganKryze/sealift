@@ -14,7 +14,7 @@ A refusal answers 400 with one entry per refused line and creates nothing. [The 
 
 ## The target
 
-A project resolves for one target: a Python version, `linux`, `x86_64`, a glibc version, and the uv release that resolves. The default is Python 3.11.2 with glibc 2.28. Read the exact values on a machine of the air-gapped side:
+A project resolves for one target: a Python version, `linux`, `x86_64`, a glibc version, and the uv release that resolves. The default is Python 3.11.2 with glibc 2.28 and uv 0.13.7; the deployment's policy file can set another, under `targets.pip` ([Settings](settings.md#python-target)). Read the exact values on a machine of the air-gapped side:
 
 <!-- illustrative -->
 ```sh
@@ -26,12 +26,10 @@ The first line of each gives the Python version and the glibc version. sealift r
 
 ## Analyse and export
 
-The calls below go to a sealift that listens on `localhost:8080`. Install uv once, then create the project: its first analysis starts at once.
+The calls below go to a sealift that listens on `localhost:8080`. sealift installs the default pip target's uv at start, so create the project once `/healthz` answers 200: its first analysis starts at once. A target that names another uv version installs it during the analysis, under the same checks.
 
 <!-- illustrative -->
 ```sh
-curl -s -X POST -H 'Content-Type: application/json' -d '{"version":"0.13.7"}' \
-  http://localhost:8080/api/tools/uv/install
 curl -s -F ecosystem=pip -F name=my-service \
   -F requirements=@requirements.txt -F requirements=@requirements-test.txt \
   http://localhost:8080/api/projects

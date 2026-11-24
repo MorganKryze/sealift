@@ -164,6 +164,22 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestOpenStartsWithSettledParallelism pins the shipped defaults with literals,
+// since every other test compares against DefaultSettings itself.
+func TestOpenStartsWithSettledParallelism(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.Settings()
+	if got.ResolveParallelism != 4 {
+		t.Errorf("ResolveParallelism = %d, want 4", got.ResolveParallelism)
+	}
+	if got.DownloadParallelism != 16 {
+		t.Errorf("DownloadParallelism = %d, want 16", got.DownloadParallelism)
+	}
+}
+
 func TestStoredSettingsReadsA070File(t *testing.T) {
 	root := t.TempDir()
 	path := writeSettings070(t, root)

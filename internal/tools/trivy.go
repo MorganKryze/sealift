@@ -21,7 +21,7 @@ import (
 )
 
 // ErrReleaseTooRecent reports a release younger than the configured
-// minimum age, refused unless the caller forces the install.
+// minimum age. No caller can force the install.
 var ErrReleaseTooRecent = errors.New("trivy release is too recent")
 
 // ErrChecksumMismatch reports a downloaded Trivy asset whose sha256 does

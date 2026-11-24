@@ -1,8 +1,11 @@
 // Writes a finished session into a data directory, so the browser gate can load the session routes
-// without pnpm, Trivy or a registry. The shapes follow what internal/store reads back.
+// without pnpm, Trivy or a registry. The shapes follow what internal/store reads back. It also writes
+// stand-ins for the tools the start prepares, laid out as internal/tools leaves them, so the instance
+// is ready with no download.
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const root = process.argv[2]
 if (!root) throw new Error("usage: node seed.mjs <data-dir>")
@@ -118,3 +121,30 @@ write(
   ) + "\n",
 )
 write(`exports/${exported}/packages_npm.tar.gz`, "")
+
+// The versions the start prepares come from the Go sources, so a moved pin or default fails here loudly.
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
+const sourceValue = (file, pattern) => {
+  const match = readFileSync(join(repo, file), "utf8").match(pattern)
+  if (!match) throw new Error(`seed: ${pattern} matches nothing in ${file}`)
+  return match[1]
+}
+const trivy = sourceValue("internal/tools/trivy_pin.go", /Version:\s*"([^"]+)"/)
+const pnpm = sourceValue("internal/store/store.go", /PnpmVer:\s*"([^"]+)"/)
+const uv = sourceValue("internal/store/types.go", /UvVer:\s*"([^"]+)"/)
+
+const tool = (path, content, mode) => {
+  const file = join(root, path)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, content, { mode })
+}
+// A Trivy that exits 0, so the database refresh at start succeeds and reads the metadata below.
+tool(`tools/trivy/${trivy}/trivy`, "#!/bin/sh\nexit 0\n", 0o755)
+symlinkSync(trivy, join(root, "tools", "trivy", "current"))
+tool(
+  "trivy-cache/db/metadata.json",
+  JSON.stringify({ Version: 2, NextUpdate: "2026-09-21T12:12:00Z", UpdatedAt: "2026-09-21T06:12:00Z", DownloadedAt: "2026-09-21T07:00:00Z" }),
+  0o644,
+)
+tool(`tools/pnpm/${pnpm}/package/bin/pnpm.cjs`, "process.exit(0)\n", 0o644)
+tool(`tools/uv/${uv}/uv`, "#!/bin/sh\nexit 0\n", 0o755)

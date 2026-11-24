@@ -3,11 +3,18 @@ package deploy
 
 import (
 	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/store"
 )
 
 func load(t *testing.T, path string, out any) {
@@ -212,5 +219,226 @@ func TestConnectedEphemeralCompose(t *testing.T) {
 	// compose merges tmpfs lists: a second /tmp would clash with the base file's.
 	if slices.ContainsFunc(s.Tmpfs, func(m string) bool { return strings.HasPrefix(m, "/tmp") }) {
 		t.Errorf("the overlay repeats /tmp, which compose.yaml already mounts")
+	}
+}
+
+// A first start downloads Trivy, its database, pnpm and uv before /healthz
+// answers 200, so the healthcheck must not count those minutes as failures.
+func TestConnectedHealthcheckWaitsForThePreparation(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Healthcheck struct {
+				Interval      string
+				StartPeriod   string `yaml:"start_period"`
+				StartInterval string `yaml:"start_interval"`
+			}
+		}
+	}
+	load(t, "connected/compose.yaml", &c)
+	h := c.Services["sealift"].Healthcheck
+	duration := func(name, v string) time.Duration {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			t.Fatalf("%s = %q: %v", name, v, err)
+		}
+		return d
+	}
+	if d := duration("start_period", h.StartPeriod); d < 10*time.Minute {
+		t.Errorf("start_period = %s, want at least 10m, the time a first start may take to download its tools", d)
+	}
+	start, interval := duration("start_interval", h.StartInterval), duration("interval", h.Interval)
+	if start <= 0 || start >= interval {
+		t.Errorf("start_interval = %s, want above zero and under interval %s, so the instance turns healthy soon after it is ready", start, interval)
+	}
+}
+
+// The policy overlay mounts the policy folder read-only and names its file,
+// on top of compose.yaml, as the ephemeral overlay does.
+func TestPolicyOverlayMountsReadOnly(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Volumes     []string
+		}
+	}
+	load(t, "connected/compose.policy.yaml", &c)
+	s, ok := c.Services["sealift"]
+	if !ok || len(c.Services) != 1 {
+		t.Fatalf("services = %v, want sealift alone", c.Services)
+	}
+	if !slices.Equal(s.Volumes, []string{"./policy:/etc/sealift:ro"}) {
+		t.Errorf("volumes = %v, want [./policy:/etc/sealift:ro]", s.Volumes)
+	}
+	want := "/etc/sealift/policy.yaml"
+	if s.Environment["SEALIFT_POLICY"] != want {
+		t.Errorf("SEALIFT_POLICY = %q, want %q", s.Environment["SEALIFT_POLICY"], want)
+	}
+	if _, err := os.Stat("connected/policy/policy.yaml"); err != nil {
+		t.Errorf("the mounted folder holds no policy.yaml: %v", err)
+	}
+}
+
+// The example policy sets no key, so mounting it unchanged changes nothing:
+// a new instance keeps the defaults and an upgraded one keeps the settings
+// it saved.
+func TestExamplePolicyLoads(t *testing.T) {
+	p, err := policy.Load("connected/policy/policy.yaml", store.Settings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand(), Review: policy.DefaultReview()}
+	if !reflect.DeepEqual(p, want) {
+		t.Errorf("example policy = %+v, want the defaults %+v", p, want)
+	}
+}
+
+func TestExamplePolicyKeepsSavedSettings(t *testing.T) {
+	saved := store.Settings{
+		Target:              store.Target{OS: "linux", CPU: "arm64", Libc: "musl", Node: "20.19.4", PnpmVer: "9.15.9"},
+		MinReleaseAgeDays:   21,
+		ResolveParallelism:  2,
+		DownloadParallelism: 8,
+	}
+	p, err := policy.Load("connected/policy/policy.yaml", saved, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Settings != saved {
+		t.Errorf("settings in effect = %+v, want the saved %+v", p.Settings, saved)
+	}
+	if len(p.Overrides) != 0 {
+		t.Errorf("overrides = %v, want none", p.Overrides)
+	}
+}
+
+// The lab mounts a policy whose brand differs from the default in every
+// field, so each one shows on screen.
+func TestLabPolicyChangesEveryBrandField(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Volumes     []string
+		}
+	}
+	load(t, "../lab/compose.yaml", &c)
+	s := c.Services["sealift"]
+	if !slices.Contains(s.Volumes, "./policy:/etc/sealift:ro") {
+		t.Errorf("lab sealift volumes = %v, want ./policy:/etc/sealift:ro", s.Volumes)
+	}
+	if s.Environment["SEALIFT_POLICY"] != "/etc/sealift/policy.yaml" {
+		t.Errorf("lab SEALIFT_POLICY = %q, want /etc/sealift/policy.yaml", s.Environment["SEALIFT_POLICY"])
+	}
+	p, err := policy.Load("../lab/policy/policy.yaml", store.Settings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, d := p.Brand, policy.DefaultBrand()
+	for _, f := range []struct {
+		name     string
+		got, def string
+	}{
+		{"name", b.Name, d.Name},
+		{"accent", b.Accent, d.Accent},
+		{"sides.online", b.Online, d.Online},
+		{"sides.offline", b.Offline, d.Offline},
+		{"reviewWord", b.ReviewWord, d.ReviewWord},
+		{"logo type", b.LogoType, d.LogoType},
+	} {
+		if f.got == f.def {
+			t.Errorf("lab brand %s = %q, the default", f.name, f.got)
+		}
+	}
+	if b.Contact == nil {
+		t.Error("lab brand has no contact, the default")
+	}
+}
+
+// uncommentPolicy turns the example's commented keys into YAML and leaves
+// its prose out: a commented key is a "#" line whose text starts with a key
+// or a nested comment.
+func uncommentPolicy(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := regexp.MustCompile(`^\s*([A-Za-z]+:|#)`)
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		text, ok := strings.CutPrefix(line, "# ")
+		if ok && key.MatchString(text) {
+			out = append(out, text)
+		}
+	}
+	return []byte(strings.Join(out, "\n") + "\n")
+}
+
+// keyPaths lists every mapping key of a YAML document, dotted from the root.
+func keyPaths(n *yaml.Node, prefix string, out *[]string) {
+	if n.Kind == yaml.DocumentNode {
+		for _, c := range n.Content {
+			keyPaths(c, prefix, out)
+		}
+		return
+	}
+	if n.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		p := prefix + n.Content[i].Value
+		*out = append(*out, p)
+		keyPaths(n.Content[i+1], p+".", out)
+	}
+}
+
+// The example spells out every key the policy reads, and the values it
+// shows are the defaults: uncommented, it loads to the defaults plus the
+// three brand keys that have none.
+func TestExamplePolicySpellsOutEveryDefault(t *testing.T) {
+	text := uncommentPolicy(t, "connected/policy/policy.yaml")
+	var doc yaml.Node
+	if err := yaml.Unmarshal(text, &doc); err != nil {
+		t.Fatalf("the uncommented example is not YAML: %v\n%s", err, text)
+	}
+	var got []string
+	keyPaths(&doc, "", &got)
+	want := []string{
+		"targets", "targets.npm", "targets.npm.os", "targets.npm.cpu", "targets.npm.libc", "targets.npm.node", "targets.npm.pnpm",
+		"targets.pip", "targets.pip.python", "targets.pip.os", "targets.pip.cpu", "targets.pip.glibc", "targets.pip.uv",
+		"minReleaseAgeDays",
+		"parallelism", "parallelism.resolve", "parallelism.download",
+		"brand", "brand.name", "brand.sides", "brand.sides.online", "brand.sides.offline", "brand.reviewWord",
+		"brand.logo", "brand.accent", "brand.contact", "brand.contact.label", "brand.contact.url",
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("keys of the uncommented example = %v, want %v", got, want)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+	logo := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>`)
+	if err := os.WriteFile(path, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logo.svg"), logo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Load refuses an unknown key, so a key the example misspells fails here.
+	p, err := policy.Load(path, store.Settings{}, false)
+	if err != nil {
+		t.Fatalf("the uncommented example does not load: %v", err)
+	}
+	wantBrand := policy.DefaultBrand()
+	wantBrand.Logo, wantBrand.LogoType = p.Brand.Logo, p.Brand.LogoType
+	wantBrand.Accent = "#0b6e99"
+	wantBrand.Contact = &policy.Contact{Label: "Platform team", URL: "mailto:platform@example.com"}
+	wantP := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: wantBrand, Review: policy.DefaultReview()}
+	if !reflect.DeepEqual(p, wantP) {
+		t.Errorf("uncommented example = %+v, want the defaults %+v", p, wantP)
+	}
+	if p.Brand.LogoType != "image/svg+xml" {
+		t.Errorf("logo type = %q, want image/svg+xml", p.Brand.LogoType)
 	}
 }

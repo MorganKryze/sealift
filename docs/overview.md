@@ -159,7 +159,7 @@ The import side trusts one Ed25519 public key. Compare its sha256 fingerprint on
 
 Least privilege shows up on each side:
 
-- The collection server runs as `app`. pnpm and Trivy run as `tools`, which cannot read `private/settings.json`.
+- The collection server runs as `app`. pnpm, uv and Trivy run as `tools`, which cannot read `private/`.
 - The import roles run from a copy of the binary with no capability, as user 10000, under `--cap-drop ALL`.
 - The MinIO service user can list, read and delete under `packages/npm/` in the `user-*` buckets and nothing else. The service client never writes an object.
 - The Nexus user of the import holds browse, read, add and edit on one repository and the upload privilege ([The air gap](air-gap.md#the-import)).
@@ -173,12 +173,12 @@ The collection role keeps everything under `/data`:
 
 ```
 /data
-  private/        settings.json and signing-key.pem: the settings and the private signing key, readable by app only
+  private/        signing-key.pem, the private signing key, and on a volume from 0.7.0 its settings.json, read and never written; readable by app only
   projects/       one folder per session
     <session>/
       analyses/   one folder per analysis: status, log, lockfiles, scans, ranking
       exports/    one folder per export: the archive and its reports
-  tools/          Trivy versions, the active one, and pnpm
+  tools/          the pinned Trivy, pnpm and uv, installed at start
   trivy-cache/    the vulnerability database
   cache/          pnpm, resolution and tarball caches
   home/           the home directory of pnpm and Trivy
@@ -233,7 +233,7 @@ The connected side runs as one container with one volume, bound to a loopback ad
 | [Getting started](getting-started.md) | From nothing to a first archive in ten minutes |
 | [Workflow](workflow.md) | Each screen of a session, and every button on it |
 | [How sealift chooses](how-sealift-chooses.md) | The proposal, the signals, the minimum release age |
-| [Settings](settings.md) | The target platform, the signing key, the limits |
+| [Settings](settings.md) | The policy file: the targets, the limits and the brand; the signing key |
 | [The air gap](air-gap.md) | What crosses, what to check and what the import side receives |
 | [Importing](importing.md) | The three screens of the import service, with every state |
 | [Deployment](deployment.md) | Compose, reverse proxy, the import service, the data volume, upgrades and backups |

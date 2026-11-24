@@ -18,37 +18,41 @@ Check the container with `docker ps` and its log with `docker logs sealift`, the
 
 A reverse proxy buffers the event stream. Turn buffering off for sealift: [Deployment](deployment.md#reverse-proxy) has the Caddy and Nginx settings.
 
-## Setup and settings
+## Start and preparation
+
+These causes show on Preparing sealift, under the item that failed, and in `GET /api/instance`. sealift tries the item again every minute, so a fix outside sealift needs no restart. The log carries the same cause.
 
 ### could not reach GitHub to look up Trivy releases
 
-sealift asks `api.github.com` for the Trivy releases before it installs or updates Trivy. The machine has no route to GitHub, or a firewall blocks it. [Deployment](deployment.md#outbound-access) lists the hosts sealift needs.
-
-### trivy release is too recent
-
-**Update Trivy** found a latest release younger than the minimum release age. Keep the installed version, or press **Install anyway** to take the latest now.
+sealift asks `api.github.com` for the pinned Trivy release before it downloads it. The machine has no route to GitHub, a firewall blocks it, or GitHub answers `403` because many users share your outbound address. Open the hosts [Deployment](deployment.md#outbound-access) lists, or set `SEALIFT_GITHUB_TOKEN`.
 
 ### trivy asset checksum mismatch
 
-The Trivy archive sealift downloaded does not match the sha256 in the release's checksum file. sealift keeps nothing from it. Retry; if the mismatch stays, something between you and GitHub alters the download.
+The Trivy archive sealift downloaded does not match the sha256 built into sealift. The message gives both digests. sealift installs nothing and keeps the instance not ready. If the mismatch stays, something between you and GitHub alters the download, or the mirror in `SEALIFT_GITHUB_API` serves other bytes.
+
+### vulnerability database download
+
+Trivy could not download its database from `mirror.gcr.io`, and the volume holds none, so the instance stays not ready. The message ends with Trivy's last line. Open that host.
+
+### could not refresh the vulnerability database
+
+The refresh at start failed while an older database is on the volume. The instance is ready and scans with that database; the warning in `GET /api/instance` gives its date and the cause.
+
+### uv was uploaded under the minimum release age
+
+The uv version the default pip target names is younger than `minReleaseAgeDays`, so sealift refuses to install it, and pip projects cannot run. Set `targets.pip.uv` in the policy file to an older uv, or wait until the release is old enough. [Settings](settings.md#python-target) describes the key.
 
 ### tools not ready
 
-The API refuses to create a session or start an analysis while Trivy or its database is missing. The answer lists which one. The interface opens the setup screen instead: install what it shows, then continue.
+The API answers 409 to a new session or analysis while Trivy or its database is missing, and lists which one. Wait until `/healthz` answers 200.
 
-### invalid limits
+### policy
 
-A limit is out of range. The message names it and the value:
+The policy file holds an unknown key, a value outside its range, or cannot be read. sealift does not start. The log's last line names the file, the key and the rule, such as `policy /etc/sealift/policy.yaml: minReleaseAgeDays must be between 1 and 90, not 120`. Fix the file and start again. [Settings](settings.md#when-the-file-is-refused) lists the keys and their ranges.
 
-```
-invalid limits: download parallelism must be between 1 and 32, not 1000
-```
+### left by an older release
 
-[Settings](settings.md#limits) gives each range.
-
-### Use an exact version, such as 22.17.1.
-
-The Node version must be exact. `22`, `22.x` and `>=22` are refused.
+The settings 0.7.0 saved in `private/settings.json` hold a value this release refuses. sealift does not start, and the message names the policy key that replaces it, such as `set minReleaseAgeDays in the policy file to replace it`. Set that key in the policy file and start again.
 
 ## Drop
 

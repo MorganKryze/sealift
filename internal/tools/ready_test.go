@@ -488,3 +488,21 @@ func TestPreparerWaitsForTheSigningKey(t *testing.T) {
 	mu.Unlock()
 	waitState(t, pr.p, "ready once the key exists", isReady)
 }
+
+// TestPreparerRetriesAFailedItemAMinuteLater pins the default wait: with
+// RetryEvery left at zero, a failed item's next try is one minute after
+// the failure, read from its state without waiting for it.
+func TestPreparerRetriesAFailedItemAMinuteLater(t *testing.T) {
+	pr := newPreparation(t, monthOld)
+	pr.p.RetryEvery = 0
+	pr.db.fail = func(int) error { return errors.New("database download failed: 429 Too Many Requests") }
+	before := time.Now()
+	pr.run(t)
+
+	r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+	after := time.Now()
+	next := item(r, "trivy-db").NextTry
+	if next.Before(before.Add(time.Minute)) || next.After(after.Add(time.Minute)) {
+		t.Errorf("next try is %v after the start, want one minute after the failure", next.Sub(before).Round(time.Second))
+	}
+}

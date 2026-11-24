@@ -136,6 +136,8 @@ func TestRemoveOrphanDirsKeepsAnInterruptedAnalysis(t *testing.T) {
 	write(running, "status.json", `{"state":"running","step":"resolve"}`)
 	write(running, "log.txt", "resolving\n")
 	queued := mkdir("proj-1/analyses/20260917T101504Z.tmp")
+	write(queued, "status.json", `{"state":"queued"}`)
+	write(queued, "log.txt", "")
 	orphanExport := mkdir("proj-2/exports/20260917T101503Z.tmp")
 	committed := mkdir("proj-1/analyses/20260916T090000Z")
 	write(committed, "status.json", `{"state":"done"}`)

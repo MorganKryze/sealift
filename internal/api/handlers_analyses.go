@@ -5,19 +5,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
-// idLayout is the time.Parse layout analysis and export IDs use: a UTC
-// timestamp with second precision, the same one internal/store and
-// internal/jobs parse and format it with.
-const idLayout = "20060102T150405Z"
-
 // QueueAnalysis queues an analysis for the project.
 func (h *Handlers) QueueAnalysis(_ context.Context, req QueueAnalysisRequestObject) (QueueAnalysisResponseObject, error) {
-	if ready, missing := h.Tools.Ready(); !ready {
+	if missing := h.notReady(); missing != nil {
 		return QueueAnalysisdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
 	}
 	info, err := h.Service.QueueAnalysis(req.ProjectId)
@@ -32,7 +26,7 @@ func (h *Handlers) QueueAnalysis(_ context.Context, req QueueAnalysisRequestObje
 // Service's live tracking before falling back to the store.
 func (h *Handlers) GetAnalysis(_ context.Context, req GetAnalysisRequestObject) (GetAnalysisResponseObject, error) {
 	if state, _, ok := h.Service.LiveState(req.ProjectId, "analysis", req.AnalysisId); ok {
-		createdAt, _ := time.Parse(idLayout, req.AnalysisId)
+		createdAt, _ := store.JobCreatedAt(req.AnalysisId)
 		return GetAnalysis200JSONResponse(Analysis{
 			Id: req.AnalysisId, ProjectId: req.ProjectId, State: State(state), CreatedAt: createdAt,
 		}), nil
@@ -85,7 +79,7 @@ func (h *Handlers) DeleteAnalysis(_ context.Context, req DeleteAnalysisRequestOb
 func (h *Handlers) CancelAnalysis(_ context.Context, req CancelAnalysisRequestObject) (CancelAnalysisResponseObject, error) {
 	_, err := h.Service.Cancel(req.ProjectId, "analysis", req.AnalysisId)
 	if err == nil {
-		createdAt, _ := time.Parse(idLayout, req.AnalysisId)
+		createdAt, _ := store.JobCreatedAt(req.AnalysisId)
 		return CancelAnalysis200JSONResponse(Analysis{
 			Id: req.AnalysisId, ProjectId: req.ProjectId, State: Cancelled, CreatedAt: createdAt,
 		}), nil

@@ -926,3 +926,91 @@ func TestRunLogsAnOverriddenKey(t *testing.T) {
 		t.Errorf("settings.json changed to %s", raw)
 	}
 }
+
+// TestNewToolsManagerNpmRegistry covers SEALIFT_NPM_REGISTRY: an http
+// registry off loopback stops the start unless SEALIFT_ALLOW_HTTP_REGISTRY
+// is true, which logs a warning naming the variable and never the URL.
+func TestNewToolsManagerNpmRegistry(t *testing.T) {
+	cases := []struct {
+		name, value, allow string
+		wantErr, wantWarn  bool
+	}{
+		{"unset keeps the public registry", "", "", false, false},
+		{"https with credentials", "https://ci:s3cretTOKEN@npm.example.internal/", "", false, false},
+		{"http on loopback", "http://127.0.0.1:4873", "", false, false},
+		{"http on another host", "http://ci:s3cretTOKEN@registry:4873", "", true, false},
+		{"http on another host, allowed", "http://ci:s3cretTOKEN@registry:4873", "true", false, true},
+		{"http on another host, allow is 1", "http://ci:s3cretTOKEN@registry:4873", "1", true, false},
+		{"http on another host, allow is TRUE", "http://ci:s3cretTOKEN@registry:4873", "TRUE", true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SEALIFT_NPM_REGISTRY", c.value)
+			t.Setenv("SEALIFT_ALLOW_HTTP_REGISTRY", c.allow)
+			var logs bytes.Buffer
+			m, err := newToolsManager(nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("newToolsManager accepted %q", c.value)
+				}
+				if strings.Contains(err.Error(), "s3cretTOKEN") || strings.Contains(err.Error(), "registry:4873") {
+					t.Errorf("error repeats the value: %v", err)
+				}
+				if !strings.Contains(err.Error(), "SEALIFT_NPM_REGISTRY") {
+					t.Errorf("error does not name the variable: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.NPMRegistry != c.value {
+				t.Errorf("NPMRegistry = %q, want %q", m.NPMRegistry, c.value)
+			}
+			warned := strings.Contains(logs.String(), "SEALIFT_ALLOW_HTTP_REGISTRY")
+			if warned != c.wantWarn {
+				t.Errorf("warning logged = %v, want %v: %s", warned, c.wantWarn, logs.String())
+			}
+			if strings.Contains(logs.String(), "s3cretTOKEN") || strings.Contains(logs.String(), "registry:4873") {
+				t.Errorf("log repeats the URL: %s", logs.String())
+			}
+		})
+	}
+}
+
+// TestRunStopsOnABusyAddressBeforePreparing proves the listener binds before
+// the preparation starts: on an address another process holds, run returns
+// the bind error, prepares no item, asks nothing of GitHub and leaves tools/ empty.
+func TestRunStopsOnABusyAddressBeforePreparing(t *testing.T) {
+	asked := localUpstreams(t)
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	root := filepath.Join(t.TempDir(), "data")
+
+	var logs lockedBuffer
+	done := make(chan error, 1)
+	go func() { done <- run(held.Addr().String(), root, slog.New(slog.NewJSONHandler(&logs, nil))) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run on a busy address returned nil")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run on a busy address did not return")
+	}
+	select {
+	case path := <-asked:
+		t.Errorf("the preparation asked GitHub for %s before the bind failed", path)
+	default:
+	}
+	if strings.Contains(logs.String(), `"msg":"prepared"`) {
+		t.Errorf("the preparation ran before the bind failed: %s", logs.String())
+	}
+	// store.Open creates tools/ empty; the preparation is what fills it.
+	if entries, err := os.ReadDir(filepath.Join(root, "tools")); err != nil || len(entries) != 0 {
+		t.Errorf("tools/ holds %v after a failed bind (%v), want it empty", entries, err)
+	}
+}

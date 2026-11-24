@@ -128,7 +128,7 @@ func run(addr, root string, log *slog.Logger) error {
 	if onServiceReady != nil {
 		onServiceReady(service)
 	}
-	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
+	handlers := api.NewHandlers(st, service, toolsManager)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle
 	handlers.Policy = pol
@@ -147,6 +147,12 @@ func run(addr, root string, log *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the event stream stays open for a whole job.
 	}
+	// Bound before the preparation starts, so a busy address stops the
+	// start before anything under tools/ is written.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	// The preparation writes under root, so run returns only once it has
@@ -156,7 +162,7 @@ func run(addr, root string, log *slog.Logger) error {
 	defer func() { stop(); <-prepared }()
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() { serveErr <- srv.Serve(listener) }()
 
 	log.Info("listening", "addr", addr, "data", root, "ephemeral", idle > 0)
 	if idle > 0 {
@@ -228,15 +234,17 @@ var onServiceReady func(*jobs.Service)
 // own identity, when either variable is unset or does not parse as a
 // uint32, which covers every test and a bare host outside the image.
 // newToolsManager builds the tools manager with the GitHub API address from
-// SEALIFT_GITHUB_API. Unset keeps the public API. The release date, the
-// checksums and the download address of Trivy all come from that API, so the
-// address must be https, or http on a loopback host for the browser gate. The
+// SEALIFT_GITHUB_API. Unset keeps the public API. The download address of
+// the pinned Trivy comes from that API, while the pinned sha256 decides what
+// installs. The address must be https, or http on a loopback host for the
+// browser gate. The
 // error never repeats the value, which could carry credentials.
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 // SEALIFT_PIP_INDEX names the package index uv comes from, under
 // tools.ParseIndexURL's rules. SEALIFT_NPM_REGISTRY names the registry pnpm
-// comes from, and the analyses' registry client reads it from the manager.
-// Empty keeps npm.DefaultRegistry, the only path production takes. The
+// comes from, and the analyses' registry client reads it from the manager,
+// under tools.ParseRegistryURL's rules; SEALIFT_ALLOW_HTTP_REGISTRY=true
+// lets it be plain http off loopback. Empty keeps npm.DefaultRegistry. The
 // end-to-end test (test/e2e) sets it to a local Verdaccio that mirrors the
 // public registry through an uplink, so it can publish a package sealift's
 // own analysis and export need to resolve that the public registry never
@@ -244,7 +252,14 @@ var onServiceReady func(*jobs.Service)
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
-	m.NPMRegistry = os.Getenv("SEALIFT_NPM_REGISTRY")
+	registry, insecure, err := tools.ParseRegistryURL(os.Getenv("SEALIFT_NPM_REGISTRY"), os.Getenv("SEALIFT_ALLOW_HTTP_REGISTRY") == "true")
+	if err != nil {
+		return nil, fmt.Errorf("SEALIFT_NPM_REGISTRY: %w", err)
+	}
+	if insecure && log != nil {
+		log.Warn("SEALIFT_ALLOW_HTTP_REGISTRY is true: pnpm and the packages come over plain http, so the network can change them")
+	}
+	m.NPMRegistry = registry
 	index, err := tools.ParseIndexURL(os.Getenv("SEALIFT_PIP_INDEX"))
 	if err != nil {
 		return nil, fmt.Errorf("SEALIFT_PIP_INDEX: %w", err)

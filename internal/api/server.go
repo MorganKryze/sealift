@@ -7,20 +7,18 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/policy"
-	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // NewHandlers builds the Handlers every operation of the contract runs
 // against, under the default policy.
-func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy runner.Trivy) *Handlers {
+func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager) *Handlers {
 	return &Handlers{
 		EventsHandler: &EventsHandler{Jobs: svc},
 		Store:         st,
 		Service:       svc,
 		Tools:         tm,
-		Trivy:         trivy,
 		Ready:         toolsReadiness{tm},
 		Policy:        policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand(), Review: policy.DefaultReview()},
 	}
@@ -31,7 +29,7 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 // every other operation of api/openapi.yaml mounted at base URL /api
 // through the generated strict server; and the frontend build in static
 // for every other path. refuseCrossSite wraps all of it and
-// guards the signing key's regenerate route and the tool installs. WatchJob
+// guards the signing key's regenerate route. WatchJob
 // (the event stream) is one of the contract's operations: Handlers embeds
 // *EventsHandler, so the generated dispatch reaches it exactly like any JSON
 // operation.
@@ -59,6 +57,12 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
+	// 0.7.0 documented these routes, so a script may still call them: it
+	// learns they are gone and where the answer lives now.
+	toolsGone := gone("the tool routes are gone: the server prepares its tools at start, and GET /api/instance reports them")
+	mux.HandleFunc("/api/tools", toolsGone)
+	mux.HandleFunc("/api/tools/", toolsGone)
+	mux.HandleFunc("PUT /api/settings", gone("the settings write is gone: the deployment sets them in its policy file, and GET /api/instance reports them"))
 	mux.Handle("/", SPA(static))
 	routes := refuseCrossSite(mux, allowedHosts(h.ListenAddr))
 	if h.Ephemeral > 0 {
@@ -76,4 +80,12 @@ func noStore(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// gone answers a route a past release served with a 410 naming what
+// replaced it.
+func gone(detail string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		WriteProblem(w, NewProblem(http.StatusGone, "route removed", detail))
+	}
 }

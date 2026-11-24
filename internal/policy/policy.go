@@ -144,8 +144,8 @@ var (
 // older release's settings held when hasStored is true. Each value comes
 // from the file, else from stored, else from the defaults. A stored value
 // this release refuses stops the load with a *StoredError, unless the file
-// replaces it. The error names the key and the rule it breaks, and never
-// repeats a value of the file.
+// replaces it. The error names the key and the rule it breaks. It repeats
+// a number out of range, and never a text value of the file.
 func Load(path string, stored store.Settings, hasStored bool) (Policy, error) {
 	var raw rawPolicy
 	if path != "" {

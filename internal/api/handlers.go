@@ -9,7 +9,6 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/policy"
-	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/pip"
@@ -31,7 +30,6 @@ type Handlers struct {
 	Store      *store.Store
 	Service    *jobs.Service
 	Tools      *tools.Manager
-	Trivy      runner.Trivy
 	// Ready answers /healthz. NewHandlers sets it to the tools manager's
 	// own check; the server sets the start's preparation.
 	Ready Readiness
@@ -68,7 +66,7 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, jobs.ErrPipSelection), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion), errors.Is(err, tools.ErrInvalidUvVersion):
+	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, jobs.ErrPipSelection), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, jobs.ErrPipNotExportable), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict
@@ -127,12 +125,27 @@ func requirementsProblem(problems []pip.Problem) problemBody {
 	return problemBody{Body: p, StatusCode: http.StatusBadRequest}
 }
 
+// notReady names the items the start's preparation still lacks, nil once
+// it is ready. The routes that start work read it, so they agree with
+// /healthz and GET /api/instance on what "ready" means.
+func (h *Handlers) notReady() []string {
+	state := h.Ready.State()
+	if state.Ready {
+		return nil
+	}
+	missing := []string{}
+	for _, it := range state.Items {
+		if it.State != tools.ItemReady {
+			missing = append(missing, it.Name)
+		}
+	}
+	return missing
+}
+
 // toolsMissingProblem builds the 409 response for an operation that
-// needs trivy and its database before it can queue
-// anything: the same list tools.Manager.Ready reports on GET /tools, so
-// the web and the API agree on what "ready" means.
+// needs the start's preparation done before it can queue anything.
 func toolsMissingProblem(missing []string) problemBody {
-	p := NewProblem(http.StatusConflict, "tools not ready", "trivy or its database is not installed yet")
+	p := NewProblem(http.StatusConflict, "tools not ready", "the start has not prepared every tool yet; missing lists what it waits for")
 	p.Type = ptr("tools-missing")
 	m := missing
 	p.Missing = &m
