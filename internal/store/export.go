@@ -127,7 +127,7 @@ func (s *Store) ExportFile(projectID, exportID, name string) (*os.File, error) {
 // rule readAnalysisInfo uses. It is excluded from Files: it is bookkeeping
 // for this package, not one of the export's own deliverables.
 func readExportInfo(projectID, id, dir string) (ExportInfo, error) {
-	createdAt, err := jobCreatedAt(id)
+	createdAt, err := JobCreatedAt(id)
 	if err != nil {
 		return ExportInfo{}, fmt.Errorf("store: %s is not a valid export id: %w", id, err)
 	}

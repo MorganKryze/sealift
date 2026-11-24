@@ -19,11 +19,6 @@ import (
 	"github.com/MorganKryze/sealift/pip"
 )
 
-// idLayout is the time.Parse layout analysis and export IDs use: a UTC
-// timestamp with second precision, the same one internal/store parses
-// committed directory names with.
-const idLayout = "20060102T150405Z"
-
 // ErrAnalysisNotDone reports a QueueExport call naming an analysis that
 // has not reached state done: queued, running, failed or cancelled all
 // leave nothing ranked yet to select from.
@@ -162,7 +157,7 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 	// discard it and the analysis vanish; a queued status.json and an empty
 	// log.txt make it a record the reconciler turns into "cancelled". A
 	// running job overwrites status.json and appends to log.txt itself.
-	createdAt, _ := time.Parse(idLayout, pending.ID())
+	createdAt, _ := store.JobCreatedAt(pending.ID())
 	if err := s.seedPending(pending, createdAt, project); err != nil {
 		_ = pending.Discard()
 		return store.AnalysisInfo{}, err
@@ -349,7 +344,7 @@ func (s *Service) submitExport(job Job, projectID, analysisID string, pending *s
 		return store.ExportInfo{}, err
 	}
 
-	createdAt, _ := time.Parse(idLayout, pending.ID())
+	createdAt, _ := store.JobCreatedAt(pending.ID())
 	return store.ExportInfo{
 		ID: pending.ID(), ProjectID: projectID, AnalysisID: analysisID, State: store.Queued, CreatedAt: createdAt,
 	}, nil

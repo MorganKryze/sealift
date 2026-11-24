@@ -310,13 +310,13 @@ func TestJobCreatedAt(t *testing.T) {
 		{"", false},
 	}
 	for _, tt := range tests {
-		got, err := jobCreatedAt(tt.id)
+		got, err := JobCreatedAt(tt.id)
 		if tt.ok {
 			if err != nil || !got.Equal(want) {
-				t.Errorf("jobCreatedAt(%q) = %v, %v; want %v", tt.id, got, err, want)
+				t.Errorf("JobCreatedAt(%q) = %v, %v; want %v", tt.id, got, err, want)
 			}
 		} else if err == nil {
-			t.Errorf("jobCreatedAt(%q) = %v, want an error", tt.id, got)
+			t.Errorf("JobCreatedAt(%q) = %v, want an error", tt.id, got)
 		}
 	}
 }
