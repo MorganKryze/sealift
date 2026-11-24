@@ -442,3 +442,49 @@ func TestPreparerCutsAndStripsARefreshWarning(t *testing.T) {
 		t.Errorf("no log line reports the failed refresh:\n%s", logs)
 	}
 }
+
+func TestPreparerWaitsForTheSigningKey(t *testing.T) {
+	pr := newPreparation(t, monthOld)
+	var mu sync.Mutex
+	asked := 0
+	present := false
+	pr.p.keySHA256 = func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		asked++
+		if present {
+			return prepareKey
+		}
+		return ""
+	}
+	pr.run(t)
+
+	waitState(t, pr.p, "three looks at the key", func(Readiness) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return asked >= 3
+	})
+	r := pr.p.State()
+	if r.Ready {
+		t.Fatalf("ready without a signing key: %+v", r)
+	}
+	if key := item(r, "signing-key"); key.State != ItemFailed || key.Reason != "no signing key on the data volume" || key.NextTry.IsZero() {
+		t.Errorf("signing key = %+v, want failed with its cause and a next try", key)
+	}
+	for _, name := range []string{"trivy", "trivy-db", "pnpm", "uv"} {
+		if it := item(r, name); it.State != ItemPreparing {
+			t.Errorf("%s = %+v, want still preparing while the key is missing", name, it)
+		}
+	}
+	if n := pr.db.callCount(); n != 0 {
+		t.Errorf("database downloaded %d times without a signing key, want none", n)
+	}
+	if _, err := os.Stat(filepath.Join(pr.root, "tools")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("tools installed without a signing key (stat: %v)", err)
+	}
+
+	mu.Lock()
+	present = true
+	mu.Unlock()
+	waitState(t, pr.p, "ready once the key exists", isReady)
+}
