@@ -3108,3 +3108,74 @@ func TestAMultipartBodyOnAJSONRouteKeepsTheJSONCap(t *testing.T) {
 
 // emptyProjectScan is a lockfile scan that finds nothing.
 const emptyProjectScan = `{"SchemaVersion": 2, "Results": []}`
+
+// An export of the project tree conflicts with the analysis's own files
+// when its lockfile scan is missing or its lockfile is too large to walk:
+// both answer 409, neither a server failure.
+func TestQueueExportProjectTreeRefusalsAnswer409(t *testing.T) {
+	var lock, scan strings.Builder
+	lock.WriteString("lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n")
+	for i := range 1100 {
+		fmt.Fprintf(&lock, "      d%d:\n        specifier: 1.0.0\n        version: 1.0.0\n", i)
+	}
+	lock.WriteString("snapshots:\n")
+	for i := range 1100 {
+		fmt.Fprintf(&lock, "  d%d@1.0.0:\n    dependencies:\n      hub: 1.0.0\n", i)
+	}
+	lock.WriteString("  hub@1.0.0:\n    dependencies:\n")
+	for i := range 1000 {
+		fmt.Fprintf(&lock, "      l%d: 1.0.0\n", i)
+	}
+	scan.WriteString(`{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [`)
+	for i := range 1000 {
+		fmt.Fprintf(&lock, "  l%d@1.0.0: {}\n", i)
+		if i > 0 {
+			scan.WriteString(",")
+		}
+		fmt.Fprintf(&scan, `{"VulnerabilityID": "CVE-2025-%04d", "PkgName": "l%d", "InstalledVersion": "1.0.0", "FixedVersion": "1.0.1", "Severity": "LOW", "Title": "t"}`, i, i)
+	}
+	scan.WriteString("]}]}")
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		cause string
+	}{
+		{"no project scan", map[string]string{}, "project.trivy.json"},
+		{"lockfile too large", map[string]string{"project.trivy.json": scan.String(), "project/pnpm-lock.yaml": lock.String()}, "too large"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, h := newTestServer(t)
+			project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("CreateProject status = %d", resp.StatusCode)
+			}
+			analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+			if err := os.MkdirAll(filepath.Join(analysisDir, "project"), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking}
+			for name, data := range tc.files {
+				files[name] = data
+			}
+			for name, data := range files {
+				if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp2, err := http.Post(
+				fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+				"application/json", strings.NewReader(`{"selection":{},"includeProject":true}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp2.Body.Close()
+			data, _ := io.ReadAll(resp2.Body)
+			if resp2.StatusCode != http.StatusConflict || !strings.Contains(string(data), tc.cause) {
+				t.Errorf("status = %d, body: %s, want 409 naming %q", resp2.StatusCode, data, tc.cause)
+			}
+		})
+	}
+}
