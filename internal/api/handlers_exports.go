@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
@@ -20,11 +21,21 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 		Selection:      body.Selection,
 		IncludeProject: body.IncludeProject != nil && *body.IncludeProject,
 	}
+	if body.Reasons != nil {
+		for _, r := range *body.Reasons {
+			jobsReq.Reasons = append(jobsReq.Reasons, jobs.Reason{Kind: jobs.ReasonKind(r.Kind), Dependencies: r.Dependencies, Text: r.Text})
+		}
+	}
 	info, err := h.Service.QueueExport(req.ProjectId, req.AnalysisId, jobsReq)
 	if err != nil {
 		var invalid *jobs.ErrInvalidSelection
 		if errors.As(err, &invalid) {
 			return QueueExportdefaultApplicationProblemPlusJSONResponse(invalidSelectionProblem(invalid.Bad)), nil
+		}
+		var reasons *jobs.ErrInvalidReasons
+		if errors.As(err, &reasons) {
+			p := NewProblem(http.StatusBadRequest, "invalid export reasons", strings.Join(reasons.Problems, "; "))
+			return QueueExportdefaultApplicationProblemPlusJSONResponse(problemBody{Body: p, StatusCode: http.StatusBadRequest}), nil
 		}
 		return QueueExportdefaultApplicationProblemPlusJSONResponse(autoProblem("queue export", err)), nil
 	}

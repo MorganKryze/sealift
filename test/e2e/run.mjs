@@ -93,6 +93,37 @@ function resolvesFromRegistry(registryUrl, name, version) {
   }
 }
 
+// reasonsFor builds the reasons the server asks of a selection: one for
+// every selected version that leaves its line, and one per dependency whose
+// kept version (the best selected one, as an install keeps) carries a CVE
+// with no fixing version.
+function reasonsFor(result, selection) {
+  const compare = (a, b) => {
+    const i = a.findIndex((n, j) => n !== b[j]);
+    return i === -1 ? 0 : a[i] - b[i];
+  };
+  const jumps = [];
+  const reasons = [];
+  for (const d of result.dependencies) {
+    const versions = selection[d.name] ?? [];
+    let kept = null;
+    for (const version of versions) {
+      const picked = version === d.current ? { vector: d.vector, cves: d.cves ?? [] } : d.candidates.find((c) => c.version === version);
+      if (!picked) continue;
+      if (version !== d.current && picked.leavesLine) jumps.push(d.name);
+      if (!kept || compare(picked.vector, kept.vector) < 0) kept = picked;
+    }
+    if (kept && (kept.cves ?? []).some((c) => !c.fixedIn)) {
+      reasons.push({ kind: "cve-without-fix", dependencies: [d.name], text: "The end-to-end fixture keeps this CVE to test the review." });
+    }
+  }
+  const jumped = [...new Set(jumps)];
+  if (jumped.length > 0) {
+    reasons.unshift({ kind: "major-jump", dependencies: jumped, text: "The end-to-end fixture takes this jump to test the review." });
+  }
+  return reasons;
+}
+
 async function main() {
   await waitForHealthz();
   console.log("sealift is healthy");
@@ -177,10 +208,13 @@ async function main() {
   }
   console.log(`selecting two versions of ${multiVersion.name}: ${multiVersion.versions.join(", ")}`);
 
+  const reasons = reasonsFor(analysis.result, selection);
+  console.log(`sending ${reasons.length} reason(s): ${reasons.map((r) => `${r.kind} ${r.dependencies.join(", ")}`).join("; ") || "none needed"}`);
+
   const exportJob = await json(`${api}/projects/${projectId}/analyses/${analysisId}/exports`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selection, includeProject: true }),
+    body: JSON.stringify({ selection, includeProject: true, reasons }),
   });
   console.log("export queued:", exportJob.id);
   await pollUntilDone("export", `${api}/projects/${projectId}/exports/${exportJob.id}`);
@@ -224,6 +258,18 @@ async function main() {
     throw new Error("manifest.json.sig does not verify over manifest.json with the server's public key");
   }
   console.log(`manifest.json.sig verifies over manifest.json with public key sha256 ${signingKey.publicKeySha256}`);
+
+  const review = JSON.parse(manifestBytes.toString("utf8")).review;
+  if (!review || !Array.isArray(review.cves?.before)) {
+    throw new Error("manifest.json carries no review");
+  }
+  const signedReasons = [...review.jumps.map((j) => j.reason), ...review.left.map((c) => c.reason).filter(Boolean)];
+  for (const r of reasons) {
+    if (!signedReasons.includes(r.text)) {
+      throw new Error(`the signed review lacks the ${r.kind} reason sent for ${r.dependencies.join(", ")}`);
+    }
+  }
+  console.log(`manifest.json carries a review with ${review.jumps.length} jump(s) and ${review.left.length} CVE(s) left`);
 
   if (multiVersion) {
     const files = readdirSync(path.join(work, "out"));

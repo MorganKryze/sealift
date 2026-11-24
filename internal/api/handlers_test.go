@@ -2512,3 +2512,183 @@ func readTestFile(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+// reasonsAnalysis writes a done analysis where left-pad can leave major 1
+// and is-even keeps a CVE that no version fixes, with a stub lockfile for
+// each version an export may select.
+func reasonsAnalysis(t *testing.T, h *Handlers, projectID string) {
+	t.Helper()
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],"candidates":[]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"jump":"2.0.0","candidates":[{"version":"2.0.0","vector":[0,0,0,0,0],"cves":[],"signals":[],"key":true,"resolved":true}]}` +
+		`],"warnings":[],"families":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", projectID, "analyses", "20260917T101502Z")
+	for _, dep := range []string{"is-even@1.0.0", "left-pad@1.3.0", "left-pad@2.0.0"} {
+		dir := filepath.Join(analysisDir, "candidates", dep)
+		if err := os.MkdirAll(dir, 0o770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte("lockfileVersion: '9.0'\npackages: {}\n"), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range map[string]string{
+		"status.json":           `{"state":"done"}`,
+		"ranking.json":          ranking,
+		"candidates.trivy.json": `{"SchemaVersion":2,"Results":[]}`,
+	} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(content), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func queueExportWith(t *testing.T, srv *httptest.Server, projectID string, req ExportRequest) *http.Response {
+	t.Helper()
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, projectID),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func reasonsProblem(t *testing.T, resp *http.Response) Problem {
+	t.Helper()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
+	}
+	var problem Problem
+	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Detail == nil {
+		t.Fatal("the problem has no detail")
+	}
+	return problem
+}
+
+func TestQueueExportNamesEachMissingReason(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}, "is-even": {"1.0.0"}}}))
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason; " +
+		"left-pad 1.3.0 to 2.0.0 leaves major 1 and needs a reason"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+	exports, err := h.Store.Exports(project.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exports) != 0 {
+		t.Errorf("Exports() = %v, want none reserved for a refused request", exports)
+	}
+}
+
+func TestQueueExportRepeatsNoReasonText(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	secret := "internal ticket SEC-4411   <img src=x>"
+	reasons := []Reason{
+		{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: secret},
+		{Kind: CveWithoutFix, Dependencies: []string{"left-pad"}, Text: "left-pad SEC-4411 is fine"},
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}}, Reasons: &reasons})
+	data, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
+	}
+	for _, leak := range []string{"SEC-4411", "img", "ticket", "fine"} {
+		if strings.Contains(string(data), leak) {
+			t.Errorf("the refusal repeats %q from a reason: %s", leak, data)
+		}
+	}
+	var problem Problem
+	if err := json.Unmarshal(data, &problem); err != nil {
+		t.Fatal(err)
+	}
+	want := "reason 1 (major-jump): the reason holds a control, line-separating, bidirectional or format character; " +
+		"reason 2 (cve-without-fix) covers nothing the selection takes"
+	if problem.Detail == nil {
+		t.Fatal("the problem has no detail")
+	}
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+}
+
+func TestQueueExportAcceptsTheReasonsItNeeds(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	reasons := []Reason{
+		{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: "Version 2 keeps the same API for us."},
+		{Kind: CveWithoutFix, Dependencies: []string{"is-even"}, Text: "We call is-even on our own numbers only."},
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}, "is-even": {"1.0.0"}}, Reasons: &reasons})
+	if resp2.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	}
+	var queued Export
+	if err := json.NewDecoder(resp2.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed); final.State != Done {
+		t.Fatalf("export state = %q, want %q", final.State, Done)
+	}
+
+	f, err := h.Store.ExportFile(project.Id, queued.Id, "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var manifest struct {
+		Review struct {
+			Jumps []struct {
+				Reason string `json:"reason"`
+			} `json:"jumps"`
+			Left []struct {
+				Dependency string `json:"dependency"`
+				Reason     string `json:"reason"`
+			} `json:"left"`
+		} `json:"review"`
+	}
+	if err := json.NewDecoder(f).Decode(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Review.Jumps) != 1 || manifest.Review.Jumps[0].Reason != reasons[0].Text {
+		t.Errorf("review.jumps = %+v, want left-pad's jump with its reason", manifest.Review.Jumps)
+	}
+	if len(manifest.Review.Left) != 1 || manifest.Review.Left[0].Reason != reasons[1].Text {
+		t.Errorf("review.left = %+v, want is-even's CVE with its reason", manifest.Review.Left)
+	}
+}

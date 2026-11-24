@@ -202,9 +202,10 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 // submits it to the queue, returning its queued state at once. analysisID
 // must name a done analysis with a readable ranking.json: the export never
 // resolves anything itself, so it has nothing to fall back to otherwise.
-// The selection is validated against that analysis' own result before
-// anything is reserved, so a bad selection never reaches the queue only
-// to fail deep inside the job once the HTTP response is gone.
+// The selection and its reasons are validated against that analysis' own
+// result and the review policy before anything is reserved, so a bad
+// selection never reaches the queue only to fail deep inside the job once
+// the HTTP response is gone.
 // The project's ecosystem picks Export or PipExport. Unlike Analysis, an
 // export leaves a successful run's directory for Service's finalizer to
 // commit.
@@ -229,6 +230,9 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	}
 	if bad := ValidateSelection(result, req.Selection); len(bad) > 0 {
 		return store.ExportInfo{}, &ErrInvalidSelection{Bad: bad}
+	}
+	if problems := CheckReasons(result, req.Selection, req.Reasons, s.Review); len(problems) > 0 {
+		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
 	}
 
 	settings := s.store.Settings()

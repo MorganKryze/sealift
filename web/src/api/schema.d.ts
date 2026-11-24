@@ -888,6 +888,17 @@ export interface components {
              * @default false
              */
             includeProject: boolean;
+            /** @description The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. */
+            reasons?: components["schemas"]["Reason"][];
+        };
+        /** @description Why a selection takes a jump or keeps a CVE that no version fixes. */
+        Reason: {
+            /** @enum {string} */
+            kind: "major-jump" | "cve-without-fix";
+            /** @description The dependencies the reason covers, by name. */
+            dependencies: string[];
+            /** @description 1 to 300 characters once trimmed, on one line, with no control, line-separating, bidirectional or other format character. */
+            text: string;
         };
         /** @description One export job, its state and its files. */
         Export: {

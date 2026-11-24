@@ -1,0 +1,297 @@
+package jobs
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/rank"
+)
+
+// ReasonKind names what a reason answers for.
+type ReasonKind string
+
+// The two kinds of reason a selection may need.
+const (
+	MajorJumpReason     ReasonKind = "major-jump"
+	CVEWithoutFixReason ReasonKind = "cve-without-fix"
+)
+
+// Reason is why a selection takes its dependencies out of their line, or
+// keeps a CVE that no version fixes. One reason covers a family or a lone
+// jump, or every such CVE of one dependency.
+type Reason struct {
+	Kind         ReasonKind `json:"kind"`
+	Dependencies []string   `json:"dependencies"`
+	Text         string     `json:"text"`
+}
+
+// ErrInvalidReasons reports a selection whose reasons are missing, refused
+// by the policy, unreadable or covering nothing. No problem repeats a
+// reason's text.
+type ErrInvalidReasons struct {
+	Problems []string
+}
+
+func (e *ErrInvalidReasons) Error() string {
+	return "jobs: the export's reasons do not fit its selection: " + strings.Join(e.Problems, "; ")
+}
+
+// asked is what one dependency of a selection asks a reason for.
+type asked struct {
+	dep      DependencyResult
+	jumps    []string // selected versions outside the current line
+	kept     string   // the version an install keeps; empty when none is selected
+	keptCVEs []CVE
+	noFix    []string // ids of the kept version's CVEs that no version fixes
+}
+
+func askedOf(r Result, selection map[string][]string) []asked {
+	out := make([]asked, 0, len(r.Dependencies))
+	for _, d := range r.Dependencies {
+		a := asked{dep: d}
+		for _, v := range selection[d.Name] {
+			if v != d.Current && !rank.SameLine(d.Current, v) && !slices.Contains(a.jumps, v) {
+				a.jumps = append(a.jumps, v)
+			}
+		}
+		a.kept, a.keptCVEs, _ = pickedCVEs(d, selection[d.Name])
+		for _, c := range a.keptCVEs {
+			if withoutFix(c) && !slices.Contains(a.noFix, c.ID) {
+				a.noFix = append(a.noFix, c.ID)
+			}
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// withoutFix is true for a CVE no version fixes, and for one whose fix was
+// never recorded, as in an analysis of sealift 0.7.0.
+func withoutFix(c CVE) bool {
+	return strings.TrimSpace(c.FixedIn) == ""
+}
+
+// coverage maps each kind to the dependencies a reason covers, and each of
+// those to the index of the first reason that names it.
+type coverage map[ReasonKind]map[string]int
+
+// cover matches the reasons to what the selection asks, and words a
+// problem for each reason that is unreadable or covers nothing.
+func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
+	known := map[string]bool{}
+	for _, d := range r.Dependencies {
+		known[d.Name] = true
+	}
+	needs := map[ReasonKind]map[string]bool{MajorJumpReason: {}, CVEWithoutFixReason: {}}
+	for _, a := range asks {
+		needs[MajorJumpReason][a.dep.Name] = len(a.jumps) > 0
+		needs[CVEWithoutFixReason][a.dep.Name] = len(a.noFix) > 0
+	}
+	covered := coverage{MajorJumpReason: {}, CVEWithoutFixReason: {}}
+	var problems []string
+	for i, reason := range reasons {
+		if needs[reason.Kind] == nil {
+			problems = append(problems, fmt.Sprintf("reason %d has an unknown kind", i+1))
+			continue
+		}
+		at := fmt.Sprintf("reason %d (%s)", i+1, reason.Kind)
+		if err := archive.CheckReason(reason.Text); err != nil {
+			problems = append(problems, at+": "+err.Error())
+		}
+		if len(reason.Dependencies) == 0 {
+			problems = append(problems, at+" names no dependency")
+			continue
+		}
+		// An unknown name is caller text: the problem leaves it out.
+		unknown := slices.ContainsFunc(reason.Dependencies, func(name string) bool { return !known[name] })
+		if unknown {
+			problems = append(problems, at+" names a dependency the analysis does not hold")
+		}
+		coversSome := false
+		for _, name := range reason.Dependencies {
+			if _, done := covered[reason.Kind][name]; needs[reason.Kind][name] && !done {
+				covered[reason.Kind][name] = i
+				coversSome = true
+			}
+		}
+		if !coversSome && !unknown {
+			problems = append(problems, at+" covers nothing the selection takes")
+		}
+	}
+	return covered, problems
+}
+
+// CheckReasons returns one worded problem for each jump or CVE without fix
+// the selection carries with no reason or against the policy, and for each
+// reason that is unreadable or covers nothing. Every selected version counts
+// for a jump; for CVEs, the version an install keeps. Empty when the export
+// may go.
+func CheckReasons(r Result, selection map[string][]string, reasons []Reason, p policy.Review) []string {
+	asks := askedOf(r, selection)
+	covered, reasonProblems := cover(r, asks, reasons)
+	var problems []string
+	for _, a := range asks {
+		d := a.dep
+		for _, v := range a.jumps {
+			_, ok := covered[MajorJumpReason][d.Name]
+			switch {
+			case p.MajorJump == policy.Refuse:
+				problems = append(problems, fmt.Sprintf("review.majorJump is refuse: %s %s to %s cannot cross", d.Name, d.Current, v))
+			case !ok:
+				problems = append(problems, fmt.Sprintf("%s %s to %s leaves %s and needs a reason", d.Name, d.Current, v, lineWords(d.Current)))
+			}
+		}
+		if len(a.noFix) == 0 {
+			continue
+		}
+		keeps := fmt.Sprintf("%s %s keeps %s, which no version fixes", d.Name, a.kept, andList(a.noFix))
+		_, ok := covered[CVEWithoutFixReason][d.Name]
+		switch {
+		case p.CVEWithoutFix == policy.Refuse:
+			problems = append(problems, "review.cveWithoutFix is refuse: "+keeps+", and cannot cross")
+		case !ok:
+			problems = append(problems, keeps+", and needs a reason")
+		}
+	}
+	return append(problems, reasonProblems...)
+}
+
+// lineWords names the line a current version belongs to.
+func lineWords(current string) string {
+	switch line := rank.LineOf(current); {
+	case line == "":
+		return "its line"
+	case strings.Contains(line, "."):
+		return "line " + line
+	default:
+		return "major " + line
+	}
+}
+
+func andList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// ReviewOf is the review a manifest signs for a selection whose reasons
+// CheckReasons accepts. projected is the estimate summary.md prints, nil
+// when the project scan could not be read. The review names no person: the
+// import attaches who brought the archive in.
+func ReviewOf(r Result, selection map[string][]string, reasons []Reason, projected *rank.Vector) archive.Review {
+	asks := askedOf(r, selection)
+	covered, _ := cover(r, asks, reasons)
+	reasonFor := func(kind ReasonKind, name string) (int, string) {
+		i, ok := covered[kind][name]
+		if !ok {
+			return -1, ""
+		}
+		return i, reasons[i].Text
+	}
+
+	review := archive.Review{
+		CVEs:    archive.ReviewCVEs{Before: [5]int(r.Before)},
+		Updates: []archive.ReviewUpdate{},
+		Kept:    []archive.ReviewKept{},
+		Jumps:   []archive.ReviewJump{},
+		Left:    []archive.ReviewCVE{},
+	}
+	if projected != nil {
+		after := [5]int(*projected)
+		review.CVEs.After = &after
+	}
+	jumpAt := map[string]int{}
+	for _, a := range asks {
+		d := a.dep
+		version, cves := a.kept, a.keptCVEs
+		if version == "" {
+			version, cves = d.Current, d.CVEs
+		}
+
+		if len(a.jumps) > 0 {
+			i, text := reasonFor(MajorJumpReason, d.Name)
+			// A family moves as one jump per reason given for it; a lone
+			// dependency is a jump of its own.
+			key := "dependency " + d.Name
+			if d.Family != "" {
+				key = fmt.Sprintf("family %d %s", i, d.Family)
+			}
+			at, ok := jumpAt[key]
+			if !ok {
+				at = len(review.Jumps)
+				jumpAt[key] = at
+				review.Jumps = append(review.Jumps, archive.ReviewJump{Family: d.Family, Packages: []archive.ReviewMove{}, Reason: text})
+			}
+			for _, v := range a.jumps {
+				review.Jumps[at].Packages = append(review.Jumps[at].Packages, archive.ReviewMove{Name: d.Name, From: d.Current, To: v})
+			}
+		} else if d.Jump != "" {
+			review.Kept = append(review.Kept, archive.ReviewKept{Name: d.Name, Version: version, Jump: d.Jump})
+		}
+
+		updated := version != d.Current && rank.SameLine(d.Current, version)
+		if updated {
+			review.Updates = append(review.Updates, archive.ReviewUpdate{
+				Name: d.Name, From: d.Current, To: version,
+				Fixed: cveCounts(fixedBy(d.CVEs, cves)), Left: cveCounts(cves),
+			})
+		}
+		if !updated && len(a.jumps) == 0 && d.Jump == "" {
+			review.Unchanged++
+		}
+
+		_, text := reasonFor(CVEWithoutFixReason, d.Name)
+		for _, c := range cves {
+			left := archive.ReviewCVE{
+				Dependency: d.Name, Version: version, ID: c.ID,
+				Severity: severityText(rank.ParseSeverity(c.Severity)),
+				Package:  packageName(c.Package), FixedIn: c.FixedIn,
+			}
+			if withoutFix(c) {
+				left.Reason = text
+			}
+			review.Left = append(review.Left, left)
+		}
+	}
+	return review
+}
+
+// fixedBy returns the CVEs of before that none of after carries.
+func fixedBy(before, after []CVE) []CVE {
+	var fixed []CVE
+	for _, c := range before {
+		if !slices.ContainsFunc(after, func(o CVE) bool { return o.ID == c.ID }) {
+			fixed = append(fixed, c)
+		}
+	}
+	return fixed
+}
+
+// cveCounts counts distinct ids by severity, the most serious one winning,
+// as a Vector does.
+func cveCounts(cves []CVE) [5]int {
+	worst := map[string]rank.Severity{}
+	for _, c := range cves {
+		sev := rank.ParseSeverity(c.Severity)
+		if prev, ok := worst[c.ID]; !ok || sev < prev {
+			worst[c.ID] = sev
+		}
+	}
+	var v [5]int
+	for _, sev := range worst {
+		v[sev]++
+	}
+	return v
+}
+
+// packageName drops the version from a CVE's "name@version" package.
+func packageName(pkg string) string {
+	if i := strings.LastIndex(pkg, "@"); i > 0 {
+		return pkg[:i]
+	}
+	return pkg
+}

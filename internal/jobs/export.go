@@ -78,6 +78,7 @@ type Export struct {
 type ExportRequest struct {
 	Selection      map[string][]string `json:"selection"`      // dependency name to selected versions
 	IncludeProject bool                `json:"includeProject"` // add the current project tree
+	Reasons        []Reason            `json:"reasons"`
 }
 
 // Kind identifies this job to the queue and in its events.
@@ -613,7 +614,8 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 	start := time.Now()
 	emitStep(emit, "reports", store.Running, 0)
 
-	if err := e.writeManifest(shipped, arch, key); err != nil {
+	projected := e.projected()
+	if err := e.writeManifest(shipped, arch, key, projected); err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
@@ -625,7 +627,7 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
-	if err := e.writeSummary(shipped, arch); err != nil {
+	if err := e.writeSummary(shipped, arch, projected); err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
@@ -634,8 +636,14 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 }
 
 // writeManifest marshals the manifest once, signs those bytes and writes
-// the same bytes, so the signature covers exactly what a reader finds.
-func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey) error {
+// the same bytes, so the signature covers exactly what a reader finds. The
+// review is checked by the import's own rules first: an import keeps out a
+// review it cannot read, and the reasons in it would be lost unseen.
+func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey, projected *rank.Vector) error {
+	review := ReviewOf(e.Analysis.Result, e.Request.Selection, e.Request.Reasons, projected)
+	if err := archive.CheckReview(review, archive.NPM); err != nil {
+		return fmt.Errorf("jobs: the import would keep the review out: %w", err)
+	}
 	entries := make([]report.PackageEntry, len(shipped))
 	for i, s := range shipped {
 		entries[i] = report.PackageEntry{
@@ -651,6 +659,7 @@ func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveMani
 		Target:        e.Project.Target,
 		Archive:       arch,
 		Packages:      entries,
+		Review:        &review,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -811,7 +820,7 @@ func readAnalysisStatus(dir string) analysisStatus {
 	return status
 }
 
-func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManifest) error {
+func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManifest, projected *rank.Vector) error {
 	status := readAnalysisStatus(e.Analysis.Dir)
 
 	var deps []report.DependencyChange
@@ -844,7 +853,6 @@ func (e *Export) writeSummary(shipped []shippedPackage, arch report.ArchiveManif
 	if err != nil {
 		return err
 	}
-	projected := e.projected()
 
 	s := report.Summary{
 		AnalysisDate: status.CreatedAt, TrivyDBDate: status.TrivyDBDate, TrivyVersion: status.TrivyVersion,
@@ -876,7 +884,7 @@ func findCandidate(cands []Candidate, version string) (Candidate, bool) {
 
 // projected estimates the project once the selection applies, from the
 // analysis' own project scan. A scan it cannot read leaves the row out of
-// summary.md rather than failing the export over a report.
+// summary.md and the review rather than failing the export over a report.
 func (e *Export) projected() *rank.Vector {
 	path := filepath.Join(e.Analysis.Dir, "project.trivy.json")
 	f, err := openRegularFile(path)

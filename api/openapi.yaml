@@ -1497,8 +1497,42 @@ components:
           type: boolean
           default: false
           description: Add the current project tree to an npm export. A pip export ignores it.
+        reasons:
+          type: array
+          description: >
+            The reasons the selection needs: one for each family or lone
+            dependency it takes out of its line, and one for each dependency
+            whose kept version carries a CVE that no version fixes. The
+            signed manifest carries them in its review.
+          items:
+            $ref: "#/components/schemas/Reason"
       required:
         - selection
+    Reason:
+      type: object
+      description: Why a selection takes a jump or keeps a CVE that no version fixes.
+      properties:
+        kind:
+          type: string
+          enum:
+            - major-jump
+            - cve-without-fix
+        dependencies:
+          type: array
+          minItems: 1
+          description: The dependencies the reason covers, by name.
+          items:
+            type: string
+        text:
+          type: string
+          maxLength: 1200
+          description: >
+            1 to 300 characters once trimmed, on one line, with no control,
+            line-separating, bidirectional or other format character.
+      required:
+        - kind
+        - dependencies
+        - text
     Export:
       type: object
       description: One export job, its state and its files.

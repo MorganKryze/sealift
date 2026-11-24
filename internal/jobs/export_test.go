@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -30,6 +31,8 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -554,6 +557,19 @@ func TestNPMExportBytesMatchTheLastRelease(t *testing.T) {
 		t.Fatalf("manifest.json has no createdAt line:\n%s", manifest)
 	}
 	manifest = createdAtLine.ReplaceAll(manifest, []byte(`  "createdAt": "2026-09-17T10:15:02Z",`))
+	// The review is new and the last release wrote none: every other byte
+	// must stay as it was.
+	var written report.Manifest
+	if err := json.Unmarshal(manifest, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.Review == nil {
+		t.Fatal("manifest.json carries no review")
+	}
+	written.Review = nil
+	if manifest, err = json.MarshalIndent(written, "", "  "); err != nil {
+		t.Fatal(err)
+	}
 	golden := filepath.Join("testdata", "npm-export-0.6.2", "manifest.json")
 	if os.Getenv("SEALIFT_UPDATE_GOLDEN") == "1" {
 		if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
@@ -1340,5 +1356,95 @@ func TestExportReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
 			}
 			assertExportFailedStatus(t, exportDir, c.step, c.reason)
 		})
+	}
+}
+
+// reviewedExport is the harness' export with a CVE no version fixes on the
+// gadget version an install keeps, and the reason it needs.
+func reviewedExport(t *testing.T, h *testHarness, analysisDir, exportDir, reason string) *Export {
+	t.Helper()
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	gadget := &exp.Analysis.Result.Dependencies[1]
+	gadget.Candidates[1].CVEs = []CVE{{ID: "CVE-GADGET-OTHER", Severity: "MEDIUM", Package: "@scope/gadget@2.2.0"}}
+	exp.Request.Reasons = []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"@scope/gadget"}, Text: reason}}
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request.Selection, exp.Request.Reasons, policy.DefaultReview()); len(problems) > 0 {
+		t.Fatalf("the export's reasons should pass: %q", problems)
+	}
+	return exp
+}
+
+func TestExportSignsItsReview(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(candidatesTrivyJSON), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := reviewedExport(t, h, analysisDir, exportDir, "Only our own build calls the gadget.")
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertSigned(t, exportDir, h.store.SigningKey())
+
+	data, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := archive.ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.ReviewProblem != "" || m.Review == nil {
+		t.Fatalf("the import keeps the review out: %q", m.ReviewProblem)
+	}
+	projected := exp.projected()
+	if projected == nil {
+		t.Fatal("the project scan was not read, the test proves nothing about cves.after")
+	}
+	want := ReviewOf(exp.Analysis.Result, exp.Request.Selection, exp.Request.Reasons, projected)
+	if !reflect.DeepEqual(*m.Review, want) {
+		t.Errorf("signed review =\n %+v\nwant\n %+v", *m.Review, want)
+	}
+	if len(m.Review.Left) != 1 || m.Review.Left[0].Reason != "Only our own build calls the gadget." {
+		t.Errorf("review.left = %+v, want the gadget's CVE with its reason", m.Review.Left)
+	}
+}
+
+func TestSameSelectionSameArchiveWhateverTheReasons(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+
+	var archives [2][]byte
+	var reviews [2]*archive.Review
+	for i, reason := range []string{"Only our own build calls the gadget.", "The gadget runs in a sandbox, so the CVE cannot reach data."} {
+		exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+		if err := reviewedExport(t, h, analysisDir, exportDir, reason).Run(context.Background(), noopEmit); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		archives[i] = data
+		manifest, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := archive.ParseManifest(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := sha256.Sum256(data); m.Archive.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Errorf("export %d: manifest names sha256 %s, the archive has %x", i, m.Archive.SHA256, sum)
+		}
+		reviews[i] = m.Review
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("the archive's bytes changed with the reasons")
+	}
+	if reviews[0] == nil || reviews[1] == nil || reviews[0].Left[0].Reason == reviews[1].Left[0].Reason {
+		t.Error("the two manifests should carry their own reason, the test proves nothing")
 	}
 }
