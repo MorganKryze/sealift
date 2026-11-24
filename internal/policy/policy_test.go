@@ -378,6 +378,16 @@ func TestPolicyReadsTheReviewRules(t *testing.T) {
 	}
 }
 
+// A rule key written with no value would otherwise fall back to the
+// permissive default without a word, while an empty string is refused.
+func TestPolicyRefusesARuleWithNoValue(t *testing.T) {
+	for _, key := range []string{"majorJump", "cveWithoutFix"} {
+		for _, value := range []string{"", " null", " ~"} {
+			refused(t, "review:\n  "+key+":"+value+"\n", "review."+key, "reason, refuse")
+		}
+	}
+}
+
 func TestPolicyRefusesAnUnknownReviewRule(t *testing.T) {
 	for _, c := range []struct{ key, value string }{
 		{"majorJump", "forbid"},

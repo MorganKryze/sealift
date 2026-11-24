@@ -89,9 +89,10 @@ type rawPolicy struct {
 }
 
 type rawReview struct {
-	ProposeOtherMajors *bool   `yaml:"proposeOtherMajors"`
-	MajorJump          *string `yaml:"majorJump"`
-	CVEWithoutFix      *string `yaml:"cveWithoutFix"`
+	ProposeOtherMajors *bool `yaml:"proposeOtherMajors"`
+	// Nodes, since a *string reads an explicit null as a key left out.
+	MajorJump     yaml.Node `yaml:"majorJump"`
+	CVEWithoutFix yaml.Node `yaml:"cveWithoutFix"`
 }
 
 type rawTargets struct {
@@ -285,16 +286,22 @@ func (r rawReview) review() (Review, error) {
 	}
 	for _, f := range []struct {
 		key   string
-		value *string
+		value yaml.Node
 		into  *Rule
 	}{
 		{"review.majorJump", r.MajorJump, &out.MajorJump},
 		{"review.cveWithoutFix", r.CVEWithoutFix, &out.CVEWithoutFix},
 	} {
-		if f.value == nil {
+		if f.value.Kind == 0 {
 			continue
 		}
-		switch rule := Rule(*f.value); rule {
+		var value string
+		if f.value.ShortTag() != "!!null" {
+			if err := f.value.Decode(&value); err != nil {
+				return Review{}, yamlError(err)
+			}
+		}
+		switch rule := Rule(value); rule {
 		case AskReason, Refuse:
 			*f.into = rule
 		default:
