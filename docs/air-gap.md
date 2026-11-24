@@ -74,6 +74,8 @@ The review names no person: the connected side has no login. Reasons and review 
 
 An import that predates the review reads such an archive as before. The review adds a key and keeps `formatVersion` 2, and the import of sealift 0.7.0 ignores keys it does not know. A newer import reads the review by fixed rules. One it cannot read is kept out with the field at fault, and the import checks and publishes the packages as before: a review never refuses an archive. An archive from 0.7.0 or earlier has no review, and imports as before. Neither the import report nor the import screens show the review yet. [Archive format](dev/archive-format.md#the-review) gives every field and each reading rule.
 
+Proven in the lab at commit 6772058: the `sealift import` of 0.7.0 published an archive whose manifest carries a review and a family's jump, and ended `import complete` with 0 failed. An analysis written by 0.7.0, exported again with the reasons it needed, gave the archive sha256 that 0.7.0 gave for the same selection.
+
 ## Before the kiosk
 
 The export screen shows the archive's sha256 with **Copy**, and which key signed it. `manifest.json` carries the same value under `archive.sha256`. Carry the archive, `manifest.json` and `manifest.json.sig` together. Check the file you downloaded against the sha256:
