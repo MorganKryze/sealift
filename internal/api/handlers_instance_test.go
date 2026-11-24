@@ -227,9 +227,26 @@ func TestInstanceReportsThePolicy(t *testing.T) {
 	want := Policy{
 		Target: targetToAPI(npmTarget), PipTarget: pipTargetToAPI(pipTarget),
 		MinReleaseAgeDays: 30, ResolveParallelism: 2, DownloadParallelism: 5,
+		Review: ReviewPolicy{ProposeOtherMajors: false, MajorJump: RuleReason, CveWithoutFix: RuleReason},
 	}
 	if got != want {
 		t.Errorf("policy = %+v, want %+v", got, want)
+	}
+}
+
+func TestInstanceReportsTheReviewPolicy(t *testing.T) {
+	for _, c := range []struct {
+		review policy.Review
+		want   ReviewPolicy
+	}{
+		{policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.AskReason}, ReviewPolicy{ProposeOtherMajors: true, MajorJump: RuleRefuse, CveWithoutFix: RuleReason}},
+		{policy.Review{MajorJump: policy.AskReason, CVEWithoutFix: policy.Refuse}, ReviewPolicy{MajorJump: RuleReason, CveWithoutFix: RuleRefuse}},
+	} {
+		srv, h := newTestServer(t)
+		h.Policy.Review = c.review
+		if got := getInstance(t, srv.URL).Policy.Review; got != c.want {
+			t.Errorf("review for %+v = %+v, want %+v", c.review, got, c.want)
+		}
 	}
 }
 

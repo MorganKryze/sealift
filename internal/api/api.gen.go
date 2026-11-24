@@ -137,6 +137,24 @@ func (e PreparingItemState) Valid() bool {
 	}
 }
 
+// Defines values for ReviewRule.
+const (
+	RuleReason ReviewRule = "reason"
+	RuleRefuse ReviewRule = "refuse"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRule enum.
+func (e ReviewRule) Valid() bool {
+	switch e {
+	case RuleReason:
+		return true
+	case RuleRefuse:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for State.
 const (
 	Cancelled   State = "cancelled"
@@ -491,6 +509,9 @@ type Policy struct {
 	PipTarget          PipTarget `json:"pipTarget"`
 	ResolveParallelism int       `json:"resolveParallelism"`
 
+	// Review What a selection needs before it can cross.
+	Review ReviewPolicy `json:"review"`
+
 	// Target The system a resolution or an export is prepared for
 	Target Target `json:"target"`
 }
@@ -605,6 +626,21 @@ type ProjectSummary struct {
 	// Target The system a resolution or an export is prepared for
 	Target *Target `json:"target,omitempty"`
 }
+
+// ReviewPolicy What a selection needs before it can cross.
+type ReviewPolicy struct {
+	// CveWithoutFix reason lets the selection cross with a reason written for it; refuse stops it.
+	CveWithoutFix ReviewRule `json:"cveWithoutFix"`
+
+	// MajorJump reason lets the selection cross with a reason written for it; refuse stops it.
+	MajorJump ReviewRule `json:"majorJump"`
+
+	// ProposeOtherMajors Whether an analysis proposes versions outside the current major.
+	ProposeOtherMajors bool `json:"proposeOtherMajors"`
+}
+
+// ReviewRule reason lets the selection cross with a reason written for it; refuse stops it.
+type ReviewRule string
 
 // Settings Every value the interface can change.
 type Settings struct {

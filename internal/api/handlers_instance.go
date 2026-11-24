@@ -31,6 +31,11 @@ func (h *Handlers) GetInstance(ctx context.Context, _ GetInstanceRequestObject) 
 			MinReleaseAgeDays:   h.Policy.Settings.MinReleaseAgeDays,
 			ResolveParallelism:  h.Policy.Settings.ResolveParallelism,
 			DownloadParallelism: h.Policy.Settings.DownloadParallelism,
+			Review: ReviewPolicy{
+				ProposeOtherMajors: h.Policy.Review.ProposeOtherMajors,
+				MajorJump:          ReviewRule(h.Policy.Review.MajorJump),
+				CveWithoutFix:      ReviewRule(h.Policy.Review.CVEWithoutFix),
+			},
 		},
 	}
 	if in.Ephemeral {

@@ -22,7 +22,7 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 		Tools:         tm,
 		Trivy:         trivy,
 		Ready:         toolsReadiness{tm},
-		Policy:        policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()},
+		Policy:        policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand(), Review: policy.DefaultReview()},
 	}
 }
 

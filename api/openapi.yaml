@@ -979,12 +979,39 @@ components:
           type: integer
         downloadParallelism:
           type: integer
+        review:
+          $ref: "#/components/schemas/ReviewPolicy"
       required:
         - target
         - pipTarget
         - minReleaseAgeDays
         - resolveParallelism
         - downloadParallelism
+        - review
+    ReviewPolicy:
+      type: object
+      description: What a selection needs before it can cross.
+      properties:
+        proposeOtherMajors:
+          type: boolean
+          description: Whether an analysis proposes versions outside the current major.
+        majorJump:
+          $ref: "#/components/schemas/ReviewRule"
+        cveWithoutFix:
+          $ref: "#/components/schemas/ReviewRule"
+      required:
+        - proposeOtherMajors
+        - majorJump
+        - cveWithoutFix
+    ReviewRule:
+      type: string
+      description: reason lets the selection cross with a reason written for it; refuse stops it.
+      enum:
+        - reason
+        - refuse
+      x-enum-varnames:
+        - RuleReason
+        - RuleRefuse
     InstanceTools:
       type: object
       description: The tool versions on the data volume.

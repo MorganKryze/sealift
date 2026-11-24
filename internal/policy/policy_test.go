@@ -333,3 +333,67 @@ func TestPipTargetFromThePolicy(t *testing.T) {
 		t.Errorf("a pip target changed the npm settings: %+v, overrides %v", p.Settings, p.Overrides)
 	}
 }
+
+func TestReviewDefaults(t *testing.T) {
+	want := Review{ProposeOtherMajors: false, MajorJump: AskReason, CVEWithoutFix: AskReason}
+	if got := DefaultReview(); got != want {
+		t.Errorf("DefaultReview() = %+v, want %+v", got, want)
+	}
+	for name, path := range map[string]string{
+		"no file":                    "",
+		"a file without review":      writePolicy(t, "minReleaseAgeDays: 30\n"),
+		"an empty review":            writePolicy(t, "review: {}\n"),
+		"a review that sets nothing": writePolicy(t, "review:\n"),
+	} {
+		p, err := Load(path, stored070, true)
+		if err != nil {
+			t.Errorf("%s: Load: %v", name, err)
+			continue
+		}
+		if p.Review != want {
+			t.Errorf("%s: Review = %+v, want the defaults %+v", name, p.Review, want)
+		}
+	}
+}
+
+func TestPolicyReadsTheReviewRules(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want Review
+	}{
+		{"review:\n  proposeOtherMajors: true\n  majorJump: refuse\n  cveWithoutFix: refuse\n", Review{ProposeOtherMajors: true, MajorJump: Refuse, CVEWithoutFix: Refuse}},
+		{"review:\n  proposeOtherMajors: false\n  majorJump: reason\n  cveWithoutFix: reason\n", Review{MajorJump: AskReason, CVEWithoutFix: AskReason}},
+		{"review:\n  proposeOtherMajors: true\n", Review{ProposeOtherMajors: true, MajorJump: AskReason, CVEWithoutFix: AskReason}},
+		{"review:\n  majorJump: refuse\n", Review{MajorJump: Refuse, CVEWithoutFix: AskReason}},
+		{"review:\n  cveWithoutFix: refuse\n", Review{MajorJump: AskReason, CVEWithoutFix: Refuse}},
+	} {
+		p, err := Load(writePolicy(t, c.body), store.Settings{}, false)
+		if err != nil {
+			t.Errorf("Load(%q): %v", c.body, err)
+			continue
+		}
+		if p.Review != c.want {
+			t.Errorf("Load(%q).Review = %+v, want %+v", c.body, p.Review, c.want)
+		}
+	}
+}
+
+func TestPolicyRefusesAnUnknownReviewRule(t *testing.T) {
+	for _, c := range []struct{ key, value string }{
+		{"majorJump", "forbid"},
+		{"cveWithoutFix", "forbid"},
+		{"majorJump", "Refuse"},
+		{"cveWithoutFix", "\"\""},
+		{"majorJump", "\"refuse \""},
+	} {
+		body := fmt.Sprintf("review:\n  %s: %s\n", c.key, c.value)
+		refused(t, body, "review."+c.key, "reason, refuse")
+		_, err := Load(writePolicy(t, body), store.Settings{}, false)
+		if err != nil && c.value == "forbid" && strings.Contains(err.Error(), "forbid") {
+			t.Errorf("Load(%q) = %q, which repeats the file's value", body, err)
+		}
+	}
+	refused(t, "review:\n  majorJumps: refuse\n", "review.majorJumps", "unknown key", "line 2")
+	refused(t, "review:\n  proposeOtherMajors: sometimes\n", "line 2", "wrong type")
+	refused(t, "review:\n  majorJump: [reason]\n", "line 2", "wrong type")
+}

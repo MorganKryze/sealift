@@ -33,6 +33,7 @@ function instance(mode: Pick<Instance, "ephemeral" | "idleMinutes">): Instance {
       minReleaseAgeDays: 14,
       resolveParallelism: 4,
       downloadParallelism: 16,
+      review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason" },
     },
     tools: { trivy: "0.55.0", pnpm: ["10.34.5"], uv: ["0.13.7"] },
   }

@@ -642,7 +642,20 @@ export interface components {
             minReleaseAgeDays: number;
             resolveParallelism: number;
             downloadParallelism: number;
+            review: components["schemas"]["ReviewPolicy"];
         };
+        /** @description What a selection needs before it can cross. */
+        ReviewPolicy: {
+            /** @description Whether an analysis proposes versions outside the current major. */
+            proposeOtherMajors: boolean;
+            majorJump: components["schemas"]["ReviewRule"];
+            cveWithoutFix: components["schemas"]["ReviewRule"];
+        };
+        /**
+         * @description reason lets the selection cross with a reason written for it; refuse stops it.
+         * @enum {string}
+         */
+        ReviewRule: "reason" | "refuse";
         /** @description The tool versions on the data volume. */
         InstanceTools: {
             /**

@@ -1,5 +1,6 @@
 // Package policy reads the file the deployment names in SEALIFT_POLICY: the
-// default targets, the minimum release age, the parallelism and the brand.
+// default targets, the minimum release age, the parallelism, the brand and
+// the review rules.
 package policy
 
 import (
@@ -31,12 +32,40 @@ type Policy struct {
 	// Pip is the target a pip project gets when its creator names none.
 	Pip   store.PipTarget
 	Brand Brand
+	// Review says what a selection needs before it can cross.
+	Review Review
 	// Overrides names each key the file set over a different value the
 	// stored settings held, for the start log.
 	Overrides []string
 	// Defaulted names each key the stored settings held empty or at zero
 	// and the file does not set, so the default applies, for the start log.
 	Defaulted []string
+}
+
+// Rule is what a selection that carries a major jump or a CVE without fix
+// needs to cross.
+type Rule string
+
+const (
+	// AskReason lets the selection cross with a reason written for it.
+	AskReason Rule = "reason"
+	// Refuse stops the selection whatever reason it holds.
+	Refuse Rule = "refuse"
+)
+
+// Review holds the review rules of the policy file's review key.
+type Review struct {
+	// ProposeOtherMajors lets an analysis propose a version outside the
+	// current major.
+	ProposeOtherMajors bool
+	MajorJump          Rule
+	CVEWithoutFix      Rule
+}
+
+// DefaultReview proposes inside the current major only and asks a reason
+// for a major jump and for a CVE without fix.
+func DefaultReview() Review {
+	return Review{MajorJump: AskReason, CVEWithoutFix: AskReason}
 }
 
 // StoredError reports a value the settings of an older release hold, which
@@ -56,6 +85,13 @@ type rawPolicy struct {
 	MinReleaseAgeDays *int           `yaml:"minReleaseAgeDays"`
 	Parallelism       rawParallelism `yaml:"parallelism"`
 	Brand             rawBrand       `yaml:"brand"`
+	Review            rawReview      `yaml:"review"`
+}
+
+type rawReview struct {
+	ProposeOtherMajors *bool   `yaml:"proposeOtherMajors"`
+	MajorJump          *string `yaml:"majorJump"`
+	CVEWithoutFix      *string `yaml:"cveWithoutFix"`
 }
 
 type rawTargets struct {
@@ -95,6 +131,7 @@ var keyPrefix = map[string]string{
 	"policy.rawBrand":       "brand.",
 	"policy.rawSides":       "brand.sides.",
 	"policy.rawContact":     "brand.contact.",
+	"policy.rawReview":      "review.",
 }
 
 var (
@@ -126,6 +163,9 @@ func Load(path string, stored store.Settings, hasStored bool) (Policy, error) {
 		if p.Pip, err = raw.Targets.Pip.target(); err != nil {
 			return Policy{}, err
 		}
+	}
+	if p.Review, err = raw.Review.review(); err != nil {
+		return Policy{}, err
 	}
 	// Without a file, the brand holds no key and reads no logo.
 	if p.Brand, err = raw.Brand.brand(filepath.Dir(path)); err != nil {
@@ -235,6 +275,33 @@ func (r rawPipTarget) target() (store.PipTarget, error) {
 		return store.PipTarget{}, invalidTarget("targets.pip", err)
 	}
 	return t, nil
+}
+
+// review applies each rule the file sets over the default review.
+func (r rawReview) review() (Review, error) {
+	out := DefaultReview()
+	if r.ProposeOtherMajors != nil {
+		out.ProposeOtherMajors = *r.ProposeOtherMajors
+	}
+	for _, f := range []struct {
+		key   string
+		value *string
+		into  *Rule
+	}{
+		{"review.majorJump", r.MajorJump, &out.MajorJump},
+		{"review.cveWithoutFix", r.CVEWithoutFix, &out.CVEWithoutFix},
+	} {
+		if f.value == nil {
+			continue
+		}
+		switch rule := Rule(*f.value); rule {
+		case AskReason, Refuse:
+			*f.into = rule
+		default:
+			return Review{}, fmt.Errorf("%s must be one of %s, %s", f.key, AskReason, Refuse)
+		}
+	}
+	return out, nil
 }
 
 // required refuses a target that leaves a field out: a target in the file
