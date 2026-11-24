@@ -11,6 +11,7 @@ import (
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/rank"
 )
 
@@ -818,9 +819,9 @@ func TestCheckReasonsPlacesAProjectFindingOnADependencyOnlyAtItsCurrentVersion(t
 	}
 }
 
-// Only a lockfile CVE without a fix that no dependency's scan places needs
-// the lockfile walked; the walk starts from its package alone.
-func TestLockKeysToPlaceNamesUnplacedFindingsWithoutFix(t *testing.T) {
+// Every lockfile CVE no dependency's scan places needs the lockfile
+// walked, with a fix or without; the walk starts from its package alone.
+func TestLockKeysToPlaceNamesEveryUnplacedFinding(t *testing.T) {
 	r := reviewResult()
 	findings := []rank.Finding{
 		{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0"},
@@ -828,11 +829,61 @@ func TestLockKeysToPlaceNamesUnplacedFindingsWithoutFix(t *testing.T) {
 		{ID: "CVE-2025-0301", Package: "ms", Version: "2.0.0", FixedVersion: "2.1.0"},
 		{ID: "CVE-2025-0100", Package: "react", Version: "18.3.1"},
 	}
-	if got, want := lockKeysToPlace(r, findings), []string{"qs@6.0.0"}; !slices.Equal(got, want) {
+	if got, want := lockKeysToPlace(r, findings), []string{"qs@6.0.0", "ms@2.0.0"}; !slices.Equal(got, want) {
 		t.Errorf("lockKeysToPlace = %q, want %q", got, want)
 	}
-	if got := lockKeysToPlace(r, findings[2:]); len(got) != 0 {
-		t.Errorf("with every finding placed or fixed, lockKeysToPlace = %q, want none", got)
+	if got := lockKeysToPlace(r, findings[3:]); len(got) != 0 {
+		t.Errorf("with every finding placed, lockKeysToPlace = %q, want none", got)
+	}
+}
+
+const expressQsLock = `lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      express:
+        specifier: 4.17.1
+        version: 4.17.1
+snapshots:
+  express@4.17.1:
+    dependencies:
+      qs: 6.0.0
+  qs@6.0.0: {}
+`
+
+// A fixable lockfile CVE that no dependency's scan places is counted in
+// cves.after, so review.left must list it under the direct dependency the
+// lockfile places it under, with its fix, and ask no reason for it.
+func TestReviewLeftListsEveryCVEAfterCountsWithTheProject(t *testing.T) {
+	r := reviewResult()
+	fixed := rank.Finding{ID: "CVE-2025-0301", Package: "qs", Version: "6.0.0", Severity: rank.Medium, FixedVersion: "6.2.0"}
+	req := withProject(request(map[string][]string{}), fixed)
+	holders, err := npm.LockHolders(strings.NewReader(expressQsLock), lockKeysToPlace(r, req.ProjectFindings))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ProjectHolders = holders
+	req.Reasons = []Reason{cveReason("Templates are ours.", "html-minifier")}
+	if problems := CheckReasons(r, req, askReasons()); len(problems) > 0 {
+		t.Fatalf("a fixable CVE asked for a reason: %q", problems)
+	}
+	after := projectedFor(r, req, req.ProjectFindings)
+	review := ReviewOf(r, req, &after)
+	if !slices.ContainsFunc(review.Left, func(c archive.ReviewCVE) bool {
+		return c.Dependency == "express" && c.ID == "CVE-2025-0301" && c.Package == "qs" && c.FixedIn == "6.2.0"
+	}) {
+		t.Errorf("review.left = %+v, want CVE-2025-0301 under express with fixedIn 6.2.0", review.Left)
+	}
+	ids := map[string]bool{}
+	for _, c := range review.Left {
+		ids[c.ID] = true
+	}
+	total := 0
+	for _, n := range *review.CVEs.After {
+		total += n
+	}
+	if total != len(ids) {
+		t.Errorf("cves.after counts %d, review.left lists %d ids: %+v", total, len(ids), review.Left)
 	}
 }
 

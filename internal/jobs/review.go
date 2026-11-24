@@ -157,14 +157,14 @@ func scanPlaced(r Result, f rank.Finding) bool {
 	return slices.ContainsFunc(r.Dependencies, func(d DependencyResult) bool { return underDependency(d, f) })
 }
 
-// lockKeysToPlace is each "name@version" of the lockfile's findings
-// without a fix that no dependency's scan places: the only packages the
-// lockfile's tree must place.
+// lockKeysToPlace is each "name@version" of the lockfile's findings that
+// no dependency's scan places, with a fix or without: cves.after counts
+// them all, so the lockfile's tree must place them all in review.left.
 func lockKeysToPlace(r Result, findings []rank.Finding) []string {
 	var keys []string
 	for _, f := range findings {
 		key := f.Package + "@" + f.Version
-		if strings.TrimSpace(f.FixedVersion) == "" && !scanPlaced(r, f) && !slices.Contains(keys, key) {
+		if !scanPlaced(r, f) && !slices.Contains(keys, key) {
 			keys = append(keys, key)
 		}
 	}
