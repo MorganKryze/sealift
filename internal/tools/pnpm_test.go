@@ -321,3 +321,14 @@ func TestEnsurePnpmAcceptsAReleaseOverTheMinimumAge(t *testing.T) {
 		t.Fatalf("EnsurePnpm: %v", err)
 	}
 }
+
+func TestPnpmMinimumAgeBoundary(t *testing.T) {
+	m := NewManager(fakeVolume{root: t.TempDir(), settings: store.Settings{MinReleaseAgeDays: 14}}, nil, nil)
+	var tooRecent releaseTooRecent
+	if err := m.checkPnpmAge("10.40.0", time.Now().Add(-13*24*time.Hour)); !errors.As(err, &tooRecent) {
+		t.Errorf("13 days old: got %v, want a refusal", err)
+	}
+	if err := m.checkPnpmAge("10.40.0", time.Now().Add(-14*24*time.Hour-time.Hour)); err != nil {
+		t.Errorf("14 days and one hour old: got %v, want nil", err)
+	}
+}
