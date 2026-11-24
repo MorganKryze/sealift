@@ -219,3 +219,41 @@ func TestExportFileUnknownNameReturnsErrNotFound(t *testing.T) {
 		t.Fatalf("ExportFile(missing): err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestExportsInTheSameSecondAreListedAndReadable(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-24T09:41:07Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	var ids []string
+	for range 2 {
+		p, err := s.NewDir("exports", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "cancelled"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		ids = append(ids, p.ID())
+	}
+
+	got, err := s.Exports("proj-1")
+	if err != nil {
+		t.Fatalf("Exports: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Exports() = %+v, want both exports of the same second", got)
+	}
+	for _, id := range ids {
+		info, err := s.ExportInfo("proj-1", id)
+		if err != nil {
+			t.Fatalf("ExportInfo(%q): %v", id, err)
+		}
+		if !info.CreatedAt.Equal(fixed) || info.State != Cancelled {
+			t.Errorf("ExportInfo(%q) = created %v, state %q; want %v, cancelled", id, info.CreatedAt, info.State, fixed)
+		}
+	}
+}

@@ -1131,3 +1131,80 @@ func blockQueue(t *testing.T, svc *Service) {
 	}
 	<-blocker.started
 }
+
+// occupyComingSeconds creates a committed directory under dir for every
+// id the next minute could produce, so the store has to add its suffix to
+// the next id it allocates there.
+func occupyComingSeconds(t *testing.T, dir string) {
+	t.Helper()
+	start := time.Now().UTC().Truncate(time.Second)
+	for i := range 60 {
+		id := start.Add(time.Duration(i) * time.Second).Format("20060102T150405Z")
+		if err := os.MkdirAll(filepath.Join(dir, id), 0o770); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+}
+
+// suffixedIDTime checks that id carries the store's suffix and returns the
+// time its timestamp part names.
+func suffixedIDTime(t *testing.T, id string) time.Time {
+	t.Helper()
+	stamp, suffix, ok := strings.Cut(id, "-")
+	if !ok || len(suffix) != 6 {
+		t.Fatalf("id = %q, want a timestamp with a six-digit suffix", id)
+	}
+	want, err := time.Parse("20060102T150405Z", stamp)
+	if err != nil {
+		t.Fatalf("parse %q: %v", stamp, err)
+	}
+	return want
+}
+
+func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	projectDir := filepath.Join(st.Root(), "projects", project.ID)
+	analysisDir := filepath.Join(projectDir, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+	occupyComingSeconds(t, filepath.Join(projectDir, "analyses"))
+	occupyComingSeconds(t, filepath.Join(projectDir, "exports"))
+	blockQueue(t, svc)
+
+	analysis, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	defer waitForTerminal(t, svc, project.ID, "analysis", analysis.ID)
+	defer func() { _, _ = svc.Cancel(project.ID, "analysis", analysis.ID) }()
+	want := suffixedIDTime(t, analysis.ID)
+	if !analysis.CreatedAt.Equal(want) {
+		t.Errorf("QueueAnalysis CreatedAt = %v, want %v", analysis.CreatedAt, want)
+	}
+	var status statusFile
+	if err := st.ReadJSON(filepath.Join(projectDir, "analyses", analysis.ID+".tmp", "status.json"), &status); err != nil {
+		t.Fatalf("read queued status.json: %v", err)
+	}
+	if !status.CreatedAt.Equal(want) {
+		t.Errorf("queued status.json createdAt = %v, want %v", status.CreatedAt, want)
+	}
+
+	export, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	defer waitForTerminal(t, svc, project.ID, "export", export.ID)
+	defer func() { _, _ = svc.Cancel(project.ID, "export", export.ID) }()
+	if want := suffixedIDTime(t, export.ID); !export.CreatedAt.Equal(want) {
+		t.Errorf("QueueExport CreatedAt = %v, want %v", export.CreatedAt, want)
+	}
+}

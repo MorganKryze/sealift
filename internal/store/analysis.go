@@ -16,6 +16,18 @@ import (
 // a UTC timestamp with second precision.
 const analysisIDLayout = "20060102T150405Z"
 
+// JobCreatedAt reads the creation time out of an analysis or export ID: the
+// timestamp alone, or the timestamp, "-" and six lowercase hex digits, the
+// suffix NewDir adds to tell apart two jobs of one project started in the
+// same second. Any other shape is refused.
+func JobCreatedAt(id string) (time.Time, error) {
+	stamp := len(analysisIDLayout)
+	if len(id) == stamp+7 && id[stamp] == '-' && strings.Trim(id[stamp+1:], "0123456789abcdef") == "" {
+		id = id[:stamp]
+	}
+	return time.Parse(analysisIDLayout, id)
+}
+
 // AnalysisInfo summarizes one committed analysis for the API: its identity,
 // its state, and the result an API response embeds once ranking.json, or
 // pip-result.json for a pip analysis, exists. Result is nil before an npm
@@ -146,7 +158,7 @@ func (s *Store) jobInfos(projectID, kind string) ([]AnalysisInfo, error) {
 // creation time, and the caller can show state Interrupted for a directory
 // this process cannot otherwise explain.
 func readAnalysisInfo(projectID, id, dir string) (AnalysisInfo, error) {
-	createdAt, err := time.Parse(analysisIDLayout, id)
+	createdAt, err := JobCreatedAt(id)
 	if err != nil {
 		return AnalysisInfo{}, fmt.Errorf("store: %s is not a valid analysis id: %w", id, err)
 	}

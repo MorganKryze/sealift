@@ -2423,3 +2423,115 @@ func readTestFile(t *testing.T, path string) []byte {
 	}
 	return data
 }
+
+// occupyComingSeconds creates a committed directory under dir for every
+// id the next minute could produce, so the store has to add its suffix to
+// the next id it allocates there.
+func occupyComingSeconds(t *testing.T, dir string) {
+	t.Helper()
+	start := time.Now().UTC().Truncate(time.Second)
+	for i := range 60 {
+		id := start.Add(time.Duration(i) * time.Second).Format("20060102T150405Z")
+		if err := os.MkdirAll(filepath.Join(dir, id), 0o770); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+}
+
+// suffixedIDTime checks that id carries the store's suffix and returns the
+// time its timestamp part names.
+func suffixedIDTime(t *testing.T, id string) time.Time {
+	t.Helper()
+	stamp, suffix, ok := strings.Cut(id, "-")
+	if !ok || len(suffix) != 6 {
+		t.Fatalf("id = %q, want a timestamp with a six-digit suffix", id)
+	}
+	want, err := time.Parse("20060102T150405Z", stamp)
+	if err != nil {
+		t.Fatalf("parse %q: %v", stamp, err)
+	}
+	return want
+}
+
+// TestLiveJobWithASuffixedIDShowsItsCreationTime covers every response
+// built from a live job's id rather than its committed status.json.
+func TestLiveJobWithASuffixedIDShowsItsCreationTime(t *testing.T) {
+	ctx := context.Background()
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlers(t, q)
+	release := make(chan struct{})
+	defer close(release)
+	if _, err := q.Submit(&testBlockingJob{run: func(context.Context, func(jobs.Event)) error {
+		<-release
+		return nil
+	}}); err != nil {
+		t.Fatalf("Submit(blocking): %v", err)
+	}
+
+	project, err := h.Store.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	analysisDir := filepath.Join(project.Dir, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	if err := os.WriteFile(filepath.Join(analysisDir, "status.json"), []byte(`{"state":"done"}`), 0o664); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatalf("write ranking.json: %v", err)
+	}
+	occupyComingSeconds(t, filepath.Join(project.Dir, "analyses"))
+	occupyComingSeconds(t, filepath.Join(project.Dir, "exports"))
+
+	analysis, err := h.Service.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	want := suffixedIDTime(t, analysis.ID)
+	got, err := h.GetAnalysis(ctx, GetAnalysisRequestObject{ProjectId: project.ID, AnalysisId: analysis.ID})
+	if err != nil {
+		t.Fatalf("GetAnalysis: %v", err)
+	}
+	if a, ok := got.(GetAnalysis200JSONResponse); !ok || !a.CreatedAt.Equal(want) {
+		t.Errorf("GetAnalysis = %+v, want createdAt %v", got, want)
+	}
+	if live, _ := h.liveAnalysisOrExport(project.ID); live == nil || !live.CreatedAt.Equal(want) {
+		t.Errorf("project's live analysis = %+v, want createdAt %v", live, want)
+	}
+	cancelled, err := h.CancelAnalysis(ctx, CancelAnalysisRequestObject{ProjectId: project.ID, AnalysisId: analysis.ID})
+	if err != nil {
+		t.Fatalf("CancelAnalysis: %v", err)
+	}
+	if a, ok := cancelled.(CancelAnalysis200JSONResponse); !ok || !a.CreatedAt.Equal(want) {
+		t.Errorf("CancelAnalysis = %+v, want createdAt %v", cancelled, want)
+	}
+	waitForTerminalState(t, h, project.ID, "analysis", analysis.ID)
+
+	export, err := h.Service.QueueExport(project.ID, "20260917T101502Z", jobs.ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	want = suffixedIDTime(t, export.ID)
+	gotExport, err := h.GetExport(ctx, GetExportRequestObject{ProjectId: project.ID, ExportId: export.ID})
+	if err != nil {
+		t.Fatalf("GetExport: %v", err)
+	}
+	if e, ok := gotExport.(GetExport200JSONResponse); !ok || !e.CreatedAt.Equal(want) {
+		t.Errorf("GetExport = %+v, want createdAt %v", gotExport, want)
+	}
+	if _, live := h.liveAnalysisOrExport(project.ID); live == nil || !live.CreatedAt.Equal(want) {
+		t.Errorf("project's live export = %+v, want createdAt %v", live, want)
+	}
+	cancelledExport, err := h.CancelExport(ctx, CancelExportRequestObject{ProjectId: project.ID, ExportId: export.ID})
+	if err != nil {
+		t.Fatalf("CancelExport: %v", err)
+	}
+	if e, ok := cancelledExport.(CancelExport200JSONResponse); !ok || !e.CreatedAt.Equal(want) {
+		t.Errorf("CancelExport = %+v, want createdAt %v", cancelledExport, want)
+	}
+	waitForTerminalState(t, h, project.ID, "export", export.ID)
+}
