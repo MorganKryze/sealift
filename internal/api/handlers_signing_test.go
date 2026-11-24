@@ -16,12 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/jobs"
-	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // captureLog routes the default logger into a buffer for one test.
@@ -303,125 +301,5 @@ func TestOtherRoutesAreNotGuardedByTheRegenerateCheck(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("GET status = %d, want 200: the guard covers the regenerate route only", resp.StatusCode)
-	}
-}
-
-// trivyReleaseServer points h at a GitHub stand-in whose Trivy release
-// carries no assets, pins another version than the one seeded, and returns
-// the count of requests it answered.
-func trivyReleaseServer(t *testing.T, h *Handlers) func() int {
-	t.Helper()
-	var requests atomic.Int32
-	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"v1.2.3","published_at":"2020-01-01T00:00:00Z","assets":[]}`))
-	}))
-	t.Cleanup(gh.Close)
-	h.Tools.GitHubAPI = gh.URL
-	h.Tools.Arch = "amd64"
-	h.Tools.Trivy = tools.TrivyPin{Version: "1.2.3", SHA256: map[string]string{"amd64": strings.Repeat("0", 64)}}
-	return func() int { return int(requests.Load()) }
-}
-
-func TestToolInstallsRefuseCrossSite(t *testing.T) {
-	routes := []struct {
-		name, path, body string
-		// source points h at a stand-in for what the route installs from
-		// and returns the count of requests that reached it.
-		source func(t *testing.T, h *Handlers) func() int
-	}{
-		{"uv install", "/api/tools/uv/install", `{"version":"0.13.8","force":true}`, func(t *testing.T, h *Handlers) func() int {
-			index, requests := uvIndexServer(t)
-			h.Tools.PipIndex = index
-			h.Tools.Arch = "amd64"
-			return requests
-		}},
-		{"trivy update", "/api/tools/trivy/update", `{"force":true}`, trivyReleaseServer},
-	}
-	const (
-		otherOrigin = "the Origin of this request is not this server's own host"
-		otherSite   = "this request comes from another site"
-		notJSON     = "the body must be application/json"
-	)
-	rows := []struct {
-		name   string
-		mutate func(r *http.Request, port string)
-		check  string // the check a refusal names in the log; empty for a request that passes
-		reason string
-	}{
-		{"no Origin, JSON", nil, "", ""},
-		{"own Origin", func(r *http.Request, p string) { r.Header.Set("Origin", "http://127.0.0.1:"+p) }, "", ""},
-		{"own Origin in another case", func(r *http.Request, p string) {
-			r.Host = "localhost:" + p
-			r.Header.Set("Origin", "http://LOCALHOST:"+p)
-		}, "", ""},
-		{"charset on the media type", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/json; charset=utf-8") }, "", ""},
-		{"Sec-Fetch-Site same-origin", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "same-origin") }, "", ""},
-		{"foreign Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "https://evil.example") }, "origin", otherOrigin},
-		{"null Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "null") }, "origin", otherOrigin},
-		{"Origin on another port of the same host", func(r *http.Request, _ string) { r.Header.Set("Origin", "http://127.0.0.1:1") }, "origin", otherOrigin},
-		{"cross-site fetch", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "cross-site") }, "fetch-site", otherSite},
-		{"text body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "text/plain") }, "content-type", notJSON},
-		{"form body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") }, "content-type", notJSON},
-		{"no content type", func(r *http.Request, _ string) { r.Header.Del("Content-Type") }, "content-type", notJSON},
-		{"a no-cors text post from another tab", func(r *http.Request, _ string) {
-			r.Header.Set("Content-Type", "text/plain")
-			r.Header.Set("Origin", "https://evil.example")
-			r.Header.Set("Sec-Fetch-Site", "cross-site")
-		}, "origin", otherOrigin},
-	}
-	for _, route := range routes {
-		for _, row := range rows {
-			t.Run(route.name+"/"+row.name, func(t *testing.T) {
-				srv, h := newTestServer(t)
-				requests := route.source(t, h)
-				logs := captureLog(t)
-				u, _ := url.Parse(srv.URL)
-
-				req, err := http.NewRequest(http.MethodPost, srv.URL+route.path, strings.NewReader(route.body))
-				if err != nil {
-					t.Fatal(err)
-				}
-				req.Header.Set("Content-Type", "application/json")
-				if row.mutate != nil {
-					row.mutate(req, u.Port())
-				}
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer resp.Body.Close()
-				body := readBody(t, resp)
-
-				if row.check == "" {
-					if resp.StatusCode == http.StatusForbidden || requests() == 0 {
-						t.Fatalf("status = %d after %d requests to the source, want the install to run: %s", resp.StatusCode, requests(), body)
-					}
-					return
-				}
-				if resp.StatusCode != http.StatusForbidden {
-					t.Fatalf("status = %d, want 403: %s", resp.StatusCode, body)
-				}
-				if n := requests(); n != 0 {
-					t.Errorf("a refused request made %d requests to the source", n)
-				}
-				var p Problem
-				if err := json.Unmarshal([]byte(body), &p); err != nil || p.Status != http.StatusForbidden {
-					t.Fatalf("body %q is not a 403 Problem", body)
-				}
-				if p.Detail == nil || *p.Detail != row.reason {
-					t.Errorf("detail = %v, want %q", p.Detail, row.reason)
-				}
-				if !strings.Contains(logs.String(), `msg="tool install refused"`) || !strings.Contains(logs.String(), "check="+row.check) {
-					t.Errorf("log %q does not name the tool install and the check %q", logs.String(), row.check)
-				}
-				for _, leaked := range []string{"evil.example", "127.0.0.1:1 ", "text/plain", "x-www-form", "cross-site"} {
-					if strings.Contains(logs.String(), leaked) || strings.Contains(body, leaked) {
-						t.Errorf("the log or the answer repeats a header value: %q", leaked)
-					}
-				}
-			})
-		}
 	}
 }

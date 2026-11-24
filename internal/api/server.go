@@ -31,7 +31,7 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 // every other operation of api/openapi.yaml mounted at base URL /api
 // through the generated strict server; and the frontend build in static
 // for every other path. refuseCrossSite wraps all of it and
-// guards the signing key's regenerate route and the tool installs. WatchJob
+// guards the signing key's regenerate route. WatchJob
 // (the event stream) is one of the contract's operations: Handlers embeds
 // *EventsHandler, so the generated dispatch reaches it exactly like any JSON
 // operation.

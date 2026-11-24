@@ -656,32 +656,6 @@ type Target struct {
 	PnpmVer string `json:"pnpmVer"`
 }
 
-// ToolsState Installed and available pnpm, uv and Trivy versions, and the DB date.
-type ToolsState struct {
-	// LatestSizeBytes Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable
-	LatestSizeBytes int `json:"latestSizeBytes"`
-
-	// Missing Names of what ready needs and does not have yet
-	Missing       []string `json:"missing"`
-	PnpmInstalled []string `json:"pnpmInstalled"`
-
-	// Ready Whether trivy and its database are both in place
-	Ready          bool      `json:"ready"`
-	TrivyActive    string    `json:"trivyActive"`
-	TrivyDbDate    time.Time `json:"trivyDbDate"`
-	TrivyInstalled []string  `json:"trivyInstalled"`
-	TrivyLatest    string    `json:"trivyLatest"`
-
-	// TrivyLatestAge Duration since the latest Trivy release, as a Go duration string
-	TrivyLatestAge string `json:"trivyLatestAge"`
-
-	// TrivyRecommended Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age
-	TrivyRecommended *string `json:"trivyRecommended,omitempty"`
-
-	// UvInstalled The uv versions installed on the data volume, sorted
-	UvInstalled *[]string `json:"uvInstalled,omitempty"`
-}
-
 // Vector CVE counts by severity, critical to unknown
 type Vector = []int
 
@@ -721,29 +695,6 @@ type CreateProjectMultipartBody struct {
 // RegenerateSigningKeyJSONBody defines parameters for RegenerateSigningKey.
 type RegenerateSigningKeyJSONBody = map[string]interface{}
 
-// ActivateTrivyJSONBody defines parameters for ActivateTrivy.
-type ActivateTrivyJSONBody struct {
-	Version string `json:"version"`
-}
-
-// UpdateTrivyJSONBody defines parameters for UpdateTrivy.
-type UpdateTrivyJSONBody struct {
-	// Force Install the latest release regardless of its age
-	Force bool `json:"force"`
-
-	// Version Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set.
-	Version *string `json:"version,omitempty"`
-}
-
-// InstallUvJSONBody defines parameters for InstallUv.
-type InstallUvJSONBody struct {
-	// Force Install the release even when it is younger than the minimum release age
-	Force *bool `json:"force,omitempty"`
-
-	// Version The uv release to install, such as 0.13.7
-	Version string `json:"version"`
-}
-
 // CreateProjectMultipartRequestBody defines body for CreateProject for multipart/form-data ContentType.
 type CreateProjectMultipartRequestBody CreateProjectMultipartBody
 
@@ -753,20 +704,8 @@ type QueueExportJSONRequestBody = ExportRequest
 // SetProjectTargetJSONRequestBody defines body for SetProjectTarget for application/json ContentType.
 type SetProjectTargetJSONRequestBody = Target
 
-// UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
-type UpdateSettingsJSONRequestBody = Settings
-
 // RegenerateSigningKeyJSONRequestBody defines body for RegenerateSigningKey for application/json ContentType.
 type RegenerateSigningKeyJSONRequestBody = RegenerateSigningKeyJSONBody
-
-// ActivateTrivyJSONRequestBody defines body for ActivateTrivy for application/json ContentType.
-type ActivateTrivyJSONRequestBody ActivateTrivyJSONBody
-
-// UpdateTrivyJSONRequestBody defines body for UpdateTrivy for application/json ContentType.
-type UpdateTrivyJSONRequestBody UpdateTrivyJSONBody
-
-// InstallUvJSONRequestBody defines body for InstallUv for application/json ContentType.
-type InstallUvJSONRequestBody InstallUvJSONBody
 
 // AsStepData returns the union data inside the Event_Data as a StepData
 func (t Event_Data) AsStepData() (StepData, error) {
@@ -970,30 +909,12 @@ type ServerInterface interface {
 	// GetSettings Get settings
 	// (GET /settings)
 	GetSettings(w http.ResponseWriter, r *http.Request)
-	// UpdateSettings Update settings
-	// (PUT /settings)
-	UpdateSettings(w http.ResponseWriter, r *http.Request)
 	// GetSigningKey The public half of the key that signs exports
 	// (GET /signing-key)
 	GetSigningKey(w http.ResponseWriter, r *http.Request)
 	// RegenerateSigningKey Replace the signing key with a new pair
 	// (POST /signing-key/regenerate)
 	RegenerateSigningKey(w http.ResponseWriter, r *http.Request)
-	// GetTools Installed and available tool versions, DB date
-	// (GET /tools)
-	GetTools(w http.ResponseWriter, r *http.Request)
-	// ActivateTrivy Activate an installed Trivy version
-	// (POST /tools/trivy/activate)
-	ActivateTrivy(w http.ResponseWriter, r *http.Request)
-	// UpdateTrivyDB Force a Trivy DB download
-	// (POST /tools/trivy/db/update)
-	UpdateTrivyDB(w http.ResponseWriter, r *http.Request)
-	// UpdateTrivy Install a new Trivy release
-	// (POST /tools/trivy/update)
-	UpdateTrivy(w http.ResponseWriter, r *http.Request)
-	// InstallUv Install a uv release from the package index
-	// (POST /tools/uv/install)
-	InstallUv(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1562,20 +1483,6 @@ func (siw *ServerInterfaceWrapper) GetSettings(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
-// UpdateSettings operation middleware
-func (siw *ServerInterfaceWrapper) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateSettings(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // GetSigningKey operation middleware
 func (siw *ServerInterfaceWrapper) GetSigningKey(w http.ResponseWriter, r *http.Request) {
 
@@ -1595,76 +1502,6 @@ func (siw *ServerInterfaceWrapper) RegenerateSigningKey(w http.ResponseWriter, r
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RegenerateSigningKey(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetTools operation middleware
-func (siw *ServerInterfaceWrapper) GetTools(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetTools(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ActivateTrivy operation middleware
-func (siw *ServerInterfaceWrapper) ActivateTrivy(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ActivateTrivy(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// UpdateTrivyDB operation middleware
-func (siw *ServerInterfaceWrapper) UpdateTrivyDB(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateTrivyDB(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// UpdateTrivy operation middleware
-func (siw *ServerInterfaceWrapper) UpdateTrivy(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateTrivy(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// InstallUv operation middleware
-func (siw *ServerInterfaceWrapper) InstallUv(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.InstallUv(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1812,16 +1649,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{projectId}/exports/{exportId}/files/{name}", wrapper.DownloadExportFile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/jobs/current/events", wrapper.WatchJob)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/settings", wrapper.GetSettings)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/settings", wrapper.UpdateSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance", wrapper.GetInstance)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance/logo", wrapper.GetInstanceLogo)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/signing-key", wrapper.GetSigningKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/signing-key/regenerate", wrapper.RegenerateSigningKey)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetTools)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/update", wrapper.UpdateTrivy)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/activate", wrapper.ActivateTrivy)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/uv/install", wrapper.InstallUv)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tools/trivy/db/update", wrapper.UpdateTrivyDB)
 
 	return m
 }
@@ -2683,45 +2514,6 @@ func (response GetSettingsdefaultApplicationProblemPlusJSONResponse) VisitGetSet
 	return err
 }
 
-type UpdateSettingsRequestObject struct {
-	Body *UpdateSettingsJSONRequestBody
-}
-
-type UpdateSettingsResponseObject interface {
-	VisitUpdateSettingsResponse(w http.ResponseWriter) error
-}
-
-type UpdateSettings200JSONResponse Settings
-
-func (response UpdateSettings200JSONResponse) VisitUpdateSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateSettingsdefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response UpdateSettingsdefaultApplicationProblemPlusJSONResponse) VisitUpdateSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 type GetSigningKeyRequestObject struct {
 }
 
@@ -2829,199 +2621,6 @@ func (response RegenerateSigningKeydefaultApplicationProblemPlusJSONResponse) Vi
 	return err
 }
 
-type GetToolsRequestObject struct {
-}
-
-type GetToolsResponseObject interface {
-	VisitGetToolsResponse(w http.ResponseWriter) error
-}
-
-type GetTools200JSONResponse ToolsState
-
-func (response GetTools200JSONResponse) VisitGetToolsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetToolsdefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response GetToolsdefaultApplicationProblemPlusJSONResponse) VisitGetToolsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type ActivateTrivyRequestObject struct {
-	Body *ActivateTrivyJSONRequestBody
-}
-
-type ActivateTrivyResponseObject interface {
-	VisitActivateTrivyResponse(w http.ResponseWriter) error
-}
-
-type ActivateTrivy200JSONResponse ToolsState
-
-func (response ActivateTrivy200JSONResponse) VisitActivateTrivyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type ActivateTrivydefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response ActivateTrivydefaultApplicationProblemPlusJSONResponse) VisitActivateTrivyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateTrivyDBRequestObject struct {
-}
-
-type UpdateTrivyDBResponseObject interface {
-	VisitUpdateTrivyDBResponse(w http.ResponseWriter) error
-}
-
-type UpdateTrivyDB200JSONResponse ToolsState
-
-func (response UpdateTrivyDB200JSONResponse) VisitUpdateTrivyDBResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateTrivyDBdefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response UpdateTrivyDBdefaultApplicationProblemPlusJSONResponse) VisitUpdateTrivyDBResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateTrivyRequestObject struct {
-	Body *UpdateTrivyJSONRequestBody
-}
-
-type UpdateTrivyResponseObject interface {
-	VisitUpdateTrivyResponse(w http.ResponseWriter) error
-}
-
-type UpdateTrivy200JSONResponse ToolsState
-
-func (response UpdateTrivy200JSONResponse) VisitUpdateTrivyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateTrivydefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response UpdateTrivydefaultApplicationProblemPlusJSONResponse) VisitUpdateTrivyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type InstallUvRequestObject struct {
-	Body *InstallUvJSONRequestBody
-}
-
-type InstallUvResponseObject interface {
-	VisitInstallUvResponse(w http.ResponseWriter) error
-}
-
-type InstallUv200JSONResponse ToolsState
-
-func (response InstallUv200JSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type InstallUvdefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response InstallUvdefaultApplicationProblemPlusJSONResponse) VisitInstallUvResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetInstance How this instance was deployed and what it has prepared
@@ -3084,30 +2683,12 @@ type StrictServerInterface interface {
 	// GetSettings Get settings
 	// (GET /settings)
 	GetSettings(ctx context.Context, request GetSettingsRequestObject) (GetSettingsResponseObject, error)
-	// UpdateSettings Update settings
-	// (PUT /settings)
-	UpdateSettings(ctx context.Context, request UpdateSettingsRequestObject) (UpdateSettingsResponseObject, error)
 	// GetSigningKey The public half of the key that signs exports
 	// (GET /signing-key)
 	GetSigningKey(ctx context.Context, request GetSigningKeyRequestObject) (GetSigningKeyResponseObject, error)
 	// RegenerateSigningKey Replace the signing key with a new pair
 	// (POST /signing-key/regenerate)
 	RegenerateSigningKey(ctx context.Context, request RegenerateSigningKeyRequestObject) (RegenerateSigningKeyResponseObject, error)
-	// GetTools Installed and available tool versions, DB date
-	// (GET /tools)
-	GetTools(ctx context.Context, request GetToolsRequestObject) (GetToolsResponseObject, error)
-	// ActivateTrivy Activate an installed Trivy version
-	// (POST /tools/trivy/activate)
-	ActivateTrivy(ctx context.Context, request ActivateTrivyRequestObject) (ActivateTrivyResponseObject, error)
-	// UpdateTrivyDB Force a Trivy DB download
-	// (POST /tools/trivy/db/update)
-	UpdateTrivyDB(ctx context.Context, request UpdateTrivyDBRequestObject) (UpdateTrivyDBResponseObject, error)
-	// UpdateTrivy Install a new Trivy release
-	// (POST /tools/trivy/update)
-	UpdateTrivy(ctx context.Context, request UpdateTrivyRequestObject) (UpdateTrivyResponseObject, error)
-	// InstallUv Install a uv release from the package index
-	// (POST /tools/uv/install)
-	InstallUv(ctx context.Context, request InstallUvRequestObject) (InstallUvResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3690,37 +3271,6 @@ func (sh *strictHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// UpdateSettings operation middleware
-func (sh *strictHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	var request UpdateSettingsRequestObject
-
-	var body UpdateSettingsJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateSettings(ctx, request.(UpdateSettingsRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateSettings")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateSettingsResponseObject); ok {
-		if err := validResponse.VisitUpdateSettingsResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
 // GetSigningKey operation middleware
 func (sh *strictHandler) GetSigningKey(w http.ResponseWriter, r *http.Request) {
 	var request GetSigningKeyRequestObject
@@ -3769,147 +3319,6 @@ func (sh *strictHandler) RegenerateSigningKey(w http.ResponseWriter, r *http.Req
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RegenerateSigningKeyResponseObject); ok {
 		if err := validResponse.VisitRegenerateSigningKeyResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetTools operation middleware
-func (sh *strictHandler) GetTools(w http.ResponseWriter, r *http.Request) {
-	var request GetToolsRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetTools(ctx, request.(GetToolsRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetTools")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetToolsResponseObject); ok {
-		if err := validResponse.VisitGetToolsResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// ActivateTrivy operation middleware
-func (sh *strictHandler) ActivateTrivy(w http.ResponseWriter, r *http.Request) {
-	var request ActivateTrivyRequestObject
-
-	var body ActivateTrivyJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.ActivateTrivy(ctx, request.(ActivateTrivyRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ActivateTrivy")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(ActivateTrivyResponseObject); ok {
-		if err := validResponse.VisitActivateTrivyResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// UpdateTrivyDB operation middleware
-func (sh *strictHandler) UpdateTrivyDB(w http.ResponseWriter, r *http.Request) {
-	var request UpdateTrivyDBRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateTrivyDB(ctx, request.(UpdateTrivyDBRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateTrivyDB")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateTrivyDBResponseObject); ok {
-		if err := validResponse.VisitUpdateTrivyDBResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// UpdateTrivy operation middleware
-func (sh *strictHandler) UpdateTrivy(w http.ResponseWriter, r *http.Request) {
-	var request UpdateTrivyRequestObject
-
-	var body UpdateTrivyJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateTrivy(ctx, request.(UpdateTrivyRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateTrivy")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateTrivyResponseObject); ok {
-		if err := validResponse.VisitUpdateTrivyResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// InstallUv operation middleware
-func (sh *strictHandler) InstallUv(w http.ResponseWriter, r *http.Request) {
-	var request InstallUvRequestObject
-
-	var body InstallUvJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.InstallUv(ctx, request.(InstallUvRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "InstallUv")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(InstallUvResponseObject); ok {
-		if err := validResponse.VisitInstallUvResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

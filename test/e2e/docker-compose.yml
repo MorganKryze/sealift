@@ -43,7 +43,7 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 2s
-      retries: 60
+      retries: 300
 
   test:
     image: node:22-bookworm-slim

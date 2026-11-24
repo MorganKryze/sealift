@@ -434,86 +434,6 @@ func pinnedTrivyRelease(t *testing.T, h *Handlers) func() []string {
 	}
 }
 
-func postTools(t *testing.T, url, body string) (int, []byte) {
-	t.Helper()
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST %s: %v", url, err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, data
-}
-
-func TestUpdateTrivyRouteInstallsThePin(t *testing.T) {
-	srv, h := newTestServer(t)
-	requests := pinnedTrivyRelease(t, h)
-
-	status, data := postTools(t, srv.URL+"/api/tools/trivy/update", `{"version":"9.9.9","force":true}`)
-	if status != http.StatusConflict {
-		t.Fatalf("update to another version: status = %d, want 409, body %s", status, data)
-	}
-	var problem Problem
-	if err := json.Unmarshal(data, &problem); err != nil || problem.Detail == nil || !strings.Contains(*problem.Detail, "1.2.3") {
-		t.Errorf("problem %s does not name the pinned 1.2.3", data)
-	}
-	if got := requests(); len(got) != 0 {
-		t.Errorf("a refused update asked GitHub for %v", got)
-	}
-
-	for _, body := range []string{`{}`, `{"version":"v1.2.3"}`} {
-		status, data = postTools(t, srv.URL+"/api/tools/trivy/update", body)
-		if status != http.StatusOK {
-			t.Fatalf("update with %s: status = %d, want 200, body %s", body, status, data)
-		}
-		var state ToolsState
-		if err := json.Unmarshal(data, &state); err != nil {
-			t.Fatal(err)
-		}
-		if state.TrivyActive != "1.2.3" || !slices.Equal(state.TrivyInstalled, []string{"1.2.3"}) || !state.Ready {
-			t.Errorf("after update with %s: active %q, installed %v, ready %v, want the pin alone, ready", body, state.TrivyActive, state.TrivyInstalled, state.Ready)
-		}
-	}
-}
-
-func TestActivateTrivyRouteNamesThePin(t *testing.T) {
-	srv, _ := newTestServer(t)
-
-	status, data := postTools(t, srv.URL+"/api/tools/trivy/activate", `{"version":"0.54.0"}`)
-	if status != http.StatusConflict {
-		t.Fatalf("status = %d, want 409, body %s", status, data)
-	}
-	var problem Problem
-	if err := json.Unmarshal(data, &problem); err != nil || problem.Detail == nil || !strings.Contains(*problem.Detail, tools.PinnedTrivy.Version) {
-		t.Errorf("problem %s does not name the pinned %s", data, tools.PinnedTrivy.Version)
-	}
-}
-
-func TestGetToolsAsksNothingOfGitHub(t *testing.T) {
-	srv, h := newTestServer(t)
-	requests := pinnedTrivyRelease(t, h)
-
-	resp, err := http.Get(srv.URL + "/api/tools")
-	if err != nil {
-		t.Fatalf("GET /api/tools: %v", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body %s", resp.StatusCode, data)
-	}
-	if got := requests(); len(got) != 0 {
-		t.Errorf("GET /api/tools asked GitHub for %v, want nothing", got)
-	}
-	var state ToolsState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	if state.TrivyLatest != "1.2.3" || state.TrivyRecommended != nil || state.LatestSizeBytes != 0 {
-		t.Errorf("latest %q, recommended %v, size %d, want the pin, no recommendation, no size", state.TrivyLatest, state.TrivyRecommended, state.LatestSizeBytes)
-	}
-}
-
 // exportTrivyFake is a runner.Trivy whose ScanSBOM and ConvertToCycloneDX
 // write a minimal valid report and CycloneDX document, so an export job
 // that reaches the reports step can finish without a real Trivy binary.
@@ -910,41 +830,6 @@ func TestSettingsHaveNoSignatureKey(t *testing.T) {
 	}
 }
 
-// TestUpdateSettingsAnswers409 proves a valid settings body changes nothing:
-// the policy file sets the settings at deploy, and nothing writes them to
-// the volume.
-func TestUpdateSettingsAnswers409(t *testing.T) {
-	srv, h := newTestServer(t)
-	before := h.Store.Settings()
-	next := settingsToAPI(before)
-	next.MinReleaseAgeDays = 21
-
-	body, _ := json.Marshal(next)
-	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build PUT: %v", err)
-	}
-	putReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("PUT /api/settings: %v", err)
-	}
-	defer resp.Body.Close()
-	var p Problem
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
-		t.Fatalf("decode problem: %v", err)
-	}
-	if resp.StatusCode != http.StatusConflict || p.Detail == nil || *p.Detail != "Settings are set at deploy, in the policy file" {
-		t.Errorf("PUT answered %d %+v, want 409 naming the policy file", resp.StatusCode, p)
-	}
-	if got := h.Store.Settings(); got != before {
-		t.Errorf("Settings() = %+v after a refused PUT, want %+v", got, before)
-	}
-	if _, err := os.Lstat(filepath.Join(h.Store.Root(), "private", "settings.json")); !os.IsNotExist(err) {
-		t.Errorf("a refused PUT left a settings file (stat: %v)", err)
-	}
-}
-
 // assertServesNothingOutsideProjects plants, one row at a time, a link that
 // leaves projects/ at each component of rel, the path a route reads there,
 // or a loop of links at its last one, and expects the route at url to
@@ -1184,27 +1069,6 @@ func TestSetProjectTarget(t *testing.T) {
 	}
 	if updated.Target.Node != "20.0.0" {
 		t.Fatalf("Target.Node = %q, want %q", updated.Target.Node, "20.0.0")
-	}
-}
-
-func TestGetToolsSucceedsWithoutNetworkAccess(t *testing.T) {
-	srv, _ := newTestServer(t)
-
-	resp, err := http.Get(srv.URL + "/api/tools")
-	if err != nil {
-		t.Fatalf("GET /api/tools: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200, body: %s", resp.StatusCode, body)
-	}
-	var state ToolsState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.PnpmInstalled == nil || state.TrivyInstalled == nil {
-		t.Errorf("ToolsState = %+v, want non-nil empty slices, not null", state)
 	}
 }
 
@@ -2145,95 +2009,6 @@ func uvIndexServer(t *testing.T) (index string, requests func() int) {
 	}
 }
 
-func postInstallUv(t *testing.T, srv *httptest.Server, body string) (int, []byte) {
-	t.Helper()
-	resp, err := http.Post(srv.URL+"/api/tools/uv/install", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST install uv: %v", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, data
-}
-
-func TestInstallUvRoute(t *testing.T) {
-	srv, h := newTestServer(t)
-	index, _ := uvIndexServer(t)
-	h.Tools.PipIndex = index
-	h.Tools.Arch = "amd64"
-
-	status, data := postInstallUv(t, srv, `{"version":"0.13.7"}`)
-	if status != http.StatusOK {
-		t.Fatalf("install 0.13.7: status = %d, body %s", status, data)
-	}
-	var state ToolsState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7" {
-		t.Fatalf("uvInstalled = %v, want [0.13.7]", state.UvInstalled)
-	}
-
-	refusals := []struct {
-		name, body string
-		status     int
-		detail     []string
-	}{
-		{"a young release without force", `{"version":"0.13.8"}`, http.StatusConflict, []string{"uv 0.13.8", "14 days", "force"}},
-		{"a bad version", `{"version":"../0.13.7"}`, http.StatusBadRequest, []string{"invalid uv version", "such as 0.13.7"}},
-	}
-	for _, c := range refusals {
-		t.Run(c.name, func(t *testing.T) {
-			status, data := postInstallUv(t, srv, c.body)
-			if status != c.status {
-				t.Fatalf("status = %d, want %d, body %s", status, c.status, data)
-			}
-			var p Problem
-			if err := json.Unmarshal(data, &p); err != nil {
-				t.Fatalf("decode problem: %v", err)
-			}
-			for _, part := range c.detail {
-				if p.Detail == nil || !strings.Contains(*p.Detail, part) {
-					t.Errorf("detail = %v, want it to name %q", p.Detail, part)
-				}
-			}
-		})
-	}
-
-	status, data = postInstallUv(t, srv, `{"version":"0.13.8","force":true}`)
-	if status != http.StatusOK {
-		t.Fatalf("forced install of 0.13.8: status = %d, body %s", status, data)
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7,0.13.8" {
-		t.Fatalf("uvInstalled = %v, want [0.13.7 0.13.8]", state.UvInstalled)
-	}
-}
-
-func TestToolsStateAsksNothingOfTheIndex(t *testing.T) {
-	srv, h := newTestServer(t)
-	index, requests := uvIndexServer(t)
-	h.Tools.PipIndex = index
-
-	resp, err := http.Get(srv.URL + "/api/tools")
-	if err != nil {
-		t.Fatalf("GET /api/tools: %v", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body %s", resp.StatusCode, data)
-	}
-	if n := requests(); n != 0 {
-		t.Errorf("GET /api/tools made %d requests to the package index, want 0", n)
-	}
-	if !strings.Contains(string(data), `"uvInstalled":[]`) {
-		t.Errorf("body %s does not send uvInstalled as an empty list", data)
-	}
-}
-
 // writeAnalysisFiles commits an analysis directory holding files, as a job
 // would leave it.
 func writeAnalysisFiles(t *testing.T, st *store.Store, projectID, id string, files map[string]string) {
@@ -2511,4 +2286,91 @@ func readTestFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// volumeTools records every entry under the volume's tools folder: a
+// file's sha256, a link's target, a folder's name.
+func volumeTools(t *testing.T, root string) map[string]string {
+	t.Helper()
+	entries := map[string]string{}
+	err := filepath.WalkDir(filepath.Join(root, "tools"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			entries[rel] = "link " + target
+			return err
+		case d.IsDir():
+			entries[rel] = "dir"
+		default:
+			data, err := os.ReadFile(path)
+			sum := sha256.Sum256(data)
+			entries[rel] = "file " + hex.EncodeToString(sum[:])
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read the tools folder: %v", err)
+	}
+	return entries
+}
+
+// TestToolAndSettingsRoutesAreGone proves no request installs a tool or
+// writes the settings: the deployment prepares the one and sets the other.
+func TestToolAndSettingsRoutesAreGone(t *testing.T) {
+	srv, h := newTestServer(t)
+	githubRequests := pinnedTrivyRelease(t, h)
+	index, indexRequests := uvIndexServer(t)
+	h.Tools.PipIndex = index
+	settings, _ := json.Marshal(settingsToAPI(h.Store.Settings()))
+	beforeSettings := h.Store.Settings()
+	before := volumeTools(t, h.Store.Root())
+
+	routes := []struct{ method, path, body string }{
+		{http.MethodGet, "/api/tools", ""},
+		{http.MethodPost, "/api/tools/trivy/update", `{"force":true}`},
+		{http.MethodPost, "/api/tools/trivy/activate", `{"version":"1.2.3"}`},
+		{http.MethodPost, "/api/tools/trivy/db/update", `{}`},
+		{http.MethodPost, "/api/tools/uv/install", `{"version":"0.13.8","force":true}`},
+		{http.MethodPut, "/api/settings", string(settings)},
+	}
+	for _, route := range routes {
+		req, err := http.NewRequest(route.method, srv.URL+route.path, strings.NewReader(route.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", route.method, route.path, err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s = %d, want 404 or 405: %s", route.method, route.path, resp.StatusCode, data)
+		}
+	}
+
+	if after := volumeTools(t, h.Store.Root()); !reflect.DeepEqual(after, before) {
+		t.Errorf("the tools folder changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if got := githubRequests(); len(got) != 0 {
+		t.Errorf("the routes asked GitHub for %v, want nothing", got)
+	}
+	if n := indexRequests(); n != 0 {
+		t.Errorf("the routes made %d requests to the package index, want 0", n)
+	}
+	if got := h.Store.Settings(); got != beforeSettings {
+		t.Errorf("Settings() = %+v, want %+v", got, beforeSettings)
+	}
+	if _, err := os.Lstat(filepath.Join(h.Store.Root(), "private", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("a settings file appeared on the volume (stat: %v)", err)
+	}
 }
