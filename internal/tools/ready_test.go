@@ -401,3 +401,44 @@ func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparerCutsAndStripsARefreshWarning(t *testing.T) {
+	const token = "ghp_plantedTokenValue0123456789"
+	pr := newPreparation(t, monthOld)
+	pr.m.GitHubToken = token
+	plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
+	cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
+	pr.db.fail = func(int) error { return errors.New(cause) }
+	pr.run(t)
+
+	r := waitState(t, pr.p, "ready", isReady)
+	if n := utf8.RuneCountInString(r.Warning); n > 300 {
+		t.Errorf("warning holds %d characters, want 300 at most", n)
+	}
+	if !strings.Contains(r.Warning, strings.Repeat("x", 100)+"[31m Bearer [redacted] line break done y") {
+		t.Errorf("warning = %q, want the cause's start, stripped", r.Warning)
+	}
+	for _, c := range r.Warning {
+		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
+			t.Errorf("warning = %q holds the control character %U", r.Warning, c)
+		}
+	}
+	logs := pr.logs.String()
+	if strings.Contains(logs, token) {
+		t.Error("the log holds the token")
+	}
+	logged := false
+	for line := range strings.Lines(logs) {
+		var entry struct{ Msg, Cause string }
+		if json.Unmarshal([]byte(line), &entry) != nil || entry.Msg != "vulnerability database not refreshed" {
+			continue
+		}
+		logged = true
+		if entry.Cause != r.Warning {
+			t.Errorf("logged cause = %q, want the warning %q", entry.Cause, r.Warning)
+		}
+	}
+	if !logged {
+		t.Errorf("no log line reports the failed refresh:\n%s", logs)
+	}
+}
