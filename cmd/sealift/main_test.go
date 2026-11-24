@@ -903,3 +903,52 @@ func TestRunLogsAnOverriddenKey(t *testing.T) {
 		t.Errorf("settings.json changed to %s", raw)
 	}
 }
+
+// TestNewToolsManagerNpmRegistry covers SEALIFT_NPM_REGISTRY: an http
+// registry off loopback stops the start unless SEALIFT_ALLOW_HTTP_REGISTRY
+// is true, which logs a warning naming the variable and never the URL.
+func TestNewToolsManagerNpmRegistry(t *testing.T) {
+	cases := []struct {
+		name, value, allow string
+		wantErr, wantWarn  bool
+	}{
+		{"unset keeps the public registry", "", "", false, false},
+		{"https with credentials", "https://ci:s3cretTOKEN@npm.example.internal/", "", false, false},
+		{"http on loopback", "http://127.0.0.1:4873", "", false, false},
+		{"http on another host", "http://ci:s3cretTOKEN@registry:4873", "", true, false},
+		{"http on another host, allowed", "http://ci:s3cretTOKEN@registry:4873", "true", false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SEALIFT_NPM_REGISTRY", c.value)
+			t.Setenv("SEALIFT_ALLOW_HTTP_REGISTRY", c.allow)
+			var logs bytes.Buffer
+			m, err := newToolsManager(nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("newToolsManager accepted %q", c.value)
+				}
+				if strings.Contains(err.Error(), "s3cretTOKEN") || strings.Contains(err.Error(), "registry:4873") {
+					t.Errorf("error repeats the value: %v", err)
+				}
+				if !strings.Contains(err.Error(), "SEALIFT_NPM_REGISTRY") {
+					t.Errorf("error does not name the variable: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.NPMRegistry != c.value {
+				t.Errorf("NPMRegistry = %q, want %q", m.NPMRegistry, c.value)
+			}
+			warned := strings.Contains(logs.String(), "SEALIFT_ALLOW_HTTP_REGISTRY")
+			if warned != c.wantWarn {
+				t.Errorf("warning logged = %v, want %v: %s", warned, c.wantWarn, logs.String())
+			}
+			if strings.Contains(logs.String(), "s3cretTOKEN") || strings.Contains(logs.String(), "registry:4873") {
+				t.Errorf("log repeats the URL: %s", logs.String())
+			}
+		})
+	}
+}

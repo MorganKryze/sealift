@@ -76,6 +76,32 @@ func ParseIndexURL(raw string) (string, error) {
 	return raw, nil
 }
 
+// ParseRegistryURL checks the npm registry pnpm and the analyses read.
+// Empty keeps npm.DefaultRegistry. The registry must be https, or http on
+// a loopback host, or http on any host when allowHTTP is set, which
+// insecure then reports. Credentials may stand in the URL, so the error
+// never repeats the value.
+func ParseRegistryURL(raw string, allowHTTP bool) (u string, insecure bool, err error) {
+	if raw == "" {
+		return "", false, nil
+	}
+	parsed, perr := url.Parse(raw)
+	switch {
+	case perr != nil:
+		return "", false, errors.New("the npm registry is not a readable URL")
+	case parsed.Scheme != "https" && parsed.Scheme != "http":
+		return "", false, errors.New("the npm registry must be an https URL, or an http URL on a loopback host")
+	case parsed.Host == "":
+		return "", false, errors.New("the npm registry URL has no host")
+	case parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()):
+		if !allowHTTP {
+			return "", false, errors.New("an http npm registry must be on a loopback host unless SEALIFT_ALLOW_HTTP_REGISTRY=true")
+		}
+		return raw, true, nil
+	}
+	return raw, false, nil
+}
+
 func loopbackHost(host string) bool {
 	if host == "localhost" {
 		return true

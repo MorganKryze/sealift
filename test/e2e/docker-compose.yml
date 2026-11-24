@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     environment:
       SEALIFT_NPM_REGISTRY: http://registry:4873
+      SEALIFT_ALLOW_HTTP_REGISTRY: "true"
       NPM_CONFIG_REGISTRY: http://registry:4873
       # Lifts GitHub's anonymous rate limit for the Trivy release lookup.
       SEALIFT_GITHUB_TOKEN: ${GITHUB_TOKEN:-}

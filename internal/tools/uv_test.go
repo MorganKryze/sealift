@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -492,6 +493,45 @@ func TestParseIndexURL(t *testing.T) {
 			}
 			if err != nil || got != c.want {
 				t.Fatalf("ParseIndexURL(%q) = %q, %v, want %q", c.raw, got, err, c.want)
+			}
+		})
+	}
+}
+
+func TestParseRegistryURL(t *testing.T) {
+	cases := []struct {
+		raw       string
+		allowHTTP bool
+		want      string
+		insecure  bool
+		wantErr   string
+	}{
+		{raw: "", want: ""},
+		{raw: "https://npm.example.org/", want: "https://npm.example.org/"},
+		{raw: "https://ci:s3cret@npm.example.org/", want: "https://ci:s3cret@npm.example.org/"},
+		{raw: "http://127.0.0.1:4873", want: "http://127.0.0.1:4873"},
+		{raw: "http://localhost:4873", want: "http://localhost:4873"},
+		{raw: "http://registry:4873", wantErr: "SEALIFT_ALLOW_HTTP_REGISTRY"},
+		{raw: "http://ci:s3cret@registry:4873", wantErr: "SEALIFT_ALLOW_HTTP_REGISTRY"},
+		{raw: "http://registry:4873", allowHTTP: true, want: "http://registry:4873", insecure: true},
+		{raw: "ftp://npm.example.org/", allowHTTP: true, wantErr: "https"},
+		{raw: "https:///", wantErr: "host"},
+		{raw: "npm.example.org", wantErr: "https"},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%s allow=%v", c.raw, c.allowHTTP), func(t *testing.T) {
+			got, insecure, err := ParseRegistryURL(c.raw, c.allowHTTP)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("ParseRegistryURL(%q) = %q, %v, want an error naming %q", c.raw, got, err, c.wantErr)
+				}
+				if strings.Contains(err.Error(), c.raw) || strings.Contains(err.Error(), "s3cret") {
+					t.Errorf("error %q repeats the value", err)
+				}
+				return
+			}
+			if err != nil || got != c.want || insecure != c.insecure {
+				t.Fatalf("ParseRegistryURL(%q) = %q, %v, %v, want %q, %v", c.raw, got, insecure, err, c.want, c.insecure)
 			}
 		})
 	}

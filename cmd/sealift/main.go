@@ -226,8 +226,9 @@ var onQueueReady func(*jobs.Queue)
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 // SEALIFT_PIP_INDEX names the package index uv comes from, under
 // tools.ParseIndexURL's rules. SEALIFT_NPM_REGISTRY names the registry pnpm
-// comes from, and the analyses' registry client reads it from the manager.
-// Empty keeps npm.DefaultRegistry, the only path production takes. The
+// comes from, and the analyses' registry client reads it from the manager,
+// under tools.ParseRegistryURL's rules; SEALIFT_ALLOW_HTTP_REGISTRY=true
+// lets it be plain http off loopback. Empty keeps npm.DefaultRegistry. The
 // end-to-end test (test/e2e) sets it to a local Verdaccio that mirrors the
 // public registry through an uplink, so it can publish a package sealift's
 // own analysis and export need to resolve that the public registry never
@@ -235,7 +236,14 @@ var onQueueReady func(*jobs.Queue)
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
-	m.NPMRegistry = os.Getenv("SEALIFT_NPM_REGISTRY")
+	registry, insecure, err := tools.ParseRegistryURL(os.Getenv("SEALIFT_NPM_REGISTRY"), os.Getenv("SEALIFT_ALLOW_HTTP_REGISTRY") == "true")
+	if err != nil {
+		return nil, fmt.Errorf("SEALIFT_NPM_REGISTRY: %w", err)
+	}
+	if insecure && log != nil {
+		log.Warn("SEALIFT_ALLOW_HTTP_REGISTRY is true: pnpm and the packages come over plain http, so the network can change them")
+	}
+	m.NPMRegistry = registry
 	index, err := tools.ParseIndexURL(os.Getenv("SEALIFT_PIP_INDEX"))
 	if err != nil {
 		return nil, fmt.Errorf("SEALIFT_PIP_INDEX: %w", err)
