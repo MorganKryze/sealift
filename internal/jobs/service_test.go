@@ -959,6 +959,53 @@ func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T)
 	}
 }
 
+// TestAnalysisThatFailedBeforeItBeganKeepsItsCause proves a run that fails
+// before its first write, such as one that cannot open its log, is
+// published with a failed step and the run's error, so the screen can say
+// what went wrong.
+func TestAnalysisThatFailedBeforeItBeganKeepsItsCause(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	pending, err := st.NewDir("analyses", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	createdAt, _ := store.JobCreatedAt(pending.ID())
+	if err := svc.seedPending(pending, createdAt, project); err != nil {
+		t.Fatalf("seedPending: %v", err)
+	}
+
+	const cause = "jobs: open log.txt: permission denied"
+	job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+		return errors.New(cause)
+	}}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, "", pending)
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+	info, err := st.AnalysisInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if info.State != store.Failed {
+		t.Errorf("State = %q, want %q", info.State, store.Failed)
+	}
+	want := store.StepFailure{Step: "prepare", Message: cause}
+	if info.Failure == nil || *info.Failure != want {
+		t.Errorf("Failure = %+v, want %+v", info.Failure, want)
+	}
+	var status map[string]json.RawMessage
+	if err := st.ReadJSON(filepath.Join(pending.Final(), "status.json"), &status); err != nil {
+		t.Fatalf("read status.json: %v", err)
+	}
+	if status["target"] == nil || status["createdAt"] == nil {
+		t.Errorf("status.json = %v, want the queued record's target and creation time kept", status)
+	}
+}
+
 // TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled proves the
 // finalizer never discards an analysis that wrote something. Its own
 // commit can fail (a full volume fails the status write there and again
