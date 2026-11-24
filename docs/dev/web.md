@@ -16,7 +16,7 @@ The collection's routes are file-based, in `web/src/routes/`:
 
 | Route | Screen |
 | --- | --- |
-| `/` | Setup when a tool or the key is missing, otherwise home: the drop zone, the drop preview, past sessions |
+| `/` | Preparing sealift until the instance is ready, then home: the drop zone, the drop preview, past sessions |
 | `/settings` | Opens the settings panel over home |
 | `/sessions/$sessionId` | Redirects to the session's most useful step: export when the latest analysis has an export, finished or not, review after a finished analysis, analysis otherwise |
 | `/sessions/$sessionId/drop` | The manifest the session started from |
@@ -53,9 +53,13 @@ Two rules keep the screens steady while events arrive several times a second:
 
 `web/src/hooks/use-selection.ts` holds the version chosen for each dependency, starting from `best`, and keeps it in `sessionStorage` so a reload does not lose it. `web/src/lib/reviewGroups.ts` sorts dependencies into To decide, Proposed and Nothing to do from sealift's proposal, not from the selection, so a row does not move while someone picks a version. `web/src/lib/exportSelection.ts` turns the selection into the export request; a retried export sends the same selection. [Ranking](ranking.md#the-review-groups) gives the grouping rule.
 
+## The preparing screen
+
+`components/preparing-screen.tsx` holds `WhenReady`, which wraps home at `/`. It reads `GET /api/instance` every 3 seconds until `ready` is true, then shows home and stops asking. Until then it shows Preparing sealift: one row per item the start prepares (Trivy, the vulnerability database, the signing key, pnpm and uv), with its version and its state, Ready, Preparing or Failed. A failed row shows the server's cause and the time of the next try. The screen has no button: the server installs and retries on its own. Each row's state is a polite status that stays mounted across polls, so a screen reader announces each change once.
+
 ## The settings panel
 
-`components/settings/settings-panel.tsx` renders a side sheet over the current screen, from anywhere, and returns focus to what opened it. `settings-form.tsx` holds the form: the platform choice from `lib/platforms.ts`, the Node version checked as you type, the key with Replace and Clear, the limits with their ranges. `PUT /api/settings` replaces every field, so the form always sends the full object, with `********` to keep the saved key. `tools-panel.tsx` holds the Trivy, database and pnpm cards.
+`components/settings/settings-panel.tsx` renders a side sheet over the current screen, from anywhere, and returns focus to what opened it. It holds Appearance, saved in the browser, then three sections from `GET /api/instance` and `GET /api/signing-key`. `policy-section.tsx` shows the policy as a description list under the line "Set by your deployment.": the npm and pip targets, the minimum release age, both parallelism limits, and whether the instance is ephemeral, with its idle delay. `signing-key-section.tsx` shows the public key with its download and Regenerate key. `tools-panel.tsx` shows the pinned Trivy and the database's date under Scanner. Beside the theme, only the signing key has a control: the deployment sets the rest.
 
 ## Checks
 
@@ -69,7 +73,7 @@ pnpm -C web run test
 
 ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may import only each other and `@/components/ui/*`, `@/components/brand/*`, `@/components/theme-toggle`, `@/hooks/use-return-focus` and `@/lib/utils`. An import of the collection's API client, routes, session, settings or project components, or of `use-job-events`, fails the lint. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
 
-`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It builds the web and one `sealift` binary, then starts both roles from that binary. The collection listens on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. CI does not run the gate. Install the browser once, then run it:
+`web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It builds the web and one `sealift` binary, then starts both roles from that binary. The collection listens on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. The seed also lays out the pinned Trivy (a script that exits 0), its database's `metadata.json`, and the default pnpm and uv, in the folders `internal/tools` installs to. It reads their versions from the Go sources. The server is then ready without a download, and its stand-in for GitHub, the npm registry and the package index receives no request. The gate checks both. The preparing screen comes from `UI.answers`, which replaces `/api/instance` with a body captured once from the server started on an empty volume. CI does not run the gate. Install the browser once, then run it:
 
 ```sh
 pnpm -C web exec playwright install chromium

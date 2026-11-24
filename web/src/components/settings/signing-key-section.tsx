@@ -6,7 +6,7 @@ import { ProblemError } from "@/api/client"
 import { getSigningKey, regenerateSigningKey, type SigningKey } from "@/api/settings"
 import { CopyControl } from "@/components/copy-control"
 import { ProblemNotice } from "@/components/problem-notice"
-import { Section } from "@/components/settings/settings-form"
+import { Section } from "@/components/settings/policy-section"
 import { Button } from "@/components/ui/button"
 
 const PEM_FILE = "sealift-public-key.pem"

@@ -6,6 +6,78 @@
 // at baseURL, and the import server with its token check on (see import-fixtures.mjs). No start
 // command, or a missing package, fails the run: it never skips. No screenshot diff, no clock, no
 // random input. Fill the blocks below; `exceptions` take a selector, the check they lift and the reason.
+
+// GET /api/instance as the collection server answered it on an empty volume, with its stand-in upstream
+// answering 404 to everything: Trivy, pnpm and uv failed once and wait for their next try. Captured once
+// from the real server; the seeded volume is ready, so the gate shows this state through `answers`.
+const PREPARING = {
+  "brand": {
+    "logo": false,
+    "name": "sealift",
+    "offline": "Offline",
+    "online": "Online",
+    "reviewWord": "PR"
+  },
+  "ephemeral": false,
+  "policy": {
+    "downloadParallelism": 16,
+    "minReleaseAgeDays": 14,
+    "pipTarget": {
+      "cpu": "x86_64",
+      "glibc": "2.28",
+      "os": "linux",
+      "python": "3.11.2",
+      "uvVer": "0.13.7"
+    },
+    "resolveParallelism": 4,
+    "target": {
+      "cpu": "x64",
+      "libc": "glibc",
+      "node": "22.17.1",
+      "os": "linux",
+      "pnpmVer": "10.34.5"
+    }
+  },
+  "preparing": [
+    {
+      "name": "trivy",
+      "nextTry": "2026-11-24T12:09:45.79156+01:00",
+      "reason": "could not reach GitHub to look up Trivy releases: release 0.76.2: GET http://127.0.0.1:56403/repos/aquasecurity/trivy/releases/tags/v0.76.2: 404 Not Found",
+      "state": "failed",
+      "version": "0.76.2"
+    },
+    {
+      "name": "trivy-db",
+      "state": "preparing"
+    },
+    {
+      "name": "signing-key",
+      "state": "ready",
+      "version": "ef1bea90874fe11f644bbcad4acda3214dce976a0908b6b7f0b395b1673d46f8"
+    },
+    {
+      "name": "pnpm",
+      "nextTry": "2026-11-24T12:09:45.793535+01:00",
+      "reason": "pnpm packument: packument pnpm: not found in registry",
+      "state": "failed",
+      "version": "10.34.5"
+    },
+    {
+      "name": "uv",
+      "nextTry": "2026-11-24T12:09:45.792933+01:00",
+      "reason": "uv 0.13.7: pip: not found on the index",
+      "state": "failed",
+      "version": "0.13.7"
+    }
+  ],
+  "ready": false,
+  "tools": {
+    "pnpm": [],
+    "trivy": "0.76.2",
+    "uv": []
+  }
+}
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -24,6 +96,11 @@ export const UI = {
   states: [
     { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
   ],
+  // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
+  // `ready` is the text that proves the page drew that answer.
+  answers: [
+    { path: "/", api: "/api/instance", body: PREPARING, ready: "Preparing sealift" },
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
@@ -31,12 +108,14 @@ export const UI = {
   exceptions: [
     // Radix places these zero-size spans around an open dialog to trap focus; nobody clicks them.
     { selector: "[data-radix-focus-guard]", check: "target", reason: "focus trap sentinel" },
+    // The drop zone's file input is visually hidden and out of the tab order; Choose a file opens it.
+    { selector: "input[type=file].sr-only", check: "target", reason: "hidden file input behind a button" },
   ],
 }
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
@@ -100,8 +179,8 @@ test.describe.configure({ mode: "default", retries: 0 })
 const CONTROLS = `a, button, input, select, textarea, summary, [role=button], [tabindex]:not([tabindex="-1"])`
 const POLLS = 60
 
-const answers = async (url = UI.baseURL) => {
-  try { await fetch(url); return true } catch { return false }
+const answers = async (url = UI.baseURL, accept = () => true) => {
+  try { return accept(await fetch(url)) } catch { return false }
 }
 const pause = (ms) => new Promise((done) => setTimeout(done, ms))
 
@@ -152,9 +231,9 @@ const run = (command, args) =>
     child.on("exit", (code) => (code === 0 ? done() : fail(new Error(`${command} ${args.join(" ")} exited with ${code}\n${out}`))))
   })
 
-const waitFor = async (url, what, child) => {
+const waitFor = async (url, what, child, accept) => {
   for (let i = 0; i < POLLS; i++) {
-    if (await answers(url)) return
+    if (await answers(url, accept)) return
     if (child && child.exitCode !== null) throw new Error(`${what} stopped with ${child.exitCode}\n${child.log}`)
     await pause(1000)
   }
@@ -188,6 +267,8 @@ test.beforeAll(async () => {
     const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: upstream.url, SEALIFT_NPM_REGISTRY: upstream.url, SEALIFT_PIP_INDEX: `${upstream.url}/simple/` } })
     startedCollection = true
     await waitFor(UI.baseURL, "the collection server", collection)
+    // The seed lays out every tool the start prepares, so the server turns ready without a download.
+    await waitFor(`${UI.baseURL}/healthz`, "the collection server's readiness", collection, (res) => res.ok)
   }
 
   if (await answers(`${IMPORT.baseURL}/healthz`)) throw new Error(`${IMPORT.baseURL} answers already: the gate starts its own import server and will not reuse another`)
@@ -331,6 +412,24 @@ for (const state of UI.states) {
   }
 }
 
+for (const state of UI.answers) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${state.path} answered by ${state.api} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${state.path} · ${state.api} fixed · ${width}px · ${theme}`,
+          url: new URL(state.path, UI.baseURL).href,
+          width,
+          theme,
+          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: state.body })),
+          ready: (p) => p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
 for (const route of IMPORT.routes) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
@@ -403,10 +502,11 @@ for (const route of IMPORT.routes) {
   }
 }
 
-test("the collection server asked its stand-in for the pinned Trivy, pnpm and uv only", () => {
+test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return
-  const pin = readFileSync(resolve("..", "internal", "tools", "trivy_pin.go"), "utf8").match(/Version:\s*"([^"]+)"/)[1]
-  const asked = [...new Set(upstream.paths)].sort()
-  expect(asked).toEqual(["/pnpm", `/repos/aquasecurity/trivy/releases/tags/v${pin}`, "/simple/uv/"])
+  const health = await fetch(`${UI.baseURL}/healthz`)
+  expect(health.status).toBe(200)
+  expect(await health.json()).toEqual({ status: "ok" })
+  expect([...new Set(upstream.paths)].sort()).toEqual([])
 })
