@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { ChevronRight, CircleAlert, Info } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ProblemError } from "@/api/client"
 import { queueExport, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
@@ -48,6 +48,23 @@ const SEVERITY_DOT: Record<string, string> = {
   unknown: "bg-severity-unknown",
 }
 
+/** The height of the element the returned ref lands on, kept current as it resizes. */
+function useHeight(): [number, (element: HTMLElement | null) => void] {
+  const [height, setHeight] = useState(0)
+  const observer = useRef<ResizeObserver | null>(null)
+  const ref = useCallback((element: HTMLElement | null) => {
+    observer.current?.disconnect()
+    observer.current = null
+    if (element === null || typeof ResizeObserver === "undefined") {
+      return
+    }
+    observer.current = new ResizeObserver(() => setHeight(element.offsetHeight))
+    observer.current.observe(element)
+    setHeight(element.offsetHeight)
+  }, [])
+  return [height, ref]
+}
+
 export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreenProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -59,6 +76,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
 
   const result = analysis.result
   const dependencies = result?.dependencies ?? []
+  const [barHeight, barRef] = useHeight()
 
   // Seeded from sealift's own best pick, so the initial export matches the
   // proposal without the user touching anything; re-runs if the analysis
@@ -153,7 +171,12 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   }
 
   return (
-    <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8 pb-28">
+    <div
+      className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8 pb-28"
+      // The Export bar is fixed and grows with its cause, so the page keeps its real height free below
+      // the last reason field.
+      style={barHeight > 0 ? { paddingBottom: barHeight + 32 } : undefined}
+    >
       <StepBar steps={steps} />
 
       <div className="mb-6">
@@ -259,7 +282,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
 
       <ReasonsBlock needed={needed} reasons={reasons.reasons} onChange={reasons.setReason} refusal={refusal} />
 
-      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
+      <div ref={barRef} className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
           <div className="text-sm">
             <span className="font-semibold text-ink">

@@ -545,6 +545,30 @@ for (const route of IMPORT.routes) {
   }
 }
 
+// Twenty reasons and the Export bar at its tallest: at the bottom of the page, the last reason field and
+// the text typed in it sit above the bar.
+for (const width of UI.widths) {
+  test(`/sessions/worst/review keeps the last reason above the Export bar ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await page.addInitScript(() => {
+      sessionStorage.setItem("sealift:selection:20261124T111500Z", JSON.stringify({ "keeps-cve-20": ["1.0.1"] }))
+    })
+    await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
+    await page.getByText(/^20 reasons missing: /).waitFor({ timeout: 15_000 })
+    const last = page.locator("textarea").last()
+    await last.fill("x")
+    await last.focus()
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await page.evaluate(settle)
+    const hidden = await page.evaluate(() => {
+      const field = [...document.querySelectorAll("textarea")].at(-1).getBoundingClientRect()
+      const bar = document.getElementById("export-waits").closest(".fixed").getBoundingClientRect()
+      return Math.max(0, field.bottom - bar.top)
+    })
+    expect(hidden, `${hidden} px of the last reason field sit under the Export bar at ${width}px`).toBe(0)
+  })
+}
+
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return

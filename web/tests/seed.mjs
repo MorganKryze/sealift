@@ -98,6 +98,34 @@ write(`analyses/${reasons.analysis}/status.json`, {
 write(`analyses/${reasons.analysis}/candidates.json`, JSON.stringify(reasonsResult(null), null, 2), reasons.project)
 write(`analyses/${reasons.analysis}/ranking.json`, JSON.stringify(reasonsResult([0, 0, 1, 0, 0]), null, 2), reasons.project)
 
+// The worst case for the review's reasons: twenty dependencies keep a CVE no version fixes, one with a
+// 40-character name, and a twenty-first the gate moves off its proposal, so the Export bar shows its note
+// and a two-line cause.
+const worst = { project: "worst", analysis: "20261124T111500Z" }
+const worstNames = ["@northwind-industries/holdings-dashboard", ...Array.from({ length: 20 }, (_, i) => `keeps-cve-${i + 1}`)]
+const worstManifest = JSON.stringify({ name: "worst", dependencies: Object.fromEntries(worstNames.map((n) => [n, "1.0.0"])) }, null, 2)
+const worstResult = (after) => ({
+  target,
+  before: [0, 0, 21, 0, 0],
+  after,
+  dependencies: worstNames.map((name, i) => ({
+    name, current: "1.0.0", vector: [0, 0, 1, 0, 0],
+    cves: [{ id: `CVE-2025-${1000 + i}`, severity: "MEDIUM", package: `${name}@1.0.0`, fixedIn: "" }],
+    candidates: [stored("1.0.0"), stored("1.0.1")],
+  })),
+  warnings: [],
+})
+write("package.json", worstManifest, worst.project)
+write("project.json", {
+  id: worst.project, name: "worst", target, createdAt: "2026-11-24T11:14:00Z",
+  manifestSha256: createHash("sha256").update(worstManifest).digest("hex"),
+}, worst.project)
+write(`analyses/${worst.analysis}/status.json`, {
+  state: "done", pnpmVersion: "12.3.4", trivyVersion: "0.74.0", trivyDbDate: "2026-11-24T06:12:00Z",
+}, worst.project)
+write(`analyses/${worst.analysis}/candidates.json`, JSON.stringify(worstResult(null), null, 2), worst.project)
+write(`analyses/${worst.analysis}/ranking.json`, JSON.stringify(worstResult([0, 0, 21, 0, 0]), null, 2), worst.project)
+
 // The key is made per run and written as the store writes it: PKCS#8 PEM, mode 0600, in private/ at 0700.
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
 mkdirSync(join(root, "private"), { recursive: true, mode: 0o700 })
