@@ -736,3 +736,15 @@ func TestShortFixedInCutsAFixedInOf257Bytes(t *testing.T) {
 		t.Errorf("shortFixedIn = %d bytes, want 200", len(got))
 	}
 }
+
+// A lockfile copy of a direct dependency at another version is not the
+// dependency the project selects from: it asks that dependency nothing.
+func TestCheckReasonsPlacesAProjectFindingOnADependencyOnlyAtItsCurrentVersion(t *testing.T) {
+	r := reviewResult()
+	req := withProject(request(map[string][]string{}), rank.Finding{ID: "CVE-2025-0400", Package: "react", Version: "17.0.2", Severity: rank.High})
+	for _, p := range CheckReasons(r, req, askReasons()) {
+		if strings.Contains(p, "CVE-2025-0400") {
+			t.Errorf("problem %q places react 17.0.2 on react 18.3.1", p)
+		}
+	}
+}
