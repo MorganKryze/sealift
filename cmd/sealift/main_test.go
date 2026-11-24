@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -63,38 +64,58 @@ func TestToolsCredential(t *testing.T) {
 	})
 }
 
-// TestRunServesHealthAndStopsOnSignal starts the real wiring on a free port,
-// so a broken store, queue or route shows up here rather than in the image.
-func TestRunServesHealthAndStopsOnSignal(t *testing.T) {
-	localGitHub(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+// TestRunServesTheInterfaceWhilePreparing starts the real wiring on a free
+// port, with a GitHub that accepts the connection and never answers, so a
+// broken store, queue or route shows up here rather than in the image, and
+// a hung preparation neither blocks the interface nor the stop.
+func TestRunServesTheInterfaceWhilePreparing(t *testing.T) {
+	localUpstreams(t)
+	hung := make(chan struct{})
+	gh := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(gh.Close)
+	t.Cleanup(func() { close(hung) })
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
 
+	addr := freeAddr(t)
 	root := filepath.Join(t.TempDir(), "data")
 	done := make(chan error, 1)
 	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
 
-	deadline := time.Now().Add(5 * time.Second)
 	var resp *http.Response
-	for time.Now().Before(deadline) {
-		resp, err = http.Get("http://" + addr + "/healthz")
-		if err == nil {
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if resp, err = http.Get("http://" + addr + "/"); err == nil {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("health check never answered: %v", err)
+		t.Fatalf("the interface never answered: %v", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
+		t.Errorf("GET / = %d, want 200", resp.StatusCode)
+	}
+
+	resp, err = http.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Status  string
+		Missing []string
+	}
+	err = json.NewDecoder(resp.Body).Decode(&health)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || health.Status != "preparing" || !slices.Contains(health.Missing, "trivy") {
+		t.Errorf("/healthz = %d %+v, want 503 preparing with trivy missing", resp.StatusCode, health)
 	}
 	if _, statErr := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(statErr) {
 		t.Errorf("a fresh volume holds a settings file (stat: %v), want none", statErr)
@@ -137,7 +158,7 @@ func (j *blockingJob) Run(ctx context.Context, emit func(jobs.Event)) error {
 // job before shutting the server down, so the connection goes idle quickly
 // and run returns well under the 10 second shutdown timeout.
 func TestRunCancelsRunningJobBeforeShuttingDownServer(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	started := make(chan struct{})
 	onQueueReady = func(q *jobs.Queue) {
 		if _, err := q.Submit(&blockingJob{started: started}); err != nil {
@@ -239,10 +260,11 @@ func TestSubcommand(t *testing.T) {
 	}
 }
 
-// localGitHub points SEALIFT_GITHUB_API at a local server that answers 404 and
-// reports the paths it is asked for. A test that starts run sets it first, so
-// no test reaches api.github.com.
-func localGitHub(t *testing.T) <-chan string {
+// localUpstreams points SEALIFT_GITHUB_API at a local server that answers 404
+// and reports the paths it is asked for, and SEALIFT_NPM_REGISTRY and
+// SEALIFT_PIP_INDEX at another that answers 404. A test that starts run sets
+// it first, so the preparation at start reaches nothing outside the machine.
+func localUpstreams(t *testing.T) <-chan string {
 	t.Helper()
 	asked := make(chan string, 8)
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -254,62 +276,23 @@ func localGitHub(t *testing.T) <-chan string {
 	}))
 	t.Cleanup(gh.Close)
 	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	registries := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(registries.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registries.URL)
+	t.Setenv("SEALIFT_PIP_INDEX", registries.URL+"/simple/")
 	return asked
 }
 
-// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
-// manager: GET /api/tools asks GitHub nothing, the Trivy install looks up
-// the pinned release, and the server named by the variable must be the one
-// asked.
-func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
-	asked := localGitHub(t)
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+// startAndStop serves a fresh volume on a free port until fn returns, then
+// signals the process and waits for run to return.
+func startAndStop(t *testing.T, fn func(addr string)) {
+	t.Helper()
+	addr := freeAddr(t)
 	done := make(chan error, 1)
 	go func() {
 		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
-
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	var resp *http.Response
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if resp, err = client.Get("http://" + addr + "/api/tools"); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("GET /api/tools never answered: %v", err)
-	}
-	resp.Body.Close()
-	select {
-	case path := <-asked:
-		t.Errorf("GET /api/tools asked GitHub for %q, want nothing", path)
-	default:
-	}
-
-	resp, err = client.Post("http://"+addr+"/api/tools/trivy/update", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatalf("POST /api/tools/trivy/update: %v", err)
-	}
-	resp.Body.Close()
-	select {
-	case path := <-asked:
-		if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
-			t.Errorf("fake GitHub asked for %q, want %q", path, want)
-		}
-	default:
-		t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
-	}
-
+	fn(addr)
 	p, err := os.FindProcess(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
@@ -325,6 +308,50 @@ func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("run did not return after SIGTERM")
 	}
+}
+
+// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
+// manager: the preparation at start looks up the pinned Trivy release on the
+// server the variable names.
+func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
+	asked := localUpstreams(t)
+	startAndStop(t, func(string) {
+		select {
+		case path := <-asked:
+			if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
+				t.Errorf("fake GitHub asked for %q, want %q", path, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
+		}
+	})
+}
+
+// TestRunPassesTheNpmRegistryToTheTools proves SEALIFT_NPM_REGISTRY reaches
+// the tools manager as well as the analysis's registry client: the pnpm the
+// preparation installs comes from the registry the variable names.
+func TestRunPassesTheNpmRegistryToTheTools(t *testing.T) {
+	localUpstreams(t)
+	asked := make(chan string, 8)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case asked <- r.URL.Path:
+		default:
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(registry.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registry.URL)
+	startAndStop(t, func(string) {
+		select {
+		case path := <-asked:
+			if path != "/pnpm" {
+				t.Errorf("the registry was asked for %q, want /pnpm", path)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the registry was never asked: SEALIFT_NPM_REGISTRY did not reach the tools manager")
+		}
+	})
 }
 
 // TestNewToolsManagerGitHubAPI covers the lookup address the manager gets from
@@ -441,7 +468,7 @@ func freeAddr(t *testing.T) string {
 }
 
 func TestServerServesItsSigningKey(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	addr := freeAddr(t)
 	root := filepath.Join(t.TempDir(), "data")
 	done := make(chan error, 1)
@@ -561,7 +588,7 @@ func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 // that signals the process and waits for run to return.
 func startRun(t *testing.T, root string, log *slog.Logger) (string, func()) {
 	t.Helper()
-	localGitHub(t)
+	localUpstreams(t)
 	addr := freeAddr(t)
 	done := make(chan error, 1)
 	go func() { done <- run(addr, root, log) }()
@@ -636,7 +663,7 @@ func refusedStart(t *testing.T, root string) error {
 }
 
 func TestRunRefusesABadPolicy(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	dir := t.TempDir()
 	for name, c := range map[string]struct{ body, want string }{
 		"out of range": {"minReleaseAgeDays: 120\n", "minReleaseAgeDays must be between 1 and 90"},
@@ -687,7 +714,7 @@ func loggedKeys(logs, msg string) []string {
 }
 
 func TestRunRefusesAStoredSettingOutsideTheRules(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	t.Setenv("SEALIFT_POLICY", "")
 	for name, c := range map[string]struct {
 		node string

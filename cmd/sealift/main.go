@@ -63,7 +63,8 @@ func run(addr, root string, log *slog.Logger) error {
 		return err
 	}
 	st.SetEphemeral(idle > 0)
-	if err := applyPolicy(st, os.Getenv("SEALIFT_POLICY"), log); err != nil {
+	pol, err := applyPolicy(st, os.Getenv("SEALIFT_POLICY"), log)
+	if err != nil {
 		return err
 	}
 	swept, err := st.MarkRunningInterrupted()
@@ -106,12 +107,7 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
 	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), asUser)
-	// Empty keeps npm.DefaultRegistry, the only path production takes. The
-	// end-to-end test (test/e2e) sets this to a local Verdaccio that mirrors
-	// the public registry through an uplink, so it can publish a package
-	// sealift's own analysis and export need to resolve that the public
-	// registry never carries.
-	registry := &npm.Client{Registry: os.Getenv("SEALIFT_NPM_REGISTRY")}
+	registry := &npm.Client{Registry: toolsManager.NPMRegistry}
 
 	queue := jobs.NewQueue(log)
 	defer queue.Close()
@@ -131,6 +127,9 @@ func run(addr, root string, log *slog.Logger) error {
 	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle
+	preparer := tools.NewPreparer(toolsManager, trivyRunner, func() string { return st.SigningKey().PublicKeySHA256 },
+		pol.Settings.Target.PnpmVer, pol.Pip.UvVer, log)
+	handlers.Ready = preparer
 
 	static, err := web.Static()
 	if err != nil {
@@ -145,6 +144,11 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// The preparation writes under root, so run returns only once it has
+	// stopped.
+	prepared := make(chan struct{})
+	go func() { defer close(prepared); preparer.Run(ctx) }()
+	defer func() { stop(); <-prepared }()
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.ListenAndServe() }()
@@ -179,20 +183,20 @@ func run(addr, root string, log *slog.Logger) error {
 }
 
 // applyPolicy reads the policy file at path, "" meaning none, over the
-// settings an older release left on the volume, and makes the result the
-// settings in effect. It logs each key the file changed from a stored value,
+// settings an older release left on the volume, makes the result the
+// settings in effect, and returns the policy. It logs each key the file changed from a stored value,
 // and each key whose stored value was empty, so the default applies.
-func applyPolicy(st *store.Store, path string, log *slog.Logger) error {
+func applyPolicy(st *store.Store, path string, log *slog.Logger) (policy.Policy, error) {
 	stored, hasStored := st.StoredSettings()
 	p, err := policy.Load(path, stored, hasStored)
 	if held := (*policy.StoredError)(nil); errors.As(err, &held) {
-		return fmt.Errorf("%s, left by an older release: %w", filepath.Join(st.Root(), "private", "settings.json"), err)
+		return policy.Policy{}, fmt.Errorf("%s, left by an older release: %w", filepath.Join(st.Root(), "private", "settings.json"), err)
 	}
 	if err != nil {
-		return fmt.Errorf("policy %s: %w", path, err)
+		return policy.Policy{}, fmt.Errorf("policy %s: %w", path, err)
 	}
 	if err := st.UseSettings(p.Settings); err != nil {
-		return fmt.Errorf("settings in effect: %w", err)
+		return policy.Policy{}, fmt.Errorf("settings in effect: %w", err)
 	}
 	for _, key := range p.Overrides {
 		log.Info("policy overrides a stored setting", "key", key)
@@ -200,7 +204,7 @@ func applyPolicy(st *store.Store, path string, log *slog.Logger) error {
 	for _, key := range p.Defaulted {
 		log.Warn("default replaces an empty stored setting", "key", key)
 	}
-	return nil
+	return p, nil
 }
 
 // onQueueReady, when non-nil, is called with the queue right after it is
@@ -220,10 +224,17 @@ var onQueueReady func(*jobs.Queue)
 // error never repeats the value, which could carry credentials.
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 // SEALIFT_PIP_INDEX names the package index uv comes from, under
-// tools.ParseIndexURL's rules.
+// tools.ParseIndexURL's rules. SEALIFT_NPM_REGISTRY names the registry pnpm
+// comes from, and the analyses' registry client reads it from the manager.
+// Empty keeps npm.DefaultRegistry, the only path production takes. The
+// end-to-end test (test/e2e) sets it to a local Verdaccio that mirrors the
+// public registry through an uplink, so it can publish a package sealift's
+// own analysis and export need to resolve that the public registry never
+// carries.
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
+	m.NPMRegistry = os.Getenv("SEALIFT_NPM_REGISTRY")
 	index, err := tools.ParseIndexURL(os.Getenv("SEALIFT_PIP_INDEX"))
 	if err != nil {
 		return nil, fmt.Errorf("SEALIFT_PIP_INDEX: %w", err)

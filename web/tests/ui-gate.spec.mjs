@@ -36,7 +36,7 @@ export const UI = {
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
@@ -114,7 +114,7 @@ function settle() {
 
 let binary = ""
 let scratch = ""
-let github = null
+let upstream = null
 let startedCollection = false
 let fixtures = null
 const children = []
@@ -127,9 +127,10 @@ const spawnServer = (command, args, options) => {
   return child
 }
 
-// A stand-in for api.github.com, so a Trivy lookup from the collection server stays on this machine. No page
-// asks for one: the server answers from the data volume. `paths` records what it was asked.
-const startFakeGitHub = () =>
+// A stand-in for api.github.com, the npm registry and the package index, so the collection server's preparation at
+// start stays on this machine. It answers 404 to everything, so the server stays preparing. `paths` records what it
+// was asked.
+const startFakeUpstream = () =>
   new Promise((done, fail) => {
     const paths = []
     const server = createServer((req, res) => {
@@ -177,14 +178,14 @@ test.beforeAll(async () => {
   const out = resolve("test-results", "gate")
   mkdirSync(out, { recursive: true })
   binary = join(out, "sealift")
-  github = await startFakeGitHub()
+  upstream = await startFakeUpstream()
   // The binary embeds web/dist, so the build comes first and the binary is built once for both roles.
   await run("pnpm", ["run", "build"])
   await run("go", ["build", "-o", binary, "../cmd/sealift"])
 
   if (!(await answers(UI.baseURL))) {
     if (!UI.start) throw new Error(`nothing answers at ${UI.baseURL} and UI.start is empty`)
-    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: github.url } })
+    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: upstream.url, SEALIFT_NPM_REGISTRY: upstream.url, SEALIFT_PIP_INDEX: `${upstream.url}/simple/` } })
     startedCollection = true
     await waitFor(UI.baseURL, "the collection server", collection)
   }
@@ -199,8 +200,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await Promise.all(children.splice(0).map(stop))
   if (fixtures) await fixtures.close()
-  if (github) await github.close()
-  github = null
+  if (upstream) await upstream.close()
+  upstream = null
   fixtures = null
   if (scratch) rmSync(scratch, { recursive: true, force: true })
   scratch = ""
@@ -402,8 +403,10 @@ for (const route of IMPORT.routes) {
   }
 }
 
-test("the collection server asked GitHub nothing while the pages loaded", () => {
+test("the collection server asked its stand-in for the pinned Trivy, pnpm and uv only", () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return
-  expect(github.paths).toEqual([])
+  const pin = readFileSync(resolve("..", "internal", "tools", "trivy_pin.go"), "utf8").match(/Version:\s*"([^"]+)"/)[1]
+  const asked = [...new Set(upstream.paths)].sort()
+  expect(asked).toEqual(["/pnpm", `/repos/aquasecurity/trivy/releases/tags/v${pin}`, "/simple/uv/"])
 })

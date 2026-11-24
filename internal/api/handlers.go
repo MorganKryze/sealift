@@ -30,6 +30,9 @@ type Handlers struct {
 	Service    *jobs.Service
 	Tools      *tools.Manager
 	Trivy      runner.Trivy
+	// Ready answers /healthz. NewHandlers sets it to the tools manager's
+	// own check; the server sets the start's preparation.
+	Ready Readiness
 	// Ephemeral is the idle delay of ephemeral mode, zero when the mode is
 	// off. In that mode, deleting a project also empties the shared caches.
 	Ephemeral time.Duration

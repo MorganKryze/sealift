@@ -50,7 +50,7 @@ pnpm -C web install
 pnpm -C web run dev
 ```
 
-Open the address Vite prints. It proxies `/api` to `127.0.0.1:8080`; set `SEALIFT_API` to point it elsewhere. The first run shows the setup screen, which downloads Trivy and its database into the data directory.
+Open the address Vite prints. It proxies `/api` to `127.0.0.1:8080`; set `SEALIFT_API` to point it elsewhere. The first run prepares itself. The server downloads the pinned Trivy, its vulnerability database, and the pnpm and uv versions of the default targets into the data directory. `/healthz` answers 503 until all of them are in place, while the interface already works. The dev loop sets no variable, so these downloads come from GitHub, the npm registry and PyPI. `SEALIFT_GITHUB_API`, `SEALIFT_NPM_REGISTRY` and `SEALIFT_PIP_INDEX` point them elsewhere. The browser gate points all three at a local stand-in, so it reaches nothing outside the machine.
 
 Outside the image, sealift runs pnpm and Trivy as your own user: the switch to a separate `tools` user happens only when `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` are set, as the image does.
 

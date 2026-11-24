@@ -30,13 +30,20 @@ jobs:
       - name: scan the image
         run: trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --no-progress sealift:smoke-test
       - name: healthz, volume permissions, cap_setuid and cap_setgid
+        env:
+          # Lifts the anonymous rate limit on the pinned Trivy release's
+          # lookup. It reaches the container by name, never on the command
+          # line.
+          SEALIFT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker run -d --name sealift-smoke -v sealift-smoke-data:/data -p 18080:8080 sealift:smoke-test
-          for _ in $(seq 1 20); do curl -sf http://localhost:18080/healthz && break; sleep 0.5; done
-          curl -sf http://localhost:18080/healthz
+          docker run -d --name sealift-smoke -e SEALIFT_GITHUB_TOKEN -v sealift-smoke-data:/data -p 18080:8080 sealift:smoke-test
+          # A fresh volume answers 503 until Trivy, its database, pnpm and uv
+          # are downloaded: wait up to 600 s.
+          for _ in $(seq 1 120); do curl -sf http://localhost:18080/healthz && break; sleep 5; done
+          curl -sf http://localhost:18080/healthz || { curl -s http://localhost:18080/healthz; docker logs sealift-smoke; exit 1; }
           docker exec sealift-smoke id | grep -q 'uid=10000(app) gid=2000(data)'
           docker exec -u 10001:2000 sealift-smoke sh -c 'echo ok > /data/smoke.txt'
-          docker exec -u 10001:2000 sealift-smoke sh -c '! cat /data/private/settings.json'
+          docker exec -u 10001:2000 sealift-smoke sh -c '! cat /data/private/signing-key.pem'
           docker exec sealift-smoke sh -c 'test -d "$HOME"'
           docker rm -f sealift-smoke
           docker volume rm sealift-smoke-data
