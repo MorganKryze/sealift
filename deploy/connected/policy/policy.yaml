@@ -1,44 +1,45 @@
-# sealift's policy. Every value below is the default, so this file changes
-# nothing until you edit it. Remove a key to keep the value saved in
-# Settings, or the default.
+# sealift's policy. Every key below is commented out, so this file
+# changes nothing until you edit it: a new instance keeps the defaults,
+# and an upgraded one keeps the values it saved in Settings. A key you
+# uncomment replaces the saved value. The values shown are the defaults.
 
-targets:
-  # A target is whole: set all five fields or leave the target out.
-  npm:
-    os: linux
-    cpu: x64
-    libc: glibc
-    node: 22.17.1
-    pnpm: 10.34.5
-  pip:
-    python: 3.11.2
-    os: linux
-    cpu: x86_64
-    glibc: "2.28"
-    uv: 0.13.7
+# targets:
+#   # A target is whole: set all five fields or leave the target out.
+#   npm:
+#     os: linux
+#     cpu: x64
+#     libc: glibc
+#     node: 22.17.1
+#     pnpm: 10.34.5
+#   pip:
+#     python: 3.11.2
+#     os: linux
+#     cpu: x86_64
+#     glibc: "2.28"
+#     uv: 0.13.7
 
 # How many days a release must be public before sealift proposes it,
 # 1 to 90.
-minReleaseAgeDays: 14
+# minReleaseAgeDays: 14
 
-parallelism:
-  # Candidate versions an analysis resolves at once, 1 to 16.
-  resolve: 4
-  # Packages an export downloads at once, 1 to 32.
-  download: 16
+# parallelism:
+#   # Candidate versions an analysis resolves at once, 1 to 16.
+#   resolve: 4
+#   # Packages an export downloads at once, 1 to 32.
+#   download: 16
 
-brand:
-  name: sealift
-  sides:
-    online: Online
-    offline: Offline
-  reviewWord: PR
-  # No default for the three keys below. The logo is a PNG or SVG file of
-  # at most 256 KiB, its path relative to this folder. The accent is a
-  # colour written #rrggbb. The contact address starts with https: or
-  # mailto:.
-  # logo: logo.svg
-  # accent: "#0b6e99"
-  # contact:
-  #   label: Platform team
-  #   url: mailto:platform@example.com
+# brand:
+#   name: sealift
+#   sides:
+#     online: Online
+#     offline: Offline
+#   reviewWord: PR
+#   # No default for the three keys below. The logo is a PNG or SVG file
+#   # of at most 256 KiB, its path relative to this folder. The accent is
+#   # a colour written #rrggbb. The contact address starts with https: or
+#   # mailto:.
+#   logo: logo.svg
+#   accent: "#0b6e99"
+#   contact:
+#     label: Platform team
+#     url: mailto:platform@example.com

@@ -276,8 +276,9 @@ func TestPolicyOverlayMountsReadOnly(t *testing.T) {
 	}
 }
 
-// The example policy spells out the defaults, so mounting it unchanged
-// changes nothing.
+// The example policy sets no key, so mounting it unchanged changes nothing:
+// a new instance keeps the defaults and an upgraded one keeps the settings
+// it saved.
 func TestExamplePolicyLoads(t *testing.T) {
 	p, err := policy.Load("connected/policy/policy.yaml", store.Settings{}, false)
 	if err != nil {
@@ -286,6 +287,25 @@ func TestExamplePolicyLoads(t *testing.T) {
 	want := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("example policy = %+v, want the defaults %+v", p, want)
+	}
+}
+
+func TestExamplePolicyKeepsSavedSettings(t *testing.T) {
+	saved := store.Settings{
+		Target:              store.Target{OS: "linux", CPU: "arm64", Libc: "musl", Node: "20.19.4", PnpmVer: "9.15.9"},
+		MinReleaseAgeDays:   21,
+		ResolveParallelism:  2,
+		DownloadParallelism: 8,
+	}
+	p, err := policy.Load("connected/policy/policy.yaml", saved, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Settings != saved {
+		t.Errorf("settings in effect = %+v, want the saved %+v", p.Settings, saved)
+	}
+	if len(p.Overrides) != 0 {
+		t.Errorf("overrides = %v, want none", p.Overrides)
 	}
 }
 
