@@ -91,6 +91,14 @@ func TestCheckReasonsAsksForAJump(t *testing.T) {
 
 	got := CheckReasons(r, map[string][]string{"express": {"5.1.0"}}, []Reason{jumpReason("Our tests pass on 5.", "express")}, askReasons())
 	assertProblems(t, got, nil)
+
+	// A jump selected beside a better version inside the line crosses too,
+	// so it asks its reason though an install keeps the other version.
+	worse := reviewResult()
+	worse.Dependencies[1].Candidates[1].Vector = Vector{1, 0, 0, 0, 0}
+	worse.Dependencies[1].Candidates[1].CVEs = []CVE{{ID: "CVE-2025-0005", Severity: "CRITICAL", Package: "express@5.1.0", FixedIn: "5.1.1"}}
+	assertProblems(t, CheckReasons(worse, map[string][]string{"express": {"4.20.0", "5.1.0"}}, nil, askReasons()),
+		[]string{"express 4.17.1 to 5.1.0 leaves major 4 and needs a reason"})
 }
 
 func TestCheckReasonsAsksForACVEWithoutFix(t *testing.T) {
