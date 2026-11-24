@@ -29,6 +29,20 @@ describe("PolicySection", () => {
     expect(valueOf("Mode")).toBe("Projects stay until someone deletes them.")
   })
 
+  it("shows the review rules at their defaults", () => {
+    render(<PolicySection policy={policy} ephemeral={false} />)
+    expect(valueOf("Proposals")).toBe("Inside the current line")
+    expect(valueOf("Major jump")).toBe("Needs a reason")
+    expect(valueOf("CVE without fix")).toBe("Needs a reason")
+  })
+
+  it("shows the review rules a deployment widened or tightened", () => {
+    render(<PolicySection policy={{ ...policy, review: { proposeOtherMajors: true, majorJump: "refuse", cveWithoutFix: "refuse" } }} ephemeral={false} />)
+    expect(valueOf("Proposals")).toBe("Any version")
+    expect(valueOf("Major jump")).toBe("Refused")
+    expect(valueOf("CVE without fix")).toBe("Refused")
+  })
+
   it("names a target outside the platform list by its fields", () => {
     render(<PolicySection policy={{ ...policy, target: { ...policy.target, os: "darwin", cpu: "arm64", libc: "" } }} ephemeral={false} />)
     expect(valueOf("npm target")).toBe("darwin arm64, Node 22.17.1, pnpm 10.34.5")

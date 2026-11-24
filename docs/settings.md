@@ -137,7 +137,7 @@ The file stays on the volume, so 0.7.0 still reads it after a rollback. 0.7.0 th
 | Section | Shows |
 | --- | --- |
 | Appearance | System, Light or Dark. The choice is saved in this browser only, so each person using sealift keeps their own |
-| Policy | Set by your deployment. The npm target, the pip target, Minimum release age, Resolve parallelism, Download parallelism, and Mode, which says whether the instance is ephemeral |
+| Policy | Set by your deployment. The npm target, the pip target, Minimum release age, Resolve parallelism, Download parallelism, the three review rules (Proposals, Major jump, CVE without fix), and Mode, which says whether the instance is ephemeral |
 | Signing key | The public key and its sha256, described below |
 | Scanner | The Trivy version and the date of the vulnerability database. sealift refreshes the database before each analysis |
 
