@@ -207,34 +207,46 @@ func TestRegenerateRefusesCrossSite(t *testing.T) {
 		u, _ := url.Parse(srv.URL)
 		return u.Port()
 	}
+	const (
+		otherHost   = "this request is not addressed to this server's own host"
+		otherOrigin = "the Origin of this request is not this server's own host"
+		otherSite   = "this request comes from another site"
+		notJSON     = "the body must be application/json"
+	)
 	rows := []struct {
 		name   string
 		mutate func(r *http.Request, port string)
 		status int
 		check  string // the check a refusal names in the log
+		reason string // the detail of the refusal's Problem
 	}{
-		{"no Origin, JSON", nil, 200, ""},
-		{"own Origin", func(r *http.Request, p string) { r.Header.Set("Origin", "http://127.0.0.1:"+p) }, 200, ""},
-		{"localhost Origin on a loopback Host", func(r *http.Request, p string) { r.Header.Set("Origin", "http://localhost:"+p) }, 200, ""},
-		{"charset on the media type", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/json; charset=utf-8") }, 200, ""},
-		{"Sec-Fetch-Site same-origin", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "same-origin") }, 200, ""},
+		{"no Origin, JSON", nil, 200, "", ""},
+		{"own Origin", func(r *http.Request, p string) { r.Header.Set("Origin", "http://127.0.0.1:"+p) }, 200, "", ""},
+		{"localhost Origin on a loopback Host", func(r *http.Request, p string) { r.Header.Set("Origin", "http://localhost:"+p) }, 200, "", ""},
+		{"charset on the media type", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/json; charset=utf-8") }, 200, "", ""},
+		{"Sec-Fetch-Site same-origin", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "same-origin") }, 200, "", ""},
 		{"Host of the listen address", func(r *http.Request, p string) {
 			r.Host = "SEALIFT.lan:" + p
 			r.Header.Set("Origin", "http://sealift.lan:"+p)
-		}, 200, ""},
-		{"foreign Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "http://evil.example") }, 403, "origin"},
-		{"null Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "null") }, 403, "origin"},
-		{"foreign Origin on the right port", func(r *http.Request, p string) { r.Header.Set("Origin", "http://evil.example:"+p) }, 403, "origin"},
-		{"cross-site fetch", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "cross-site") }, 403, "fetch-site"},
-		{"text body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "text/plain") }, 403, "content-type"},
-		{"form body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") }, 403, "content-type"},
-		{"no content type", func(r *http.Request, _ string) { r.Header.Del("Content-Type") }, 403, "content-type"},
+		}, 200, "", ""},
+		{"foreign Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "http://evil.example") }, 403, "origin", otherOrigin},
+		{"null Origin", func(r *http.Request, _ string) { r.Header.Set("Origin", "null") }, 403, "origin", otherOrigin},
+		{"foreign Origin on the right port", func(r *http.Request, p string) { r.Header.Set("Origin", "http://evil.example:"+p) }, 403, "origin", otherOrigin},
+		{"cross-site fetch", func(r *http.Request, _ string) { r.Header.Set("Sec-Fetch-Site", "cross-site") }, 403, "fetch-site", otherSite},
+		{"text body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "text/plain") }, 403, "content-type", notJSON},
+		{"form body", func(r *http.Request, _ string) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") }, 403, "content-type", notJSON},
+		{"no content type", func(r *http.Request, _ string) { r.Header.Del("Content-Type") }, 403, "content-type", notJSON},
+		{"a no-cors text post from another tab", func(r *http.Request, _ string) {
+			r.Header.Set("Content-Type", "text/plain")
+			r.Header.Set("Origin", "https://evil.example")
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+		}, 403, "origin", otherOrigin},
 		{"rebinding with Origin", func(r *http.Request, p string) {
 			r.Host = "evil.example:" + p
 			r.Header.Set("Origin", "http://evil.example:"+p)
-		}, 403, "host"},
-		{"rebinding without Origin", func(r *http.Request, p string) { r.Host = "evil.example:" + p }, 403, "host"},
-		{"rebinding to a name that ends like a loopback name", func(r *http.Request, p string) { r.Host = "notlocalhost:" + p }, 403, "host"},
+		}, 403, "host", otherHost},
+		{"rebinding without Origin", func(r *http.Request, p string) { r.Host = "evil.example:" + p }, 403, "host", otherHost},
+		{"rebinding to a name that ends like a loopback name", func(r *http.Request, p string) { r.Host = "notlocalhost:" + p }, 403, "host", otherHost},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -277,8 +289,15 @@ func TestRegenerateRefusesCrossSite(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &p); err != nil || p.Status != 403 {
 				t.Errorf("body %q is not a 403 Problem", body)
 			}
-			if !strings.Contains(logs.String(), "check="+row.check) {
-				t.Errorf("log %q does not name the check %q", logs.String(), row.check)
+			detail := ""
+			if p.Detail != nil {
+				detail = *p.Detail
+			}
+			if detail != row.reason {
+				t.Errorf("detail = %q, want %q", detail, row.reason)
+			}
+			if !strings.Contains(logs.String(), `msg="signing key regenerate refused"`) || !strings.Contains(logs.String(), "check="+row.check) {
+				t.Errorf("log %q does not name the regenerate and the check %q", logs.String(), row.check)
 			}
 			for _, leaked := range []string{"evil.example", "notlocalhost", "text/plain", "x-www-form", "cross-site"} {
 				if strings.Contains(logs.String(), leaked) || strings.Contains(body, leaked) {
