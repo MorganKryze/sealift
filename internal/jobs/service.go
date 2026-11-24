@@ -292,6 +292,10 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	if len(req.Selection) > 0 {
 		return store.ExportInfo{}, ErrPipSelection
 	}
+	if len(req.Reasons) > 0 {
+		// Pip writes no review yet: a reason sent here would be lost.
+		return store.ExportInfo{}, &pipRefusal{text: "jobs: a pip export takes no reasons: its set carries no review yet", class: ErrPipSelection}
+	}
 	analysisInfo, err := s.store.AnalysisInfo(project.ID, analysisID)
 	if err != nil {
 		return store.ExportInfo{}, err

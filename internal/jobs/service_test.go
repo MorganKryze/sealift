@@ -1422,3 +1422,13 @@ func TestQueueExportLetsAPipCVEWithoutFixCrossUnderReason(t *testing.T) {
 		t.Fatalf("QueueExport = %v, want queued: pip asks no reason", err)
 	}
 }
+
+func TestQueueExportRefusesReasonsForPip(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	reasons := []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"requests"}, Text: "Only our build calls it."}}
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Reasons: reasons})
+	if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "pip export takes no reasons") {
+		t.Fatalf("QueueExport = %v, want a 400 saying pip takes no reasons", err)
+	}
+	noExportReserved(t, f.project)
+}
