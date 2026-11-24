@@ -219,6 +219,9 @@ func TestGetAnalysisAfterNullSurvivesThroughTheAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z", srv.URL, project.Id))
 	if err != nil {
@@ -263,6 +266,9 @@ func TestQueueExportInvalidSelectionReturns400WithEveryEntry(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{"left-pad": {"9.9.9"}}})
@@ -322,6 +328,9 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// "1.3.1" is a real candidate; "9.9.9" is not.
@@ -530,6 +539,9 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
 		t.Fatalf("write candidates.trivy.json: %v", err)
 	}
@@ -602,6 +614,9 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
 		t.Fatalf("write candidates.trivy.json: %v", err)
@@ -767,6 +782,9 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// A blocking job holds the queue busy for the whole test, so the export
@@ -1138,6 +1156,9 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	// A blocking job holds the queue busy for the whole test, so the
 	// export queued behind it stays live (Service still tracking it)
@@ -1211,6 +1232,9 @@ func TestCancelExportLiveExportSucceeds(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// A blocking job holds the queue busy for the whole test, so the export
@@ -1556,6 +1580,9 @@ func TestQueueExportWithNothingToPackAnswers400(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
@@ -2435,6 +2462,9 @@ func TestQueueExportCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	withTree := true
 	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
@@ -2626,6 +2656,9 @@ func TestQueueExportRefusesTheCurrentVersionBesideACleanOne(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 	withTree := true
 	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"is-even": {"1.0.1"}}, IncludeProject: &withTree}))
 	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
@@ -2765,6 +2798,9 @@ func TestLiveJobWithASuffixedIDShowsItsCreationTime(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 	occupyComingSeconds(t, filepath.Join(project.Dir, "analyses"))
 	occupyComingSeconds(t, filepath.Join(project.Dir, "exports"))
@@ -3069,3 +3105,6 @@ func TestAMultipartBodyOnAJSONRouteKeepsTheJSONCap(t *testing.T) {
 	defer resp2.Body.Close()
 	assertTooLarge(t, resp2, "the request body is larger than 16 MiB")
 }
+
+// emptyProjectScan is a lockfile scan that finds nothing.
+const emptyProjectScan = `{"SchemaVersion": 2, "Results": []}`

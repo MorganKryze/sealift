@@ -26,6 +26,11 @@ import (
 // leave nothing ranked yet to select from.
 var ErrAnalysisNotDone = errors.New("jobs: analysis is not done")
 
+// ErrNoProjectScan reports an export of the project tree whose analysis
+// has no readable scan of the project's lockfile, so the CVEs it ships
+// cannot be checked against the review policy.
+var ErrNoProjectScan = errors.New("jobs: no readable project scan")
+
 // ErrNothingToExport reports a QueueExport call that selects no version and
 // leaves out the current tree: the archive would hold no package at all.
 var ErrNothingToExport = errors.New("jobs: the export selects no version and leaves out the current project, so it would pack nothing")
@@ -262,7 +267,11 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		return store.ExportInfo{}, ErrNothingToExport
 	}
 	if req.IncludeProject {
-		req.ProjectFindings = projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
+		findings, err := projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
+		if err != nil {
+			return store.ExportInfo{}, err
+		}
+		req.ProjectFindings = findings
 		if keys := lockKeysToPlace(result, req.ProjectFindings); len(keys) > 0 {
 			holders, err := projectHolders(filepath.Join(project.Dir, "analyses", analysisID), keys)
 			if err != nil {
@@ -688,20 +697,19 @@ func selectsAnyVersion(sel map[string][]string) bool {
 	return false
 }
 
-// projectFindings reads the analysis's scan of the project's lockfile. An
-// analysis without a readable one gives none: the export's own scan of
-// the shipped set is checked again before signing.
-func projectFindings(analysisDir string) []rank.Finding {
+// projectFindings reads the analysis's scan of the project's lockfile. A
+// missing or unreadable one is ErrNoProjectScan with its cause.
+func projectFindings(analysisDir string) ([]rank.Finding, error) {
 	f, err := openRegularFile(filepath.Join(analysisDir, "project.trivy.json"))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: %w", ErrNoProjectScan, err)
 	}
 	defer f.Close()
 	findings, err := rank.ReadTrivyJSON(f)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: project.trivy.json: %w", ErrNoProjectScan, err)
 	}
-	return findings
+	return findings, nil
 }
 
 // projectHolders reads the analysis's project lockfile into the direct

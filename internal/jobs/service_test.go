@@ -240,6 +240,9 @@ func TestQueueExportNeedsNoKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	info, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
@@ -264,6 +267,9 @@ func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// An empty selection is refused on its own (see the test below); the
@@ -295,6 +301,9 @@ func TestQueueExportRefusesAnUnknownSelectionEntry(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// "1.9.9" is neither left-pad's current version nor one of its
@@ -701,6 +710,9 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	for name, sel := range map[string]map[string][]string{
@@ -1336,6 +1348,9 @@ func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 	occupyComingSeconds(t, filepath.Join(projectDir, "analyses"))
 	occupyComingSeconds(t, filepath.Join(projectDir, "exports"))
 	blockQueue(t, svc)
@@ -1494,3 +1509,42 @@ func TestQueueExportPlacesALockfileCVEThroughTheProjectLockfile(t *testing.T) {
 	}
 	noExportReserved(t, project)
 }
+
+// Shipping the project tree reads the analysis's lockfile scan: a missing
+// or unreadable one fails the export with its cause under either policy,
+// so a CVE it would name never crosses unasked.
+func TestQueueExportFailsWithoutAReadableProjectScan(t *testing.T) {
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	for _, scan := range []string{"", "not json"} {
+		for _, rule := range []policy.Rule{policy.Refuse, policy.AskReason} {
+			svc, st := newTestService(t)
+			svc.Review = policy.DefaultReview()
+			svc.Review.CVEWithoutFix = rule
+			project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+			if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking}
+			if scan != "" {
+				files["project.trivy.json"] = scan
+			}
+			for name, data := range files {
+				if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+			if !errors.Is(err, ErrNoProjectScan) || !strings.Contains(err.Error(), "project.trivy.json") {
+				t.Errorf("scan %q under %s: QueueExport = %v, want ErrNoProjectScan naming project.trivy.json", scan, rule, err)
+			}
+			noExportReserved(t, project)
+		}
+	}
+}
+
+// emptyProjectScan is a lockfile scan that finds nothing.
+const emptyProjectScan = `{"SchemaVersion": 2, "Results": []}`

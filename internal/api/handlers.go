@@ -68,7 +68,7 @@ func statusFor(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, jobs.ErrPipSelection), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits):
 		return http.StatusBadRequest
-	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, jobs.ErrPipNotExportable), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
+	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, jobs.ErrNoProjectScan), errors.Is(err, jobs.ErrPipNotExportable), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict
 	case errors.Is(err, tools.ErrReleaseSourceUnavailable):
 		return http.StatusBadGateway
