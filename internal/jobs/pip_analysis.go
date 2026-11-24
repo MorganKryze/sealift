@@ -246,7 +246,7 @@ func plural(n int, one, many string) string {
 func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err error) {
 	err = r.runStep("prepare-tools", func() error {
 		version := r.a.Project.PipTarget.UvVer
-		bin, uerr := r.a.Tools.EnsureUv(r.ctx, version, false)
+		bin, uerr := r.a.Tools.EnsureUv(r.ctx, version)
 		if uerr != nil {
 			return fmt.Errorf("install uv %s: %w", version, uerr)
 		}

@@ -364,7 +364,7 @@ func TestPipAnalysisInstallsTheTargetsUv(t *testing.T) {
 		wantErr  string
 	}{
 		{"a month-old release installs", time.Now().Add(-30 * 24 * time.Hour), ""},
-		{"a day-old release waits for force", time.Now().Add(-24 * time.Hour), "install it with force"},
+		{"a day-old release is refused until it ages", time.Now().Add(-24 * time.Hour), "pin an older uv"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -387,7 +387,7 @@ func TestPipAnalysisInstallsTheTargetsUv(t *testing.T) {
 			status, _ := readStatus(t, st, a)
 			if c.wantErr != "" {
 				if err == nil || len(status.Steps) != 2 || !strings.Contains(status.Steps[1].Error, c.wantErr) || !strings.Contains(status.Steps[1].Error, "uv 0.13.6") {
-					t.Fatalf("Run = %v, steps %+v, want prepare-tools refusing uv 0.13.6 without force", err, status.Steps)
+					t.Fatalf("Run = %v, steps %+v, want prepare-tools refusing uv 0.13.6", err, status.Steps)
 				}
 				if status.UvVersion != "" {
 					t.Errorf("uvVersion = %q, want none: uv never installed", status.UvVersion)

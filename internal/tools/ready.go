@@ -109,7 +109,7 @@ func (p *Preparer) Run(ctx context.Context) {
 		})
 		wg.Go(func() {
 			p.attempt(ctx, "uv", func(ctx context.Context) (string, error) {
-				_, err := p.m.EnsureUv(ctx, p.uv, false)
+				_, err := p.m.EnsureUv(ctx, p.uv)
 				return p.uv, err
 			})
 		})
