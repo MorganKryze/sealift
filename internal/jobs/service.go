@@ -18,6 +18,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
 )
 
 // ErrAnalysisNotDone reports a QueueExport call naming an analysis that
@@ -260,6 +261,9 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
 		return store.ExportInfo{}, ErrNothingToExport
 	}
+	if req.IncludeProject {
+		req.ProjectFindings = projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
+	}
 	if problems := CheckReasons(result, req, s.Review); len(problems) > 0 {
 		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
 	}
@@ -279,6 +283,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		Settings: settings,
 		Analysis: AnalysisRef{ID: analysisID, Dir: filepath.Join(project.Dir, "analyses", analysisID), Result: result},
 		Request:  req,
+		Review:   s.Review,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
@@ -291,6 +296,10 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 func (s *Service) queuePipExport(project store.Project, analysisID string, req ExportRequest) (store.ExportInfo, error) {
 	if len(req.Selection) > 0 {
 		return store.ExportInfo{}, ErrPipSelection
+	}
+	if len(req.Reasons) > 0 {
+		// Pip writes no review yet: a reason sent here would be lost.
+		return store.ExportInfo{}, &pipRefusal{text: "jobs: a pip export takes no reasons: its set carries no review yet", class: ErrPipSelection}
 	}
 	analysisInfo, err := s.store.AnalysisInfo(project.ID, analysisID)
 	if err != nil {
@@ -314,6 +323,9 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	}
 	if missing > 0 {
 		return store.ExportInfo{}, fmt.Errorf("%w: %d of %d packages %s no wheel", ErrPipNotExportable, missing, len(result.Packages), plural(missing, "has", "have"))
+	}
+	if err := pipNoFixRefusal(result, s.Review); err != nil {
+		return store.ExportInfo{}, err
 	}
 	s.mu.Lock()
 	index := s.index
@@ -667,4 +679,20 @@ func selectsAnyVersion(sel map[string][]string) bool {
 		}
 	}
 	return false
+}
+
+// projectFindings reads the analysis's scan of the project's lockfile. An
+// analysis without a readable one gives none: the export's own scan of
+// the shipped set is checked again before signing.
+func projectFindings(analysisDir string) []rank.Finding {
+	f, err := openRegularFile(filepath.Join(analysisDir, "project.trivy.json"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	findings, err := rank.ReadTrivyJSON(f)
+	if err != nil {
+		return nil
+	}
+	return findings
 }

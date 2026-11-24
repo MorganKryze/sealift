@@ -318,33 +318,45 @@ func TestExportSummaryLabelsBothRowsByScope(t *testing.T) {
 // With the project tree in the archive, the archive's own scan counts the
 // old versions too, so the summary also prints the project once the
 // selection applies, from the analysis' project scan.
+// Without the project tree, the selection replaces widgets 1.0.0 and its
+// CVE-OLD goes; with it, the lockfile keeps 1.0.0 and CVE-OLD stays.
 func TestExportSummaryPrintsTheProjectedRow(t *testing.T) {
-	h := newTestHarness(t)
-	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
-	h.buildAnalysis(analysisDir)
-	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+	for _, tc := range []struct {
+		includeProject bool
+		row            string
+	}{
+		{false, "| After (project with this selection) | 0 | 0 | 0 | 1 | 0 |"},
+		{true, "| After (project with this selection) | 0 | 1 | 0 | 1 | 0 |"},
+	} {
+		t.Run(fmt.Sprintf("includeProject %v", tc.includeProject), func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
     {"VulnerabilityID": "CVE-OLD", "PkgName": "widgets", "InstalledVersion": "1.0.0", "Severity": "HIGH", "Title": "o"},
     {"VulnerabilityID": "CVE-OTHER", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "LOW", "Title": "l"}
   ]}]}`
-	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(scan), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
-	exp := h.newExport(t, analysisDir, exportDir, true)
-	for i, d := range exp.Analysis.Result.Dependencies {
-		if d.Name == "widgets" {
-			exp.Analysis.Result.Dependencies[i].CVEs = []CVE{{ID: "CVE-OLD", Severity: "HIGH"}}
-		}
-	}
-	if err := exp.Run(context.Background(), noopEmit); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(summary, []byte("| After (project with this selection) | 0 | 0 | 0 | 1 | 0 |")) {
-		t.Errorf("summary.md lacks the projected row without CVE-OLD:\n%s", summary)
+			if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(scan), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, tc.includeProject)
+			for i, d := range exp.Analysis.Result.Dependencies {
+				if d.Name == "widgets" {
+					exp.Analysis.Result.Dependencies[i].CVEs = []CVE{{ID: "CVE-OLD", Severity: "HIGH", FixedIn: "1.1.0"}}
+				}
+			}
+			if err := exp.Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(summary, []byte(tc.row)) {
+				t.Errorf("summary.md lacks %q:\n%s", tc.row, summary)
+			}
+		})
 	}
 }
 
@@ -1471,8 +1483,7 @@ func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
 func TestExportFailsOnAReviewTheImportWouldKeepOut(t *testing.T) {
 	long := strings.Repeat("9", 257)
 	for name, set := range map[string]func(*CVE){
-		"a fixedIn over 256 bytes": func(c *CVE) { c.FixedIn = long },
-		"a cve id over 256 bytes":  func(c *CVE) { c.ID = "CVE-" + long },
+		"a cve id over 256 bytes": func(c *CVE) { c.ID = "CVE-" + long },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHarness(t)
@@ -1493,5 +1504,37 @@ func TestExportFailsOnAReviewTheImportWouldKeepOut(t *testing.T) {
 				t.Errorf("manifest.json was written: %v", err)
 			}
 		})
+	}
+}
+
+// The shipped set's own scan is the last word before signing: under
+// refuse, a CVE no version fixes that the review does not list fails the
+// export, whatever the analysis said.
+func TestExportRefusesBeforeSigningAShippedCVEWithoutFixTheReviewMisses(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	for i := range exp.Analysis.Result.Dependencies {
+		d := &exp.Analysis.Result.Dependencies[i]
+		d.CVEs = nil
+		for j := range d.Candidates {
+			d.Candidates[j].CVEs = nil
+		}
+	}
+	exp.Review = policy.DefaultReview()
+	exp.Review.CVEWithoutFix = policy.Refuse
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, exp.Review); len(problems) > 0 {
+		t.Fatalf("the queue-time check should pass: %q", problems)
+	}
+
+	err := exp.Run(context.Background(), noopEmit)
+	const cause = "review.cveWithoutFix is refuse, yet the shipped set keeps @scope/gadget 2.1.0 with CVE-GADGET-SHARED"
+	if err == nil || !strings.Contains(err.Error(), cause) {
+		t.Fatalf("Run = %v, want an error saying %q", err, cause)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
 	}
 }

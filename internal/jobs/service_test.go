@@ -1368,3 +1368,99 @@ func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
 		t.Errorf("QueueExport CreatedAt = %v, want %v", export.CreatedAt, want)
 	}
 }
+
+// withPipCVE rewrites the fixture's pip-result.json so its first package
+// carries one CVE with the fixed versions given.
+func withPipCVE(t *testing.T, f pipFixture, fixed []string) {
+	t.Helper()
+	path := filepath.Join(f.ref.Dir, "pip-result.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r PipResult
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	r.Packages[0].CVEs = append(r.Packages[0].CVEs, PipFinding{ID: "CVE-2025-9999", Severity: "HIGH", FixedVersions: fixed})
+	if data, err = json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o664); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueueExportRefusesAPipCVEWithoutFixUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{})
+	if !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), "review.cveWithoutFix is refuse") || !strings.Contains(err.Error(), "CVE-2025-9999") {
+		t.Fatalf("QueueExport = %v, want a 409 naming review.cveWithoutFix and the CVE", err)
+	}
+	noExportReserved(t, f.project)
+}
+
+func TestQueueExportLetsAPipCVEWithAFixCrossUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, []string{"9.9.9"})
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued", err)
+	}
+}
+
+func TestQueueExportLetsAPipCVEWithoutFixCrossUnderReason(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.AskReason
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued: pip asks no reason", err)
+	}
+}
+
+func TestQueueExportRefusesReasonsForPip(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	reasons := []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"requests"}, Text: "Only our build calls it."}}
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Reasons: reasons})
+	if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "pip export takes no reasons") {
+		t.Fatalf("QueueExport = %v, want a 400 saying pip takes no reasons", err)
+	}
+	noExportReserved(t, f.project)
+}
+
+// The queue reads the analysis's lockfile scan when the project tree
+// ships: a CVE no version fixes on a dependency whose own scan was clean
+// is refused under refuse before anything is reserved.
+func TestQueueExportReadsTheProjectScanWhenTheTreeShips(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.Review = policy.DefaultReview()
+	svc.Review.CVEWithoutFix = policy.Refuse
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad","dependencies":{"lodash":"4.17.21"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[{"name":"lodash","current":"4.17.21","vector":[0,0,0,0,0],"cves":[],"candidates":[]}],"warnings":[]}`
+	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-2025-0400", "PkgName": "lodash", "InstalledVersion": "4.17.21", "Severity": "HIGH", "Title": "t"}
+  ]}]}`
+	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, data := range map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking, "project.trivy.json": scan} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	var reasons *ErrInvalidReasons
+	if !errors.As(err, &reasons) || !strings.Contains(err.Error(), "lodash 4.17.21 keeps CVE-2025-0400") {
+		t.Fatalf("QueueExport = %v, want lodash's project CVE refused", err)
+	}
+	noExportReserved(t, project)
+}

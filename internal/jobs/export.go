@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -63,6 +65,7 @@ type Export struct {
 	Settings store.Settings
 	Analysis AnalysisRef
 	Request  ExportRequest
+	Review   policy.Review // the review rules the request was checked against
 	Dir      string
 	ID       string
 
@@ -79,6 +82,9 @@ type ExportRequest struct {
 	Selection      map[string][]string `json:"selection"`      // dependency name to selected versions
 	IncludeProject bool                `json:"includeProject"` // add the current project tree
 	Reasons        []Reason            `json:"reasons"`
+	// ProjectFindings is the analysis's scan of the project's lockfile,
+	// read when the project tree ships: its packages ship too.
+	ProjectFindings []rank.Finding `json:"-"`
 }
 
 // Kind identifies this job to the queue and in its events.
@@ -614,12 +620,14 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 	start := time.Now()
 	emitStep(emit, "reports", store.Running, 0)
 
-	projected := e.projected()
-	if err := e.writeManifest(shipped, arch, key, projected); err != nil {
+	// The shipped set's scan comes first: the manifest's check reads it
+	// before signing.
+	if err := e.writeTrivyReports(ctx, shipped); err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
-	if err := e.writeTrivyReports(ctx, shipped); err != nil {
+	projected := e.projected()
+	if err := e.writeManifest(shipped, arch, key, projected); err != nil {
 		emitFailedStep(emit, "reports", time.Since(start), err)
 		return err
 	}
@@ -643,6 +651,11 @@ func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveMani
 	review := ReviewOf(e.Analysis.Result, e.Request, projected)
 	if err := archive.CheckReview(review, archive.NPM); err != nil {
 		return fmt.Errorf("jobs: the import would keep the review out: %w", err)
+	}
+	if e.Review.CVEWithoutFix == policy.Refuse {
+		if err := e.checkShippedWithoutFix(review); err != nil {
+			return err
+		}
 	}
 	entries := make([]report.PackageEntry, len(shipped))
 	for i, s := range shipped {
@@ -901,8 +914,35 @@ func (e *Export) projected() *rank.Vector {
 		slog.Warn("jobs: unreadable project scan for summary.md", "path", path, "error", err)
 		return nil
 	}
-	v := projectedVector(findings, e.Analysis.Result.Dependencies, e.Request.Selection)
+	v := projectedFor(e.Analysis.Result, e.Request, findings)
 	return &v
+}
+
+// checkShippedWithoutFix reads the shipped set's own scan and fails on a
+// CVE no version fixes that review does not list. The queue checked the
+// analysis's view; this catches a package that view never named.
+func (e *Export) checkShippedWithoutFix(review archive.Review) error {
+	f, err := openRegularFile(filepath.Join(e.Dir, "report.trivy.json"))
+	if err != nil {
+		return fmt.Errorf("jobs: read report.trivy.json: %w", err)
+	}
+	defer f.Close()
+	findings, err := rank.ReadTrivyJSON(f)
+	if err != nil {
+		return fmt.Errorf("jobs: parse report.trivy.json: %w", err)
+	}
+	for _, fnd := range findings {
+		if strings.TrimSpace(fnd.FixedVersion) != "" {
+			continue
+		}
+		listed := slices.ContainsFunc(review.Left, func(c archive.ReviewCVE) bool {
+			return c.ID == fnd.ID && (c.Package == fnd.Package || c.Package == "")
+		})
+		if !listed {
+			return fmt.Errorf("jobs: review.cveWithoutFix is refuse, yet the shipped set keeps %s %s with %s, which no version fixes and the review does not list", fnd.Package, fnd.Version, fnd.ID)
+		}
+	}
+	return nil
 }
 
 // exportedFindings reads the export's own just-written report.trivy.json,

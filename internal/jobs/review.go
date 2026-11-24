@@ -64,6 +64,9 @@ const maxReasonTextRunes = 1200
 func askedOf(r Result, req ExportRequest) []asked {
 	out := make([]asked, 0, len(r.Dependencies))
 	for _, d := range r.Dependencies {
+		if req.IncludeProject {
+			d.CVEs = append(slices.Clone(d.CVEs), projectCVEs(d, req.ProjectFindings)...)
+		}
 		a := asked{dep: d}
 		selected := req.Selection[d.Name]
 		for _, v := range selected {
@@ -119,6 +122,57 @@ func heldOf(d DependencyResult, v string) (held, bool) {
 		}
 	}
 	return h, true
+}
+
+// projectCVEs is what the lockfile's scan finds without a fix on d's
+// current tree and d's own scan missed: a finding on d at its current
+// version, or on a package d's scan already places under d.
+func projectCVEs(d DependencyResult, findings []rank.Finding) []CVE {
+	var out []CVE
+	for _, f := range findings {
+		if strings.TrimSpace(f.FixedVersion) != "" || !underDependency(d, f) {
+			continue
+		}
+		c := CVE{ID: f.ID, Severity: severityText(f.Severity), Package: f.Package + "@" + f.Version}
+		known := func(o CVE) bool { return o.ID == c.ID && packageName(o.Package) == f.Package }
+		if !slices.ContainsFunc(d.CVEs, known) && !slices.ContainsFunc(out, known) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// underDependency is true when finding f sits in d's current tree as far
+// as the analysis knows it.
+func underDependency(d DependencyResult, f rank.Finding) bool {
+	if f.Package == d.Name {
+		return f.Version == d.Current
+	}
+	return slices.ContainsFunc(d.CVEs, func(c CVE) bool { return packageName(c.Package) == f.Package })
+}
+
+// unplacedWithoutFix words, per package, the lockfile's CVEs without a fix
+// that no dependency's tree places.
+func unplacedWithoutFix(r Result, findings []rank.Finding) []string {
+	var order []string
+	ids := map[string][]string{}
+	for _, f := range findings {
+		if strings.TrimSpace(f.FixedVersion) != "" || slices.ContainsFunc(r.Dependencies, func(d DependencyResult) bool { return underDependency(d, f) }) {
+			continue
+		}
+		key := f.Package + " " + f.Version
+		if _, ok := ids[key]; !ok {
+			order = append(order, key)
+		}
+		if !slices.Contains(ids[key], f.ID) {
+			ids[key] = append(ids[key], f.ID)
+		}
+	}
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		out = append(out, fmt.Sprintf("the project tree keeps %s with %s, which no version fixes", key, andList(ids[key])))
+	}
+	return out
 }
 
 // noFix is true when a version a holds keeps a CVE no version fixes.
@@ -223,6 +277,13 @@ func CheckReasons(r Result, req ExportRequest, p policy.Review) []string {
 			}
 		}
 	}
+	// A lockfile package no dependency's tree places has no dependency for
+	// a reason to name; only the refusal applies to it.
+	if req.IncludeProject && p.CVEWithoutFix == policy.Refuse {
+		for _, keeps := range unplacedWithoutFix(r, req.ProjectFindings) {
+			problems = append(problems, "review.cveWithoutFix is refuse: "+keeps+", and cannot cross")
+		}
+	}
 	// A name listed twice may word one problem twice.
 	return append(slices.Compact(problems), reasonProblems...)
 }
@@ -316,7 +377,7 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 				left := archive.ReviewCVE{
 					Dependency: d.Name, Version: h.version, ID: c.ID,
 					Severity: severityText(rank.ParseSeverity(c.Severity)),
-					Package:  packageName(c.Package), FixedIn: c.FixedIn,
+					Package:  packageName(c.Package), FixedIn: shortFixedIn(c.FixedIn),
 				}
 				if withoutFix(c) {
 					left.Reason = text
@@ -328,6 +389,27 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 		}
 	}
 	return review
+}
+
+// maxFixedInBytes is the import's bound on a review's text fields.
+const maxFixedInBytes = 256
+
+// shortFixedIn keeps the versions of a Trivy fixedIn that fit the import's
+// bound, whole ones only, so a long list never fails the export. The
+// archive's Trivy report keeps the full value. A lone version past the
+// bound is cut on a character.
+func shortFixedIn(fixedIn string) string {
+	if len(fixedIn) <= maxFixedInBytes {
+		return fixedIn
+	}
+	if i := strings.LastIndex(fixedIn[:maxFixedInBytes+1], ", "); i > 0 {
+		return fixedIn[:i]
+	}
+	cut := maxFixedInBytes
+	for cut > 0 && !utf8.RuneStart(fixedIn[cut]) {
+		cut--
+	}
+	return fixedIn[:cut]
 }
 
 // fixedBy returns the CVEs of before that none of after carries.
