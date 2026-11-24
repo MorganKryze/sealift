@@ -1538,3 +1538,45 @@ func TestExportRefusesBeforeSigningAShippedCVEWithoutFixTheReviewMisses(t *testi
 		t.Errorf("manifest.json was written: %v", err)
 	}
 }
+
+// A dependency the selection leaves out asks a reason under refuse, and
+// review.left lists its CVEs; that listing must not let the same CVE ship
+// in another package of the set unrefused.
+func TestExportRefusesBeforeSigningAShippedCVEWithoutFixALeftOutDependencyLists(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	for i := range exp.Analysis.Result.Dependencies {
+		d := &exp.Analysis.Result.Dependencies[i]
+		d.CVEs = nil
+		for j := range d.Candidates {
+			d.Candidates[j].CVEs = nil
+		}
+	}
+	exp.Analysis.Result.Dependencies = append(exp.Analysis.Result.Dependencies, DependencyResult{
+		Name: "lone", Current: "1.0.0", Best: "1.0.0",
+		CVEs: []CVE{
+			{ID: "CVE-GADGET-SHARED", Severity: "HIGH", Package: "@scope/gadget@2.1.0"},
+			{ID: "CVE-TWICE", Severity: "CRITICAL", Package: "helper@3.0.0"},
+			{ID: "CVE-MIXED", Severity: "HIGH", Package: "helper@3.0.0"},
+			{ID: "CVE-LOW", Severity: "LOW", Package: "helper@3.0.0"},
+		},
+	})
+	exp.Request.Reasons = []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"lone"}, Text: "lone stays offline, reviewed"}}
+	exp.Review = policy.DefaultReview()
+	exp.Review.CVEWithoutFix = policy.Refuse
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, exp.Review); len(problems) > 0 {
+		t.Fatalf("the queue-time check should pass: %q", problems)
+	}
+
+	err := exp.Run(context.Background(), noopEmit)
+	const cause = "review.cveWithoutFix is refuse, yet the shipped set keeps"
+	if err == nil || !strings.Contains(err.Error(), cause) {
+		t.Fatalf("Run = %v, want an error saying %q", err, cause)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
+	}
+}

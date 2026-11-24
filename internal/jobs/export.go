@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -653,7 +652,7 @@ func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveMani
 		return fmt.Errorf("jobs: the import would keep the review out: %w", err)
 	}
 	if e.Review.CVEWithoutFix == policy.Refuse {
-		if err := e.checkShippedWithoutFix(review); err != nil {
+		if err := e.checkShippedWithoutFix(); err != nil {
 			return err
 		}
 	}
@@ -918,10 +917,11 @@ func (e *Export) projected() *rank.Vector {
 	return &v
 }
 
-// checkShippedWithoutFix reads the shipped set's own scan and fails on a
-// CVE no version fixes that review does not list. The queue checked the
-// analysis's view; this catches a package that view never named.
-func (e *Export) checkShippedWithoutFix(review archive.Review) error {
+// checkShippedWithoutFix reads the shipped set's own scan and fails on
+// any CVE no version fixes. Under refuse nothing without a fix ships: a
+// reason in review.left covers a dependency the archive leaves out, never
+// a package the archive carries.
+func (e *Export) checkShippedWithoutFix() error {
 	f, err := openRegularFile(filepath.Join(e.Dir, "report.trivy.json"))
 	if err != nil {
 		return fmt.Errorf("jobs: read report.trivy.json: %w", err)
@@ -932,14 +932,8 @@ func (e *Export) checkShippedWithoutFix(review archive.Review) error {
 		return fmt.Errorf("jobs: parse report.trivy.json: %w", err)
 	}
 	for _, fnd := range findings {
-		if strings.TrimSpace(fnd.FixedVersion) != "" {
-			continue
-		}
-		listed := slices.ContainsFunc(review.Left, func(c archive.ReviewCVE) bool {
-			return c.ID == fnd.ID && (c.Package == fnd.Package || c.Package == "")
-		})
-		if !listed {
-			return fmt.Errorf("jobs: review.cveWithoutFix is refuse, yet the shipped set keeps %s %s with %s, which no version fixes and the review does not list", fnd.Package, fnd.Version, fnd.ID)
+		if strings.TrimSpace(fnd.FixedVersion) == "" {
+			return fmt.Errorf("jobs: review.cveWithoutFix is refuse, yet the shipped set keeps %s %s with %s, which no version fixes", fnd.Package, fnd.Version, fnd.ID)
 		}
 	}
 	return nil
