@@ -18,7 +18,7 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 | --- | --- |
 | 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
 | 404 | An unknown project, analysis or export |
-| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; the project has a job queued or running |
+| 409 | A tool the job needs is still being prepared or missing (`tools-missing`); the analysis is not done; the project has a job queued or running |
 | 500 | Anything else; the server log has the cause |
 
 ## Health
@@ -126,7 +126,7 @@ A done pip analysis is exported as a whole: see [pip exports](#pip-exports).
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, or an export that packs nothing; 409 when the analysis is not done. |
+| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, or an export that packs nothing; 409 when the analysis is not done, or when a tool the export needs is not ready (`tools-missing`). |
 | `GET /api/projects/{projectId}/exports/{exportId}` | The export: state, steps, failure, and once done its files. |
 | `DELETE /api/projects/{projectId}/exports/{exportId}` | Delete the export and its files. |
 | `POST /api/projects/{projectId}/exports/{exportId}/cancel` | Cancel the export, running or queued. |
