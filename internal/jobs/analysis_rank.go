@@ -91,7 +91,9 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 // index in deps, into families, and names each member's family. A package
 // listed under two dependency kinds reaches here twice under one name, and
 // rank.Families keeps one entry per name: the first jump stands for the
-// name, and a later one adds only the peers the first does not declare.
+// name, and a later entry with the same jump adds only the peers the first
+// does not declare. A later entry with another jump adds nothing, since its
+// peers say nothing about the first jump.
 func (r *run) setFamilies(deps []depInfo) {
 	var jumpers []rank.Jumper
 	at := map[string]int{}
@@ -104,6 +106,9 @@ func (r *run) setFamilies(deps []depInfo) {
 		if !seen {
 			at[dr.Name] = len(jumpers)
 			jumpers = append(jumpers, rank.Jumper{Name: dr.Name, Current: dr.Current, Jump: dr.Jump, JumpPeers: maps.Clone(peers)})
+			continue
+		}
+		if jumpers[j].Jump != dr.Jump {
 			continue
 		}
 		for name, rng := range peers {
@@ -126,7 +131,9 @@ func (r *run) setFamilies(deps []depInfo) {
 	}
 	for i := range r.result.Dependencies {
 		dr := &r.result.Dependencies[i]
-		if name, ok := familyOf[dr.Name]; ok && dr.Jump == jumpers[at[dr.Name]].Jump {
+		name, inFamily := familyOf[dr.Name]
+		j, jumps := at[dr.Name]
+		if inFamily && jumps && dr.Jump == jumpers[j].Jump {
 			dr.Family = name
 		}
 	}

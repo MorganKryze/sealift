@@ -336,6 +336,34 @@ func TestRankKeepsThePeersOfADependencyListedTwice(t *testing.T) {
 	}
 }
 
+// The second entry of a name jumps elsewhere: its jump's peers say nothing
+// about the first entry's jump, so the first must not join a family by them.
+func TestRankKeepsADuplicateJumpsPeersToItself(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	react, _ := fakeDependency("react", "18.3.1", fakeVersion{version: "19.2.0", published: longAgo})
+	reactDOM, _ := fakeDependency("react-dom", "18.3.1",
+		fakeVersion{version: "19.2.0", published: longAgo},
+		fakeVersion{version: "20.0.0", published: longAgo, peers: map[string]string{"react": "^19.2.0"}})
+	devReactDOM := reactDOM
+	devReactDOM.dep.Version = "19.2.0"
+	r.result.Dependencies = []DependencyResult{
+		{Name: "react", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "19.2.0", Jump: "20.0.0"},
+	}
+
+	r.setFamilies([]depInfo{react, reactDOM, devReactDOM})
+
+	if len(r.result.Families) != 0 {
+		t.Errorf("Families = %+v, want none: react-dom 19.2.0 declares no peer", r.result.Families)
+	}
+	for _, d := range r.result.Dependencies {
+		if d.Family != "" {
+			t.Errorf("%s %s Family = %q, want none", d.Name, d.Current, d.Family)
+		}
+	}
+}
+
 func TestRankKeepsEachCVEsPackageAndFix(t *testing.T) {
 	index := rank.NewIndex([]rank.Finding{
 		{ID: "CVE-2024-29041", Package: "express", Version: "4.17.1", Severity: rank.High, FixedVersion: "4.19.2, 5.0.0"},
