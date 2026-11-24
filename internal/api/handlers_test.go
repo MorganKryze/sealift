@@ -3051,3 +3051,21 @@ func assertTooLarge(t *testing.T, resp *http.Response, detail string) {
 		t.Errorf("detail = %q, want %q", deref(p.Detail), detail)
 	}
 }
+
+// Only the project upload takes a multipart body: a JSON route sent one
+// keeps the JSON cap.
+func TestAMultipartBodyOnAJSONRouteKeepsTheJSONCap(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := `{"selection":{},"pad":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`
+	resp2, err := http.Post(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), "multipart/form-data; boundary=b", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	assertTooLarge(t, resp2, "the request body is larger than 16 MiB")
+}

@@ -33,10 +33,16 @@ func boundBodies(next http.Handler) http.Handler {
 		}
 		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		switch mediaType {
+		case "multipart/form-data":
+			// Only the project upload reads multipart; any other route
+			// decodes JSON whatever the type says, so it keeps the JSON cap.
+			if r.Method == http.MethodPost && r.URL.Path == "/api/projects" {
+				r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBodyBytes)
+				break
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 		case "application/json":
 			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
-		case "multipart/form-data":
-			r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBodyBytes)
 		default:
 			WriteProblem(w, NewProblem(http.StatusUnsupportedMediaType, "unsupported media type", "the request body must be application/json, or multipart/form-data for a project upload"))
 			return
