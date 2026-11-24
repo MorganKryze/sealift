@@ -2882,7 +2882,11 @@ func TestQueueExportAcceptsTheRequestAtItsBounds(t *testing.T) {
 	for i := range reasons {
 		reasons[i] = Reason{Kind: MajorJump, Dependencies: []string{strings.Repeat("a", maxNameBytes)}, Text: "x"}
 	}
-	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{}, Reasons: &reasons})
+	selection := map[string][]string{strings.Repeat("b", maxNameBytes): {"1.0.0"}}
+	for i := range maxRequestEntries - 1 {
+		selection[fmt.Sprintf("p%d", i)] = nil
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: selection, Reasons: &reasons})
 	data, _ := io.ReadAll(resp2.Body)
 	if strings.Contains(string(data), "more than") || strings.Contains(string(data), "longer than 214") {
 		t.Errorf("a request at its bounds was refused by a bound: %s", data)

@@ -708,3 +708,31 @@ func TestProjectedWithTheProjectCountsWhatReviewLeftLists(t *testing.T) {
 		t.Errorf("cves.after counts %d (%v), review.left lists %d ids", total, after, len(ids))
 	}
 }
+
+func TestReviewOfKeepsAFixedInOfExactly256BytesWhole(t *testing.T) {
+	exact := "4.0.1, " + strings.Repeat("9", 256-len("4.0.1, "))
+	r := reviewResult()
+	r.Dependencies[1].Candidates[0].CVEs[0].FixedIn = exact
+	sel, reasons := reviewSelection()
+	got := ReviewOf(r, request(sel, reasons...), nil)
+	if got.Left[0].FixedIn != exact {
+		t.Errorf("fixedIn = %d bytes, want the 256 bytes kept whole", len(got.Left[0].FixedIn))
+	}
+}
+
+// A separator right after byte 256 means the versions before it fit
+// whole: all 256 bytes stay.
+func TestShortFixedInKeepsEveryVersionBeforeASeparatorAtTheBound(t *testing.T) {
+	head := strings.Repeat("1", 200) + ", " + strings.Repeat("2", 256-202)
+	long := head + ", 3.0.0"
+	if got := shortFixedIn(long); got != head {
+		t.Errorf("shortFixedIn = %d bytes, want the %d bytes before the separator", len(got), len(head))
+	}
+}
+
+func TestShortFixedInCutsAFixedInOf257Bytes(t *testing.T) {
+	long := strings.Repeat("1", 200) + ", " + strings.Repeat("2", 55)
+	if got := shortFixedIn(long); got != long[:200] {
+		t.Errorf("shortFixedIn = %d bytes, want 200", len(got))
+	}
+}

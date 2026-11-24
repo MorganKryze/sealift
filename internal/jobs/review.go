@@ -402,7 +402,7 @@ func shortFixedIn(fixedIn string) string {
 	if len(fixedIn) <= maxFixedInBytes {
 		return fixedIn
 	}
-	if i := strings.LastIndex(fixedIn[:maxFixedInBytes+1], ", "); i > 0 {
+	if i := strings.LastIndex(fixedIn[:min(len(fixedIn), maxFixedInBytes+2)], ", "); i > 0 {
 		return fixedIn[:i]
 	}
 	cut := maxFixedInBytes
