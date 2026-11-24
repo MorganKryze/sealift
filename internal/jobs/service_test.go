@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/piptest"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -148,6 +149,59 @@ func TestQueueAnalysisPicksTheJobByEcosystem(t *testing.T) {
 			t.Errorf("analyses = %+v (%v), want none reserved", analyses, err)
 		}
 	})
+}
+
+// foo's only fix, 2.0.0, leaves major 1, so only a review that allows other
+// majors proposes it.
+func TestQueueAnalysisAppliesTheServicesReviewRules(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	project, err := st.CreateProject("demo", []byte(`{"name":"demo","dependencies":{"foo":"1.0.0"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	registry := registryServer(t, map[string]string{"foo": `{"name":"foo","versions":{
+	"1.0.0":{"version":"1.0.0"},
+	"2.0.0":{"version":"2.0.0"}
+},"time":{"1.0.0":"2020-01-01T00:00:00.000Z","2.0.0":"2020-02-01T00:00:00.000Z"}}`})
+	trivy := &fakeTrivy{db: map[string][]fakeFinding{
+		"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "2.0.0"}},
+	}}
+	q := NewQueue(testLogger())
+	t.Cleanup(q.Close)
+	svc := NewService(st, q, newTestToolsManager(t, st), &fakePnpm{}, trivy,
+		&npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }})
+	svc.Review = policy.DefaultReview()
+	svc.Review.ProposeOtherMajors = true
+
+	events, unsubscribe := svc.Subscribe()
+	defer unsubscribe()
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	for deadline := time.After(10 * time.Second); ; {
+		select {
+		case e := <-events:
+			if e.Kind != "end" {
+				continue
+			}
+		case <-deadline:
+			t.Fatal("the analysis never ended")
+		}
+		break
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	var result Result
+	if err := st.ReadJSON(filepath.Join(st.Root(), "projects", project.ID, "analyses", info.ID, "ranking.json"), &result); err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	if len(result.Dependencies) != 1 || result.Dependencies[0].Best != "2.0.0" {
+		t.Errorf("dependencies = %+v, want foo to propose 2.0.0, as the service's review allows other majors", result.Dependencies)
+	}
 }
 
 func TestQueueExportRefusesAnAnalysisNotDone(t *testing.T) {
