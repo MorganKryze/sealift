@@ -284,13 +284,14 @@ func localUpstreams(t *testing.T) <-chan string {
 }
 
 // startAndStop serves a fresh volume on a free port until fn returns, then
-// signals the process and waits for run to return.
-func startAndStop(t *testing.T, fn func(addr string)) {
+// signals the process and waits for run to return. The server logs JSON to
+// logs.
+func startAndStop(t *testing.T, logs io.Writer, fn func(addr string)) {
 	t.Helper()
 	addr := freeAddr(t)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
 	fn(addr)
 	p, err := os.FindProcess(os.Getpid())
@@ -315,7 +316,7 @@ func startAndStop(t *testing.T, fn func(addr string)) {
 // server the variable names.
 func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 	asked := localUpstreams(t)
-	startAndStop(t, func(string) {
+	startAndStop(t, io.Discard, func(string) {
 		select {
 		case path := <-asked:
 			if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
@@ -342,7 +343,7 @@ func TestRunPassesTheNpmRegistryToTheTools(t *testing.T) {
 	}))
 	t.Cleanup(registry.Close)
 	t.Setenv("SEALIFT_NPM_REGISTRY", registry.URL)
-	startAndStop(t, func(string) {
+	startAndStop(t, io.Discard, func(string) {
 		select {
 		case path := <-asked:
 			if path != "/pnpm" {
@@ -350,6 +351,57 @@ func TestRunPassesTheNpmRegistryToTheTools(t *testing.T) {
 			}
 		case <-time.After(5 * time.Second):
 			t.Error("the registry was never asked: SEALIFT_NPM_REGISTRY did not reach the tools manager")
+		}
+	})
+}
+
+// TestRunPreparesThePolicysPnpmAndUv proves the probe answers from the
+// preparer, built with the policy's pnpm and uv: both fail against local
+// stand-ins, their causes name the version asked, and /healthz lists them.
+func TestRunPreparesThePolicysPnpmAndUv(t *testing.T) {
+	localUpstreams(t)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pnpm" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"pnpm","versions":{}}`)
+	}))
+	t.Cleanup(registry.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registry.URL)
+	logs := &lockedBuffer{}
+	startAndStop(t, logs, func(addr string) {
+		causes := map[string]string{}
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && len(causes) < 3; time.Sleep(20 * time.Millisecond) {
+			for line := range strings.Lines(logs.String()) {
+				var entry struct{ Msg, Item, Cause string }
+				if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "preparation failed, retrying" {
+					causes[entry.Item] = entry.Cause
+				}
+			}
+		}
+		for item, version := range map[string]string{"pnpm": store.DefaultSettings.Target.PnpmVer, "uv": store.DefaultPipTarget.UvVer} {
+			if want := item + " " + version + ":"; !strings.HasPrefix(causes[item], want) {
+				t.Errorf("%s's cause = %q, want it to start with %q", item, causes[item], want)
+			}
+		}
+		if _, ok := causes["trivy"]; !ok {
+			t.Errorf("no failed trivy in the log:\n%s", logs)
+		}
+
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"status":"preparing","missing":["trivy","trivy-db","pnpm","uv"]}`
+		if resp.StatusCode != http.StatusServiceUnavailable || strings.TrimSpace(string(body)) != want {
+			t.Errorf("/healthz = %d %s, want 503 %s", resp.StatusCode, body, want)
 		}
 	})
 }
