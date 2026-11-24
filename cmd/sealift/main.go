@@ -21,6 +21,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -62,6 +63,9 @@ func run(addr, root string, log *slog.Logger) error {
 		return err
 	}
 	st.SetEphemeral(idle > 0)
+	if err := applyPolicy(st, os.Getenv("SEALIFT_POLICY"), log); err != nil {
+		return err
+	}
 	swept, err := st.MarkRunningInterrupted()
 	if err != nil {
 		return err
@@ -91,13 +95,12 @@ func run(addr, root string, log *slog.Logger) error {
 
 	// The trivy binary is reached through the "current" symlink, so
 	// ActivateTrivy repoints it without this ever being reconstructed.
-	// pnpm has no such symlink: this pins the default target's version at
-	// startup, so a settings change to a different pnpm version needs a
-	// restart to take effect, a known limit of the fixed constructor
-	// jobs.NewService takes.
+	// pnpm has no such symlink: this pins the default target's version, so
+	// a project whose own target names another pnpm version still runs this
+	// one, a known limit of the fixed constructor jobs.NewService takes.
 	target := st.Settings().Target
 	asUser := toolsCredential()
-	log.Info("child processes", "runs_as_tools_account", asUser != nil)
+	log.Info("child processes", "runs_as_tools_account", asUser != nil, "pnpm", target.PnpmVer)
 	if status, err := os.ReadFile("/proc/self/status"); asUser != nil && err == nil && noNewPrivs(string(status)) {
 		log.Error("child processes cannot switch to the tools account: the container runs with no-new-privileges, so every analysis and the Trivy database install fail; set security_opt: [no-new-privileges=false], which also overrides a daemon.json default")
 	}
@@ -171,6 +174,31 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// applyPolicy reads the policy file at path, "" meaning none, over the
+// settings an older release left on the volume, and makes the result the
+// settings in effect. It logs each key the file changed from a stored value,
+// and each key whose stored value was empty, so the default applies.
+func applyPolicy(st *store.Store, path string, log *slog.Logger) error {
+	stored, hasStored := st.StoredSettings()
+	p, err := policy.Load(path, stored, hasStored)
+	if held := (*policy.StoredError)(nil); errors.As(err, &held) {
+		return fmt.Errorf("%s, left by an older release: %w", filepath.Join(st.Root(), "private", "settings.json"), err)
+	}
+	if err != nil {
+		return fmt.Errorf("policy %s: %w", path, err)
+	}
+	if err := st.UseSettings(p.Settings); err != nil {
+		return fmt.Errorf("settings in effect: %w", err)
+	}
+	for _, key := range p.Overrides {
+		log.Info("policy overrides a stored setting", "key", key)
+	}
+	for _, key := range p.Defaulted {
+		log.Warn("default replaces an empty stored setting", "key", key)
 	}
 	return nil
 }

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -16,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
@@ -92,8 +96,8 @@ func TestRunServesHealthAndStopsOnSignal(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, "private", "settings.json")); statErr != nil {
-		t.Errorf("settings file: %v", statErr)
+	if _, statErr := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(statErr) {
+		t.Errorf("a fresh volume holds a settings file (stat: %v), want none", statErr)
 	}
 
 	p, err := os.FindProcess(os.Getpid())
@@ -254,8 +258,9 @@ func localGitHub(t *testing.T) <-chan string {
 }
 
 // TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
-// manager: GET /api/tools looks up the latest Trivy release, and the server
-// named by the variable must be the one asked.
+// manager: GET /api/tools asks GitHub nothing, the Trivy install looks up
+// the pinned release, and the server named by the variable must be the one
+// asked.
 func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 	asked := localGitHub(t)
 
@@ -285,10 +290,20 @@ func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 		t.Fatalf("GET /api/tools never answered: %v", err)
 	}
 	resp.Body.Close()
-
 	select {
 	case path := <-asked:
-		if want := "/repos/aquasecurity/trivy/releases/latest"; path != want {
+		t.Errorf("GET /api/tools asked GitHub for %q, want nothing", path)
+	default:
+	}
+
+	resp, err = client.Post("http://"+addr+"/api/tools/trivy/update", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("POST /api/tools/trivy/update: %v", err)
+	}
+	resp.Body.Close()
+	select {
+	case path := <-asked:
+		if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
 			t.Errorf("fake GitHub asked for %q, want %q", path, want)
 		}
 	default:
@@ -516,7 +531,7 @@ func TestServerStopsOnADamagedSigningKey(t *testing.T) {
 }
 
 // TestNewToolsManagerReadsGitHubToken proves SEALIFT_GITHUB_TOKEN reaches the
-// tools manager's release lookups.
+// tools manager's lookup of the pinned Trivy release.
 func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 	var got atomic.Value
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -527,12 +542,260 @@ func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
 	t.Setenv("SEALIFT_GITHUB_TOKEN", "token-for-test")
 
-	m, err := newToolsManager(nil, gh.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = m.UpdateTrivy(context.Background(), "", false)
+	m, err := newToolsManager(st, gh.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Arch = "amd64"
+	_, _ = m.EnsureTrivy(context.Background())
 	if v, _ := got.Load().(string); v != "Bearer token-for-test" {
 		t.Errorf("Authorization = %q, want the bearer token", v)
+	}
+}
+
+// startRun serves root on a free port and returns the address and a stop
+// that signals the process and waits for run to return.
+func startRun(t *testing.T, root string, log *slog.Logger) (string, func()) {
+	t.Helper()
+	localGitHub(t)
+	addr := freeAddr(t)
+	done := make(chan error, 1)
+	go func() { done <- run(addr, root, log) }()
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		var resp *http.Response
+		if resp, err = http.Get("http://" + addr + "/healthz"); err == nil {
+			resp.Body.Close()
+			break
+		}
+	}
+	if err != nil {
+		t.Fatalf("the server never answered: %v", err)
+	}
+	return addr, func() {
+		t.Helper()
+		p, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Signal(syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("run returned %v", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("run did not return after SIGTERM")
+		}
+	}
+}
+
+// writeFile writes data at path, creating its directory.
+func writeFile(t *testing.T, path, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// refusedStart runs the server on root, expects it to stop before it
+// listens, and returns the error run gave.
+func refusedStart(t *testing.T, root string) error {
+	t.Helper()
+	addr := freeAddr(t)
+	done := make(chan error, 1)
+	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		p, _ := os.FindProcess(os.Getpid())
+		_ = p.Signal(syscall.SIGTERM)
+		if err := <-done; err != nil {
+			t.Logf("run returned %v after the signal", err)
+		}
+		t.Fatal("run started and served until stopped")
+	}
+	if err == nil {
+		t.Fatal("run started")
+	}
+	if conn, dialErr := net.Dial("tcp", addr); dialErr == nil {
+		conn.Close()
+		t.Errorf("something listens on %s after a refused start", addr)
+	}
+	return err
+}
+
+func TestRunRefusesABadPolicy(t *testing.T) {
+	localGitHub(t)
+	dir := t.TempDir()
+	for name, c := range map[string]struct{ body, want string }{
+		"out of range": {"minReleaseAgeDays: 120\n", "minReleaseAgeDays must be between 1 and 90"},
+		"unknown key":  {"brand:\n  colour: red\n", "brand.colour is an unknown key"},
+		"missing file": {"", "the file does not exist"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".yaml")
+			if c.body != "" {
+				writeFile(t, path, c.body)
+			}
+			t.Setenv("SEALIFT_POLICY", path)
+			err := refusedStart(t, filepath.Join(t.TempDir(), "data"))
+			if want := "policy " + path + ": " + c.want; !strings.Contains(err.Error(), want) {
+				t.Errorf("run = %q, want it to hold %q", err, want)
+			}
+		})
+	}
+}
+
+// settings070 is private/settings.json as 0.7.0 writes it, with the node
+// version and the release age given.
+func settings070(node string, age int) string {
+	return fmt.Sprintf(`{
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": %q,
+    "pnpmVer": "10.34.5"
+  },
+  "minReleaseAgeDays": %d,
+  "resolveParallelism": 4,
+  "downloadParallelism": 16
+}`, node, age)
+}
+
+// loggedKeys returns the key of each JSON log entry whose message is msg.
+func loggedKeys(logs, msg string) []string {
+	var keys []string
+	for line := range strings.Lines(logs) {
+		var entry struct{ Msg, Key string }
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == msg {
+			keys = append(keys, entry.Key)
+		}
+	}
+	return keys
+}
+
+func TestRunRefusesAStoredSettingOutsideTheRules(t *testing.T) {
+	localGitHub(t)
+	t.Setenv("SEALIFT_POLICY", "")
+	for name, c := range map[string]struct {
+		node string
+		age  int
+		want string
+	}{
+		"a node range":                   {"22", 21, `target is refused: node must be exact, such as 22.17.1, not "22"; set targets.npm in the policy file to replace it`},
+		"a release age past the maximum": {"22.17.1", 120, "minReleaseAgeDays must be between 1 and 90, not 120; set minReleaseAgeDays in the policy file to replace it"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "data")
+			path := filepath.Join(root, "private", "settings.json")
+			writeFile(t, path, settings070(c.node, c.age))
+			err := refusedStart(t, root)
+			if want := path + ", left by an older release: " + c.want; !strings.Contains(err.Error(), want) {
+				t.Errorf("run = %q, want it to hold %q", err, want)
+			}
+		})
+	}
+}
+
+func TestRunLogsAStoredZero(t *testing.T) {
+	t.Setenv("SEALIFT_POLICY", "")
+	root := filepath.Join(t.TempDir(), "data")
+	writeFile(t, filepath.Join(root, "private", "settings.json"), settings070("22.17.1", 0))
+	var logs bytes.Buffer
+	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
+
+	resp, err := http.Get("http://" + addr + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got api.Settings
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MinReleaseAgeDays != store.DefaultSettings.MinReleaseAgeDays {
+		t.Errorf("GET /api/settings gave a release age of %d, want the default %d", got.MinReleaseAgeDays, store.DefaultSettings.MinReleaseAgeDays)
+	}
+	if keys := loggedKeys(logs.String(), "default replaces an empty stored setting"); len(keys) != 1 || keys[0] != "minReleaseAgeDays" {
+		t.Errorf("the start log names %v as defaulted, want only minReleaseAgeDays", keys)
+	}
+}
+
+func TestRunAppliesThePolicy(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "policy.yaml")
+	// pnpm differs from the default, so a runner built before the policy
+	// applies runs another version than the one the policy names.
+	writeFile(t, policy, `targets:
+  npm: {os: linux, cpu: arm64, libc: musl, node: 22.18.0, pnpm: 10.30.1}
+minReleaseAgeDays: 30
+parallelism: {resolve: 2, download: 3}
+`)
+	t.Setenv("SEALIFT_POLICY", policy)
+	root := filepath.Join(t.TempDir(), "data")
+	var logs bytes.Buffer
+	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
+
+	resp, err := http.Get("http://" + addr + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got api.Settings
+	err = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Target.Cpu != "arm64" || got.Target.Libc != "musl" || got.Target.Node != "22.18.0" || got.Target.PnpmVer != "10.30.1" ||
+		got.MinReleaseAgeDays != 30 || got.ResolveParallelism != 2 || got.DownloadParallelism != 3 {
+		t.Errorf("GET /api/settings = %+v, want the policy's values", got)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("the policy was written to the volume (stat: %v)", err)
+	}
+	var pnpm []string
+	for line := range strings.Lines(logs.String()) {
+		var entry struct{ Msg, Pnpm string }
+		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "child processes" {
+			pnpm = append(pnpm, entry.Pnpm)
+		}
+	}
+	if len(pnpm) != 1 || pnpm[0] != "10.30.1" {
+		t.Errorf("the start log names pnpm %q for child processes, want the policy's 10.30.1", pnpm)
+	}
+}
+
+func TestRunLogsAnOverriddenKey(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	stored := settings070("22.17.1", 21)
+	writeFile(t, filepath.Join(root, "private", "settings.json"), stored)
+	policy := filepath.Join(t.TempDir(), "policy.yaml")
+	writeFile(t, policy, "minReleaseAgeDays: 30\nparallelism: {resolve: 4}\n")
+	t.Setenv("SEALIFT_POLICY", policy)
+
+	var logs bytes.Buffer
+	_, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
+	stop()
+
+	overridden := loggedKeys(logs.String(), "policy overrides a stored setting")
+	if len(overridden) != 1 || overridden[0] != "minReleaseAgeDays" {
+		t.Errorf("the start log names %v as overridden, want only minReleaseAgeDays", overridden)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, "private", "settings.json")); string(raw) != stored {
+		t.Errorf("settings.json changed to %s", raw)
 	}
 }

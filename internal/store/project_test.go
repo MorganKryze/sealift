@@ -194,7 +194,7 @@ func TestProjectMethodsRefuseIDsThatEscapeTheDataVolume(t *testing.T) {
 
 func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	s := openTestStore(t)
-	settingsPath := filepath.Join(s.Root(), "private", "settings.json")
+	settingsPath := writeSettings070(t, s.Root())
 
 	if err := s.DeleteProject("../private"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"../private\"): err = %v, want ErrNotFound", err)

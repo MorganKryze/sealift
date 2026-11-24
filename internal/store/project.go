@@ -322,12 +322,12 @@ func (s *Store) ProjectsByManifestSha256(hash string) ([]Project, error) {
 }
 
 // SetProjectTarget changes a project's target platform, refusing an empty
-// field the same way SaveSettings does.
+// field the same way UseSettings does.
 func (s *Store) SetProjectTarget(id string, t Target) error {
 	if err := validID(id); err != nil {
 		return err
 	}
-	if err := validateTarget(t); err != nil {
+	if err := ValidateTarget(t); err != nil {
 		return err
 	}
 	dir := filepath.Join(s.root, "projects", id)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // captureLog routes the default logger into a buffer for one test.
@@ -305,8 +306,9 @@ func TestOtherRoutesAreNotGuardedByTheRegenerateCheck(t *testing.T) {
 	}
 }
 
-// trivyReleaseServer points h at a GitHub stand-in whose latest Trivy
-// release carries no assets, and returns the count of requests it answered.
+// trivyReleaseServer points h at a GitHub stand-in whose Trivy release
+// carries no assets, pins another version than the one seeded, and returns
+// the count of requests it answered.
 func trivyReleaseServer(t *testing.T, h *Handlers) func() int {
 	t.Helper()
 	var requests atomic.Int32
@@ -317,6 +319,8 @@ func trivyReleaseServer(t *testing.T, h *Handlers) func() int {
 	}))
 	t.Cleanup(gh.Close)
 	h.Tools.GitHubAPI = gh.URL
+	h.Tools.Arch = "amd64"
+	h.Tools.Trivy = tools.TrivyPin{Version: "1.2.3", SHA256: map[string]string{"amd64": strings.Repeat("0", 64)}}
 	return func() int { return int(requests.Load()) }
 }
 

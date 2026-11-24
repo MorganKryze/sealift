@@ -33,8 +33,7 @@ type Volume interface {
 	Settings() store.Settings
 }
 
-// Manager installs pnpm and Trivy under the data volume and switches which
-// installed Trivy version is active.
+// Manager installs pnpm, uv and the pinned Trivy under the data volume.
 type Manager struct {
 	vol  Volume
 	http *http.Client
@@ -55,12 +54,16 @@ type Manager struct {
 	// GitHubAPI overrides the GitHub API base URL. Empty uses the public
 	// API; tests point it at an httptest server.
 	GitHubAPI string
-	// GitHubToken authenticates the release lookups against the GitHub
-	// API, to lift the anonymous rate limit. Empty sends no credentials.
+	// GitHubToken authenticates the pinned release's lookup against the
+	// GitHub API, to lift the anonymous rate limit. Empty sends no
+	// credentials.
 	GitHubToken string
 	// Arch overrides the host CPU architecture used to pick the Trivy
 	// release asset. Empty uses runtime.GOARCH.
 	Arch string
+	// Trivy is the release EnsureTrivy installs and Ready wants active.
+	// Zero runs PinnedTrivy; tests set a pin of their own.
+	Trivy TrivyPin
 }
 
 // NewManager returns a Manager that installs tools into vol's data volume,

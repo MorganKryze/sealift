@@ -24,9 +24,9 @@ var ErrInvalidLimits = errors.New("invalid limits")
 // Limits the settings accept. Parallelism past these runs more pnpm or
 // download processes than a single sealift host gains from.
 const (
-	minReleaseAgeDaysMax   = 90
-	resolveParallelismMax  = 16
-	downloadParallelismMax = 32
+	MaxMinReleaseAgeDays   = 90
+	MaxResolveParallelism  = 16
+	MaxDownloadParallelism = 32
 )
 
 // ErrInvalidTarget reports a target with an empty field or a Node or pnpm
@@ -36,8 +36,8 @@ var ErrInvalidTarget = errors.New("invalid target")
 // dirMode is the mode of every directory under the data volume except
 // private/, so the tools user's group can create and write files in it.
 // fileMode is the mode of every file the store writes there, for the same
-// reason. settingsMode and privateMode keep private/settings.json unreadable
-// outside the owner.
+// reason. privateMode keeps private/ unreadable outside the owner;
+// settingsMode is the mode of a settings.json from an older release.
 const (
 	dirMode      = 0o770
 	privateMode  = 0o700
@@ -45,8 +45,9 @@ const (
 	settingsMode = 0o600
 )
 
-// defaultSettings are the values a freshly created store starts with.
-var defaultSettings = Settings{
+// DefaultSettings are the values that apply when neither the deployment nor
+// an older release's settings.json sets them.
+var DefaultSettings = Settings{
 	Target: Target{
 		OS:      "linux",
 		CPU:     "x64",
@@ -69,6 +70,11 @@ type Store struct {
 
 	mu       sync.RWMutex
 	settings Settings
+	// stored is what private/settings.json held when the store opened, and
+	// hasStored whether there was such a file. Releases up to 0.7.0 wrote
+	// it; it is read and never written, so they can still open the volume.
+	stored    Settings
+	hasStored bool
 	// signing is a pointer: fmt prints a nested pointer as an address, so
 	// printing a Store never reaches the private key.
 	signing *SigningKey
@@ -89,8 +95,9 @@ type Store struct {
 }
 
 // Open creates the data volume layout under root when it is missing, then
-// loads private/settings.json or writes the defaults there, then loads
-// private/signing-key.pem or generates the key pair.
+// reads private/settings.json if an older release left one, then loads
+// private/signing-key.pem or generates the key pair. Until UseSettings, the
+// settings are the stored ones, or the defaults on a fresh volume.
 //
 // It also sets the process umask to 002. A container's default umask of 022
 // would strip the group write bit from every file this package creates
@@ -121,13 +128,10 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{root: root, projects: projects}
+	s := &Store{root: root, projects: projects, settings: DefaultSettings}
 	settingsPath := filepath.Join(root, "private", "settings.json")
 	switch _, err := os.Stat(settingsPath); {
 	case errors.Is(err, os.ErrNotExist):
-		if err := s.SaveSettings(defaultSettings); err != nil {
-			return nil, fmt.Errorf("store: write default settings: %w", err)
-		}
 	case err != nil:
 		return nil, fmt.Errorf("store: stat settings: %w", err)
 	default:
@@ -138,9 +142,7 @@ func Open(root string) (*Store, error) {
 		if err := dropSignatureKey(settingsPath, loaded); err != nil {
 			return nil, err
 		}
-		s.mu.Lock()
-		s.settings = loaded
-		s.mu.Unlock()
+		s.settings, s.stored, s.hasStored = loaded, loaded, true
 	}
 
 	key, err := loadSigningKey(s.signingKeyPath())
@@ -206,17 +208,21 @@ func (s *Store) Settings() Settings {
 	return s.settings
 }
 
-// SaveSettings atomically writes settings to private/settings.json, mode
-// 0600, and refuses an invalid target or limits out of range.
-func (s *Store) SaveSettings(set Settings) error {
-	if err := validateTarget(set.Target); err != nil {
+// StoredSettings returns what private/settings.json held when the store
+// opened, and false when the volume had no such file.
+func (s *Store) StoredSettings() (Settings, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.stored, s.hasStored
+}
+
+// UseSettings makes set the settings in effect, refusing an invalid target
+// or limits out of range. It writes nothing to the volume.
+func (s *Store) UseSettings(set Settings) error {
+	if err := ValidateTarget(set.Target); err != nil {
 		return err
 	}
 	if err := validateLimits(set); err != nil {
-		return err
-	}
-	path := filepath.Join(s.root, "private", "settings.json")
-	if err := writeJSONFile(path, set, settingsMode); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -232,18 +238,18 @@ func validateLimits(set Settings) error {
 			problems = append(problems, fmt.Sprintf("%s must be between %d and %d, not %d", name, low, high, value))
 		}
 	}
-	check("minimum release age", set.MinReleaseAgeDays, 1, minReleaseAgeDaysMax)
-	check("resolve parallelism", set.ResolveParallelism, 1, resolveParallelismMax)
-	check("download parallelism", set.DownloadParallelism, 1, downloadParallelismMax)
+	check("minimum release age", set.MinReleaseAgeDays, 1, MaxMinReleaseAgeDays)
+	check("resolve parallelism", set.ResolveParallelism, 1, MaxResolveParallelism)
+	check("download parallelism", set.DownloadParallelism, 1, MaxDownloadParallelism)
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %s", ErrInvalidLimits, strings.Join(problems, "; "))
 	}
 	return nil
 }
 
-// validateTarget refuses a target the rest of the pipeline cannot resolve or
-// export with.
-func validateTarget(t Target) error {
+// ValidateTarget refuses a target the rest of the pipeline cannot resolve or
+// export with, naming each field at fault.
+func ValidateTarget(t Target) error {
 	var problems []string
 	for _, f := range []struct{ name, value string }{{"os", t.OS}, {"cpu", t.CPU}, {"node", t.Node}, {"pnpm version", t.PnpmVer}} {
 		if f.value == "" {
@@ -415,7 +421,7 @@ func ReadRegularFile(path string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s is larger than %d MiB", name, limit>>20)
+		return nil, fmt.Errorf("%s is larger than %d bytes", name, limit)
 	}
 	return data, nil
 }

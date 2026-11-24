@@ -21,7 +21,7 @@ flowchart LR
   Service --> Store[internal/store: /data]
   Analysis --> Store
   Export --> Store
-  API --> Tools[internal/tools: install Trivy, pnpm]
+  API --> Tools[internal/tools: Trivy at the pinned release, pnpm]
   Tools --> Store
 ```
 
@@ -31,7 +31,7 @@ flowchart LR
 | `internal/api` | Handlers for the strict server generated from `api/openapi.yaml`, problem responses, the event stream |
 | `internal/jobs` | `Service`, `Queue`, the analysis and export jobs |
 | `internal/store` | Every read and write under `/data`, settings validation, the signing key pair (`signing.go`: load or generate at start, sign, regenerate) |
-| `internal/tools` | Trivy install and activation, pnpm install, hash checks |
+| `internal/tools` | The pinned Trivy release (`trivy_pin.go`) and its install, pnpm and uv installs, hash checks |
 | `internal/runner` | pnpm and Trivy command lines, run as the tools user in their own process group |
 | `npm` | `package.json` parsing and validation, the registry client, pnpm lockfiles, version order |
 | `rank` | Finding sets, severity vectors, signals, `Best`, `KeyVersions`, `Diff` |

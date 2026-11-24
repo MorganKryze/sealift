@@ -42,6 +42,7 @@ func writeCaches(t *testing.T, s *Store) []string {
 
 func TestPurgeCachesKeepsToolsKeyAndSettings(t *testing.T) {
 	s := openTestStore(t)
+	writeSettings070(t, s.Root())
 	files := writeCaches(t, s)
 	tool := filepath.Join(s.Root(), "tools", "trivy", "0.76.2", "trivy")
 	db := filepath.Join(s.Root(), "trivy-cache", "db", "trivy.db")
