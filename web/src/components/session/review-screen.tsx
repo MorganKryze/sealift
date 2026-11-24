@@ -8,13 +8,15 @@ import { queueExport, type Analysis, type Candidate, type DependencyResult, type
 import { getSettings } from "@/api/settings"
 import { ProblemNotice } from "@/components/problem-notice"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
+import { ReasonsBlock } from "@/components/session/reasons-block"
 import { SeverityCounts } from "@/components/severity-counts"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { useSelection } from "@/hooks/use-selection"
+import { useReasons, useSelection } from "@/hooks/use-selection"
 import { exportSelection } from "@/lib/exportSelection"
+import { missingReasons, reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
 import {
   afterVectorOf,
   distinctCves,
@@ -51,6 +53,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
   const selection = useSelection(analysis.id)
+  const reasons = useReasons(analysis.id)
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [nothingOpen, setNothingOpen] = useState(false)
 
@@ -86,11 +89,16 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     return chosen !== proposed
   })
 
+  const toExport = exportSelection(dependencies, selection.selection)
+  const needed = result ? requiredReasons(result, toExport) : []
+  const missing = missingReasons(needed, reasons.reasons)
+
   const confirmMutation = useMutation({
     mutationFn: () =>
       queueExport(project.id, analysis.id, {
-        selection: exportSelection(dependencies, selection.selection),
+        selection: toExport,
         includeProject: false,
+        reasons: reasonsToSend(needed, reasons.reasons),
       }),
     onSuccess: (created) => {
       queryClient.setQueryData(["project", project.id], (prev: Project | undefined) =>
@@ -100,6 +108,9 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     },
   })
   const confirmError = confirmMutation.error instanceof ProblemError ? confirmMutation.error : null
+  // internal/api answers a selection whose reasons fall short with this title and one problem per line of its detail.
+  const refusal =
+    confirmError?.status === 400 && confirmError.problem?.title === "invalid export reasons" ? (confirmError.problem.detail ?? undefined) : undefined
 
   const steps = sessionSteps({ project, current: "review", onNavigate: onNavigateStep })
 
@@ -199,7 +210,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
               </div>
               <button
                 type="button"
-                className="text-sm font-medium text-accent"
+                className="py-1.5 text-sm font-medium text-accent"
                 aria-expanded={nothingOpen}
                 onClick={() => setNothingOpen((v) => !v)}
               >
@@ -246,6 +257,8 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         )
       })}
 
+      <ReasonsBlock needed={needed} reasons={reasons.reasons} onChange={reasons.setReason} refusal={refusal} />
+
       <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
           <div className="text-sm">
@@ -260,16 +273,22 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
             ) : null}
           </div>
           <div className="flex flex-col items-end gap-2">
+            {missing ? (
+              <p id="export-waits" className="max-w-[60ch] text-right text-sm text-muted">
+                {missing}
+              </p>
+            ) : null}
             <Button
               size="lg"
-              disabled={changedDependencies.length === 0 || confirmMutation.isPending}
+              disabled={changedDependencies.length === 0 || confirmMutation.isPending || missing !== ""}
+              aria-describedby={missing ? "export-waits" : undefined}
               onClick={() => confirmMutation.mutate()}
             >
               {confirmMutation.isPending ? "Building…" : "Confirm and build the archive"}
             </Button>
           </div>
         </div>
-        {confirmError ? (
+        {confirmError && refusal === undefined ? (
           <div className="mx-auto w-full max-w-240 px-5 pb-3.5">
             <ProblemNotice status={confirmError.status} problem={confirmError.problem} />
           </div>

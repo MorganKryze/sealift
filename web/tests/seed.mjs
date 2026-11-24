@@ -13,8 +13,8 @@ const exported = "20260921T102000Z"
 const target = { os: "linux", cpu: "x64", libc: "glibc", node: "22.17.1", pnpmVer: "12.3.4" }
 const manifest = JSON.stringify({ name: "demo", dependencies: { express: "5.0.1", lodash: "4.17.20" } }, null, 2)
 
-const write = (path, content) => {
-  const file = join(root, "projects", project, path)
+const write = (path, content, into = project) => {
+  const file = join(root, "projects", into, path)
   mkdirSync(join(file, ".."), { recursive: true })
   writeFileSync(file, typeof content === "string" ? content : JSON.stringify(content))
 }
@@ -50,6 +50,51 @@ write(`analyses/${analysis}/ranking.json`, {
     },
   ],
 })
+// A second session whose answer needs reasons: the react family and express can leave their major, and
+// html-minifier keeps a CVE that no version fixes. candidates.json and ranking.json are the bytes the rank
+// step wrote for this project (2-space indented, no final newline); ranking.json adds the combined check's after.
+const reasons = { project: "reasons", analysis: "20261124T101500Z" }
+const reasonsManifest = JSON.stringify(
+  { name: "reasons", dependencies: { react: "18.2.0", "react-dom": "18.2.0", express: "4.17.1", "html-minifier": "4.0.0" }, devDependencies: { "@types/react": "18.3.12" } },
+  null,
+  2,
+)
+const published = "2025-03-31T14:00:00Z"
+const zero = [0, 0, 0, 0, 0]
+const stored = (version, signals = []) => ({ version, vector: zero, cves: [], signals, key: true, resolved: true, published })
+const leaves = (major) => [{ name: "major-jump", evidence: `leaves major version ${major}`, blocking: false }]
+const reasonsResult = (after) => ({
+  target,
+  before: [0, 1, 1, 0, 0],
+  after,
+  dependencies: [
+    { name: "react", current: "18.2.0", vector: zero, cves: [], candidates: [stored("18.3.1"), stored("19.2.0", leaves(18))], jump: "19.2.0", family: "react 19" },
+    { name: "react-dom", current: "18.2.0", vector: zero, cves: [], candidates: [stored("18.3.1"), stored("19.2.0", leaves(18))], jump: "19.2.0", family: "react 19" },
+    { name: "@types/react", current: "18.3.12", vector: zero, cves: [], candidates: [stored("19.2.0", leaves(18))], jump: "19.2.0", family: "react 19" },
+    {
+      name: "express", current: "4.17.1", best: "4.21.2", vector: [0, 1, 0, 0, 0],
+      cves: [{ id: "CVE-2024-29041", severity: "HIGH", package: "express@4.17.1", fixedIn: "4.19.2, 5.0.0" }],
+      candidates: [stored("4.21.2"), stored("5.1.0", leaves(4))], jump: "5.1.0",
+    },
+    {
+      name: "html-minifier", current: "4.0.0", vector: [0, 0, 1, 0, 0],
+      cves: [{ id: "CVE-2022-37620", severity: "MEDIUM", package: "html-minifier@4.0.0", fixedIn: "" }], candidates: [],
+    },
+  ],
+  warnings: [],
+  families: [{ name: "react 19", members: ["@types/react", "react", "react-dom"] }],
+})
+write("package.json", reasonsManifest, reasons.project)
+write("project.json", {
+  id: reasons.project, name: "reasons", target, createdAt: "2026-11-24T10:14:00Z",
+  manifestSha256: createHash("sha256").update(reasonsManifest).digest("hex"),
+}, reasons.project)
+write(`analyses/${reasons.analysis}/status.json`, {
+  state: "done", pnpmVersion: "12.3.4", trivyVersion: "0.74.0", trivyDbDate: "2026-11-24T06:12:00Z",
+}, reasons.project)
+write(`analyses/${reasons.analysis}/candidates.json`, JSON.stringify(reasonsResult(null), null, 2), reasons.project)
+write(`analyses/${reasons.analysis}/ranking.json`, JSON.stringify(reasonsResult([0, 0, 1, 0, 0]), null, 2), reasons.project)
+
 // The key is made per run and written as the store writes it: PKCS#8 PEM, mode 0600, in private/ at 0700.
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
 mkdirSync(join(root, "private"), { recursive: true, mode: 0o700 })

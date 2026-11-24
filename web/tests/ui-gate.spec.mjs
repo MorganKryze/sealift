@@ -24,6 +24,23 @@ export const UI = {
   states: [
     { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
   ],
+  // A session route with sessionStorage written before the page loads, as the review screen keeps the
+  // selection and the reasons there; `ready` is the text that proves the analysis arrived.
+  sessions: [
+    {
+      path: "/sessions/reasons/review",
+      storage: { "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] } },
+      ready: "3 reasons missing: react 19, express, html-minifier",
+    },
+    {
+      path: "/sessions/reasons/review",
+      storage: {
+        "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] },
+        "sealift:reasons:20261124T101500Z": { "major-jump:react 19": "first line\nsecond line", "major-jump:express": "the routes need express 5" },
+      },
+      ready: "Keep the reason on one line, with no tab or control character.",
+    },
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
@@ -324,6 +341,27 @@ for (const state of UI.states) {
             await p.getByRole(state.open.role, { name: state.open.name }).click()
             await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
           },
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
+for (const session of UI.sessions) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${session.path} ${session.ready} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${session.path} · ${session.ready} · ${width}px · ${theme}`,
+          url: new URL(session.path, UI.baseURL).href,
+          width,
+          theme,
+          prepare: (p) =>
+            p.addInitScript((storage) => {
+              for (const [key, value] of Object.entries(storage)) sessionStorage.setItem(key, JSON.stringify(value))
+            }, session.storage),
+          ready: (p) => p.getByText(session.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
         })
         expect(failures, failures.join("\n")).toEqual([])
       })
