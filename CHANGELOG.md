@@ -12,6 +12,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.
 - An analysis or an export waiting for another job reads Waiting for another job, with no step in progress and no package counters, instead of looking like the running one.
 - The home and setup screens wait at most 3 seconds on GitHub for the latest Trivy release, then show the installed versions alone. A slow or closed network held them for about 30 seconds.
+- A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
 
 ## [0.7.0] - 2026-11-23
 

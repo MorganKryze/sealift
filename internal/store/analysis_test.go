@@ -304,6 +304,7 @@ func TestJobCreatedAt(t *testing.T) {
 		{"20260917T101502Z-0a1b2c3", false},
 		{"20260917T101502Z-0a1b2g", false},
 		{"20260917T101502Z0a1b2c", false},
+		{"20260917T101502Z_0a1b2c", false},
 		{"20260917T101502Z-", false},
 		{"20260917T101502Z-0a1b2c-0a1b2c", false},
 		{"proj-1", false},
