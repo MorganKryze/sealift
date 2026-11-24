@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -75,7 +76,9 @@ func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error
 	return bin, nil
 }
 
-// InstalledPnpm lists every pnpm version present under tools/pnpm/, sorted.
+// InstalledPnpm lists every pnpm version present under tools/pnpm/, sorted,
+// skipping the "<version>.tmp" and "<version>.old-<suffix>" staging
+// directories installDir leaves while it runs.
 func (m *Manager) InstalledPnpm() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(m.vol.Root(), "tools", "pnpm"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -86,7 +89,7 @@ func (m *Manager) InstalledPnpm() ([]string, error) {
 	}
 	versions := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") && !strings.Contains(e.Name(), ".old-") {
 			versions = append(versions, e.Name())
 		}
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -42,10 +43,7 @@ func (h *Handlers) GetInstance(ctx context.Context, _ GetInstanceRequestObject) 
 	for i, it := range state.Items {
 		in.Preparing[i] = preparingItemToAPI(it)
 	}
-	var err error
-	if in.Tools, err = h.toolVersions(ctx); err != nil {
-		return GetInstancedefaultApplicationProblemPlusJSONResponse(problem(http.StatusInternalServerError, "read the tool versions", err)), nil
-	}
+	in.Tools = h.toolVersions(ctx)
 	return GetInstance200JSONResponse(in), nil
 }
 
@@ -63,24 +61,26 @@ func (h *Handlers) GetInstanceLogo(_ context.Context, _ GetInstanceLogoRequestOb
 	return GetInstanceLogo404ApplicationProblemPlusJSONResponse{ProblemApplicationProblemPlusJSONResponse(NewProblem(http.StatusNotFound, "instance logo", "the policy names no logo"))}, nil
 }
 
-func (h *Handlers) toolVersions(ctx context.Context) (InstanceTools, error) {
-	trivy, err := h.Tools.TrivyState(ctx)
-	if err != nil {
-		return InstanceTools{}, err
+// toolVersions reads the versions on the data volume. A folder it cannot
+// read lists no version and is logged: the answer still carries the
+// preparation and the deployment mode, which matter more.
+func (h *Handlers) toolVersions(ctx context.Context) InstanceTools {
+	pinned, date := h.Tools.Scanner()
+	out := InstanceTools{Trivy: pinned, Pnpm: []string{}, Uv: []string{}}
+	if !date.IsZero() {
+		out.TrivyDbDate = &date
 	}
-	pnpm, err := h.Tools.InstalledPnpm()
-	if err != nil {
-		return InstanceTools{}, err
+	if pnpm, err := h.Tools.InstalledPnpm(); err != nil {
+		slog.WarnContext(ctx, "api: instance: reading the pnpm versions", "error", err)
+	} else {
+		out.Pnpm = orEmpty(pnpm)
 	}
-	uv, err := h.Tools.InstalledUv()
-	if err != nil {
-		return InstanceTools{}, err
+	if uv, err := h.Tools.InstalledUv(); err != nil {
+		slog.WarnContext(ctx, "api: instance: reading the uv versions", "error", err)
+	} else {
+		out.Uv = orEmpty(uv)
 	}
-	out := InstanceTools{Trivy: trivy.Pinned, Pnpm: orEmpty(pnpm), Uv: orEmpty(uv)}
-	if !trivy.DBDate.IsZero() {
-		out.TrivyDbDate = &trivy.DBDate
-	}
-	return out, nil
+	return out
 }
 
 func preparingItemToAPI(it tools.Item) PreparingItem {

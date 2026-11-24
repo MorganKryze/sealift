@@ -324,3 +324,38 @@ func TestInstanceLogoIs404WithoutALogo(t *testing.T) {
 		t.Errorf("problem = %s (%v), want a 404 problem", body, err)
 	}
 }
+
+func TestInstanceKeepsAnsweringWhenAToolFolderCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	srv, h := newTestServer(t)
+	h.Ephemeral = 30 * time.Minute
+	h.Ready = fixedReadiness{Items: []tools.Item{{Name: "uv", Version: "0.13.7", State: tools.ItemPreparing}}}
+	for _, dir := range []string{"tools/pnpm/10.34.5", "tools/uv/0.13.7", "tools/trivy/0.55.0"} {
+		if err := os.MkdirAll(filepath.Join(h.Store.Root(), dir), 0o770); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{"tools/pnpm", "tools/trivy"} {
+		locked := filepath.Join(h.Store.Root(), dir)
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o770) })
+	}
+
+	in := getInstance(t, srv.URL)
+	if !in.Ephemeral || in.IdleMinutes == nil || *in.IdleMinutes != 30 {
+		t.Errorf("ephemeral = %v, idleMinutes = %v, want true and 30", in.Ephemeral, in.IdleMinutes)
+	}
+	if len(in.Preparing) != 1 || in.Preparing[0].Name != PreparingItemNameUv {
+		t.Errorf("preparing = %+v, want the uv item", in.Preparing)
+	}
+	want := InstanceTools{Trivy: tools.PinnedTrivy.Version, Pnpm: []string{}, Uv: []string{"0.13.7"}}
+	got := in.Tools
+	got.TrivyDbDate = nil
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tools = %+v, want %+v", got, want)
+	}
+}
