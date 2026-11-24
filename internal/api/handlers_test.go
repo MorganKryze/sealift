@@ -530,13 +530,12 @@ func (exportTrivyFake) ConvertToCycloneDX(_ context.Context, _, outPath string) 
 
 func (exportTrivyFake) UpdateDB(context.Context) (string, error) { return "", nil }
 
-// newTestHandlersWithTrivy is newTestHandlers with the Trivy fake the
-// caller chooses, for a test whose export job must reach the reports
-// step instead of stopping at whatever the shared fakeTrivy leaves
-// unwritten.
+// newTestHandlersWithTrivy is newTestHandlers with exportTrivyFake, for a
+// test whose export job must reach the reports step instead of stopping
+// at whatever the shared fakeTrivy leaves unwritten.
 func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue) *Handlers {
-	trivy := exportTrivyFake{}
 	t.Helper()
+	trivy := exportTrivyFake{}
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
