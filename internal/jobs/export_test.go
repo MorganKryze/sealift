@@ -1471,8 +1471,7 @@ func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
 func TestExportFailsOnAReviewTheImportWouldKeepOut(t *testing.T) {
 	long := strings.Repeat("9", 257)
 	for name, set := range map[string]func(*CVE){
-		"a fixedIn over 256 bytes": func(c *CVE) { c.FixedIn = long },
-		"a cve id over 256 bytes":  func(c *CVE) { c.ID = "CVE-" + long },
+		"a cve id over 256 bytes": func(c *CVE) { c.ID = "CVE-" + long },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHarness(t)

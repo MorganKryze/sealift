@@ -2,10 +2,12 @@ package jobs
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/policy"
@@ -534,5 +536,40 @@ func TestReviewOfLeavesAfterOutWithoutAProjectScan(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"after"`) {
 		t.Errorf("the review holds an after key: %s", data)
+	}
+}
+
+// A Trivy fixedIn past the import's 256-byte bound would make the import
+// keep the review out: the signed one stops at the last whole version.
+func TestReviewOfShortensALongFixedInAtAVersion(t *testing.T) {
+	var versions []string
+	for i := 0; len(strings.Join(versions, ", ")) < 300; i++ {
+		versions = append(versions, fmt.Sprintf("4.%d.%d", i, 100+i))
+	}
+	long := strings.Join(versions, ", ")
+	r := reviewResult()
+	r.Dependencies[1].Candidates[0].CVEs[0].FixedIn = long
+	sel, reasons := reviewSelection()
+	got := ReviewOf(r, request(sel, reasons...), nil)
+	fixedIn := got.Left[0].FixedIn
+	if len(fixedIn) > 256 || len(fixedIn) == 0 {
+		t.Fatalf("fixedIn is %d bytes, want 1 to 256 (from %d)", len(fixedIn), len(long))
+	}
+	if !strings.HasPrefix(long, fixedIn) || !strings.HasPrefix(long[len(fixedIn):], ", ") {
+		t.Errorf("fixedIn %q does not stop at a version boundary of %q", fixedIn, long)
+	}
+	if err := archive.CheckReview(got, archive.NPM); err != nil {
+		t.Errorf("the import would keep this review out: %v", err)
+	}
+}
+
+func TestShortFixedInCutsALoneLongVersionOnARune(t *testing.T) {
+	long := strings.Repeat("é", 200)
+	got := shortFixedIn(long)
+	if len(got) > 256 || !utf8.ValidString(got) || !strings.HasPrefix(long, got) {
+		t.Errorf("shortFixedIn = %d bytes, valid %v, want a valid prefix of at most 256 bytes", len(got), utf8.ValidString(got))
+	}
+	if short := "4.0.1, 5.0.0"; shortFixedIn(short) != short {
+		t.Errorf("shortFixedIn changed %q", short)
 	}
 }

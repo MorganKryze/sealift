@@ -316,7 +316,7 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 				left := archive.ReviewCVE{
 					Dependency: d.Name, Version: h.version, ID: c.ID,
 					Severity: severityText(rank.ParseSeverity(c.Severity)),
-					Package:  packageName(c.Package), FixedIn: c.FixedIn,
+					Package:  packageName(c.Package), FixedIn: shortFixedIn(c.FixedIn),
 				}
 				if withoutFix(c) {
 					left.Reason = text
@@ -328,6 +328,27 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 		}
 	}
 	return review
+}
+
+// maxFixedInBytes is the import's bound on a review's text fields.
+const maxFixedInBytes = 256
+
+// shortFixedIn keeps the versions of a Trivy fixedIn that fit the import's
+// bound, whole ones only, so a long list never fails the export. The
+// archive's Trivy report keeps the full value. A lone version past the
+// bound is cut on a character.
+func shortFixedIn(fixedIn string) string {
+	if len(fixedIn) <= maxFixedInBytes {
+		return fixedIn
+	}
+	if i := strings.LastIndex(fixedIn[:maxFixedInBytes+1], ", "); i > 0 {
+		return fixedIn[:i]
+	}
+	cut := maxFixedInBytes
+	for cut > 0 && !utf8.RuneStart(fixedIn[cut]) {
+		cut--
+	}
+	return fixedIn[:cut]
 }
 
 // fixedBy returns the CVEs of before that none of after carries.
