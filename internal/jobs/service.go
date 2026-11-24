@@ -263,6 +263,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	}
 	if req.IncludeProject {
 		req.ProjectFindings = projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
+		req.ProjectHolders = projectHolders(filepath.Join(project.Dir, "analyses", analysisID))
 	}
 	if problems := CheckReasons(result, req, s.Review); len(problems) > 0 {
 		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
@@ -695,4 +696,21 @@ func projectFindings(analysisDir string) []rank.Finding {
 		return nil
 	}
 	return findings
+}
+
+// projectHolders reads the analysis's project lockfile into the direct
+// dependencies that hold each package. An unreadable lockfile places
+// nothing, so a CVE without a fix only it would place refuses the export.
+func projectHolders(analysisDir string) map[string][]string {
+	f, err := openRegularFile(filepath.Join(analysisDir, "project", "pnpm-lock.yaml"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	holders, err := npm.LockHolders(f)
+	if err != nil {
+		slog.Warn("jobs: unreadable project lockfile", "dir", analysisDir, "error", err)
+		return nil
+	}
+	return holders
 }

@@ -676,10 +676,78 @@ func TestCheckReasonsRefusesAProjectCVENoDependencyNames(t *testing.T) {
 	refuse := askReasons()
 	refuse.CVEWithoutFix = policy.Refuse
 	req := withProject(request(map[string][]string{}), rank.Finding{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0", Severity: rank.High})
-	got := CheckReasons(r, req, refuse)
-	want := "review.cveWithoutFix is refuse: the project tree keeps qs 6.0.0 with CVE-2025-0300, which no version fixes, and cannot cross"
-	if !slices.Contains(got, want) {
-		t.Errorf("problems = %q, want %q", got, want)
+	want := "the project tree keeps qs 6.0.0 with CVE-2025-0300, which no version fixes, and no direct dependency's tree in the lockfile holds it, so it cannot cross"
+	for _, p := range []policy.Review{refuse, askReasons()} {
+		if got := CheckReasons(r, req, p); !slices.Contains(got, want) {
+			t.Errorf("under %s, problems = %q, want %q", p.CVEWithoutFix, got, want)
+		}
+	}
+}
+
+// qs sits in the lockfile under express only, and express's own scan never
+// names it: its CVE without a fix asks express a reason, and review.left
+// lists it under express with qs named.
+func TestCheckReasonsPlacesAnUnnamedLockfileCVEUnderItsDirectDependency(t *testing.T) {
+	r := reviewResult()
+	noFix := rank.Finding{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0", Severity: rank.High}
+	fixed := rank.Finding{ID: "CVE-2025-0301", Package: "qs", Version: "6.0.0", Severity: rank.Medium, FixedVersion: "6.2.0"}
+	req := withProject(request(map[string][]string{}), noFix, fixed)
+	req.ProjectHolders = map[string][]string{"qs@6.0.0": {"express"}}
+
+	req.Reasons = []Reason{cveReason("Templates are ours.", "html-minifier")}
+	assertProblems(t, CheckReasons(r, req, askReasons()), []string{
+		"express 4.17.1 keeps CVE-2025-0300, which no version fixes, and needs a reason",
+	})
+	refuse := askReasons()
+	refuse.CVEWithoutFix = policy.Refuse
+	if got := CheckReasons(r, req, refuse); !slices.ContainsFunc(got, func(p string) bool {
+		return strings.HasPrefix(p, "review.cveWithoutFix is refuse: express 4.17.1 keeps") && strings.Contains(p, "CVE-2025-0300")
+	}) {
+		t.Errorf("under refuse, problems = %q, want express refused for CVE-2025-0300", got)
+	}
+
+	req.Reasons = append(req.Reasons, cveReason("Bodies come from us.", "express"))
+	if problems := CheckReasons(r, req, askReasons()); len(problems) > 0 {
+		t.Fatalf("with the reason, problems = %q", problems)
+	}
+	after := projectedFor(r, req, req.ProjectFindings)
+	review := ReviewOf(r, req, &after)
+	if !slices.ContainsFunc(review.Left, func(c archive.ReviewCVE) bool {
+		return c.Dependency == "express" && c.Version == "4.17.1" && c.ID == "CVE-2025-0300" && c.Package == "qs" && c.Reason == "Bodies come from us."
+	}) {
+		t.Errorf("review.left = %+v, want CVE-2025-0300 under express, package qs, with the reason", review.Left)
+	}
+	ids := map[string]bool{}
+	for _, c := range review.Left {
+		ids[c.ID] = true
+	}
+	total := 0
+	for _, n := range *review.CVEs.After {
+		total += n
+	}
+	if total != len(ids) {
+		t.Errorf("cves.after counts %d, review.left lists %d ids: %+v", total, len(ids), review.Left)
+	}
+	if err := archive.CheckReview(review, archive.NPM); err != nil {
+		t.Errorf("the import would keep this review out: %v", err)
+	}
+}
+
+// A package two direct dependencies reach asks both a reason.
+func TestCheckReasonsAsksEveryDirectDependencyThatReachesALockfileCVE(t *testing.T) {
+	r := reviewResult()
+	req := withProject(request(map[string][]string{}), rank.Finding{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0", Severity: rank.High})
+	req.ProjectHolders = map[string][]string{"qs@6.0.0": {"express", "react"}}
+	req.Reasons = []Reason{cveReason("Bodies come from us.", "express"), cveReason("Templates are ours.", "html-minifier")}
+	assertProblems(t, CheckReasons(r, req, askReasons()), []string{
+		"react 18.3.1 keeps CVE-2025-0300, which no version fixes, and needs a reason",
+	})
+	req.Reasons = append(req.Reasons, cveReason("Only the admin page renders it.", "react"))
+	left := ReviewOf(r, req, nil).Left
+	for _, dep := range []string{"express", "react"} {
+		if !slices.ContainsFunc(left, func(c archive.ReviewCVE) bool { return c.Dependency == dep && c.ID == "CVE-2025-0300" }) {
+			t.Errorf("review.left = %+v, want CVE-2025-0300 under %s", left, dep)
+		}
 	}
 }
 
@@ -742,8 +810,9 @@ func TestShortFixedInCutsAFixedInOf257Bytes(t *testing.T) {
 func TestCheckReasonsPlacesAProjectFindingOnADependencyOnlyAtItsCurrentVersion(t *testing.T) {
 	r := reviewResult()
 	req := withProject(request(map[string][]string{}), rank.Finding{ID: "CVE-2025-0400", Package: "react", Version: "17.0.2", Severity: rank.High})
+	req.ProjectHolders = map[string][]string{"react@17.0.2": {"express"}}
 	for _, p := range CheckReasons(r, req, askReasons()) {
-		if strings.Contains(p, "CVE-2025-0400") {
+		if strings.Contains(p, "react 18.3.1") {
 			t.Errorf("problem %q places react 17.0.2 on react 18.3.1", p)
 		}
 	}

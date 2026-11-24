@@ -65,7 +65,7 @@ func askedOf(r Result, req ExportRequest) []asked {
 	out := make([]asked, 0, len(r.Dependencies))
 	for _, d := range r.Dependencies {
 		if req.IncludeProject {
-			d.CVEs = append(slices.Clone(d.CVEs), projectCVEs(d, req.ProjectFindings)...)
+			d.CVEs = append(slices.Clone(d.CVEs), projectCVEs(r, d, req)...)
 		}
 		a := asked{dep: d}
 		selected := req.Selection[d.Name]
@@ -124,16 +124,17 @@ func heldOf(d DependencyResult, v string) (held, bool) {
 	return h, true
 }
 
-// projectCVEs is what the lockfile's scan finds without a fix on d's
-// current tree and d's own scan missed: a finding on d at its current
-// version, or on a package d's scan already places under d.
-func projectCVEs(d DependencyResult, findings []rank.Finding) []CVE {
+// projectCVEs is what the lockfile's scan finds on d's current tree that
+// d's own scan missed: a finding on d at its current version, on a package
+// d's scan already places under d, or, when no dependency's scan places
+// it, on a package the lockfile holds under d.
+func projectCVEs(r Result, d DependencyResult, req ExportRequest) []CVE {
 	var out []CVE
-	for _, f := range findings {
-		if strings.TrimSpace(f.FixedVersion) != "" || !underDependency(d, f) {
+	for _, f := range req.ProjectFindings {
+		if !underDependency(d, f) && (scanPlaced(r, f) || !slices.Contains(req.ProjectHolders[f.Package+"@"+f.Version], d.Name)) {
 			continue
 		}
-		c := CVE{ID: f.ID, Severity: severityText(f.Severity), Package: f.Package + "@" + f.Version}
+		c := CVE{ID: f.ID, Severity: severityText(f.Severity), Package: f.Package + "@" + f.Version, FixedIn: f.FixedVersion}
 		known := func(o CVE) bool { return o.ID == c.ID && packageName(o.Package) == f.Package }
 		if !slices.ContainsFunc(d.CVEs, known) && !slices.ContainsFunc(out, known) {
 			out = append(out, c)
@@ -151,13 +152,23 @@ func underDependency(d DependencyResult, f rank.Finding) bool {
 	return slices.ContainsFunc(d.CVEs, func(c CVE) bool { return packageName(c.Package) == f.Package })
 }
 
+// scanPlaced is true when some dependency's own scan places finding f.
+func scanPlaced(r Result, f rank.Finding) bool {
+	return slices.ContainsFunc(r.Dependencies, func(d DependencyResult) bool { return underDependency(d, f) })
+}
+
 // unplacedWithoutFix words, per package, the lockfile's CVEs without a fix
-// that no dependency's tree places.
-func unplacedWithoutFix(r Result, findings []rank.Finding) []string {
+// that neither a dependency's scan nor the lockfile's tree places under a
+// direct dependency the analysis holds.
+func unplacedWithoutFix(r Result, req ExportRequest) []string {
 	var order []string
 	ids := map[string][]string{}
-	for _, f := range findings {
-		if strings.TrimSpace(f.FixedVersion) != "" || slices.ContainsFunc(r.Dependencies, func(d DependencyResult) bool { return underDependency(d, f) }) {
+	for _, f := range req.ProjectFindings {
+		if strings.TrimSpace(f.FixedVersion) != "" || scanPlaced(r, f) {
+			continue
+		}
+		holders := req.ProjectHolders[f.Package+"@"+f.Version]
+		if slices.ContainsFunc(r.Dependencies, func(d DependencyResult) bool { return slices.Contains(holders, d.Name) }) {
 			continue
 		}
 		key := f.Package + " " + f.Version
@@ -170,7 +181,7 @@ func unplacedWithoutFix(r Result, findings []rank.Finding) []string {
 	}
 	out := make([]string, 0, len(order))
 	for _, key := range order {
-		out = append(out, fmt.Sprintf("the project tree keeps %s with %s, which no version fixes", key, andList(ids[key])))
+		out = append(out, fmt.Sprintf("the project tree keeps %s with %s, which no version fixes, and no direct dependency's tree in the lockfile holds it, so it cannot cross", key, andList(ids[key])))
 	}
 	return out
 }
@@ -277,12 +288,10 @@ func CheckReasons(r Result, req ExportRequest, p policy.Review) []string {
 			}
 		}
 	}
-	// A lockfile package no dependency's tree places has no dependency for
-	// a reason to name; only the refusal applies to it.
-	if req.IncludeProject && p.CVEWithoutFix == policy.Refuse {
-		for _, keeps := range unplacedWithoutFix(r, req.ProjectFindings) {
-			problems = append(problems, "review.cveWithoutFix is refuse: "+keeps+", and cannot cross")
-		}
+	// A lockfile package the walk cannot place has no dependency for a
+	// reason to name: the export fails closed, whatever the policy.
+	if req.IncludeProject {
+		problems = append(problems, unplacedWithoutFix(r, req)...)
 	}
 	// A name listed twice may word one problem twice.
 	return append(slices.Compact(problems), reasonProblems...)

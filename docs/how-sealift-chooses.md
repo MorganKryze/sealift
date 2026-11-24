@@ -81,6 +81,8 @@ A CVE counts as without fix when Trivy names no fixing version for it. An analys
 
 The versions an archive holds are the selected ones, plus the current ones when the export includes the project tree. A dependency the selection leaves out keeps its current version on the air-gapped side, so a CVE without fix in that version also needs a reason.
 
+With the project tree, the project's own scan counts too. A CVE without fix on a package that no dependency's own scan names belongs to each direct dependency whose tree in the shipped lockfile holds that package. That dependency needs the reason, and the signed review lists the CVE under it, with the package named. When the lockfile places the package under no direct dependency, the export is refused.
+
 These ask no reason:
 
 - a CVE whose only fix is in another line: it has a fix, even if the selection does not take it;

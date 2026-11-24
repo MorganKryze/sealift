@@ -84,6 +84,9 @@ type ExportRequest struct {
 	// ProjectFindings is the analysis's scan of the project's lockfile,
 	// read when the project tree ships: its packages ship too.
 	ProjectFindings []rank.Finding `json:"-"`
+	// ProjectHolders maps each "name@version" of the project's lockfile to
+	// the direct dependencies whose tree holds it.
+	ProjectHolders map[string][]string `json:"-"`
 }
 
 // Kind identifies this job to the queue and in its events.

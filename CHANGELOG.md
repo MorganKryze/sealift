@@ -35,7 +35,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - A reason may hold the no-break spaces of French and CJK typography (U+00A0, U+202F, U+3000), on the review screen and in the signed review.
 - A name listed twice, one entry in a family and one jumping alone, asks one reason for its jumps.
 - Under `review.cveWithoutFix: refuse`, a pip export whose set holds a CVE with no fix is refused with 409. A pip export sent with reasons is refused with 400.
-- With the project tree, the CVEs with no fix in the packages its lockfile holds, transitive ones included, go through the same check as a selection.
+- With the project tree, the CVEs with no fix in the packages its lockfile holds, transitive ones included, go through the same check as a selection. A package no dependency's own scan names counts for each direct dependency whose tree in the lockfile holds it, and the review lists its CVE under that dependency. A package the lockfile places under no direct dependency refuses the export.
 - An export request holds at most 10,000 reasons, 10,000 selected dependencies and 10,000 dependencies per reason, each name at most 214 bytes; a request past a bound gets a 400 that names it. A JSON request body over 16 MiB, or a project upload over 41 MiB, gets a 413, and a body that is neither JSON nor a multipart upload gets a 415.
 - A CVE's fixing versions longer than 256 bytes are shortened at a version boundary in the signed review, instead of failing the export. The Trivy report in the archive keeps the full list.
 - An analysis made by sealift 0.7.0 recorded no fixing versions, so an export from it counts each CVE as one without fix and asks a reason for it. A new analysis records them.
