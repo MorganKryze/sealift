@@ -917,6 +917,8 @@ func TestNewToolsManagerNpmRegistry(t *testing.T) {
 		{"http on loopback", "http://127.0.0.1:4873", "", false, false},
 		{"http on another host", "http://ci:s3cretTOKEN@registry:4873", "", true, false},
 		{"http on another host, allowed", "http://ci:s3cretTOKEN@registry:4873", "true", false, true},
+		{"http on another host, allow is 1", "http://ci:s3cretTOKEN@registry:4873", "1", true, false},
+		{"http on another host, allow is TRUE", "http://ci:s3cretTOKEN@registry:4873", "TRUE", true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -36,6 +36,16 @@ func pnpmRegistry(t *testing.T, tarballs map[string][]byte) (*httptest.Server, *
 // pnpmRegistryAt is pnpmRegistry with every version published at the given
 // time; a zero time leaves the packument without a time field.
 func pnpmRegistryAt(t *testing.T, tarballs map[string][]byte, published time.Time) (*httptest.Server, *atomic.Int32) {
+	times := map[string]time.Time{}
+	for version := range tarballs {
+		times[version] = published
+	}
+	return pnpmRegistryTimes(t, tarballs, times)
+}
+
+// pnpmRegistryTimes is pnpmRegistry with each version published at its own
+// time; a version with a zero time has no entry in the time field.
+func pnpmRegistryTimes(t *testing.T, tarballs map[string][]byte, times map[string]time.Time) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var requests atomic.Int32
 
@@ -44,7 +54,7 @@ func pnpmRegistryAt(t *testing.T, tarballs map[string][]byte, published time.Tim
 		meta := npm.VersionMeta{Version: version}
 		meta.Dist.Integrity = sriIntegrity(data)
 		pkg.Versions[version] = meta
-		if !published.IsZero() {
+		if published := times[version]; !published.IsZero() {
 			stamp, _ := json.Marshal(published)
 			pkg.Time[version] = stamp
 		}
@@ -246,12 +256,19 @@ func TestInstalledPnpmSkipsStagingFolders(t *testing.T) {
 // TestEnsurePnpmRefusesAReleaseUnderTheMinimumAge holds pnpm to the
 // minimum release age as uv is: a version the registry published two days
 // ago, or one it gives no publish time for, is refused before any download,
-// and the refusal names the version, its age and what to do.
+// and the refusal names the version, its age and what to do. The registry
+// also serves an older version, so the age must come from the version asked
+// for and not from another entry of the packument.
 func TestEnsurePnpmRefusesAReleaseUnderTheMinimumAge(t *testing.T) {
+	oldTarball := buildTarGz(t, map[string]string{
+		"package/package.json": `{"name":"pnpm","version":"10.30.0"}`,
+		"package/bin/pnpm.cjs": "#!/usr/bin/env node\n",
+	})
 	tarball := buildTarGz(t, map[string]string{
 		"package/package.json": `{"name":"pnpm","version":"10.40.0"}`,
 		"package/bin/pnpm.cjs": "#!/usr/bin/env node\n",
 	})
+	tarballs := map[string][]byte{"10.30.0": oldTarball, "10.40.0": tarball}
 	cases := []struct {
 		name      string
 		published time.Time
@@ -262,7 +279,8 @@ func TestEnsurePnpmRefusesAReleaseUnderTheMinimumAge(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			srv, requests := pnpmRegistryAt(t, map[string][]byte{"10.40.0": tarball}, c.published)
+			times := map[string]time.Time{"10.30.0": time.Now().Add(-30 * 24 * time.Hour), "10.40.0": c.published}
+			srv, requests := pnpmRegistryTimes(t, tarballs, times)
 			root := t.TempDir()
 			m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 14}}, srv.Client(), nil)
 			m.NPMRegistry = srv.URL
@@ -281,6 +299,9 @@ func TestEnsurePnpmRefusesAReleaseUnderTheMinimumAge(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(root, "tools", "pnpm", "10.40.0")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("a refused pnpm left tools/pnpm/10.40.0: %v", err)
+			}
+			if _, err := m.EnsurePnpm(context.Background(), "10.30.0"); err != nil {
+				t.Errorf("EnsurePnpm(10.30.0) on the same registry: %v", err)
 			}
 		})
 	}
