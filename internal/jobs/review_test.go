@@ -221,7 +221,7 @@ func TestCheckReasonsNeverRefusesADependencyTheArchiveLeavesOut(t *testing.T) {
 	assertProblems(t, CheckReasons(r, request(sel, cveReason("Templates are ours.", "html-minifier")), refuseBoth), nil)
 }
 
-func TestCheckReasonsAsksNothingOfAnEntryTheSelectionDoesNotHold(t *testing.T) {
+func TestCheckReasonsLeavesOutAnEntryTheSelectionDoesNotHold(t *testing.T) {
 	r := Result{Dependencies: []DependencyResult{
 		{
 			Name: "foo", Current: "1.0.0", Vector: Vector{0, 0, 0, 1, 0},
@@ -230,12 +230,20 @@ func TestCheckReasonsAsksNothingOfAnEntryTheSelectionDoesNotHold(t *testing.T) {
 		},
 		{Name: "foo", Current: "2.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{{Version: "2.1.0", CVEs: []CVE{}}}},
 	}}
-	// The jump from the first entry's line still asks its own reason.
-	assertProblems(t, CheckReasons(r, request(map[string][]string{"foo": {"2.1.0"}}), askReasons()),
-		[]string{"foo 1.0.0 to 2.1.0 leaves major 1 and needs a reason"})
-	got := ReviewOf(r, request(map[string][]string{"foo": {"2.1.0"}}, jumpReason("Both lists move to 2.", "foo")), nil)
-	if len(got.Left) != 0 {
-		t.Errorf("left = %+v, want nothing of foo 1.0.0", got.Left)
+	sel := map[string][]string{"foo": {"2.1.0"}}
+	// 2.1.0 belongs to the second entry: the first keeps 1.0.0 in the
+	// project, so its CVE asks a reason and the policy never refuses it.
+	refuseCVEs := askReasons()
+	refuseCVEs.CVEWithoutFix = policy.Refuse
+	jump := jumpReason("Both lists move to 2.", "foo")
+	assertProblems(t, CheckReasons(r, request(sel, jump), refuseCVEs),
+		[]string{"foo 1.0.0 keeps CVE-X, which no version fixes, and needs a reason"})
+	withReason := request(sel, jump, cveReason("Only tests load foo 1.", "foo"))
+	assertProblems(t, CheckReasons(r, withReason, refuseCVEs), nil)
+	got := ReviewOf(r, withReason, nil)
+	want := []archive.ReviewCVE{{Dependency: "foo", Version: "1.0.0", ID: "CVE-X", Severity: "LOW", Package: "foo", Reason: "Only tests load foo 1."}}
+	if !reflect.DeepEqual(got.Left, want) {
+		t.Errorf("left =\n %+v\nwant\n %+v", got.Left, want)
 	}
 }
 

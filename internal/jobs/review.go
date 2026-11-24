@@ -47,7 +47,7 @@ type asked struct {
 	kept     string   // the version an install keeps, the current one when none is selected
 	keptCVEs []CVE
 	held     []held // the versions of this entry the archive holds
-	leftOut  bool   // the archive holds no version of the name: the project keeps the current one
+	leftOut  bool   // the archive holds no version of this entry: the project keeps the current one
 }
 
 // held is one version the archive holds, with its CVEs.
@@ -77,10 +77,6 @@ func askedOf(r Result, req ExportRequest) []asked {
 			// version: a frozen install keeps it.
 			holds = append(holds, d.Current)
 		}
-		a.leftOut = len(holds) == 0
-		if a.leftOut {
-			holds = []string{d.Current}
-		}
 		for _, v := range holds {
 			if slices.ContainsFunc(a.held, func(h held) bool { return h.version == v }) {
 				continue
@@ -89,6 +85,14 @@ func askedOf(r Result, req ExportRequest) []asked {
 			if h, ok := heldOf(d, v); ok {
 				a.held = append(a.held, h)
 			}
+		}
+		// An entry none of the selected versions belongs to keeps its
+		// current version in the project, even when the name has others.
+		a.leftOut = len(a.held) == 0
+		if a.leftOut {
+			holds = []string{d.Current}
+			h, _ := heldOf(d, d.Current)
+			a.held = []held{h}
 		}
 		a.kept, a.keptCVEs, _ = pickedCVEs(d, holds)
 		if a.kept == "" {
