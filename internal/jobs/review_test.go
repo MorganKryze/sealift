@@ -239,6 +239,26 @@ func TestCheckReasonsRefusesAnUnknownDependency(t *testing.T) {
 	assertProblems(t, got, []string{"reason 2 has an unknown kind"})
 }
 
+// A package listed under two dependency kinds reaches the result twice under
+// one name; what either entry asks, the name asks.
+func TestCheckReasonsAsksForANameListedTwice(t *testing.T) {
+	r := Result{Dependencies: []DependencyResult{
+		{Name: "foo", Current: "1.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{{Version: "2.1.0", CVEs: []CVE{}}}},
+		{Name: "foo", Current: "2.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{{Version: "2.1.0", CVEs: []CVE{}}}},
+	}}
+	sel := map[string][]string{"foo": {"2.1.0"}}
+	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{"foo 1.0.0 to 2.1.0 leaves major 1 and needs a reason"})
+	assertProblems(t, CheckReasons(r, sel, []Reason{jumpReason("Both lists move to 2.", "foo")}, askReasons()), nil)
+
+	r = Result{Dependencies: []DependencyResult{
+		{Name: "foo", Current: "1.0.0", Vector: Vector{0, 0, 0, 1, 0}, CVEs: []CVE{{ID: "CVE-2025-0009", Severity: "LOW", Package: "foo@1.0.0"}}, Candidates: []Candidate{}},
+		{Name: "foo", Current: "1.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{}},
+	}}
+	sel = map[string][]string{"foo": {"1.0.0"}}
+	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{"foo 1.0.0 keeps CVE-2025-0009, which no version fixes, and needs a reason"})
+	assertProblems(t, CheckReasons(r, sel, []Reason{cveReason("Only our build calls foo.", "foo")}, askReasons()), nil)
+}
+
 func TestExportChecksReasonsByTheImportsRule(t *testing.T) {
 	r := reviewResult()
 	sel := map[string][]string{"express": {"5.1.0"}}

@@ -85,10 +85,12 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 	for _, d := range r.Dependencies {
 		known[d.Name] = true
 	}
+	// A name listed under two dependency kinds has two entries: it needs
+	// what either of them needs.
 	needs := map[ReasonKind]map[string]bool{MajorJumpReason: {}, CVEWithoutFixReason: {}}
 	for _, a := range asks {
-		needs[MajorJumpReason][a.dep.Name] = len(a.jumps) > 0
-		needs[CVEWithoutFixReason][a.dep.Name] = len(a.noFix) > 0
+		needs[MajorJumpReason][a.dep.Name] = needs[MajorJumpReason][a.dep.Name] || len(a.jumps) > 0
+		needs[CVEWithoutFixReason][a.dep.Name] = needs[CVEWithoutFixReason][a.dep.Name] || len(a.noFix) > 0
 	}
 	covered := coverage{MajorJumpReason: {}, CVEWithoutFixReason: {}}
 	var problems []string
