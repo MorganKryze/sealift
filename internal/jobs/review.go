@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/policy"
@@ -47,6 +48,10 @@ type asked struct {
 	keptCVEs []CVE
 	noFix    []string // ids of the kept version's CVEs that no version fixes
 }
+
+// maxReasonTextRunes is the contract's maxLength on a reason's text, which
+// counts characters before trimming.
+const maxReasonTextRunes = 1200
 
 func askedOf(r Result, req ExportRequest) []asked {
 	out := make([]asked, 0, len(r.Dependencies))
@@ -111,7 +116,9 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 			continue
 		}
 		at := fmt.Sprintf("reason %d (%s)", i+1, reason.Kind)
-		if err := archive.CheckReason(reason.Text); err != nil {
+		if utf8.RuneCountInString(reason.Text) > maxReasonTextRunes {
+			problems = append(problems, fmt.Sprintf("%s: the reason is longer than %d characters before trimming", at, maxReasonTextRunes))
+		} else if err := archive.CheckReason(reason.Text); err != nil {
 			problems = append(problems, at+": "+err.Error())
 		}
 		if len(reason.Dependencies) == 0 {
@@ -206,7 +213,7 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 		if !ok {
 			return -1, ""
 		}
-		return i, reasons[i].Text
+		return i, strings.TrimSpace(reasons[i].Text)
 	}
 
 	review := archive.Review{

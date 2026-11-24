@@ -320,6 +320,7 @@ func TestExportChecksReasonsByTheImportsRule(t *testing.T) {
 		{"a bidirectional override", "tests pass \u202eon 5", "reason 1 (major-jump): the reason holds a control, line-separating, bidirectional or format character"},
 		{"spaces only", "   ", "reason 1 (major-jump): the reason is empty"},
 		{"301 characters", strings.Repeat("é", archive.MaxReasonRunes+1), "reason 1 (major-jump): the reason is longer than 300 characters"},
+		{"1201 characters before trimming", strings.Repeat(" ", 1199) + "ok", "reason 1 (major-jump): the reason is longer than 1200 characters before trimming"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := CheckReasons(r, request(sel, jumpReason(tc.text, "express")), askReasons())
@@ -461,6 +462,19 @@ func TestReviewOfKeepsEachReasonGivenForPartOfAFamily(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Jumps, want) {
 		t.Errorf("jumps =\n %+v\nwant\n %+v", got.Jumps, want)
+	}
+}
+
+func TestReviewOfSignsTheTrimmedReason(t *testing.T) {
+	r := reviewResult()
+	sel := map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}, "html-minifier": {"4.0.1"}}
+	reasons := []Reason{jumpReason("  The app moved to React 19.  ", "react", "react-dom")}
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
+		t.Fatalf("the selection should pass: %q", problems)
+	}
+	got := ReviewOf(r, request(sel, reasons...), nil)
+	if len(got.Jumps) != 1 || got.Jumps[0].Reason != "The app moved to React 19." {
+		t.Errorf("jumps = %+v, want one with the trimmed reason", got.Jumps)
 	}
 }
 
