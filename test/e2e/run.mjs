@@ -95,9 +95,11 @@ function resolvesFromRegistry(registryUrl, name, version) {
 
 // reasonsFor builds the reasons the server asks of a selection: one for
 // every selected version that leaves its line, and one per dependency whose
-// kept version (the best selected one, as an install keeps, or the current
-// one when none is selected) carries a CVE with no fixing version.
-function reasonsFor(result, selection) {
+// kept version carries a CVE with no fixing version. The kept version is
+// the best selected one, as an install keeps, with the current one among
+// them when the project tree ships, or the current one when none is
+// selected.
+function reasonsFor(result, selection, includeProject) {
   const compare = (a, b) => {
     const i = a.findIndex((n, j) => n !== b[j]);
     return i === -1 ? 0 : a[i] - b[i];
@@ -105,7 +107,7 @@ function reasonsFor(result, selection) {
   const jumps = [];
   const withoutFix = new Set();
   for (const d of result.dependencies) {
-    const versions = selection[d.name] ?? [];
+    const versions = [...(selection[d.name] ?? []), ...(includeProject ? [d.current] : [])];
     const current = { vector: d.vector, cves: d.cves ?? [] };
     let kept = null;
     for (const version of versions) {
@@ -208,7 +210,7 @@ async function main() {
   }
   console.log(`selecting two versions of ${multiVersion.name}: ${multiVersion.versions.join(", ")}`);
 
-  const reasons = reasonsFor(analysis.result, selection);
+  const reasons = reasonsFor(analysis.result, selection, true);
   console.log(`sending ${reasons.length} reason(s): ${reasons.map((r) => `${r.kind} ${r.dependencies.join(", ")}`).join("; ") || "none needed"}`);
 
   const exportJob = await json(`${api}/projects/${projectId}/analyses/${analysisId}/exports`, {

@@ -48,16 +48,22 @@ type asked struct {
 	noFix    []string // ids of the kept version's CVEs that no version fixes
 }
 
-func askedOf(r Result, selection map[string][]string) []asked {
+func askedOf(r Result, req ExportRequest) []asked {
 	out := make([]asked, 0, len(r.Dependencies))
 	for _, d := range r.Dependencies {
 		a := asked{dep: d}
-		for _, v := range selection[d.Name] {
+		selected := req.Selection[d.Name]
+		for _, v := range selected {
 			if v != d.Current && !rank.SameLine(d.Current, v) && !slices.Contains(a.jumps, v) {
 				a.jumps = append(a.jumps, v)
 			}
 		}
-		a.kept, a.keptCVEs, _ = pickedCVEs(d, selection[d.Name])
+		if req.IncludeProject {
+			// The project tree ships its lockfile, which holds the current
+			// version: an install may keep it as if it were selected.
+			selected = append(slices.Clone(selected), d.Current)
+		}
+		a.kept, a.keptCVEs, _ = pickedCVEs(d, selected)
 		if a.kept == "" {
 			// The project keeps the current version of a dependency the
 			// selection leaves out.
@@ -132,14 +138,15 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 }
 
 // CheckReasons returns one worded problem for each jump or CVE without fix
-// the selection carries with no reason or against the policy, and for each
+// the request carries with no reason or against the policy, and for each
 // reason that is unreadable or covers nothing. Every selected version counts
-// for a jump; for CVEs, the version an install keeps, which is the current
-// one for a dependency the selection leaves out. Empty when the export may
-// go.
-func CheckReasons(r Result, selection map[string][]string, reasons []Reason, p policy.Review) []string {
-	asks := askedOf(r, selection)
-	covered, reasonProblems := cover(r, asks, reasons)
+// for a jump. For CVEs, the version an install keeps counts: the best of
+// those selected, the current one among them when the project tree ships,
+// and the current one alone for a dependency the selection leaves out.
+// Empty when the export may go.
+func CheckReasons(r Result, req ExportRequest, p policy.Review) []string {
+	asks := askedOf(r, req)
+	covered, reasonProblems := cover(r, asks, req.Reasons)
 	var problems []string
 	for _, a := range asks {
 		d := a.dep
@@ -186,12 +193,13 @@ func andList(items []string) string {
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
-// ReviewOf is the review a manifest signs for a selection whose reasons
+// ReviewOf is the review a manifest signs for a request whose reasons
 // CheckReasons accepts. projected is the estimate summary.md prints, nil
 // when the project scan could not be read. The review names no person: the
 // import attaches who brought the archive in.
-func ReviewOf(r Result, selection map[string][]string, reasons []Reason, projected *rank.Vector) archive.Review {
-	asks := askedOf(r, selection)
+func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Review {
+	asks := askedOf(r, req)
+	reasons := req.Reasons
 	covered, _ := cover(r, asks, reasons)
 	reasonFor := func(kind ReasonKind, name string) (int, string) {
 		i, ok := covered[kind][name]

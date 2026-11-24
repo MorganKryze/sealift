@@ -1367,7 +1367,7 @@ func reviewedExport(t *testing.T, h *testHarness, analysisDir, exportDir, reason
 	gadget := &exp.Analysis.Result.Dependencies[1]
 	gadget.Candidates[1].CVEs = []CVE{{ID: "CVE-GADGET-OTHER", Severity: "MEDIUM", Package: "@scope/gadget@2.2.0"}}
 	exp.Request.Reasons = []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"@scope/gadget"}, Text: reason}}
-	if problems := CheckReasons(exp.Analysis.Result, exp.Request.Selection, exp.Request.Reasons, policy.DefaultReview()); len(problems) > 0 {
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, policy.DefaultReview()); len(problems) > 0 {
 		t.Fatalf("the export's reasons should pass: %q", problems)
 	}
 	return exp
@@ -1402,7 +1402,7 @@ func TestExportSignsItsReview(t *testing.T) {
 	if projected == nil {
 		t.Fatal("the project scan was not read, the test proves nothing about cves.after")
 	}
-	want := ReviewOf(exp.Analysis.Result, exp.Request.Selection, exp.Request.Reasons, projected)
+	want := ReviewOf(exp.Analysis.Result, exp.Request, projected)
 	if !reflect.DeepEqual(*m.Review, want) {
 		t.Errorf("signed review =\n %+v\nwant\n %+v", *m.Review, want)
 	}

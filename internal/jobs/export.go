@@ -640,7 +640,7 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 // review is checked by the import's own rules first: an import keeps out a
 // review it cannot read, and the reasons in it would be lost unseen.
 func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey, projected *rank.Vector) error {
-	review := ReviewOf(e.Analysis.Result, e.Request.Selection, e.Request.Reasons, projected)
+	review := ReviewOf(e.Analysis.Result, e.Request, projected)
 	if err := archive.CheckReview(review, archive.NPM); err != nil {
 		return fmt.Errorf("jobs: the import would keep the review out: %w", err)
 	}

@@ -25,6 +25,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/piptest"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -2636,6 +2637,40 @@ func TestQueueExportRepeatsNoReasonText(t *testing.T) {
 	}
 	if *problem.Detail != want {
 		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+}
+
+// The project tree ships its lockfile, which holds each current version:
+// is-even 1.0.0 keeps a CVE that no version fixes, and an install keeps it
+// over 1.0.1, which carries a critical CVE with a fix.
+func TestQueueExportCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
+	srv, h := newTestServer(t)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],` +
+		`"candidates":[{"version":"1.0.1","vector":[1,0,0,0,0],"cves":[{"id":"CVE-2025-0002","severity":"CRITICAL","package":"is-even@1.0.1","fixedIn":"1.0.2"}],"signals":[],"key":true,"resolved":true}]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"candidates":[]}` +
+		`],"warnings":[],"families":[]}`
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatal(err)
+	}
+
+	withTree := true
+	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
+	for name, sel := range map[string]map[string][]string{
+		"nothing selected":         {},
+		"a worse version selected": {"is-even": {"1.0.1"}},
+	} {
+		problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel, IncludeProject: &withTree}))
+		if *problem.Detail != want {
+			t.Errorf("%s: detail = %q, want %q", name, *problem.Detail, want)
+		}
 	}
 }
 

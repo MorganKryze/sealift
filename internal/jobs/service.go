@@ -234,7 +234,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
 		return store.ExportInfo{}, ErrNothingToExport
 	}
-	if problems := CheckReasons(result, req.Selection, req.Reasons, s.Review); len(problems) > 0 {
+	if problems := CheckReasons(result, req, s.Review); len(problems) > 0 {
 		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
 	}
 

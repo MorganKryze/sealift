@@ -64,6 +64,10 @@ func fixableResult() Result {
 
 func askReasons() policy.Review { return policy.DefaultReview() }
 
+func request(selection map[string][]string, reasons ...Reason) ExportRequest {
+	return ExportRequest{Selection: selection, Reasons: reasons}
+}
+
 func jumpReason(text string, deps ...string) Reason {
 	return Reason{Kind: MajorJumpReason, Dependencies: deps, Text: text}
 }
@@ -93,11 +97,11 @@ func TestCheckReasonsAsksForAJump(t *testing.T) {
 		{"the dependency not selected", map[string][]string{}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assertProblems(t, CheckReasons(r, tc.selection, nil, askReasons()), tc.want)
+			assertProblems(t, CheckReasons(r, request(tc.selection), askReasons()), tc.want)
 		})
 	}
 
-	got := CheckReasons(r, map[string][]string{"express": {"5.1.0"}}, []Reason{jumpReason("Our tests pass on 5.", "express")}, askReasons())
+	got := CheckReasons(r, request(map[string][]string{"express": {"5.1.0"}}, jumpReason("Our tests pass on 5.", "express")), askReasons())
 	assertProblems(t, got, nil)
 
 	// A jump selected beside a better version inside the line crosses too,
@@ -105,26 +109,26 @@ func TestCheckReasonsAsksForAJump(t *testing.T) {
 	worse := fixableResult()
 	worse.Dependencies[1].Candidates[1].Vector = Vector{1, 0, 0, 0, 0}
 	worse.Dependencies[1].Candidates[1].CVEs = []CVE{{ID: "CVE-2025-0005", Severity: "CRITICAL", Package: "express@5.1.0", FixedIn: "5.1.1"}}
-	assertProblems(t, CheckReasons(worse, map[string][]string{"express": {"4.20.0", "5.1.0"}}, nil, askReasons()),
+	assertProblems(t, CheckReasons(worse, request(map[string][]string{"express": {"4.20.0", "5.1.0"}}), askReasons()),
 		[]string{"express 4.17.1 to 5.1.0 leaves major 4 and needs a reason"})
 }
 
 func TestCheckReasonsAsksForACVEWithoutFix(t *testing.T) {
 	r := reviewResult()
 	sel := map[string][]string{"html-minifier": {"4.0.0"}}
-	assertProblems(t, CheckReasons(r, sel, nil, askReasons()),
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()),
 		[]string{"html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason"})
 
 	// A jump reason is not a CVE reason.
-	assertProblems(t, CheckReasons(r, sel, []Reason{jumpReason("Templates are ours.", "html-minifier")}, askReasons()), []string{
+	assertProblems(t, CheckReasons(r, request(sel, jumpReason("Templates are ours.", "html-minifier")), askReasons()), []string{
 		"html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason",
 		"reason 1 (major-jump) covers nothing the selection takes",
 	})
-	assertProblems(t, CheckReasons(r, sel, []Reason{cveReason("Templates are ours.", "html-minifier")}, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(sel, cveReason("Templates are ours.", "html-minifier")), askReasons()), nil)
 
 	// Every such CVE of one dependency asks one reason.
 	r.Dependencies[2].CVEs = append(r.Dependencies[2].CVEs, CVE{ID: "CVE-2022-99999", Severity: "LOW", Package: "relateurl@0.2.7"})
-	assertProblems(t, CheckReasons(r, sel, nil, askReasons()),
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()),
 		[]string{"html-minifier 4.0.0 keeps CVE-2022-37620 and CVE-2022-99999, which no version fixes, and needs a reason"})
 }
 
@@ -132,9 +136,39 @@ func TestCheckReasonsAsksForACVEWithoutFixOnADependencyLeftOut(t *testing.T) {
 	r := reviewResult()
 	// The project keeps html-minifier 4.0.0 when the selection leaves it out.
 	want := []string{"html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason"}
-	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, nil, askReasons()), want)
-	assertProblems(t, CheckReasons(r, map[string][]string{}, nil, askReasons()), want)
-	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, []Reason{cveReason("Templates are ours.", "html-minifier")}, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"express": {"4.20.0"}}), askReasons()), want)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{}), askReasons()), want)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"express": {"4.20.0"}}, cveReason("Templates are ours.", "html-minifier")), askReasons()), nil)
+}
+
+func TestCheckReasonsCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
+	r := reviewResult()
+	// 4.0.1 carries a critical CVE with a fix, so an install keeps 4.0.0
+	// over it once the project tree ships 4.0.0 too.
+	r.Dependencies[2].Candidates[0].CVEs = []CVE{{ID: "CVE-2025-0006", Severity: "CRITICAL", Package: "html-minifier@4.0.1", FixedIn: "4.0.2"}}
+	r.Dependencies[2].Candidates[0].Vector = Vector{1, 0, 0, 0, 0}
+	sel := map[string][]string{"html-minifier": {"4.0.1"}}
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()), nil)
+
+	withTree := ExportRequest{Selection: sel, IncludeProject: true}
+	assertProblems(t, CheckReasons(r, withTree, askReasons()),
+		[]string{"html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason"})
+	refuseBoth := policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	assertProblems(t, CheckReasons(r, withTree, refuseBoth),
+		[]string{"review.cveWithoutFix is refuse: html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and cannot cross"})
+
+	withTree.Reasons = []Reason{cveReason("Templates are ours.", "html-minifier")}
+	assertProblems(t, CheckReasons(r, withTree, askReasons()), nil)
+	var left []archive.ReviewCVE
+	for _, c := range ReviewOf(r, withTree, nil).Left {
+		if c.Dependency == "html-minifier" {
+			left = append(left, c)
+		}
+	}
+	want := []archive.ReviewCVE{{Dependency: "html-minifier", Version: "4.0.0", ID: "CVE-2022-37620", Severity: "HIGH", Package: "html-minifier", Reason: "Templates are ours."}}
+	if !reflect.DeepEqual(left, want) {
+		t.Errorf("html-minifier's left =\n %+v\nwant\n %+v", left, want)
+	}
 }
 
 func TestCheckReasonsCountsAnUnknownFixAsNone(t *testing.T) {
@@ -146,41 +180,41 @@ func TestCheckReasonsCountsAnUnknownFixAsNone(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Dependencies[1].CVEs = old
-	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.17.1"}}, nil, askReasons()),
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"express": {"4.17.1"}}), askReasons()),
 		[]string{"express 4.17.1 keeps CVE-2021-23337, which no version fixes, and needs a reason"})
 }
 
 func TestCheckReasonsAsksNothingForAFixInAnotherLine(t *testing.T) {
 	r := fixableResult()
 	// express 4.17.1 keeps CVE-2024-0002, fixed in 5.0.0 only.
-	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.17.1"}}, nil, askReasons()), nil)
-	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, nil, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"express": {"4.17.1"}}), askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"express": {"4.20.0"}}), askReasons()), nil)
 }
 
 func TestCheckReasonsAcceptsOneReasonForAFamily(t *testing.T) {
 	r := fixableResult()
 	sel := map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}}
-	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()), []string{
 		"react 18.3.1 to 19.2.0 leaves major 18 and needs a reason",
 		"react-dom 18.3.1 to 19.2.0 leaves major 18 and needs a reason",
 	})
-	assertProblems(t, CheckReasons(r, sel, []Reason{jumpReason("The app moved to React 19.", "react", "react-dom")}, askReasons()), nil)
-	assertProblems(t, CheckReasons(r, sel, []Reason{jumpReason("The app moved to React 19.", "react")}, askReasons()),
+	assertProblems(t, CheckReasons(r, request(sel, jumpReason("The app moved to React 19.", "react", "react-dom")), askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(sel, jumpReason("The app moved to React 19.", "react")), askReasons()),
 		[]string{"react-dom 18.3.1 to 19.2.0 leaves major 18 and needs a reason"})
 }
 
 func TestCheckReasonsUsesTheVersionAnInstallKeeps(t *testing.T) {
 	r := reviewResult()
 	// 4.0.1 carries nothing, so an install keeps it over 4.0.0.
-	assertProblems(t, CheckReasons(r, map[string][]string{"html-minifier": {"4.0.0", "4.0.1"}}, nil, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"html-minifier": {"4.0.0", "4.0.1"}}), askReasons()), nil)
 
 	// The other way round: the candidate carries a CVE without fix, the
 	// current version none, and the install keeps the current one.
 	r.Dependencies[2].CVEs, r.Dependencies[2].Vector = []CVE{}, Vector{}
 	r.Dependencies[2].Candidates[0].CVEs = []CVE{{ID: "CVE-2025-0001", Severity: "LOW", Package: "html-minifier@4.0.1"}}
 	r.Dependencies[2].Candidates[0].Vector = Vector{0, 0, 0, 1, 0}
-	assertProblems(t, CheckReasons(r, map[string][]string{"html-minifier": {"4.0.0", "4.0.1"}}, nil, askReasons()), nil)
-	assertProblems(t, CheckReasons(r, map[string][]string{"html-minifier": {"4.0.1"}}, nil, askReasons()),
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"html-minifier": {"4.0.0", "4.0.1"}}), askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(map[string][]string{"html-minifier": {"4.0.1"}}), askReasons()),
 		[]string{"html-minifier 4.0.1 keeps CVE-2025-0001, which no version fixes, and needs a reason"})
 }
 
@@ -190,17 +224,17 @@ func TestCheckReasonsRefusesWhatThePolicyRefuses(t *testing.T) {
 	reasons := []Reason{jumpReason("Our tests pass on 5.", "express"), cveReason("Templates are ours.", "html-minifier")}
 
 	refuseBoth := policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
-	assertProblems(t, CheckReasons(r, sel, reasons, refuseBoth), []string{
+	assertProblems(t, CheckReasons(r, request(sel, reasons...), refuseBoth), []string{
 		"review.majorJump is refuse: express 4.17.1 to 5.1.0 cannot cross",
 		"review.cveWithoutFix is refuse: html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and cannot cross",
 	})
 
 	refuseJumps := policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.AskReason}
-	assertProblems(t, CheckReasons(r, sel, reasons, refuseJumps),
+	assertProblems(t, CheckReasons(r, request(sel, reasons...), refuseJumps),
 		[]string{"review.majorJump is refuse: express 4.17.1 to 5.1.0 cannot cross"})
 
 	refuseCVEs := policy.Review{MajorJump: policy.AskReason, CVEWithoutFix: policy.Refuse}
-	assertProblems(t, CheckReasons(r, sel, reasons, refuseCVEs),
+	assertProblems(t, CheckReasons(r, request(sel, reasons...), refuseCVEs),
 		[]string{"review.cveWithoutFix is refuse: html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and cannot cross"})
 }
 
@@ -238,7 +272,7 @@ func TestCheckReasonsRefusesAReasonThatCoversNothing(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assertProblems(t, CheckReasons(r, tc.selection, tc.reasons, askReasons()), tc.want)
+			assertProblems(t, CheckReasons(r, request(tc.selection, tc.reasons...), askReasons()), tc.want)
 		})
 	}
 }
@@ -246,13 +280,13 @@ func TestCheckReasonsRefusesAReasonThatCoversNothing(t *testing.T) {
 func TestCheckReasonsRefusesAnUnknownDependency(t *testing.T) {
 	r := fixableResult()
 	sel := map[string][]string{"express": {"5.1.0"}}
-	got := CheckReasons(r, sel, []Reason{jumpReason("Our tests pass on 5.", "express", "evil\u202ename")}, askReasons())
+	got := CheckReasons(r, request(sel, jumpReason("Our tests pass on 5.", "express", "evil\u202ename")), askReasons())
 	assertProblems(t, got, []string{"reason 1 (major-jump) names a dependency the analysis does not hold"})
 
-	got = CheckReasons(r, sel, []Reason{jumpReason("Our tests pass on 5.", "express"), jumpReason("Nothing named.")}, askReasons())
+	got = CheckReasons(r, request(sel, jumpReason("Our tests pass on 5.", "express"), jumpReason("Nothing named.")), askReasons())
 	assertProblems(t, got, []string{"reason 2 (major-jump) names no dependency"})
 
-	got = CheckReasons(r, sel, []Reason{jumpReason("Our tests pass on 5.", "express"), {Kind: "<script>", Dependencies: []string{"express"}, Text: "x"}}, askReasons())
+	got = CheckReasons(r, request(sel, jumpReason("Our tests pass on 5.", "express"), Reason{Kind: "<script>", Dependencies: []string{"express"}, Text: "x"}), askReasons())
 	assertProblems(t, got, []string{"reason 2 has an unknown kind"})
 }
 
@@ -264,16 +298,16 @@ func TestCheckReasonsAsksForANameListedTwice(t *testing.T) {
 		{Name: "foo", Current: "2.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{{Version: "2.1.0", CVEs: []CVE{}}}},
 	}}
 	sel := map[string][]string{"foo": {"2.1.0"}}
-	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{"foo 1.0.0 to 2.1.0 leaves major 1 and needs a reason"})
-	assertProblems(t, CheckReasons(r, sel, []Reason{jumpReason("Both lists move to 2.", "foo")}, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()), []string{"foo 1.0.0 to 2.1.0 leaves major 1 and needs a reason"})
+	assertProblems(t, CheckReasons(r, request(sel, jumpReason("Both lists move to 2.", "foo")), askReasons()), nil)
 
 	r = Result{Dependencies: []DependencyResult{
 		{Name: "foo", Current: "1.0.0", Vector: Vector{0, 0, 0, 1, 0}, CVEs: []CVE{{ID: "CVE-2025-0009", Severity: "LOW", Package: "foo@1.0.0"}}, Candidates: []Candidate{}},
 		{Name: "foo", Current: "1.0.0", Vector: Vector{}, CVEs: []CVE{}, Candidates: []Candidate{}},
 	}}
 	sel = map[string][]string{"foo": {"1.0.0"}}
-	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{"foo 1.0.0 keeps CVE-2025-0009, which no version fixes, and needs a reason"})
-	assertProblems(t, CheckReasons(r, sel, []Reason{cveReason("Only our build calls foo.", "foo")}, askReasons()), nil)
+	assertProblems(t, CheckReasons(r, request(sel), askReasons()), []string{"foo 1.0.0 keeps CVE-2025-0009, which no version fixes, and needs a reason"})
+	assertProblems(t, CheckReasons(r, request(sel, cveReason("Only our build calls foo.", "foo")), askReasons()), nil)
 }
 
 func TestExportChecksReasonsByTheImportsRule(t *testing.T) {
@@ -288,7 +322,7 @@ func TestExportChecksReasonsByTheImportsRule(t *testing.T) {
 		{"301 characters", strings.Repeat("é", archive.MaxReasonRunes+1), "reason 1 (major-jump): the reason is longer than 300 characters"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CheckReasons(r, sel, []Reason{jumpReason(tc.text, "express")}, askReasons())
+			got := CheckReasons(r, request(sel, jumpReason(tc.text, "express")), askReasons())
 			assertProblems(t, got, []string{tc.want})
 		})
 	}
@@ -311,11 +345,11 @@ func reviewSelection() (map[string][]string, []Reason) {
 func TestReviewOfCountsFixedAndLeft(t *testing.T) {
 	r := reviewResult()
 	sel, reasons := reviewSelection()
-	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
 		t.Fatalf("the selection should pass: %q", problems)
 	}
 	projected := rank.Vector{0, 1, 1, 1, 0}
-	got := ReviewOf(r, sel, reasons, &projected)
+	got := ReviewOf(r, request(sel, reasons...), &projected)
 
 	if got.CVEs.Before != [5]int{0, 2, 1, 0, 0} {
 		t.Errorf("cves.before = %v, want the analysis' before", got.CVEs.Before)
@@ -346,7 +380,7 @@ func TestReviewOfCountsFixedAndLeft(t *testing.T) {
 func TestReviewOfListsTheKeptVersionsCVEs(t *testing.T) {
 	r := reviewResult()
 	sel, reasons := reviewSelection()
-	got := ReviewOf(r, sel, reasons, nil)
+	got := ReviewOf(r, request(sel, reasons...), nil)
 	want := []archive.ReviewCVE{
 		{Dependency: "express", Version: "4.20.0", ID: "CVE-2024-0002", Severity: "MEDIUM", Package: "body-parser", FixedIn: "5.0.0"},
 		{Dependency: "express", Version: "4.20.0", ID: "CVE-2024-0003", Severity: "LOW", Package: "cookie", FixedIn: "0.7.0"},
@@ -362,10 +396,10 @@ func TestReviewOfListsTheKeptVersionsCVEs(t *testing.T) {
 	r.Dependencies[1].CVEs = []CVE{{ID: "CVE-2021-23337", Severity: "HIGH"}}
 	sel = map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}}
 	reasons = append(reasons, cveReason("Only our server parses bodies.", "express"))
-	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
 		t.Fatalf("the selection should pass: %q", problems)
 	}
-	got = ReviewOf(r, sel, reasons, nil)
+	got = ReviewOf(r, request(sel, reasons...), nil)
 	want = []archive.ReviewCVE{
 		{Dependency: "express", Version: "4.17.1", ID: "CVE-2021-23337", Severity: "HIGH", Reason: "Only our server parses bodies."},
 		{Dependency: "html-minifier", Version: "4.0.0", ID: "CVE-2022-37620", Severity: "HIGH", Package: "html-minifier", Reason: "Templates are ours."},
@@ -380,10 +414,10 @@ func TestReviewOfNamesTheFamilyOfAJump(t *testing.T) {
 	sel, reasons := reviewSelection()
 	sel["esbuild"] = []string{"0.19.0"}
 	reasons = append(reasons, jumpReason("The bundle builds on 0.19.", "esbuild"))
-	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
 		t.Fatalf("the selection should pass: %q", problems)
 	}
-	got := ReviewOf(r, sel, reasons, nil)
+	got := ReviewOf(r, request(sel, reasons...), nil)
 	want := []archive.ReviewJump{
 		{Packages: []archive.ReviewMove{{Name: "esbuild", From: "0.18.0", To: "0.19.0"}}, Reason: "The bundle builds on 0.19."},
 		{
@@ -417,10 +451,10 @@ func TestReviewOfKeepsEachReasonGivenForPartOfAFamily(t *testing.T) {
 		jumpReason("The app moved to React 19.", "react"),
 		jumpReason("The renderer follows React.", "react-dom"),
 	}
-	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
 		t.Fatalf("the selection should pass: %q", problems)
 	}
-	got := ReviewOf(r, sel, reasons, nil)
+	got := ReviewOf(r, request(sel, reasons...), nil)
 	want := []archive.ReviewJump{
 		{Family: "react 19", Packages: []archive.ReviewMove{{Name: "react", From: "18.3.1", To: "19.2.0"}}, Reason: "The app moved to React 19."},
 		{Family: "react 19", Packages: []archive.ReviewMove{{Name: "react-dom", From: "18.3.1", To: "19.2.0"}}, Reason: "The renderer follows React."},
@@ -432,7 +466,7 @@ func TestReviewOfKeepsEachReasonGivenForPartOfAFamily(t *testing.T) {
 
 func TestReviewOfLeavesAfterOutWithoutAProjectScan(t *testing.T) {
 	sel, reasons := reviewSelection()
-	got := ReviewOf(reviewResult(), sel, reasons, nil)
+	got := ReviewOf(reviewResult(), request(sel, reasons...), nil)
 	if got.CVEs.After != nil {
 		t.Errorf("cves.after = %v, want none without a project scan", *got.CVEs.After)
 	}
