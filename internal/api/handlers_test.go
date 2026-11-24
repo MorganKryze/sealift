@@ -2353,8 +2353,8 @@ func TestToolAndSettingsRoutesAreGone(t *testing.T) {
 		}
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Errorf("%s %s = %d, want 404 or 405: %s", route.method, route.path, resp.StatusCode, data)
+		if resp.StatusCode != http.StatusGone {
+			t.Errorf("%s %s = %d, want 410: %s", route.method, route.path, resp.StatusCode, data)
 		}
 	}
 

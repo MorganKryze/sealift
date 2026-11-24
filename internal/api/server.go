@@ -57,6 +57,12 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
+	// 0.7.0 documented these routes, so a script may still call them: it
+	// learns they are gone and where the answer lives now.
+	toolsGone := gone("the tool routes are gone: the server prepares its tools at start, and GET /api/instance reports them")
+	mux.HandleFunc("/api/tools", toolsGone)
+	mux.HandleFunc("/api/tools/", toolsGone)
+	mux.HandleFunc("PUT /api/settings", gone("the settings write is gone: the deployment sets them in its policy file, and GET /api/instance reports them"))
 	mux.Handle("/", SPA(static))
 	routes := refuseCrossSite(mux, allowedHosts(h.ListenAddr))
 	if h.Ephemeral > 0 {
@@ -74,4 +80,12 @@ func noStore(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// gone answers a route a past release served with a 410 naming what
+// replaced it.
+func gone(detail string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		WriteProblem(w, NewProblem(http.StatusGone, "route removed", detail))
+	}
 }
