@@ -323,7 +323,7 @@ Take [a backup](#backing-up) first. Then:
 
 In the lab, at commit 0257b72, a copy of a 0.7.0 volume that held 6 projects, 7 analyses and 5 exports opened with every record and field unchanged. The public key's sha256 stayed the same, `private/settings.json` kept its sha256, and a re-export of a 0.7.0 analysis gave the same archive sha256 as 0.7.0's export.
 
-The API routes that listed or installed tools and saved settings are gone, and answer 404 or 405. [The CHANGELOG](../CHANGELOG.md) names what replaces each.
+The API routes that listed or installed tools and saved settings are gone. Each answers 410 Gone with Problem Details that name `GET /api/instance`. [The CHANGELOG](../CHANGELOG.md) names what replaces each.
 
 ### Rolling back
 

@@ -180,7 +180,7 @@ The logo route answers with `Content-Security-Policy: default-src 'none'; style-
 
 ### Removed routes
 
-The routes that listed or installed tools and saved settings are gone. The deployment now prepares the tools and sets the policy, so no request can. Each answers 404 or 405. Paths are under `/api`:
+The routes that listed or installed tools and saved settings are gone. The deployment now prepares the tools and sets the policy, so no request can. Each answers 410 Gone with Problem Details whose `detail` names `GET /api/instance`. Paths are under `/api`:
 
 | Removed | Use instead |
 | --- | --- |

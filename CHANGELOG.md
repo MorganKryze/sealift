@@ -27,6 +27,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
+Each removed route below answers 410 Gone, with Problem Details that name `GET /api/instance`.
+
 - The setup screen and its install button: the start installs what it showed.
 - The settings form: the policy file replaces it.
 - `GET /api/tools`: `GET /api/instance` reports the same versions, with readiness.
