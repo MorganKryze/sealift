@@ -1922,3 +1922,16 @@ func TestCheckPipWheelNameBound(t *testing.T) {
 		}
 	}
 }
+
+func TestPipExportRefusesAManifestTheImportCannotRead(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	w := pipWheelFile{PipPackage: PipPackage{Name: "demo", Version: "1.0", Wheel: &PipWheel{File: strings.Repeat("a", archive.MaxManifestSize)}}}
+	err := e.writeManifest([]pipWheelFile{w}, report.ArchiveManifest{}, f.st.SigningKey())
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 bytes the import reads") {
+		t.Fatalf("writeManifest = %v, want the manifest refused for its size", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.Dir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
+	}
+}

@@ -724,6 +724,9 @@ func (e *PipExport) writeManifest(wheels []pipWheelFile, arch report.ArchiveMani
 	if err != nil {
 		return fmt.Errorf("jobs: encode manifest.json: %w", err)
 	}
+	if len(data) > archive.MaxManifestSize {
+		return fmt.Errorf("jobs: manifest.json would be %d bytes, larger than the %d bytes the import reads", len(data), archive.MaxManifestSize)
+	}
 	sig, err := key.SignManifest(data)
 	if err != nil {
 		return fmt.Errorf("jobs: sign manifest.json: %w", err)
