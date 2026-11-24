@@ -872,7 +872,7 @@ components:
         - uv
     Settings:
       type: object
-      description: Every value the interface can change.
+      description: The values the deployment set, read only; the policy file changes them.
       properties:
         target:
           $ref: "#/components/schemas/Target"

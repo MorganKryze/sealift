@@ -574,7 +574,7 @@ export interface components {
             /** @description The uv versions installed, sorted. */
             uv: string[];
         };
-        /** @description Every value the interface can change. */
+        /** @description The values the deployment set, read only; the policy file changes them. */
         Settings: {
             target: components["schemas"]["Target"];
             minReleaseAgeDays: number;

@@ -606,7 +606,7 @@ type ProjectSummary struct {
 	Target *Target `json:"target,omitempty"`
 }
 
-// Settings Every value the interface can change.
+// Settings The values the deployment set, read only; the policy file changes them.
 type Settings struct {
 	DownloadParallelism int `json:"downloadParallelism"`
 	MinReleaseAgeDays   int `json:"minReleaseAgeDays"`
