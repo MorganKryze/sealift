@@ -793,7 +793,7 @@ export interface components {
         };
         /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
         ExportRequest: {
-            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413. */
+            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415. */
             selection: {
                 [key: string]: string[];
             };

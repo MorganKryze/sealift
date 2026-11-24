@@ -65,7 +65,7 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("/api/tools/", toolsGone)
 	mux.HandleFunc("PUT /api/settings", gone("the settings write is gone: the deployment sets them in its policy file, and GET /api/instance reports them"))
 	mux.Handle("/", SPA(static))
-	routes := refuseCrossSite(boundJSONBodies(mux), allowedHosts(h.ListenAddr))
+	routes := refuseCrossSite(boundBodies(mux), allowedHosts(h.ListenAddr))
 	if h.Ephemeral > 0 {
 		return noStore(routes)
 	}

@@ -403,7 +403,7 @@ type ExportRequest struct {
 	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000.
 	Reasons *[]Reason `json:"reasons,omitempty"`
 
-	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413.
+	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415.
 	Selection map[string][]string `json:"selection"`
 }
 

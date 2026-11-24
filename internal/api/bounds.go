@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -13,15 +14,32 @@ const (
 	// maxRequestEntries bounds the reasons, the selected dependencies and
 	// the dependencies of one reason in an export request.
 	maxRequestEntries = 10_000
+	// maxMultipartBodyBytes bounds a project upload: its 40 parts of at
+	// most 1 MiB each, plus 1 MiB for their headers.
+	maxMultipartBodyBytes = (maxCreateParts + 1) << 20
 	// maxNameBytes is npm's own limit on a package name.
 	maxNameBytes = 214
 )
 
-// boundJSONBodies reads every JSON request body through a 16 MiB limit.
-func boundJSONBodies(next http.Handler) http.Handler {
+// boundBodies caps the body of every /api request that has one, whatever
+// it claims to be: a JSON body within 16 MiB, a project upload within
+// maxMultipartBodyBytes. Any other type is refused with 415 before a byte
+// is read, since every operation decodes JSON or multipart.
+func boundBodies(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err == nil && mediaType == "application/json" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		switch mediaType {
+		case "application/json":
 			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+		case "multipart/form-data":
+			r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBodyBytes)
+		default:
+			WriteProblem(w, NewProblem(http.StatusUnsupportedMediaType, "unsupported media type", "the request body must be application/json, or multipart/form-data for a project upload"))
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

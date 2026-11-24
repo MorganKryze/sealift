@@ -2913,3 +2913,54 @@ func TestAJSONBodyOver16MiBIsRefused(t *testing.T) {
 		t.Errorf("detail = %v", p.Detail)
 	}
 }
+
+func TestABodyThatIsNotJSONIsRefusedWhateverItsSize(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	url := fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id)
+	big := `{"selection":{},"pad":"` + strings.Repeat("a", 17<<20) + `"}`
+	for _, tt := range []struct{ name, contentType, body string }{
+		{"17 MiB as text/plain", "text/plain", big},
+		{"17 MiB with no type", "", big},
+		{"a small body as text/plain", "text/plain", `{"selection":{}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415", resp.StatusCode)
+			}
+			var p Problem
+			if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAMultipartBodyOverItsBoundIsRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := "--b\r\nContent-Disposition: form-data; name=\"pad\"\r\n\r\n" + strings.Repeat("a", maxMultipartBodyBytes) + "\r\n--b--\r\n"
+	resp, err := http.Post(srv.URL+"/api/projects", "multipart/form-data; boundary=b", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("status = %d, want a refusal", resp.StatusCode)
+	}
+}
