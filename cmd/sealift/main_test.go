@@ -21,6 +21,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
@@ -880,6 +881,28 @@ brand: {name: Harbor}
 	}
 	if len(pnpm) != 1 || pnpm[0] != "10.30.1" {
 		t.Errorf("the start log names pnpm %q for child processes, want the policy's 10.30.1", pnpm)
+	}
+}
+
+func TestRunHandsTheReviewRulesToTheAnalyses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	writeFile(t, path, "review: {proposeOtherMajors: true, majorJump: refuse, cveWithoutFix: refuse}\n")
+	t.Setenv("SEALIFT_POLICY", path)
+	reviews := make(chan policy.Review, 1)
+	onServiceReady = func(s *jobs.Service) { reviews <- s.Review }
+	defer func() { onServiceReady = nil }()
+
+	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop()
+
+	want := policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	select {
+	case got := <-reviews:
+		if got != want {
+			t.Errorf("the service hands each analysis %+v, want the policy's %+v", got, want)
+		}
+	default:
+		t.Fatal("run never handed over its service")
 	}
 }
 
