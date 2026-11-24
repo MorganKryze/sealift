@@ -11,7 +11,7 @@ The archive holds the new versions and the packages they pull in, nothing else. 
 | File | For |
 | --- | --- |
 | `packages_npm.tar.gz` | The packages, for the Nexus import |
-| `manifest.json` | Every package with its hashes, and the archive's own sha256 |
+| `manifest.json` | Every package with its hashes, the archive's own sha256, and the review of an npm export |
 | `manifest.json.sig` | The Ed25519 signature of `manifest.json`, and the key that made it |
 | `summary.md` | CVEs before and after, the updated dependencies, what remains |
 | `findings.csv` | Every CVE, one row each, for a spreadsheet or a ticket |
@@ -58,6 +58,21 @@ What a valid signature shows: the manifest was made by the holder of the private
 - Anything about the four reports, which are not signed.
 
 A regenerate in Settings, or a lost volume, gives sealift a new key. The import side then refuses every new archive, and every archive exported before, until it holds the new public key. [Troubleshooting](troubleshooting.md#import) gives each refusal and its fix.
+
+## The review in the manifest
+
+The `manifest.json` of an npm export carries a `review`: what the selection decided, and the reasons given for it. The signature covers it with the rest of the manifest, so the import side reads the reasons as the connected side signed them. The review holds:
+
+- the project's CVE counts by severity, before the selection and once it applies;
+- each dependency the selection moves inside its line, with the counts of the CVEs the move fixes and leaves;
+- each dependency kept on its line while a newer line exists, with its jump;
+- each jump the selection takes, with its family and its reason;
+- each CVE the project keeps, with the package Trivy found it in, the versions that fix it, and the reason when no version does;
+- the number of other dependencies, left as they are.
+
+The review names no person: the connected side has no login. Reasons and review leave the archive's bytes alone, so the same selection gives the same sha256 whatever the reasons say. A pip export writes no review yet.
+
+An import that predates the review reads such an archive as before. The review adds a key and keeps `formatVersion` 2, and the import of sealift 0.7.0 ignores keys it does not know. A newer import reads the review by fixed rules. One it cannot read is kept out with the field at fault, and the import checks and publishes the packages as before: a review never refuses an archive. An archive from 0.7.0 or earlier has no review, and imports as before. Neither the import report nor the import screens show the review yet. [Archive format](dev/archive-format.md#the-review) gives every field and each reading rule.
 
 ## Before the kiosk
 
@@ -170,7 +185,8 @@ Commit the lockfile the first install produces on the air-gapped side, and insta
 sealift checks:
 
 - every downloaded tarball against the sha512 the registry published;
-- the manifest of each export with an Ed25519 signature, which the import checks against the public key you carried;
+- the manifest of each export with an Ed25519 signature, which the import checks against the public key you carried, and which covers the review and its reasons;
+- that an export carries a reason for each jump out of a line and each CVE that no version fixes, unless the policy refuses them;
 - Trivy against the sha256 of its release;
 - that no proposed version of a direct dependency is younger than the minimum release age, and that neither are the packages it pulls in;
 - that nothing downloads before you press Install, Analyse or Confirm and build the archive.

@@ -65,6 +65,25 @@ Trivy, its vulnerability database, and pnpm, with their versions.
 - **Update Trivy** installs the latest Trivy release and reports it, or says the installed one is already the newest. When the latest is younger than the minimum release age, it refuses and offers **Install anyway**. Earlier versions stay installed under Also installed, to roll back to, each with **Use this version**.
 - **Update database** downloads the latest vulnerability database and shows its date. sealift also refreshes it before each analysis.
 
+## Review rules
+
+Three rules decide what an export needs before it crosses. The deployment sets them under `review` in the policy file that `SEALIFT_POLICY` names, and no control in the panel changes them:
+
+```yaml
+review:
+  proposeOtherMajors: false
+  majorJump: reason
+  cveWithoutFix: reason
+```
+
+| Key | Values | Default | What it changes |
+| --- | --- | --- | --- |
+| `review.proposeOtherMajors` | `true`, `false` | `false` | With `true`, an analysis may propose a version outside the dependency's current line, as sealift 0.7.0 did |
+| `review.majorJump` | `reason`, `refuse` | `reason` | An export that takes a version outside its line needs a reason, or is refused whatever reason it holds |
+| `review.cveWithoutFix` | `reason`, `refuse` | `reason` | An export whose archive holds a version with a CVE that no version fixes needs a reason, or is refused |
+
+A key the file leaves out keeps its default. Any other value stops sealift at start with the key and the values it takes, such as `review.majorJump must be one of reason, refuse`. The rules apply to every analysis and export after the start. An analysis keeps the proposals it made under the rule of its time: a new analysis applies a changed `review.proposeOtherMajors`. `GET /api/instance` reports the three rules under `policy.review`. [How sealift chooses](how-sealift-chooses.md#reasons) explains the line and the reasons.
+
 ## From the API
 
 The panel reads and writes `/api/settings`. The signing key has its own routes, which [the API reference](dev/api.md#signing-key) describes. `GET` returns every setting:

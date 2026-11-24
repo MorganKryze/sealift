@@ -29,15 +29,16 @@ On the connected side, from a project's `package.json`:
 
 - scans the project with Trivy and counts its CVEs by severity;
 - resolves every newer version of each direct dependency with the project's peer dependencies, and scans each one;
-- proposes, for each dependency, the oldest version that fixes the most CVEs, and holds back any release younger than 14 days;
+- proposes, for each dependency, the oldest version inside its current major (its minor below 1.0.0) that fixes the most CVEs, and holds back any release younger than 14 days;
+- names the version outside that line each dependency could jump to, and groups the jumps that must move together;
 - flags what deserves a second look: a major jump, a lost provenance, a new publisher, an added install script;
-- lets you review the proposal, change any version, or keep the current one;
+- lets you review the proposal, change any version, or keep the current one, and asks a reason for a major jump or a CVE that no version fixes;
 - downloads every package the selection needs, checks each one against the registry's sha512, packs a reproducible archive, and signs its manifest with an Ed25519 key.
 
 On the air-gapped side, the team receives:
 
 - `packages_npm.tar.gz`, with every package the new versions need, for the Nexus import;
-- `manifest.json`, with the hashes of every package and of the archive;
+- `manifest.json`, with the hashes of every package and of the archive, and the review: CVE totals, decisions and their reasons;
 - `manifest.json.sig`, the Ed25519 signature of the manifest, which the import checks with a public key you carry once;
 - `summary.md` and `findings.csv`, with the CVEs before and after, and what remains;
 - a CycloneDX SBOM and Trivy's raw report.
@@ -76,6 +77,8 @@ Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks t
 - The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
 - sealift proposes new versions for direct dependencies. Transitive packages change through them, and the minimum release age does not apply to them.
 - The signature shows that a manifest came from the holder of sealift's private key. It does not show who asked for the export, how old it is, or anything about the reports. A regenerated key, or a lost volume, means carrying a new public key to the import side.
+- Families come from peer dependencies and `@types` packages only. Two dependencies that must move together without declaring it each ask a reason of their own.
+- The export packs each selected version as the analysis resolved it, alone: it does not resolve a family's jumps together, so a conflict between them shows at the install on the air-gapped side.
 - A malicious package with no published CVE passes the scan.
 - sealift has no login: keep it on `127.0.0.1` or behind an authenticating proxy.
 
