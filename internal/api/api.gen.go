@@ -225,6 +225,9 @@ type AnalysisResult struct {
 	Before       Vector             `json:"before"`
 	Dependencies []DependencyResult `json:"dependencies"`
 
+	// Families The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed.
+	Families *[]Family `json:"families,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
 	Target   Target   `json:"target"`
 	Warnings []string `json:"warnings"`
@@ -260,6 +263,9 @@ type Candidate struct {
 	// Key Whether this candidate was resolved and scanned before the rest
 	Key bool `json:"key"`
 
+	// LeavesLine Whether this version leaves the line of the current one, the range npm's caret gives it. Set when the analysis is read.
+	LeavesLine bool `json:"leavesLine"`
+
 	// Published Empty when the registry has no publication time
 	Published *time.Time `json:"published,omitempty"`
 	Resolved  bool       `json:"resolved"`
@@ -290,7 +296,12 @@ type Contact struct {
 
 // Cve One vulnerability behind a Vector count
 type Cve struct {
-	Id string `json:"id"`
+	// FixedIn The versions Trivy names as fixing it, as Trivy prints them. Empty when none is known; absent from an analysis written before it was kept, whose fix is unknown.
+	FixedIn *string `json:"fixedIn,omitempty"`
+	Id      string  `json:"id"`
+
+	// Package The package and version Trivy found it in, as name@version. Absent from an analysis written before it was kept.
+	Package *string `json:"package,omitempty"`
 
 	// Severity As Trivy prints it, upper case
 	Severity string `json:"severity"`
@@ -298,14 +309,20 @@ type Cve struct {
 
 // DependencyResult One direct dependency's current CVEs and its ranked candidates
 type DependencyResult struct {
-	// Best Empty when no candidate improves on the current version
+	// Best Empty when no candidate inside the current line improves on the current version; the policy's review.proposeOtherMajors widens the search to every candidate
 	Best       *string     `json:"best,omitempty"`
 	Candidates []Candidate `json:"candidates"`
 	Current    string      `json:"current"`
 
 	// Cves The vulnerabilities behind vector, sorted by severity then id
-	Cves []Cve  `json:"cves"`
-	Name string `json:"name"`
+	Cves []Cve `json:"cves"`
+
+	// Family The name of the family this dependency's jump belongs to. Absent when its jump moves alone.
+	Family *string `json:"family,omitempty"`
+
+	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none.
+	Jump *string `json:"jump,omitempty"`
+	Name string  `json:"name"`
 
 	// Vector CVE counts by severity, critical to unknown
 	Vector Vector `json:"vector"`
@@ -373,6 +390,15 @@ type ExportRequest struct {
 type Failure struct {
 	Message string `json:"message"`
 	Step    string `json:"step"`
+}
+
+// Family Dependencies whose jumps must move together
+type Family struct {
+	// Members Sorted by name
+	Members []string `json:"members"`
+
+	// Name The member the others name, and the line of its jump
+	Name string `json:"name"`
 }
 
 // Instance How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes.

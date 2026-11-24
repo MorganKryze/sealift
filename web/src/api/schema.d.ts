@@ -747,6 +747,16 @@ export interface components {
              * @example HIGH
              */
             severity: string;
+            /**
+             * @description The package and version Trivy found it in, as name@version. Absent from an analysis written before it was kept.
+             * @example express@4.17.1
+             */
+            package?: string;
+            /**
+             * @description The versions Trivy names as fixing it, as Trivy prints them. Empty when none is known; absent from an analysis written before it was kept, whose fix is unknown.
+             * @example 4.19.2, 5.0.0
+             */
+            fixedIn?: string;
         };
         /** @description One reason a candidate is blocked or worth a second look */
         Signal: {
@@ -769,17 +779,23 @@ export interface components {
              * @description Empty when the registry has no publication time
              */
             published?: string;
+            /** @description Whether this version leaves the line of the current one, the range npm's caret gives it. Set when the analysis is read. */
+            leavesLine: boolean;
         };
         /** @description One direct dependency's current CVEs and its ranked candidates */
         DependencyResult: {
             name: string;
             current: string;
-            /** @description Empty when no candidate improves on the current version */
+            /** @description Empty when no candidate inside the current line improves on the current version; the policy's review.proposeOtherMajors widens the search to every candidate */
             best?: string;
             vector: components["schemas"]["Vector"];
             /** @description The vulnerabilities behind vector, sorted by severity then id */
             cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
+            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none. */
+            jump?: string;
+            /** @description The name of the family this dependency's jump belongs to. Absent when its jump moves alone. */
+            family?: string;
         };
         /** @description What an analysis writes to candidates.json and ranking.json */
         AnalysisResult: {
@@ -789,6 +805,18 @@ export interface components {
             after?: components["schemas"]["Vector"] | null;
             dependencies: components["schemas"]["DependencyResult"][];
             warnings: string[];
+            /** @description The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed. */
+            families?: components["schemas"]["Family"][];
+        };
+        /** @description Dependencies whose jumps must move together */
+        Family: {
+            /**
+             * @description The member the others name, and the line of its jump
+             * @example react 19
+             */
+            name: string;
+            /** @description Sorted by name */
+            members: string[];
         };
         /** @description What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. */
         PipAnalysisResult: {

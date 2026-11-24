@@ -115,6 +115,7 @@ func run(addr, root string, log *slog.Logger) error {
 		onQueueReady(queue)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
+	service.Review = pol.Review
 	// uv needs an interpreter to start, and builds and runs nothing with it.
 	// Without one, pip analyses fail at resolve and say so.
 	python, err := exec.LookPath("python3")

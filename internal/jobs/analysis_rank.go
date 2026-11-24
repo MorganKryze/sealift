@@ -3,6 +3,7 @@ package jobs
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,7 +32,7 @@ func cvesOf(set map[string]rank.Finding) []CVE {
 	})
 	cves := make([]CVE, len(findings))
 	for i, f := range findings {
-		cves[i] = CVE{ID: f.ID, Severity: severityText(f.Severity)}
+		cves[i] = CVE{ID: f.ID, Severity: severityText(f.Severity), Package: f.Package + "@" + f.Version, FixedIn: f.FixedVersion}
 	}
 	return cves
 }
@@ -75,8 +76,54 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 			r.rankDependency(&dr, d, group, combinedIndex, policy)
 			r.result.Dependencies = append(r.result.Dependencies, dr)
 		}
+		r.setFamilies(deps)
 		return r.a.Store.WriteJSON(filepath.Join(r.a.Dir, "candidates.json"), r.result)
 	})
+}
+
+// setFamilies groups the jumps of r.result's dependencies, each at the same
+// index in deps, into families, and names each member's family. A package
+// listed under two dependency kinds reaches here twice under one name, and
+// rank.Families keeps one entry per name: the first jump stands for the
+// name, and a later one adds only the peers the first does not declare.
+func (r *run) setFamilies(deps []depInfo) {
+	var jumpers []rank.Jumper
+	at := map[string]int{}
+	for i, dr := range r.result.Dependencies {
+		if dr.Jump == "" {
+			continue
+		}
+		peers := deps[i].packument.Versions[dr.Jump].PeerDependencies
+		j, seen := at[dr.Name]
+		if !seen {
+			at[dr.Name] = len(jumpers)
+			jumpers = append(jumpers, rank.Jumper{Name: dr.Name, Current: dr.Current, Jump: dr.Jump, JumpPeers: maps.Clone(peers)})
+			continue
+		}
+		for name, rng := range peers {
+			if _, ok := jumpers[j].JumpPeers[name]; !ok {
+				if jumpers[j].JumpPeers == nil {
+					jumpers[j].JumpPeers = map[string]string{}
+				}
+				jumpers[j].JumpPeers[name] = rng
+			}
+		}
+	}
+
+	r.result.Families = []Family{}
+	familyOf := map[string]string{}
+	for _, f := range rank.Families(jumpers) {
+		r.result.Families = append(r.result.Families, Family{Name: f.Name, Members: f.Members})
+		for _, m := range f.Members {
+			familyOf[m] = f.Name
+		}
+	}
+	for i := range r.result.Dependencies {
+		dr := &r.result.Dependencies[i]
+		if name, ok := familyOf[dr.Name]; ok && dr.Jump == jumpers[at[dr.Name]].Jump {
+			dr.Family = name
+		}
+	}
 }
 
 func groupOutcomesByDep(outcomes []candidateOutcome) map[string][]candidateOutcome {
@@ -110,7 +157,8 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		// nothing to compare candidates against: dr.Vector would stay at its
 		// zero value, and rank.Best would read that zero as "no CVEs", never
 		// finding a candidate worse than it. Warn instead of leaving the
-		// dependency looking clean, and skip ranking below.
+		// dependency looking clean, and propose nothing below. The jump
+		// compares candidates only, so it is still named.
 		r.result.Warnings = append(r.result.Warnings, fmt.Sprintf(
 			"%s: the current version %s does not resolve: %v", d.dep.Name, d.dep.Version, current.err))
 	} else {
@@ -172,10 +220,12 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		})})
 	}
 
-	if current.err == nil {
-		if best, ok := rank.Best(d.dep.Version, rank.Vector(dr.Vector), rankCandidates); ok {
-			dr.Best = best.Version
-		}
+	best, hasBest, jump, hasJump := rank.Propose(d.dep.Version, rank.Vector(dr.Vector), rankCandidates, r.a.Review.ProposeOtherMajors)
+	if hasBest && current.err == nil {
+		dr.Best = best.Version
+	}
+	if hasJump {
+		dr.Jump = jump.Version
 	}
 }
 

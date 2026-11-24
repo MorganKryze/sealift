@@ -13,6 +13,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
 )
 
 // manifestSizeLimit bounds an uploaded package.json: real ones run a few
@@ -180,8 +181,12 @@ func decodeAnalysisResult(raw json.RawMessage) (AnalysisResult, bool) {
 		d.Cves = orEmpty(d.Cves)
 		d.Candidates = orEmpty(d.Candidates)
 		for j := range d.Candidates {
-			d.Candidates[j].Cves = orEmpty(d.Candidates[j].Cves)
-			d.Candidates[j].Signals = orEmpty(d.Candidates[j].Signals)
+			c := &d.Candidates[j]
+			c.Cves = orEmpty(c.Cves)
+			c.Signals = orEmpty(c.Signals)
+			// Marked on every read, so an analysis written before the
+			// mark existed carries it too.
+			c.LeavesLine = !rank.SameLine(d.Current, c.Version)
 		}
 	}
 	return result, true

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -93,6 +94,10 @@ type Service struct {
 	trivy runner.Trivy
 	reg   *npm.Client
 
+	// Review holds the policy's review rules, copied into each analysis
+	// the Service queues. Set it before the first one.
+	Review policy.Review
+
 	mu          sync.Mutex
 	uv          runner.Uv   // nil until SetPip
 	index       *pip.Client // nil until SetPip
@@ -161,6 +166,7 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		Registry: s.reg,
 		Project:  project,
 		Settings: settings,
+		Review:   s.Review,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}

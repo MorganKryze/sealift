@@ -1188,6 +1188,19 @@ components:
           type: string
           description: As Trivy prints it, upper case
           example: HIGH
+        package:
+          type: string
+          description: >-
+            The package and version Trivy found it in, as name@version.
+            Absent from an analysis written before it was kept.
+          example: express@4.17.1
+        fixedIn:
+          type: string
+          description: >-
+            The versions Trivy names as fixing it, as Trivy prints them.
+            Empty when none is known; absent from an analysis written before
+            it was kept, whose fix is unknown.
+          example: 4.19.2, 5.0.0
       required:
         - id
         - severity
@@ -1231,6 +1244,11 @@ components:
           type: string
           format: date-time
           description: Empty when the registry has no publication time
+        leavesLine:
+          type: boolean
+          description: >-
+            Whether this version leaves the line of the current one, the
+            range npm's caret gives it. Set when the analysis is read.
       required:
         - version
         - vector
@@ -1238,6 +1256,7 @@ components:
         - signals
         - key
         - resolved
+        - leavesLine
     DependencyResult:
       type: object
       description: One direct dependency's current CVEs and its ranked candidates
@@ -1248,7 +1267,10 @@ components:
           type: string
         best:
           type: string
-          description: Empty when no candidate improves on the current version
+          description: >-
+            Empty when no candidate inside the current line improves on the
+            current version; the policy's review.proposeOtherMajors widens
+            the search to every candidate
         vector:
           $ref: "#/components/schemas/Vector"
         cves:
@@ -1260,6 +1282,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Candidate"
+        jump:
+          type: string
+          description: >-
+            The first unblocked candidate outside the current line, in the
+            order a proposal is taken. Absent when there is none.
+        family:
+          type: string
+          description: >-
+            The name of the family this dependency's jump belongs to. Absent
+            when its jump moves alone.
       required:
         - name
         - current
@@ -1288,11 +1320,34 @@ components:
           type: array
           items:
             type: string
+        families:
+          type: array
+          description: >-
+            The groups of dependencies whose jumps must move together, sorted
+            by name. Absent from an analysis written before families existed.
+          items:
+            $ref: "#/components/schemas/Family"
       required:
         - target
         - before
         - dependencies
         - warnings
+    Family:
+      type: object
+      description: Dependencies whose jumps must move together
+      properties:
+        name:
+          type: string
+          description: The member the others name, and the line of its jump
+          example: react 19
+        members:
+          type: array
+          description: Sorted by name
+          items:
+            type: string
+      required:
+        - name
+        - members
     PipAnalysisResult:
       type: object
       description: >-

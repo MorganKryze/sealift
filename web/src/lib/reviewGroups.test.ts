@@ -11,6 +11,7 @@ function candidate(version: string, overrides: Partial<DependencyResult["candida
     signals: [] as Signal[],
     key: true,
     resolved: true,
+    leavesLine: false,
     ...overrides,
   }
 }

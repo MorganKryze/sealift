@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -27,6 +28,7 @@ type Analysis struct {
 	Registry *npm.Client
 	Project  store.Project
 	Settings store.Settings
+	Review   policy.Review
 	Dir      string // the pending analyses/<id> directory
 	ID       string
 }
@@ -39,6 +41,14 @@ type Result struct {
 	After        *Vector            `json:"after"` // nil when step 9 (check-combined) never measured it
 	Dependencies []DependencyResult `json:"dependencies"`
 	Warnings     []string           `json:"warnings"`
+	Families     []Family           `json:"families"` // sorted by name; a result without the key predates families
+}
+
+// Family is a group of dependencies whose jumps must move together, named
+// after the member the others name and the line of its jump ("react 19").
+type Family struct {
+	Name    string   `json:"name"`
+	Members []string `json:"members"` // sorted
 }
 
 // DependencyResult is one direct dependency: its current vulnerability
@@ -46,10 +56,12 @@ type Result struct {
 type DependencyResult struct {
 	Name       string      `json:"name"`
 	Current    string      `json:"current"`
-	Best       string      `json:"best,omitempty"` // empty when no candidate improves on current
-	Vector     Vector      `json:"vector"`         // the current version's vector
-	CVEs       []CVE       `json:"cves"`           // the vulnerabilities behind vector, sorted severity then id
-	Candidates []Candidate `json:"candidates"`     // ascending by version
+	Best       string      `json:"best,omitempty"`   // empty when no candidate it may propose improves on current
+	Vector     Vector      `json:"vector"`           // the current version's vector
+	CVEs       []CVE       `json:"cves"`             // the vulnerabilities behind vector, sorted severity then id
+	Candidates []Candidate `json:"candidates"`       // ascending by version
+	Jump       string      `json:"jump,omitempty"`   // the first unblocked candidate outside the current line
+	Family     string      `json:"family,omitempty"` // the family Jump moves with; empty when it moves alone
 }
 
 // Candidate is one newer version of a dependency, with its vulnerability
@@ -65,10 +77,13 @@ type Candidate struct {
 }
 
 // CVE is one vulnerability behind a Vector count, by id and severity as
-// Trivy reports it (upper case: CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN).
+// Trivy reports it (upper case: CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN), with
+// the package it was found in and the versions that fix it.
 type CVE struct {
 	ID       string `json:"id"`
 	Severity string `json:"severity"`
+	Package  string `json:"package,omitempty"` // name@version
+	FixedIn  string `json:"fixedIn"`           // as Trivy prints it, "" when no fix is known
 }
 
 // Signal is one fact about a candidate version worth the user's attention.
