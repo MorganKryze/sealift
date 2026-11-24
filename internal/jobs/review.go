@@ -46,7 +46,15 @@ type asked struct {
 	jumps    []string // selected versions outside the current line
 	kept     string   // the version an install keeps, the current one when none is selected
 	keptCVEs []CVE
-	noFix    []string // ids of the kept version's CVEs that no version fixes
+	held     []held // the versions of this entry the archive holds
+	leftOut  bool   // the archive holds no version of the name: the project keeps the current one
+}
+
+// held is one version the archive holds, with its CVEs.
+type held struct {
+	version string
+	cves    []CVE
+	noFix   []string // ids of its CVEs that no version fixes
 }
 
 // maxReasonTextRunes is the contract's maxLength on a reason's text, which
@@ -63,25 +71,55 @@ func askedOf(r Result, req ExportRequest) []asked {
 				a.jumps = append(a.jumps, v)
 			}
 		}
+		holds := slices.Clone(selected)
 		if req.IncludeProject {
-			// The project tree ships its lockfile, which holds the current
-			// version: an install may keep it as if it were selected.
-			selected = append(slices.Clone(selected), d.Current)
+			// The project tree ships its lockfile, which pins the current
+			// version: a frozen install keeps it.
+			holds = append(holds, d.Current)
 		}
-		a.kept, a.keptCVEs, _ = pickedCVEs(d, selected)
-		if a.kept == "" {
-			// The project keeps the current version of a dependency the
-			// selection leaves out.
-			a.kept, a.keptCVEs = d.Current, d.CVEs
+		a.leftOut = len(holds) == 0
+		if a.leftOut {
+			holds = []string{d.Current}
 		}
-		for _, c := range a.keptCVEs {
-			if withoutFix(c) && !slices.Contains(a.noFix, c.ID) {
-				a.noFix = append(a.noFix, c.ID)
+		for _, v := range holds {
+			if slices.ContainsFunc(a.held, func(h held) bool { return h.version == v }) {
+				continue
 			}
+			// A version of another entry of the same name is that entry's.
+			if h, ok := heldOf(d, v); ok {
+				a.held = append(a.held, h)
+			}
+		}
+		a.kept, a.keptCVEs, _ = pickedCVEs(d, holds)
+		if a.kept == "" {
+			a.kept, a.keptCVEs = d.Current, d.CVEs
 		}
 		out = append(out, a)
 	}
 	return out
+}
+
+// heldOf is version v of d with its CVEs, false when d lists no such version.
+func heldOf(d DependencyResult, v string) (held, bool) {
+	h := held{version: v, cves: d.CVEs}
+	if v != d.Current {
+		c, ok := findCandidate(d.Candidates, v)
+		if !ok {
+			return held{}, false
+		}
+		h.cves = c.CVEs
+	}
+	for _, c := range h.cves {
+		if withoutFix(c) && !slices.Contains(h.noFix, c.ID) {
+			h.noFix = append(h.noFix, c.ID)
+		}
+	}
+	return h, true
+}
+
+// noFix is true when a version a holds keeps a CVE no version fixes.
+func (a asked) noFix() bool {
+	return slices.ContainsFunc(a.held, func(h held) bool { return len(h.noFix) > 0 })
 }
 
 // withoutFix is true for a CVE no version fixes, and for one whose fix was
@@ -106,7 +144,7 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 	needs := map[ReasonKind]map[string]bool{MajorJumpReason: {}, CVEWithoutFixReason: {}}
 	for _, a := range asks {
 		needs[MajorJumpReason][a.dep.Name] = needs[MajorJumpReason][a.dep.Name] || len(a.jumps) > 0
-		needs[CVEWithoutFixReason][a.dep.Name] = needs[CVEWithoutFixReason][a.dep.Name] || len(a.noFix) > 0
+		needs[CVEWithoutFixReason][a.dep.Name] = needs[CVEWithoutFixReason][a.dep.Name] || a.noFix()
 	}
 	covered := coverage{MajorJumpReason: {}, CVEWithoutFixReason: {}}
 	var problems []string
@@ -147,9 +185,10 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 // CheckReasons returns one worded problem for each jump or CVE without fix
 // the request carries with no reason or against the policy, and for each
 // reason that is unreadable or covers nothing. Every selected version counts
-// for a jump. For CVEs, the version an install keeps counts: the best of
-// those selected, the current one among them when the project tree ships,
-// and the current one alone for a dependency the selection leaves out.
+// for a jump. For CVEs, each version the archive holds counts on its own:
+// the selected ones, and the current one when the project tree ships. A
+// dependency the archive leaves out keeps its current version in the
+// project: its CVEs ask a reason, and the policy never refuses them.
 // Empty when the export may go.
 func CheckReasons(r Result, req ExportRequest, p policy.Review) []string {
 	asks := askedOf(r, req)
@@ -166,19 +205,22 @@ func CheckReasons(r Result, req ExportRequest, p policy.Review) []string {
 				problems = append(problems, fmt.Sprintf("%s %s to %s leaves %s and needs a reason", d.Name, d.Current, v, lineWords(d.Current)))
 			}
 		}
-		if len(a.noFix) == 0 {
-			continue
-		}
-		keeps := fmt.Sprintf("%s %s keeps %s, which no version fixes", d.Name, a.kept, andList(a.noFix))
 		_, ok := covered[CVEWithoutFixReason][d.Name]
-		switch {
-		case p.CVEWithoutFix == policy.Refuse:
-			problems = append(problems, "review.cveWithoutFix is refuse: "+keeps+", and cannot cross")
-		case !ok:
-			problems = append(problems, keeps+", and needs a reason")
+		for _, h := range a.held {
+			if len(h.noFix) == 0 {
+				continue
+			}
+			keeps := fmt.Sprintf("%s %s keeps %s, which no version fixes", d.Name, h.version, andList(h.noFix))
+			switch {
+			case p.CVEWithoutFix == policy.Refuse && !a.leftOut:
+				problems = append(problems, "review.cveWithoutFix is refuse: "+keeps+", and cannot cross")
+			case !ok:
+				problems = append(problems, keeps+", and needs a reason")
+			}
 		}
 	}
-	return append(problems, reasonProblems...)
+	// A name listed twice may word one problem twice.
+	return append(slices.Compact(problems), reasonProblems...)
 }
 
 // lineWords names the line a current version belongs to.
@@ -265,16 +307,20 @@ func ReviewOf(r Result, req ExportRequest, projected *rank.Vector) archive.Revie
 		}
 
 		_, text := reasonFor(CVEWithoutFixReason, d.Name)
-		for _, c := range cves {
-			left := archive.ReviewCVE{
-				Dependency: d.Name, Version: version, ID: c.ID,
-				Severity: severityText(rank.ParseSeverity(c.Severity)),
-				Package:  packageName(c.Package), FixedIn: c.FixedIn,
+		for _, h := range a.held {
+			for _, c := range h.cves {
+				left := archive.ReviewCVE{
+					Dependency: d.Name, Version: h.version, ID: c.ID,
+					Severity: severityText(rank.ParseSeverity(c.Severity)),
+					Package:  packageName(c.Package), FixedIn: c.FixedIn,
+				}
+				if withoutFix(c) {
+					left.Reason = text
+				}
+				if !slices.Contains(review.Left, left) {
+					review.Left = append(review.Left, left)
+				}
 			}
-			if withoutFix(c) {
-				left.Reason = text
-			}
-			review.Left = append(review.Left, left)
 		}
 	}
 	return review

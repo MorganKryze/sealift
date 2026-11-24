@@ -94,29 +94,22 @@ function resolvesFromRegistry(registryUrl, name, version) {
 }
 
 // reasonsFor builds the reasons the server asks of a selection: one for
-// every selected version that leaves its line, and one per dependency whose
-// kept version carries a CVE with no fixing version. The kept version is
-// the best selected one, as an install keeps, with the current one among
-// them when the project tree ships, or the current one when none is
-// selected.
+// every selected version that leaves its line, and one per dependency where
+// a version the archive holds carries a CVE with no fixing version. The
+// archive holds each selected version, plus the current one when the
+// project tree ships; with neither, the project keeps the current one.
 function reasonsFor(result, selection, includeProject) {
-  const compare = (a, b) => {
-    const i = a.findIndex((n, j) => n !== b[j]);
-    return i === -1 ? 0 : a[i] - b[i];
-  };
   const jumps = [];
   const withoutFix = new Set();
   for (const d of result.dependencies) {
-    const versions = [...(selection[d.name] ?? []), ...(includeProject ? [d.current] : [])];
-    const current = { vector: d.vector, cves: d.cves ?? [] };
-    let kept = null;
+    let versions = [...(selection[d.name] ?? []), ...(includeProject ? [d.current] : [])];
+    if (versions.length === 0) versions = [d.current];
     for (const version of versions) {
-      const picked = version === d.current ? current : d.candidates.find((c) => c.version === version);
-      if (!picked) continue;
-      if (version !== d.current && picked.leavesLine) jumps.push(d.name);
-      if (!kept || compare(picked.vector, kept.vector) < 0) kept = picked;
+      const held = version === d.current ? { cves: d.cves ?? [] } : d.candidates.find((c) => c.version === version);
+      if (!held) continue;
+      if (version !== d.current && held.leavesLine) jumps.push(d.name);
+      if (held.cves?.some((c) => !c.fixedIn)) withoutFix.add(d.name);
     }
-    if ((kept ?? current).cves?.some((c) => !c.fixedIn)) withoutFix.add(d.name);
   }
   const reasons = [...withoutFix].map((name) => ({ kind: "cve-without-fix", dependencies: [name], text: "The end-to-end fixture keeps this CVE to test the review." }));
   const jumped = [...new Set(jumps)];

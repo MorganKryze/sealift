@@ -534,7 +534,8 @@ func (exportTrivyFake) UpdateDB(context.Context) (string, error) { return "", ni
 // caller chooses, for a test whose export job must reach the reports
 // step instead of stopping at whatever the shared fakeTrivy leaves
 // unwritten.
-func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *Handlers {
+func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue) *Handlers {
+	trivy := exportTrivyFake{}
 	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -583,7 +584,7 @@ func waitForExportState(t *testing.T, srv *httptest.Server, projectID, exportID 
 func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
-	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	h := newTestHandlersWithTrivy(t, q)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
@@ -2416,7 +2417,7 @@ func waitForEnd(events <-chan jobs.Event, storeID string) {
 
 func TestQueueExportForAPipProject(t *testing.T) {
 	q := jobs.NewQueue(nil)
-	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	h := newTestHandlersWithTrivy(t, q)
 	t.Cleanup(q.Close)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
@@ -2641,8 +2642,8 @@ func TestQueueExportRepeatsNoReasonText(t *testing.T) {
 }
 
 // The project tree ships its lockfile, which holds each current version:
-// is-even 1.0.0 keeps a CVE that no version fixes, and an install keeps it
-// over 1.0.1, which carries a critical CVE with a fix.
+// is-even 1.0.0 keeps a CVE that no version fixes and crosses beside any
+// version selected.
 func TestQueueExportCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
 	srv, h := newTestServer(t)
 	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
@@ -2674,10 +2675,67 @@ func TestQueueExportCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
 	}
 }
 
+// A clean version selected beside the current one the project tree ships
+// does not hide the current one's CVE without fix.
+func TestQueueExportRefusesTheCurrentVersionBesideACleanOne(t *testing.T) {
+	srv, h := newTestServer(t)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,0,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],` +
+		`"candidates":[{"version":"1.0.1","vector":[0,0,0,0,0],"cves":[],"signals":[],"key":true,"resolved":true}]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"candidates":[]}` +
+		`],"warnings":[],"families":[]}`
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	withTree := true
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"is-even": {"1.0.1"}}, IncludeProject: &withTree}))
+	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+}
+
+// The refuse policy covers what the archive holds: a dependency left out
+// stays at its current version in the project and asks a reason only.
+func TestQueueExportAcceptsAReasonForADependencyLeftOutUnderRefuse(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlersWithTrivy(t, q)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	sel := map[string][]string{"left-pad": {"1.3.0"}}
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel}))
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+
+	reasons := []Reason{{Kind: CveWithoutFix, Dependencies: []string{"is-even"}, Text: "We call is-even on our own numbers only."}}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel, Reasons: &reasons})
+	if resp2.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	}
+}
+
 func TestQueueExportAcceptsTheReasonsItNeeds(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
-	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	h := newTestHandlersWithTrivy(t, q)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
