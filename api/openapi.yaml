@@ -20,7 +20,75 @@ tags:
     description: User-configurable defaults
   - name: tools
     description: pnpm and Trivy installs and updates
+  - name: probes
+    description: Readiness and liveness checks, served at the root
 paths:
+  /healthz:
+    servers:
+      - url: /
+    get:
+      operationId: getHealth
+      tags:
+        - probes
+      summary: Readiness
+      description: >-
+        Answers 200 once every item of the preparation is ready, 503 with the
+        names of the others until then. The causes are in GET /api/instance.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                required:
+                  - status
+        "503":
+          description: Still preparing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: preparing
+                  missing:
+                    type: array
+                    description: The items not ready yet.
+                    items:
+                      type: string
+                required:
+                  - status
+                  - missing
+  /livez:
+    servers:
+      - url: /
+    get:
+      operationId: getLive
+      tags:
+        - probes
+      summary: Liveness
+      description: >-
+        Answers 200 while the process serves requests, preparing or not, so a
+        liveness probe never restarts an instance that is still downloading.
+      responses:
+        "200":
+          description: Live
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                required:
+                  - status
   /projects:
     get:
       operationId: listProjects

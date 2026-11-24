@@ -39,6 +39,30 @@ func TestHealthzAnswers503AndNamesWhatIsMissing(t *testing.T) {
 	}
 }
 
+// While the instance prepares, the liveness probe answers 200 and the
+// readiness probe 503, on the same server.
+func TestLivezAnswers200WhileHealthzAnswers503(t *testing.T) {
+	_, h := newTestServer(t)
+	h.Ready = fixedReadiness{Items: []tools.Item{{Name: "trivy", State: tools.ItemPreparing}}}
+	routes := Routes(h, testStatic())
+	for _, c := range []struct {
+		path, body string
+		code       int
+	}{
+		{"/livez", `{"status":"ok"}`, http.StatusOK},
+		{"/healthz", `{"status":"preparing","missing":["trivy"]}`, http.StatusServiceUnavailable},
+	} {
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.path, nil))
+		if rec.Code != c.code || strings.TrimSpace(rec.Body.String()) != c.body {
+			t.Errorf("%s = %d %s, want %d %s", c.path, rec.Code, rec.Body.String(), c.code, c.body)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "application/json" {
+			t.Errorf("%s: Content-Type = %q, want application/json", c.path, got)
+		}
+	}
+}
+
 func TestHealthzAnswers200WhenReady(t *testing.T) {
 	rec := healthz(t, fixedReadiness{Ready: true, Warning: "could not refresh the vulnerability database", Items: []tools.Item{
 		{Name: "trivy", Version: "0.55.0", State: tools.ItemReady},

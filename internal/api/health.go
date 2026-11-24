@@ -25,6 +25,16 @@ func (r toolsReadiness) State() tools.Readiness {
 	return out
 }
 
+// LiveHandler answers a liveness probe: 200 while the process serves
+// requests, whatever the preparation's state, so a probe never restarts an
+// instance that is still downloading.
+func LiveHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Status string `json:"status"`
+	}{Status: "ok"})
+}
+
 // HealthHandler answers a readiness probe from r's state: 200 once every
 // item is ready, 503 with the names of the others until then. Causes stay
 // out of this answer. It reads memory only, so a probe never blocks on the

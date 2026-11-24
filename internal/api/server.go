@@ -26,8 +26,8 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 	}
 }
 
-// Routes returns every route this backend serves: the readiness check
-// outside the contract, answered from h.Ready, every operation of api/openapi.yaml mounted at
+// Routes returns every route this backend serves: the readiness check,
+// answered from h.Ready, and the liveness check at the root, every operation of api/openapi.yaml mounted at
 // base URL /api through the generated strict server, and the frontend
 // build in static for every other path. refuseCrossSite wraps all of it and
 // guards the signing key's regenerate route and the tool installs. WatchJob
@@ -37,6 +37,7 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", HealthHandler(h.Ready))
+	mux.HandleFunc("GET /livez", LiveHandler)
 
 	strict := NewStrictHandlerWithOptions(h, nil, StrictHTTPServerOptions{
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
