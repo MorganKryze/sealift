@@ -199,10 +199,10 @@ func (m *Manager) checkUvAge(version string, uploaded time.Time) error {
 		return nil
 	}
 	if uploaded.IsZero() {
-		return releaseTooRecent{fmt.Sprintf("uv %s: the index gives no upload time, so its age against the minimum release age of %d days is unknown; pin an older uv in the policy file", version, days)}
+		return releaseTooRecent{fmt.Sprintf("uv %s: the index gives no upload time, so its age against the minimum release age of %d days is unknown; pin an older uv in the project's target or the policy file", version, days)}
 	}
 	if age := time.Since(uploaded); age < minAge {
-		return releaseTooRecent{fmt.Sprintf("uv %s was uploaded %s ago, under the minimum release age of %d days; pin an older uv in the policy file or wait until it is %d days old", version, age.Round(time.Hour), days, days)}
+		return releaseTooRecent{fmt.Sprintf("uv %s was uploaded %s ago, under the minimum release age of %d days; pin an older uv in the project's target or the policy file, or wait until it is %d days old", version, age.Round(time.Hour), days, days)}
 	}
 	return nil
 }
