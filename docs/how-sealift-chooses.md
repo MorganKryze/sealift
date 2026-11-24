@@ -89,7 +89,7 @@ These ask no reason:
 
 The signed manifest still lists each of these CVEs, with the versions that fix it.
 
-A reason holds 1 to 300 characters once trimmed, on one line. Letters, marks, numbers, punctuation, symbols and the plain space pass; a tab, a line break, a control character, a line or paragraph separator, a bidirectional override or any other format character does not. The import side reads the reason by the same rule.
+A reason holds 1 to 300 characters once trimmed, on one line. Letters, marks, numbers, punctuation, symbols, the plain space and the no-break spaces of French and CJK typography (U+00A0, U+202F, U+3000) pass; a tab, a line break, a control character, a line or paragraph separator, a bidirectional override or any other format character does not. The import side reads the reason by the same rule.
 
 The deployment's policy can refuse instead. With `review.majorJump: refuse`, an export that takes a version outside its line is refused whatever reason it holds; `review.cveWithoutFix: refuse` does the same for a CVE without fix in a version the archive holds. A dependency the selection leaves out still asks a reason under `refuse`, since the archive does not carry it.
 

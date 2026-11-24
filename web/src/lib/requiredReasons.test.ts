@@ -114,6 +114,23 @@ describe("reasonProblem", () => {
     expect(reasonProblem(text)).toBe("Keep the reason on one line, with no tab or control character.")
   })
 
+  it.each([
+    ["a no-break space", "Mise à jour\u00a0: rien ne casse"],
+    ["a narrow no-break space", "Mise à jour\u202f: rien ne casse"],
+    ["an ideographic space", "東京\u3000リアクト"],
+  ])("accepts %s", (_name, text) => {
+    expect(reasonProblem(text)).toBeUndefined()
+  })
+
+  it("refuses an ogham space mark the archive refuses", () => {
+    expect(reasonProblem("a\u1680reason")).toBe("Keep the reason on one line, with no tab or control character.")
+  })
+
+  it("bounds the raw text at 4800 bytes", () => {
+    expect(reasonProblem(`${" ".repeat(4799)}x`)).toBeUndefined()
+    expect(reasonProblem(`${" ".repeat(4800)}x`)).toBe("Shorten the reason: it holds more than 4800 bytes with its spaces.")
+  })
+
   it("counts characters once trimmed", () => {
     expect(reasonProblem(` ${"é".repeat(300)} `)).toBeUndefined()
     expect(reasonProblem("é".repeat(301))).toBe("Shorten the reason to 300 characters: it has 301.")

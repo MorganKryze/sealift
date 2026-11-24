@@ -25,6 +25,8 @@ func TestCheckReasonRefuses(t *testing.T) {
 		{"zero width space", "owned\u200bb", unsafe},
 		{"escape sequence", "owned\x1b[2J", unsafe},
 		{"invalid UTF-8", "owned\xff", unsafe},
+		{"4801 bytes of spaces around a word", strings.Repeat(" ", maxReasonBytes) + "x", "is longer than 4800 bytes"},
+		{"ogham space mark", "owned\u1680b", unsafe},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,6 +42,19 @@ func TestCheckReasonRefuses(t *testing.T) {
 				t.Errorf("the error repeats the reason's text: %q", err)
 			}
 		})
+	}
+}
+
+func TestCheckReasonAcceptsFrenchSpaces(t *testing.T) {
+	for _, text := range []string{
+		"Mise à jour\u00a0: rien ne casse",
+		"Mise à jour\u202f: rien ne casse",
+		"東京\u3000リアクト",
+		strings.Repeat(" ", maxReasonBytes-1) + "x",
+	} {
+		if err := CheckReason(text); err != nil {
+			t.Errorf("CheckReason(%q): %v", text[:min(len(text), 40)], err)
+		}
 	}
 }
 

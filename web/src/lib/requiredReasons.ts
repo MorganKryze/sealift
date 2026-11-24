@@ -9,6 +9,7 @@ type Reason = NonNullable<ExportRequest["reasons"]>[number]
 
 /** The archive's reader takes 300 characters once trimmed (archive.MaxReasonRunes). */
 const MAX_REASON_CHARACTERS = 300
+const MAX_REASON_BYTES = 4800
 
 /** Where a reason's text lives in useReasons: unique per kind, family or dependency. */
 export function reasonKey(needed: NeededReason): string {
@@ -92,10 +93,14 @@ export function requiredReasons(result: AnalysisResult, selection: Record<string
  * What keeps text from being a reason the archive accepts, in words, or
  * undefined. An empty text is missing rather than wrong, so it has none.
  * Printable means what Go's unicode.IsPrint takes: letters, marks, numbers,
- * punctuation, symbols and the plain space.
+ * punctuation, symbols and the plain space, plus the no-break spaces
+ * U+00A0, U+202F and U+3000 the archive accepts.
  */
 export function reasonProblem(text: string): string | undefined {
-  if (!/^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u.test(text)) {
+  if (new TextEncoder().encode(text).length > MAX_REASON_BYTES) {
+    return `Shorten the reason: it holds more than ${MAX_REASON_BYTES} bytes with its spaces.`
+  }
+  if (!/^[\p{L}\p{M}\p{N}\p{P}\p{S} \u00a0\u202f\u3000]*$/u.test(text)) {
     return "Keep the reason on one line, with no tab or control character."
   }
   const length = [...text.trim()].length
