@@ -2960,7 +2960,90 @@ func TestAMultipartBodyOverItsBoundIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-		t.Fatalf("status = %d, want a refusal", resp.StatusCode)
+	assertTooLarge(t, resp, "the request body is larger than 41 MiB")
+}
+
+// A valid manifest followed by a part the handler skips would create the
+// project without the cap: only the cap refuses it.
+func TestAValidManifestPaddedPastTheMultipartBoundIsRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, []formPart{
+		{field: "name", data: "pads"},
+		{field: "manifest", filename: "package.json", data: `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`},
+		{field: "pad", data: strings.Repeat("a", maxMultipartBodyBytes)},
+	})
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %.200s", status, data)
+	}
+	var p Problem
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatal(err)
+	}
+	if deref(p.Detail) != "the request body is larger than 41 MiB" {
+		t.Errorf("detail = %q", deref(p.Detail))
+	}
+}
+
+// A chunked body declares no length, so only the reader's cap stops it.
+func TestAChunkedJSONBodyOver16MiBIsRefused(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := io.MultiReader(strings.NewReader(`{"selection":{},"pad":"`), strings.NewReader(strings.Repeat("a", maxJSONBodyBytes)), strings.NewReader(`"}`))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if req.ContentLength != 0 {
+		t.Fatalf("ContentLength = %d, want an unknown length", req.ContentLength)
+	}
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	assertTooLarge(t, resp2, "the request body is larger than 16 MiB")
+}
+
+// The body bounds belong to /api: the web shell outside it answers as it
+// always did, and no 415 reaches it.
+func TestBodyBoundsStayUnderTheAPIPrefix(t *testing.T) {
+	srv, _ := newTestServer(t)
+	for _, path := range []string{"/", "/apix", "/projects"} {
+		resp, err := http.Post(srv.URL+path, "text/plain", strings.NewReader("hello"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnsupportedMediaType {
+			t.Errorf("POST %s = 415, want the bounds left to /api/", path)
+		}
+	}
+	resp, err := http.Post(srv.URL+"/api/projects", "text/plain", strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("POST /api/projects as text/plain = %d, want 415", resp.StatusCode)
+	}
+}
+
+func assertTooLarge(t *testing.T, resp *http.Response, detail string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 413: %.200s", resp.StatusCode, data)
+	}
+	var p Problem
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if deref(p.Detail) != detail {
+		t.Errorf("detail = %q, want %q", deref(p.Detail), detail)
 	}
 }

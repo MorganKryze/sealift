@@ -120,6 +120,9 @@ type createParts struct {
 // queues its first analysis too.
 func (h *Handlers) CreateProject(_ context.Context, req CreateProjectRequestObject) (CreateProjectResponseObject, error) {
 	parts, err := readCreateProjectParts(req.Body)
+	if tooLarge := new(http.MaxBytesError); errors.As(err, &tooLarge) {
+		return CreateProjectdefaultApplicationProblemPlusJSONResponse(problemBody{Body: NewProblem(http.StatusRequestEntityTooLarge, "request too large", "the request body is larger than 41 MiB"), StatusCode: http.StatusRequestEntityTooLarge}), nil
+	}
 	if err != nil {
 		return CreateProjectdefaultApplicationProblemPlusJSONResponse(problem(http.StatusBadRequest, "create project", err)), nil
 	}
