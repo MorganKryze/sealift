@@ -509,7 +509,7 @@ func (s *Service) finalize(info FinalizeInfo) error {
 	if tj.kind == "export" && info.State == store.Cancelled {
 		s.recordQueuedExportCancel(tj)
 	}
-	err := s.finalizeDir(tj, info.State)
+	err := s.finalizeDir(tj, info.State, info.Err)
 
 	s.mu.Lock()
 	delete(s.byQueueID, info.ID)
@@ -553,7 +553,11 @@ func (s *Service) recordQueuedExportCancel(tj *trackedJob) {
 // published as "queued" it would stay there, since nothing runs it. Any
 // other directory holds a run's log and results, so it is published even
 // when the rewrite fails, and the startup sweep settles its state.
-func (s *Service) finalizeDir(tj *trackedJob, state store.State) error {
+//
+// An analysis that failed without starting wrote no step of its own, so
+// its record gets one, prepare, carrying runErr: without it the screen
+// would show a failure with no cause.
+func (s *Service) finalizeDir(tj *trackedJob, state store.State, runErr error) error {
 	reconcile := tj.kind == "analysis" || tj.kind == "export"
 	if _, err := os.Stat(tj.pending.Path()); err != nil {
 		if !reconcile {
@@ -564,7 +568,12 @@ func (s *Service) finalizeDir(tj *trackedJob, state store.State) error {
 	if reconcile {
 		// Judged before the rewrite, which replaces the state it reads.
 		neverStarted := tj.kind == "analysis" && s.neverStarted(tj.pending.Path())
-		if err := reconcileStatus(s.store, tj.pending.Path(), state); err != nil {
+		fields := map[string]any{"state": state}
+		if neverStarted && state == store.Failed && runErr != nil {
+			slog.Error("jobs: analysis failed before it began", "project", tj.projectID, "id", tj.storeID, "error", runErr)
+			fields["steps"] = []stepRecord{{Name: "prepare", State: string(store.Failed), Error: runErr.Error()}}
+		}
+		if err := rewriteStatus(s.store, tj.pending.Path(), fields); err != nil {
 			if neverStarted {
 				return errors.Join(err, tj.pending.Discard())
 			}
@@ -594,6 +603,13 @@ func (s *Service) neverStarted(dir string) bool {
 // writes none). A job that never started still has the status.json its
 // queueing seeded, so its outcome is rewritten here too.
 func reconcileStatus(st *store.Store, dir string, state store.State) error {
+	return rewriteStatus(st, dir, map[string]any{"state": state})
+}
+
+// rewriteStatus sets each of set's fields in the status.json in dir and
+// leaves the others as they are. It does nothing when dir holds no
+// status.json.
+func rewriteStatus(st *store.Store, dir string, set map[string]any) error {
 	path := filepath.Join(dir, "status.json")
 	var fields map[string]json.RawMessage
 	if err := st.ReadJSON(path, &fields); err != nil {
@@ -602,11 +618,13 @@ func reconcileStatus(st *store.Store, dir string, state store.State) error {
 		}
 		return err
 	}
-	encoded, err := json.Marshal(state)
-	if err != nil {
-		return err
+	for name, value := range set {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		fields[name] = encoded
 	}
-	fields["state"] = encoded
 	return st.WriteJSON(path, fields)
 }
 

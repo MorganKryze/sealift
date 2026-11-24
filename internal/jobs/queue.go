@@ -79,11 +79,13 @@ type entry struct {
 // FinalizeInfo is the bounded, typed shape the queue's finalize hook
 // receives: just enough to let a caller commit or reconcile a job's own
 // state, never the job's own Event stream, whose raw, arbitrarily sized
-// Data a hook could otherwise be tempted to hold onto.
+// Data a hook could otherwise be tempted to hold onto. Err is the error
+// Run returned, nil when it returned none.
 type FinalizeInfo struct {
 	ID    string
 	Kind  string
 	State store.State
+	Err   error
 }
 
 // FinalizeFunc is the queue's finalize hook. See SetFinalizer.
@@ -156,14 +158,14 @@ func (q *Queue) SetFinalizer(fn FinalizeFunc) {
 
 // runFinalizer calls the registered finalize hook, if any, logging but
 // swallowing its error: see SetFinalizer.
-func (q *Queue) runFinalizer(id, kind string, state store.State) {
+func (q *Queue) runFinalizer(id, kind string, state store.State, runErr error) {
 	q.mu.Lock()
 	fn := q.finalize
 	q.mu.Unlock()
 	if fn == nil {
 		return
 	}
-	if err := fn(FinalizeInfo{ID: id, Kind: kind, State: state}); err != nil {
+	if err := fn(FinalizeInfo{ID: id, Kind: kind, State: state, Err: runErr}); err != nil {
 		q.log.Error("finalize hook failed", "id", id, "kind", kind, "state", state, "error", err)
 	}
 }
@@ -239,7 +241,7 @@ func (q *Queue) Cancel(id string) error {
 // job the queue never ran, through the same publish path a finished
 // job's own end event takes.
 func (q *Queue) publishCancelled(id string, job Job) {
-	q.runFinalizer(id, job.Kind(), store.Cancelled)
+	q.runFinalizer(id, job.Kind(), store.Cancelled, nil)
 	data, _ := json.Marshal(struct {
 		State store.State `json:"state"`
 	}{State: store.Cancelled})
@@ -356,7 +358,7 @@ func (q *Queue) run() {
 		// whether or not any subscriber is still keeping up, since
 		// deliverLocked would otherwise drop the "end" event a
 		// Subscribe-based caller would have relied on instead.
-		q.runFinalizer(next.id, next.job.Kind(), state)
+		q.runFinalizer(next.id, next.job.Kind(), state, err)
 
 		q.mu.Lock()
 		endData, _ := json.Marshal(struct {

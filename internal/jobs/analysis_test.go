@@ -241,6 +241,47 @@ func TestAnalysisKind(t *testing.T) {
 	}
 }
 
+// TestAnalysisThatCannotBeginNamesNoServerPath proves the error of a run
+// that fails before its first write keeps its cause and drops the path:
+// that error becomes the failure the screen shows.
+func TestAnalysisThatCannotBeginNamesNoServerPath(t *testing.T) {
+	kinds := []struct {
+		name string
+		job  func(t *testing.T) (Job, string)
+	}{
+		{"npm", func(t *testing.T) (Job, string) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo"}`)
+			return &Analysis{Store: st, Project: proj, Dir: pending.Path(), ID: pending.ID()}, pending.Path()
+		}},
+		{"pip", func(t *testing.T) (Job, string) {
+			a, _ := newPipAnalysis(t, "http://127.0.0.1:1/simple/", store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+			return a, a.Dir
+		}},
+	}
+	for _, kind := range kinds {
+		for _, blocked := range []string{"log.txt", "status.json"} {
+			t.Run(kind.name+" "+blocked, func(t *testing.T) {
+				job, dir := kind.job(t)
+				// A directory where the run expects a file fails the open
+				// or the rename with an error that carries the path.
+				if err := os.Mkdir(filepath.Join(dir, blocked), 0o770); err != nil {
+					t.Fatal(err)
+				}
+				err := job.Run(context.Background(), func(Event) {})
+				if err == nil {
+					t.Fatal("Run returned nil, want the error of the blocked write")
+				}
+				if strings.Contains(err.Error(), filepath.Base(dir)) {
+					t.Errorf("error %q names the analysis directory", err)
+				}
+				if !strings.Contains(err.Error(), blocked) {
+					t.Errorf("error %q does not name %s", err, blocked)
+				}
+			})
+		}
+	}
+}
+
 // TestRunStepRecordsTheFailureMessage proves a failed step's own error
 // reaches status.json instead of staying only in log.txt: runStep must
 // set stepRecord.Error to err.Error() whenever the step's state is

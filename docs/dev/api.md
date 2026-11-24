@@ -84,6 +84,8 @@ The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupt
 {"message":"resolve project: pnpm install: ERR_PNPM_NO_MATCHING_VERSION No matching version found for left-pad@99.0.0: exit status 1","step":"resolve-project"}
 ```
 
+An analysis that fails before its first step, for example when sealift cannot open its log, names the step `prepare`.
+
 ### pip analyses
 
 A pip analysis runs these steps:
