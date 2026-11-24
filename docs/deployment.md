@@ -48,7 +48,7 @@ sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second use
 
 ## Readiness
 
-At start, sealift prepares five items, in this order: it checks the signing key, then installs the pinned Trivy and downloads its database, while it installs pnpm and uv beside them. Until every item is ready, `GET /healthz` answers 503 and names what is missing:
+At start, sealift prepares five items, in this order: it checks the signing key, then installs the pinned Trivy and downloads its database, and installs pnpm and uv. The three installs take turns, one download at a time. Until every item is ready, `GET /healthz` answers 503 and names what is missing:
 
 ```
 {"status":"preparing","missing":["trivy-db","pnpm"]}

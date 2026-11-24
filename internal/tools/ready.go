@@ -92,7 +92,9 @@ func NewPreparer(m *Manager, db DBUpdater, keySHA256 func() string, pnpm, uv str
 }
 
 // Run prepares every item: the key first, then Trivy and its database,
-// pnpm and uv side by side. It returns when ctx ends.
+// pnpm and uv. The three start together, but each install holds
+// Manager.mu for its whole download, so they take turns. It returns when
+// ctx ends.
 func (p *Preparer) Run(ctx context.Context) {
 	if p.attempt(ctx, "signing-key", p.key) {
 		var wg sync.WaitGroup

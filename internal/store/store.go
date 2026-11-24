@@ -37,7 +37,8 @@ var ErrInvalidTarget = errors.New("invalid target")
 // private/, so the tools user's group can create and write files in it.
 // fileMode is the mode of every file the store writes there, for the same
 // reason. privateMode keeps private/ unreadable outside the owner;
-// settingsMode is the mode of a settings.json from an older release.
+// settingsMode is the mode of the signing key and of a settings.json from
+// an older release.
 const (
 	dirMode      = 0o770
 	privateMode  = 0o700

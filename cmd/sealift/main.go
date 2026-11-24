@@ -225,9 +225,10 @@ var onQueueReady func(*jobs.Queue)
 // own identity, when either variable is unset or does not parse as a
 // uint32, which covers every test and a bare host outside the image.
 // newToolsManager builds the tools manager with the GitHub API address from
-// SEALIFT_GITHUB_API. Unset keeps the public API. The release date, the
-// checksums and the download address of Trivy all come from that API, so the
-// address must be https, or http on a loopback host for the browser gate. The
+// SEALIFT_GITHUB_API. Unset keeps the public API. The download address of
+// the pinned Trivy comes from that API, while the pinned sha256 decides what
+// installs. The address must be https, or http on a loopback host for the
+// browser gate. The
 // error never repeats the value, which could carry credentials.
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 // SEALIFT_PIP_INDEX names the package index uv comes from, under
