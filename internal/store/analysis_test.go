@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // writeAnalysisDir creates projects/<projectID>/analyses/<id> with the
@@ -249,5 +250,73 @@ func TestAnalysisInfoReadsPipResult(t *testing.T) {
 	}
 	if got.Result != nil || got.PnpmVersion != "" {
 		t.Errorf("Result = %s, PnpmVersion = %q, want neither", got.Result, got.PnpmVersion)
+	}
+}
+
+func TestAnalysesInTheSameSecondAreListedAndReadable(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-24T09:41:07Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	var ids []string
+	for range 2 {
+		p, err := s.NewDir("analyses", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		ids = append(ids, p.ID())
+	}
+
+	got, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Analyses() = %+v, want both analyses of the same second", got)
+	}
+	for _, id := range ids {
+		info, err := s.AnalysisInfo("proj-1", id)
+		if err != nil {
+			t.Fatalf("AnalysisInfo(%q): %v", id, err)
+		}
+		if !info.CreatedAt.Equal(fixed) || info.State != Done {
+			t.Errorf("AnalysisInfo(%q) = created %v, state %q; want %v, done", id, info.CreatedAt, info.State, fixed)
+		}
+	}
+}
+
+func TestJobCreatedAt(t *testing.T) {
+	want := mustParseTime(t, "2026-09-17T10:15:02Z")
+	tests := []struct {
+		id string
+		ok bool
+	}{
+		{"20260917T101502Z", true},
+		{"20260917T101502Z-0a1b2c", true},
+		{"20260917T101502Z-0A1B2C", false},
+		{"20260917T101502Z-0a1b2", false},
+		{"20260917T101502Z-0a1b2c3", false},
+		{"20260917T101502Z-0a1b2g", false},
+		{"20260917T101502Z0a1b2c", false},
+		{"20260917T101502Z-", false},
+		{"20260917T101502Z-0a1b2c-0a1b2c", false},
+		{"proj-1", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got, err := jobCreatedAt(tt.id)
+		if tt.ok {
+			if err != nil || !got.Equal(want) {
+				t.Errorf("jobCreatedAt(%q) = %v, %v; want %v", tt.id, got, err, want)
+			}
+		} else if err == nil {
+			t.Errorf("jobCreatedAt(%q) = %v, want an error", tt.id, got)
+		}
 	}
 }
