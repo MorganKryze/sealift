@@ -80,6 +80,13 @@ describe("HomeScreen session status", () => {
     state,
     createdAt: "2026-11-24T10:20:00Z",
   })
+  const serveRow = (jobs: Partial<ProjectSummary>) => {
+    vi.mocked(apiFetch).mockImplementation((path: string) => {
+      if (path.startsWith("/projects")) return Promise.resolve([{ ...npmRow, ...jobs }]) as never
+      if (path === "/settings") return Promise.resolve({ target: npmRow.target }) as never
+      return Promise.reject(new Error(`unexpected request ${path}`))
+    })
+  }
 
   it.each([
     ["an analysis waiting in the queue", { lastAnalysis: analysis("queued") }, "Waiting for another job"],
@@ -87,14 +94,20 @@ describe("HomeScreen session status", () => {
     ["an export waiting in the queue", { lastAnalysis: analysis("done"), lastExport: archive("queued") }, "Waiting for another job"],
     ["a running export", { lastAnalysis: analysis("done"), lastExport: archive("running") }, "Exporting"],
   ])("labels %s", async (_, jobs, label) => {
-    vi.mocked(apiFetch).mockImplementation((path: string) => {
-      if (path.startsWith("/projects")) return Promise.resolve([{ ...npmRow, ...jobs }]) as never
-      if (path === "/settings") return Promise.resolve({ target: npmRow.target }) as never
-      return Promise.reject(new Error(`unexpected request ${path}`))
-    })
+    serveRow(jobs)
     renderHome()
 
     const row = await screen.findByRole("button", { name: /left-pad/ })
     expect(row).toHaveTextContent(label)
+  })
+
+  // At 320 px the waiting label on one line ends past the page's right edge.
+  it("lets the label wrap so a narrow row stays inside the page", async () => {
+    serveRow({ lastAnalysis: analysis("queued") })
+    renderHome()
+
+    const badge = await screen.findByText("Waiting for another job")
+    expect(badge).toHaveClass("whitespace-normal")
+    expect(badge).not.toHaveClass("whitespace-nowrap")
   })
 })

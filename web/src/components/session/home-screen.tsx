@@ -201,7 +201,7 @@ function HistoryList({ query, onOpen }: HistoryListProps) {
                 </span>
               </span>
               <span className="text-sm text-muted">{when ? formatWhen(when) : ""}</span>
-              <Badge variant={badge.variant}>{badge.label}</Badge>
+              <Badge variant={badge.variant} className="whitespace-normal">{badge.label}</Badge>
             </button>
           )
         })}
