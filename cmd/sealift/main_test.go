@@ -820,28 +820,53 @@ func TestRunAppliesThePolicy(t *testing.T) {
 	// applies runs another version than the one the policy names.
 	writeFile(t, policy, `targets:
   npm: {os: linux, cpu: arm64, libc: musl, node: 22.18.0, pnpm: 10.30.1}
+  pip: {python: 3.12.4, os: linux, cpu: x86_64, glibc: 2.31, uv: 0.13.7}
 minReleaseAgeDays: 30
 parallelism: {resolve: 2, download: 3}
+brand: {name: Harbor}
 `)
 	t.Setenv("SEALIFT_POLICY", policy)
 	root := filepath.Join(t.TempDir(), "data")
 	var logs bytes.Buffer
 	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
 
-	resp, err := http.Get("http://" + addr + "/api/settings")
-	if err != nil {
-		t.Fatal(err)
+	get := func(path string, into any) error {
+		resp, err := http.Get("http://" + addr + path)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		return json.NewDecoder(resp.Body).Decode(into)
 	}
 	var got api.Settings
-	err = json.NewDecoder(resp.Body).Decode(&got)
-	resp.Body.Close()
+	var instance api.Instance
+	settingsErr := get("/api/settings", &got)
+	instanceErr := get("/api/instance", &instance)
 	stop()
-	if err != nil {
-		t.Fatal(err)
+	if settingsErr != nil {
+		t.Fatal(settingsErr)
+	}
+	if instanceErr != nil {
+		t.Fatal(instanceErr)
 	}
 	if got.Target.Cpu != "arm64" || got.Target.Libc != "musl" || got.Target.Node != "22.18.0" || got.Target.PnpmVer != "10.30.1" ||
 		got.MinReleaseAgeDays != 30 || got.ResolveParallelism != 2 || got.DownloadParallelism != 3 {
 		t.Errorf("GET /api/settings = %+v, want the policy's values", got)
+	}
+	// The instance answer and a new pip project's default read the policy
+	// the handlers hold, a value apart from the stored settings above.
+	if instance.Brand.Name != "Harbor" {
+		t.Errorf("GET /api/instance brand.name = %q, want the policy's Harbor", instance.Brand.Name)
+	}
+	wantPip := api.PipTarget{Python: "3.12.4", Os: "linux", Cpu: "x86_64", Glibc: "2.31", UvVer: "0.13.7"}
+	if instance.Policy.PipTarget != wantPip {
+		t.Errorf("GET /api/instance policy.pipTarget = %+v, want the policy's %+v", instance.Policy.PipTarget, wantPip)
+	}
+	if instance.Policy.Target.PnpmVer != "10.30.1" || instance.Policy.MinReleaseAgeDays != 30 {
+		t.Errorf("GET /api/instance policy = %+v, want the policy's values", instance.Policy)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(err) {
 		t.Errorf("the policy was written to the volume (stat: %v)", err)
