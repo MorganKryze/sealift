@@ -835,3 +835,34 @@ func TestLockKeysToPlaceNamesUnplacedFindingsWithoutFix(t *testing.T) {
 		t.Errorf("with every finding placed or fixed, lockKeysToPlace = %q, want none", got)
 	}
 }
+
+// A holder the analysis does not know, such as a dev dependency it never
+// ranked, places nothing: the CVE stays unplaced and cannot cross.
+func TestCheckReasonsIgnoresALockfileHolderOutsideTheAnalysis(t *testing.T) {
+	r := reviewResult()
+	req := withProject(request(map[string][]string{}, cveReason("Templates are ours.", "html-minifier")), rank.Finding{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0", Severity: rank.High})
+	req.ProjectHolders = map[string][]string{"qs@6.0.0": {"ghost"}}
+	assertProblems(t, CheckReasons(r, req, askReasons()), []string{
+		"the project tree keeps qs 6.0.0 with CVE-2025-0300, which no version fixes, and no direct dependency's tree in the lockfile holds it, so it cannot cross",
+	})
+}
+
+// A CVE some dependency's own scan places is asked of that dependency
+// only, whatever other holders the lockfile names.
+func TestCheckReasonsAsksAScanPlacedCVEOfItsDependencyOnly(t *testing.T) {
+	r := reviewResult()
+	transitive := rank.Finding{ID: "CVE-2025-0200", Package: "body-parser", Version: "1.19.0", Severity: rank.Low}
+	req := withProject(request(map[string][]string{}, cveReason("Templates are ours.", "html-minifier")), transitive)
+	req.ProjectHolders = map[string][]string{"body-parser@1.19.0": {"express", "react"}}
+	assertProblems(t, CheckReasons(r, req, askReasons()), []string{
+		"express 4.17.1 keeps CVE-2025-0200, which no version fixes, and needs a reason",
+	})
+}
+
+// A lockfile CVE with a fix is never counted as unplaced.
+func TestCheckReasonsLeavesAFixedUnplacedCVEOut(t *testing.T) {
+	r := reviewResult()
+	fixed := rank.Finding{ID: "CVE-2025-0301", Package: "qs", Version: "6.0.0", Severity: rank.Medium, FixedVersion: "6.2.0"}
+	req := withProject(request(map[string][]string{}, cveReason("Templates are ours.", "html-minifier")), fixed)
+	assertProblems(t, CheckReasons(r, req, askReasons()), nil)
+}
