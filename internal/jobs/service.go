@@ -315,6 +315,9 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	if missing > 0 {
 		return store.ExportInfo{}, fmt.Errorf("%w: %d of %d packages %s no wheel", ErrPipNotExportable, missing, len(result.Packages), plural(missing, "has", "have"))
 	}
+	if err := pipNoFixRefusal(result, s.Review); err != nil {
+		return store.ExportInfo{}, err
+	}
 	s.mu.Lock()
 	index := s.index
 	s.mu.Unlock()

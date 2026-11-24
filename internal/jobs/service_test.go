@@ -1368,3 +1368,57 @@ func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
 		t.Errorf("QueueExport CreatedAt = %v, want %v", export.CreatedAt, want)
 	}
 }
+
+// withPipCVE rewrites the fixture's pip-result.json so its first package
+// carries one CVE with the fixed versions given.
+func withPipCVE(t *testing.T, f pipFixture, fixed []string) {
+	t.Helper()
+	path := filepath.Join(f.ref.Dir, "pip-result.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r PipResult
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	r.Packages[0].CVEs = append(r.Packages[0].CVEs, PipFinding{ID: "CVE-2025-9999", Severity: "HIGH", FixedVersions: fixed})
+	if data, err = json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o664); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueueExportRefusesAPipCVEWithoutFixUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{})
+	if !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), "review.cveWithoutFix is refuse") || !strings.Contains(err.Error(), "CVE-2025-9999") {
+		t.Fatalf("QueueExport = %v, want a 409 naming review.cveWithoutFix and the CVE", err)
+	}
+	noExportReserved(t, f.project)
+}
+
+func TestQueueExportLetsAPipCVEWithAFixCrossUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, []string{"9.9.9"})
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued", err)
+	}
+}
+
+func TestQueueExportLetsAPipCVEWithoutFixCrossUnderReason(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.AskReason
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued: pip asks no reason", err)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -37,6 +38,48 @@ var ErrPipSelection = errors.New("jobs: a pip export carries the analysis's whol
 // ErrPipNotExportable reports a pip analysis whose result is unreadable,
 // lists no package, or lists a package with no wheel.
 var ErrPipNotExportable = errors.New("jobs: the pip analysis has no wheel for every package")
+
+// pipRefusal is a pip export refused before anything is reserved. It
+// matches class, the sentinel whose HTTP status it answers with.
+type pipRefusal struct {
+	text  string
+	class error
+}
+
+func (e *pipRefusal) Error() string        { return e.text }
+func (e *pipRefusal) Is(target error) bool { return target == e.class }
+
+// pipNoFixRefusal words the refusal of a pip set holding a CVE no version
+// fixes under review.cveWithoutFix: refuse, nil when it holds none. Pip
+// asks no reason yet, so only the refusal applies.
+func pipNoFixRefusal(r PipResult, p policy.Review) error {
+	if p.CVEWithoutFix != policy.Refuse {
+		return nil
+	}
+	var keeps []string
+	for _, pkg := range r.Packages {
+		var ids []string
+		for _, c := range pkg.CVEs {
+			if !slices.ContainsFunc(c.FixedVersions, func(v string) bool { return strings.TrimSpace(v) != "" }) && !slices.Contains(ids, c.ID) {
+				ids = append(ids, c.ID)
+			}
+		}
+		if len(ids) > 0 {
+			keeps = append(keeps, fmt.Sprintf("%s %s keeps %s", pkg.Name, pkg.Version, andList(ids)))
+		}
+	}
+	if len(keeps) == 0 {
+		return nil
+	}
+	shown := keeps
+	if len(shown) > shownProblems {
+		shown = append(slices.Clone(shown[:shownProblems]), fmt.Sprintf("%d more", len(keeps)-shownProblems))
+	}
+	return &pipRefusal{
+		text:  "jobs: review.cveWithoutFix is refuse: " + strings.Join(shown, "; ") + ", which no version fixes, so the set cannot cross",
+		class: ErrPipNotExportable,
+	}
+}
 
 // PipAnalysisRef points a pip export at the analysis it exports.
 type PipAnalysisRef struct {
