@@ -573,3 +573,52 @@ func TestShortFixedInCutsALoneLongVersionOnARune(t *testing.T) {
 		t.Errorf("shortFixedIn changed %q", short)
 	}
 }
+
+// A name listed under two dependency kinds at the same version has two
+// entries: review.left lists each of its CVEs once.
+func TestReviewOfListsACVEOfANameListedTwiceOnce(t *testing.T) {
+	r := reviewResult()
+	r.Dependencies = append(r.Dependencies, r.Dependencies[2])
+	sel, reasons := reviewSelection()
+	got := ReviewOf(r, request(sel, reasons...), nil)
+	n := 0
+	for _, c := range got.Left {
+		if c.ID == "CVE-2022-37620" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("review.left lists CVE-2022-37620 %d times, want once: %+v", n, got.Left)
+	}
+}
+
+// A reason answers only for the CVEs no version fixes: a fixable CVE of
+// the same version carries none.
+func TestReviewOfPutsTheReasonOnlyOnCVEsWithoutFix(t *testing.T) {
+	r := reviewResult()
+	minifier := &r.Dependencies[2]
+	minifier.CVEs = append(minifier.CVEs, CVE{ID: "CVE-2023-0004", Severity: "LOW", Package: "html-minifier@4.0.0", FixedIn: "4.0.1"})
+	sel, reasons := reviewSelection()
+	if problems := CheckReasons(r, request(sel, reasons...), askReasons()); len(problems) > 0 {
+		t.Fatalf("the selection should pass: %q", problems)
+	}
+	got := ReviewOf(r, request(sel, reasons...), nil)
+	seen := 0
+	for _, c := range got.Left {
+		switch c.ID {
+		case "CVE-2022-37620":
+			seen++
+			if c.Reason != "Templates are ours." {
+				t.Errorf("the CVE without fix has reason %q, want the one given", c.Reason)
+			}
+		case "CVE-2023-0004":
+			seen++
+			if c.Reason != "" {
+				t.Errorf("the fixable CVE has reason %q, want none", c.Reason)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("review.left = %+v, want both html-minifier CVEs", got.Left)
+	}
+}
