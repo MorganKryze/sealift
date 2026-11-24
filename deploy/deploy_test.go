@@ -409,6 +409,7 @@ func TestExamplePolicySpellsOutEveryDefault(t *testing.T) {
 		"parallelism", "parallelism.resolve", "parallelism.download",
 		"brand", "brand.name", "brand.sides", "brand.sides.online", "brand.sides.offline", "brand.reviewWord",
 		"brand.logo", "brand.accent", "brand.contact", "brand.contact.label", "brand.contact.url",
+		"review", "review.proposeOtherMajors", "review.majorJump", "review.cveWithoutFix",
 	}
 	slices.Sort(got)
 	slices.Sort(want)
