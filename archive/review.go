@@ -17,6 +17,10 @@ import (
 // MaxReasonRunes is the longest reason, in characters once trimmed.
 const MaxReasonRunes = 300
 
+// maxReasonBytes bounds a reason's raw text before it is read: 1,200
+// characters of 4 bytes, the export's own bound before trimming.
+const maxReasonBytes = 4800
+
 // maxReviewEntries bounds each list of a review: 100,000 entries.
 const maxReviewEntries = 100_000
 
@@ -121,9 +125,13 @@ func CheckReview(r Review, e Ecosystem) error {
 
 // reasonRule names the rule text breaks, or returns "". Line and paragraph
 // separators, bidirectional and other format characters are not printable,
-// so a reason printed into a table or a terminal stays one plain line.
+// so a reason printed into a table or a terminal stays one plain line. The
+// no-break spaces French and CJK typography put in a sentence pass.
 func reasonRule(text string) string {
-	if !utf8.ValidString(text) || strings.IndexFunc(text, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+	if len(text) > maxReasonBytes {
+		return fmt.Sprintf("is longer than %d bytes", maxReasonBytes)
+	}
+	if !utf8.ValidString(text) || strings.IndexFunc(text, func(r rune) bool { return !reasonRune(r) }) >= 0 {
 		return "holds a control, line-separating, bidirectional or format character"
 	}
 	trimmed := strings.TrimSpace(text)
@@ -134,6 +142,10 @@ func reasonRule(text string) string {
 		return fmt.Sprintf("is longer than %d characters", MaxReasonRunes)
 	}
 	return ""
+}
+
+func reasonRune(r rune) bool {
+	return unicode.IsPrint(r) || r == '\u00a0' || r == '\u202f' || r == '\u3000'
 }
 
 // nameRules reads names and versions as a manifest of one ecosystem does.
@@ -152,15 +164,15 @@ var severities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
 // the wrong length apart from a short one Go would pad with zeros.
 type rawReview struct {
 	CVEs *struct {
-		Before []int `json:"before"`
-		After  []int `json:"after"`
+		Before []*int `json:"before"`
+		After  []*int `json:"after"`
 	} `json:"cves"`
 	Updates []struct {
 		Name  string `json:"name"`
 		From  string `json:"from"`
 		To    string `json:"to"`
-		Fixed []int  `json:"fixed"`
-		Left  []int  `json:"left"`
+		Fixed []*int `json:"fixed"`
+		Left  []*int `json:"left"`
 	} `json:"updates"`
 	Kept  []ReviewKept `json:"kept"`
 	Jumps []ReviewJump `json:"jumps"`
@@ -356,16 +368,19 @@ func (rules nameRules) exactVersion(field, value string) string {
 	return ""
 }
 
-func vector(field string, counts []int) ([5]int, string) {
+func vector(field string, counts []*int) ([5]int, string) {
 	var v [5]int
 	if len(counts) != len(v) {
 		return v, field + " does not hold 5 counts"
 	}
 	for i, n := range counts {
-		if n < 0 {
+		if n == nil {
+			return v, field + " holds a null count"
+		}
+		if *n < 0 {
 			return v, field + " holds a negative count"
 		}
-		v[i] = n
+		v[i] = *n
 	}
 	return v, ""
 }

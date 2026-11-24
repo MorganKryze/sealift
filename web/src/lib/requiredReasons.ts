@@ -9,6 +9,7 @@ type Reason = NonNullable<ExportRequest["reasons"]>[number]
 
 /** The archive's reader takes 300 characters once trimmed (archive.MaxReasonRunes). */
 const MAX_REASON_CHARACTERS = 300
+const MAX_REASON_BYTES = 4800
 
 /** Where a reason's text lives in useReasons: unique per kind, family or dependency. */
 export function reasonKey(needed: NeededReason): string {
@@ -44,13 +45,21 @@ function andList(items: string[]): string {
  * The reasons an export of selection needs, as the server checks them: one
  * per family or lone dependency the selection takes out of its line, read
  * from each candidate's leavesLine and each dependency's family, then one
- * per dependency whose held version keeps a CVE with no known fix. The
+ * per dependency whose held version keeps a CVE with no known fix. A name
+ * listed twice keeps all its jumps in one group, its family's when either
+ * entry has one, since the server covers a jump by name. The
  * export sends includeProject false, so a dependency the selection leaves
  * out holds its current version.
  */
 export function requiredReasons(result: AnalysisResult, selection: Record<string, string[]>): NeededReason[] {
   const jumps = new Map<string, { label: string; moves: { name: string; from: string; to: string }[] }>()
   const cves = new Map<string, string[]>()
+  const familyOf = new Map<string, string>()
+  for (const dependency of result.dependencies) {
+    if (dependency.family && !familyOf.has(dependency.name)) {
+      familyOf.set(dependency.name, dependency.family)
+    }
+  }
 
   for (const dependency of result.dependencies) {
     const selected = selection[dependency.name] ?? []
@@ -59,8 +68,9 @@ export function requiredReasons(result: AnalysisResult, selection: Record<string
       if (version === dependency.current || !leaves) {
         continue
       }
-      const group = dependency.family ? `family ${dependency.family}` : `dependency ${dependency.name}`
-      const jump = jumps.get(group) ?? { label: dependency.family || dependency.name, moves: [] }
+      const family = familyOf.get(dependency.name)
+      const group = family ? `family ${family}` : `dependency ${dependency.name}`
+      const jump = jumps.get(group) ?? { label: family || dependency.name, moves: [] }
       jump.moves.push({ name: dependency.name, from: dependency.current, to: version })
       jumps.set(group, jump)
     }
@@ -92,10 +102,14 @@ export function requiredReasons(result: AnalysisResult, selection: Record<string
  * What keeps text from being a reason the archive accepts, in words, or
  * undefined. An empty text is missing rather than wrong, so it has none.
  * Printable means what Go's unicode.IsPrint takes: letters, marks, numbers,
- * punctuation, symbols and the plain space.
+ * punctuation, symbols and the plain space, plus the no-break spaces
+ * U+00A0, U+202F and U+3000 the archive accepts.
  */
 export function reasonProblem(text: string): string | undefined {
-  if (!/^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u.test(text)) {
+  if (new TextEncoder().encode(text).length > MAX_REASON_BYTES) {
+    return `Shorten the reason: it holds more than ${MAX_REASON_BYTES} bytes with its spaces.`
+  }
+  if (!/^[\p{L}\p{M}\p{N}\p{P}\p{S} \u00a0\u202f\u3000]*$/u.test(text)) {
     return "Keep the reason on one line, with no tab or control character."
   }
   const length = [...text.trim()].length

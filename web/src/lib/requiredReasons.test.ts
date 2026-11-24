@@ -45,6 +45,28 @@ const htmlMinifier = dependency({
 const reactFamily = [{ name: "react 19", members: ["@types/react", "react", "react-dom"] }]
 
 describe("requiredReasons", () => {
+  it("asks one reason for a name split between a family and a lone jump", () => {
+    const inFamily = dependency({
+      name: "react-dom", current: "18.3.1", jump: "19.0.0", family: "react 19",
+      candidates: [candidate("19.0.0", { leavesLine: true })],
+    })
+    const alone = dependency({
+      name: "react-dom", current: "19.0.0", jump: "20.0.0",
+      candidates: [candidate("20.0.0", { leavesLine: true })],
+    })
+    const needed = requiredReasons(result([inFamily, alone], [{ name: "react 19", members: ["react-dom"] }]), {
+      "react-dom": ["19.0.0", "20.0.0"],
+    })
+    expect(needed).toEqual([
+      {
+        kind: "major-jump",
+        dependencies: ["react-dom"],
+        label: "react 19",
+        detail: "react-dom 18.3.1 to 19.0.0, react-dom 19.0.0 to 20.0.0",
+      },
+    ])
+  })
+
   it("asks one reason per family of selected jumps", () => {
     const needed = requiredReasons(result([react, reactDOM, typesReact], reactFamily), {
       react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"],
@@ -112,6 +134,23 @@ describe("reasonProblem", () => {
     ["a bidirectional override", "a\u202ereason"],
   ])("refuses %s", (_name, text) => {
     expect(reasonProblem(text)).toBe("Keep the reason on one line, with no tab or control character.")
+  })
+
+  it.each([
+    ["a no-break space", "Mise à jour\u00a0: rien ne casse"],
+    ["a narrow no-break space", "Mise à jour\u202f: rien ne casse"],
+    ["an ideographic space", "東京\u3000リアクト"],
+  ])("accepts %s", (_name, text) => {
+    expect(reasonProblem(text)).toBeUndefined()
+  })
+
+  it("refuses an ogham space mark the archive refuses", () => {
+    expect(reasonProblem("a\u1680reason")).toBe("Keep the reason on one line, with no tab or control character.")
+  })
+
+  it("bounds the raw text at 4800 bytes", () => {
+    expect(reasonProblem(`${" ".repeat(4799)}x`)).toBeUndefined()
+    expect(reasonProblem(`${" ".repeat(4800)}x`)).toBe("Shorten the reason: it holds more than 4800 bytes with its spaces.")
   })
 
   it("counts characters once trimmed", () => {

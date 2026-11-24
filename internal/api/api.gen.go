@@ -338,7 +338,7 @@ type DependencyResult struct {
 	// Family The name of the family this dependency's jump belongs to. Absent when its jump moves alone.
 	Family *string `json:"family,omitempty"`
 
-	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none.
+	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it.
 	Jump *string `json:"jump,omitempty"`
 	Name string  `json:"name"`
 
@@ -400,10 +400,10 @@ type ExportRequest struct {
 	// IncludeProject Add the current project tree to an npm export. A pip export ignores it.
 	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review.
+	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000.
 	Reasons *[]Reason `json:"reasons,omitempty"`
 
-	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty.
+	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415.
 	Selection map[string][]string `json:"selection"`
 }
 
@@ -676,7 +676,7 @@ type ProjectSummary struct {
 
 // Reason Why a selection takes a jump or keeps a CVE that no version fixes.
 type Reason struct {
-	// Dependencies The dependencies the reason covers, by name.
+	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes.
 	Dependencies []string   `json:"dependencies"`
 	Kind         ReasonKind `json:"kind"`
 
@@ -695,7 +695,7 @@ type ReviewPolicy struct {
 	// MajorJump reason lets the selection cross with a reason written for it; refuse stops it.
 	MajorJump ReviewRule `json:"majorJump"`
 
-	// ProposeOtherMajors Whether an analysis proposes versions outside the current major.
+	// ProposeOtherMajors Whether an analysis proposes versions outside the current line.
 	ProposeOtherMajors bool `json:"proposeOtherMajors"`
 }
 

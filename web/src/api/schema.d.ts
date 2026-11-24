@@ -560,7 +560,7 @@ export interface components {
         };
         /** @description What a selection needs before it can cross. */
         ReviewPolicy: {
-            /** @description Whether an analysis proposes versions outside the current major. */
+            /** @description Whether an analysis proposes versions outside the current line. */
             proposeOtherMajors: boolean;
             majorJump: components["schemas"]["ReviewRule"];
             cveWithoutFix: components["schemas"]["ReviewRule"];
@@ -706,7 +706,7 @@ export interface components {
             /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
-            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none. */
+            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it. */
             jump?: string;
             /** @description The name of the family this dependency's jump belongs to. Absent when its jump moves alone. */
             family?: string;
@@ -793,7 +793,7 @@ export interface components {
         };
         /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
         ExportRequest: {
-            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. */
+            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415. */
             selection: {
                 [key: string]: string[];
             };
@@ -802,14 +802,14 @@ export interface components {
              * @default false
              */
             includeProject: boolean;
-            /** @description The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. */
+            /** @description The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000. */
             reasons?: components["schemas"]["Reason"][];
         };
         /** @description Why a selection takes a jump or keeps a CVE that no version fixes. */
         Reason: {
             /** @enum {string} */
             kind: "major-jump" | "cve-without-fix";
-            /** @description The dependencies the reason covers, by name. */
+            /** @description The dependencies the reason covers, by name, each at most 214 bytes. */
             dependencies: string[];
             /** @description 1 to 300 characters once trimmed, on one line, with no control, line-separating, bidirectional or other format character. */
             text: string;

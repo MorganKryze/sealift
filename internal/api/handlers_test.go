@@ -2817,3 +2817,150 @@ func TestLiveJobWithASuffixedIDShowsItsCreationTime(t *testing.T) {
 	}
 	waitForTerminalState(t, h, project.ID, "export", export.ID)
 }
+
+func TestQueueExportBoundsTheRequest(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	manyReasons := make([]Reason, maxRequestEntries+1)
+	for i := range manyReasons {
+		manyReasons[i] = Reason{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: "x"}
+	}
+	manyNames := make([]string, maxRequestEntries+1)
+	for i := range manyNames {
+		manyNames[i] = "left-pad"
+	}
+	bigSelection := map[string][]string{}
+	for i := range maxRequestEntries + 1 {
+		bigSelection[fmt.Sprintf("p%d", i)] = nil
+	}
+	long := strings.Repeat("a", maxNameBytes+1)
+	tests := []struct {
+		name, detail string
+		req          ExportRequest
+	}{
+		{"10,001 reasons", "the export request holds more than 10000 reasons",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &manyReasons}},
+		{"10,001 dependencies in the selection", "the export selection holds more than 10000 dependencies",
+			ExportRequest{Selection: bigSelection}},
+		{"10,001 dependencies in a reason", "reason 1 holds more than 10000 dependencies",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &[]Reason{{Kind: MajorJump, Dependencies: manyNames, Text: "x"}}}},
+		{"a selected name of 215 bytes", "a dependency name in the export selection is longer than 214 bytes",
+			ExportRequest{Selection: map[string][]string{long: {"1.0.0"}}}},
+		{"a reason's name of 215 bytes", "reason 1 names a dependency longer than 214 bytes",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &[]Reason{{Kind: MajorJump, Dependencies: []string{long}, Text: "x"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := queueExportWith(t, srv, project.Id, tt.req)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", resp.StatusCode)
+			}
+			var p Problem
+			if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Detail == nil || *p.Detail != tt.detail {
+				t.Errorf("detail = %v, want %q", p.Detail, tt.detail)
+			}
+		})
+	}
+}
+
+func TestQueueExportAcceptsTheRequestAtItsBounds(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	reasons := make([]Reason, maxRequestEntries)
+	for i := range reasons {
+		reasons[i] = Reason{Kind: MajorJump, Dependencies: []string{strings.Repeat("a", maxNameBytes)}, Text: "x"}
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{}, Reasons: &reasons})
+	data, _ := io.ReadAll(resp2.Body)
+	if strings.Contains(string(data), "more than") || strings.Contains(string(data), "longer than 214") {
+		t.Errorf("a request at its bounds was refused by a bound: %s", data)
+	}
+}
+
+func TestAJSONBodyOver16MiBIsRefused(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := `{"selection":{},"pad":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`
+	resp2, err := http.Post(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp2.StatusCode)
+	}
+	var p Problem
+	if err := json.NewDecoder(resp2.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Detail == nil || *p.Detail != "the request body is larger than 16 MiB" {
+		t.Errorf("detail = %v", p.Detail)
+	}
+}
+
+func TestABodyThatIsNotJSONIsRefusedWhateverItsSize(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	url := fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id)
+	big := `{"selection":{},"pad":"` + strings.Repeat("a", 17<<20) + `"}`
+	for _, tt := range []struct{ name, contentType, body string }{
+		{"17 MiB as text/plain", "text/plain", big},
+		{"17 MiB with no type", "", big},
+		{"a small body as text/plain", "text/plain", `{"selection":{}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415", resp.StatusCode)
+			}
+			var p Problem
+			if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAMultipartBodyOverItsBoundIsRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := "--b\r\nContent-Disposition: form-data; name=\"pad\"\r\n\r\n" + strings.Repeat("a", maxMultipartBodyBytes) + "\r\n--b--\r\n"
+	resp, err := http.Post(srv.URL+"/api/projects", "multipart/form-data; boundary=b", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("status = %d, want a refusal", resp.StatusCode)
+	}
+}

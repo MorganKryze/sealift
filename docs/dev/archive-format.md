@@ -67,7 +67,7 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 ## The review
 
-A manifest may carry a `review` object: what the selection updates, keeps and takes out of its line, the CVEs the project keeps, and the reasons given for them. A dependency's line is the range npm's caret gives its current version: the same major from 1.0.0, the same minor below it. The signature covers the review with the rest of the manifest. The archive's bytes do not depend on it.
+A manifest may carry a `review` object: what the selection updates, keeps and takes out of its line, the CVEs the project keeps, and the reasons given for them. A dependency's line is the range npm's caret gives its current version: the same major from 1.0.0, the same minor below it, the same patch below 0.1.0. The signature covers the review with the rest of the manifest. The archive's bytes do not depend on it.
 
 ```json
 {
@@ -140,7 +140,7 @@ The review changes nothing the import must check, so it keeps `formatVersion` 2,
 
 1. The review is read within the manifest's 16 MiB bound. Each list holds at most 100,000 entries, and `cves.before` is present.
 2. Each `name`, `dependency` and `package` is a valid package name, and each version an exact version of at most 256 bytes, as rule 4 reads them. `id`, `fixedIn` and `family` are at most 256 bytes of printable characters, as rule 5 reads text. `severity` is one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` and `UNKNOWN`. Each count vector holds 5 counts of zero or more.
-3. A reason holds 1 to 300 characters once trimmed, on one line. A control character, a line or paragraph separator (U+2028, U+2029), a bidirectional override or any other format character breaks the rule. `archive.CheckReason` is that rule, the one a writer of the review applies too.
+3. A reason holds 1 to 300 characters once trimmed, on one line, within 4,800 bytes. Letters, marks, numbers, punctuation, symbols, the plain space and the no-break spaces U+00A0, U+202F and U+3000 pass. A control character, a line or paragraph separator (U+2028, U+2029), a bidirectional override or any other format character breaks the rule. `archive.CheckReason` is that rule, the one a writer of the review applies too.
 4. A review that breaks a rule is kept out with a problem that names the field and repeats no value, such as `review.left[1].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN`. The import still checks and publishes the packages as before: a review never refuses an archive.
 
 `archive.CheckReview` reads a whole review through the import's own reader and returns the problem rule 4 would name. A writer that runs it before signing learns at the export that the import would keep the review out.

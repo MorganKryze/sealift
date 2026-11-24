@@ -853,7 +853,7 @@ components:
       properties:
         proposeOtherMajors:
           type: boolean
-          description: Whether an analysis proposes versions outside the current major.
+          description: Whether an analysis proposes versions outside the current line.
         majorJump:
           $ref: "#/components/schemas/ReviewRule"
         cveWithoutFix:
@@ -1147,7 +1147,8 @@ components:
           type: string
           description: >-
             The first unblocked candidate outside the current line, in the
-            order a proposal is taken. Absent when there is none.
+            order a proposal is taken. Absent when there is none, and in an
+            analysis sealift 0.7.0 recorded, which did not write it.
         family:
           type: string
           description: >-
@@ -1347,7 +1348,13 @@ components:
             Dependency name to the list of its versions to include. An
             empty or absent list selects nothing for that dependency. A pip
             export carries the analysis's whole set, so its selection is
-            empty.
+            empty. At most 10,000 dependencies, each name at most 214
+            bytes; a request past either bound is refused with 400. Every
+            JSON request body is read within 16 MiB; a larger one is
+            refused with 413, and a body of another type with 415.
+          maxProperties: 10000
+          propertyNames:
+            maxLength: 214
           additionalProperties:
             type: array
             items:
@@ -1362,7 +1369,8 @@ components:
             The reasons the selection needs: one for each family or lone
             dependency it takes out of its line, and one for each dependency
             whose kept version carries a CVE that no version fixes. The
-            signed manifest carries them in its review.
+            signed manifest carries them in its review. At most 10,000.
+          maxItems: 10000
           items:
             $ref: "#/components/schemas/Reason"
       required:
@@ -1379,9 +1387,11 @@ components:
         dependencies:
           type: array
           minItems: 1
-          description: The dependencies the reason covers, by name.
+          maxItems: 10000
+          description: The dependencies the reason covers, by name, each at most 214 bytes.
           items:
             type: string
+            maxLength: 214
         text:
           type: string
           maxLength: 1200
