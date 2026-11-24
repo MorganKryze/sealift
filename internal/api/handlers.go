@@ -9,7 +9,6 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/policy"
-	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/pip"
@@ -30,7 +29,6 @@ type Handlers struct {
 	Store      *store.Store
 	Service    *jobs.Service
 	Tools      *tools.Manager
-	Trivy      runner.Trivy
 	// Ready answers /healthz. NewHandlers sets it to the tools manager's
 	// own check; the server sets the start's preparation.
 	Ready Readiness
@@ -67,7 +65,7 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, jobs.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, jobs.ErrPipSelection), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits), errors.Is(err, tools.ErrInvalidTrivyVersion), errors.Is(err, tools.ErrInvalidUvVersion):
+	case errors.Is(err, jobs.ErrNothingToExport), errors.Is(err, jobs.ErrPipSelection), errors.Is(err, store.ErrInvalidTarget), errors.Is(err, store.ErrInvalidRequirements), errors.Is(err, store.ErrInvalidLimits):
 		return http.StatusBadRequest
 	case errors.Is(err, jobs.ErrAnalysisNotDone), errors.Is(err, jobs.ErrPipNotExportable), errors.Is(err, tools.ErrReleaseTooRecent), errors.Is(err, store.ErrBusy):
 		return http.StatusConflict

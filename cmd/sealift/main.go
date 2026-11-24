@@ -124,7 +124,7 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	uvRunner := runner.NewUvCLI(python, filepath.Join(root, "cache", "uv"), asUser)
 	service.SetPip(uvRunner, &pip.Client{Index: toolsManager.PipIndex})
-	handlers := api.NewHandlers(st, service, toolsManager, trivyRunner)
+	handlers := api.NewHandlers(st, service, toolsManager)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle
 	handlers.Policy = pol

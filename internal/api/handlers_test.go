@@ -464,7 +464,7 @@ func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, trivy, &npm.Client{})
-	return NewHandlers(st, svc, tm, trivy)
+	return NewHandlers(st, svc, tm)
 }
 
 // waitForExportState polls GetExport until it reports one of wantStates
@@ -576,7 +576,7 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	tm.NPMRegistry = unroutable
 	reg := &npm.Client{Registry: unroutable, Attempts: 1, Backoff: func(int) time.Duration { return 0 }}
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, exportTrivyFake{}, reg)
-	h := NewHandlers(st, svc, tm, exportTrivyFake{})
+	h := NewHandlers(st, svc, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
@@ -1509,7 +1509,7 @@ func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
-	h := NewHandlers(st, svc, tm, fakeTrivy{})
+	h := NewHandlers(st, svc, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 

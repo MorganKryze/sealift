@@ -258,7 +258,7 @@ func TestInstanceReportsNoToolsOnAnEmptyVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
-	h := NewHandlers(st, nil, tm, fakeTrivy{})
+	h := NewHandlers(st, nil, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 	got := getInstance(t, srv.URL).Tools

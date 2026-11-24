@@ -44,7 +44,7 @@ const unroutable = "http://127.0.0.1:1"
 
 // newTestHandlers builds Handlers against a fresh temporary store, and a
 // tools.Manager pointed at addresses nothing answers, so a test that
-// exercises GetTools or an analysis' own tool preparation step never
+// exercises an analysis' own tool preparation step never
 // waits on or depends on the real network (conventions.md: no network in
 // a unit test). Pnpm and Trivy runs themselves go through fakes. The
 // store starts seeded as ready (see seedToolsReady): most tests exist to
@@ -60,7 +60,7 @@ func newTestHandlers(t *testing.T, q *jobs.Queue) *Handlers {
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
-	return NewHandlers(st, svc, tm, fakeTrivy{})
+	return NewHandlers(st, svc, tm)
 }
 
 // seedToolsReady makes st report ready (tools.Manager.Ready) without any
