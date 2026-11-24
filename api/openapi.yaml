@@ -1179,7 +1179,9 @@ components:
       maxItems: 5
     Cve:
       type: object
-      description: One vulnerability behind a Vector count
+      description: >-
+        One vulnerability behind a Vector count, in one package. An id found in
+        two packages appears once for each, and the vector counts it once.
       properties:
         id:
           type: string
@@ -1228,7 +1230,7 @@ components:
           $ref: "#/components/schemas/Vector"
         cves:
           type: array
-          description: The vulnerabilities behind vector, sorted by severity then id
+          description: The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
           items:
             $ref: "#/components/schemas/Cve"
         signals:
@@ -1275,7 +1277,7 @@ components:
           $ref: "#/components/schemas/Vector"
         cves:
           type: array
-          description: The vulnerabilities behind vector, sorted by severity then id
+          description: The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
           items:
             $ref: "#/components/schemas/Cve"
         candidates:

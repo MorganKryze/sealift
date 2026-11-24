@@ -2,12 +2,12 @@ package jobs
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,20 +15,26 @@ import (
 	"github.com/MorganKryze/sealift/rank"
 )
 
-// cvesOf converts a vulnerability set (as rank.Index.Set returns it, and
-// as VectorOf counts it) into the sorted list the contract carries:
-// severity first, critical to unknown, then id, so the result never
-// depends on map iteration order.
-func cvesOf(set map[string]rank.Finding) []CVE {
-	findings := make([]rank.Finding, 0, len(set))
-	for _, f := range set {
-		findings = append(findings, f)
-	}
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Severity != findings[j].Severity {
-			return findings[i].Severity < findings[j].Severity
+// cvesOf lists the vulnerabilities index holds for keys, once per id and
+// package: one id found in two packages has two entries, each with its own
+// fix, where rank.Index.Set and VectorOf keep the id once. The list is
+// sorted by severity, critical to unknown, then id, package name and
+// version, so it never depends on the lockfile's order.
+func cvesOf(index rank.Index, keys []string) []CVE {
+	type occurrence struct{ id, key string }
+	var findings []rank.Finding
+	seen := map[occurrence]bool{}
+	for _, key := range keys {
+		for _, f := range index[key] {
+			if o := (occurrence{f.ID, key}); !seen[o] {
+				seen[o] = true
+				findings = append(findings, f)
+			}
 		}
-		return findings[i].ID < findings[j].ID
+	}
+	slices.SortFunc(findings, func(a, b rank.Finding) int {
+		return cmp.Or(cmp.Compare(a.Severity, b.Severity), strings.Compare(a.ID, b.ID),
+			strings.Compare(a.Package, b.Package), strings.Compare(a.Version, b.Version))
 	})
 	cves := make([]CVE, len(findings))
 	for i, f := range findings {
@@ -162,9 +168,9 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		r.result.Warnings = append(r.result.Warnings, fmt.Sprintf(
 			"%s: the current version %s does not resolve: %v", d.dep.Name, d.dep.Version, current.err))
 	} else {
-		set := combinedIndex.Set(keysOf(current.pkgs))
-		dr.Vector = Vector(rank.VectorOf(set))
-		dr.CVEs = cvesOf(set)
+		keys := keysOf(current.pkgs)
+		dr.Vector = Vector(rank.VectorOf(combinedIndex.Set(keys)))
+		dr.CVEs = cvesOf(combinedIndex, keys)
 	}
 	currentFacts.Resolves = current.err == nil
 
@@ -192,9 +198,9 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		var vec Vector
 		cves := []CVE{}
 		if o.err == nil {
-			set := combinedIndex.Set(keysOf(o.pkgs))
-			vec = Vector(rank.VectorOf(set))
-			cves = cvesOf(set)
+			keys := keysOf(o.pkgs)
+			vec = Vector(rank.VectorOf(combinedIndex.Set(keys)))
+			cves = cvesOf(combinedIndex, keys)
 		}
 		published := ""
 		if t, ok := d.packument.Published(o.task.version); ok {

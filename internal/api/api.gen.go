@@ -257,7 +257,7 @@ type Brand struct {
 
 // Candidate One newer version of a dependency, ranked against the current one
 type Candidate struct {
-	// Cves The vulnerabilities behind vector, sorted by severity then id
+	// Cves The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
 	Cves []Cve `json:"cves"`
 
 	// Key Whether this candidate was resolved and scanned before the rest
@@ -294,7 +294,7 @@ type Contact struct {
 	Url string `json:"url"`
 }
 
-// Cve One vulnerability behind a Vector count
+// Cve One vulnerability behind a Vector count, in one package. An id found in two packages appears once for each, and the vector counts it once.
 type Cve struct {
 	// FixedIn The versions Trivy names as fixing it, as Trivy prints them. Empty when none is known; absent from an analysis written before it was kept, whose fix is unknown.
 	FixedIn *string `json:"fixedIn,omitempty"`
@@ -314,7 +314,7 @@ type DependencyResult struct {
 	Candidates []Candidate `json:"candidates"`
 	Current    string      `json:"current"`
 
-	// Cves The vulnerabilities behind vector, sorted by severity then id
+	// Cves The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
 	Cves []Cve `json:"cves"`
 
 	// Family The name of the family this dependency's jump belongs to. Absent when its jump moves alone.

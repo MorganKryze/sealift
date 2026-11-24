@@ -58,7 +58,7 @@ type DependencyResult struct {
 	Current    string      `json:"current"`
 	Best       string      `json:"best,omitempty"`   // empty when no candidate it may propose improves on current
 	Vector     Vector      `json:"vector"`           // the current version's vector
-	CVEs       []CVE       `json:"cves"`             // the vulnerabilities behind vector, sorted severity then id
+	CVEs       []CVE       `json:"cves"`             // the vulnerabilities behind vector, once per id and package, sorted severity, id, package
 	Candidates []Candidate `json:"candidates"`       // ascending by version
 	Jump       string      `json:"jump,omitempty"`   // the first unblocked candidate outside the current line
 	Family     string      `json:"family,omitempty"` // the family Jump moves with; empty when it moves alone
@@ -69,7 +69,7 @@ type DependencyResult struct {
 type Candidate struct {
 	Version   string   `json:"version"`
 	Vector    Vector   `json:"vector"`
-	CVEs      []CVE    `json:"cves"` // the vulnerabilities behind vector, sorted severity then id
+	CVEs      []CVE    `json:"cves"` // the vulnerabilities behind vector, once per id and package, sorted severity, id, package
 	Signals   []Signal `json:"signals"`
 	Key       bool     `json:"key"`
 	Resolved  bool     `json:"resolved"`
@@ -78,7 +78,8 @@ type Candidate struct {
 
 // CVE is one vulnerability behind a Vector count, by id and severity as
 // Trivy reports it (upper case: CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN), with
-// the package it was found in and the versions that fix it.
+// the package it was found in and the versions that fix it there. An id
+// found in two packages makes two entries, which the Vector counts once.
 type CVE struct {
 	ID       string `json:"id"`
 	Severity string `json:"severity"`

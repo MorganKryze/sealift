@@ -738,7 +738,7 @@ export interface components {
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];
-        /** @description One vulnerability behind a Vector count */
+        /** @description One vulnerability behind a Vector count, in one package. An id found in two packages appears once for each, and the vector counts it once. */
         Cve: {
             /** @example CVE-2024-29041 */
             id: string;
@@ -768,7 +768,7 @@ export interface components {
         Candidate: {
             version: string;
             vector: components["schemas"]["Vector"];
-            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             signals: components["schemas"]["Signal"][];
             /** @description Whether this candidate was resolved and scanned before the rest */
@@ -789,7 +789,7 @@ export interface components {
             /** @description Empty when no candidate inside the current line improves on the current version; the policy's review.proposeOtherMajors widens the search to every candidate */
             best?: string;
             vector: components["schemas"]["Vector"];
-            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
             /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none. */

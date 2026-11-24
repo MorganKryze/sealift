@@ -17,6 +17,7 @@ import { useSelection } from "@/hooks/use-selection"
 import { exportSelection } from "@/lib/exportSelection"
 import {
   afterVectorOf,
+  distinctCves,
   groupDependencies,
   jumpKind,
   reasonFor,
@@ -300,7 +301,8 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
   const listRef = useRef<HTMLDivElement>(null)
   const shownCandidates = showAll ? dependency.candidates : defaultCandidates
   const cveTotal = dependency.vector.reduce((a, b) => a + b, 0)
-  const extraCves = cveTotal - dependency.cves.length
+  const cves = distinctCves(dependency.cves)
+  const extraCves = cveTotal - cves.length
 
   return (
     <div className={cn(isFirst ? "" : "border-t border-line")}>
@@ -335,16 +337,16 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
             Current {dependency.current} · {cveTotal} CVE{cveTotal === 1 ? "" : "s"}
           </p>
           <div className="mb-3 flex flex-wrap gap-1.5">
-            {dependency.cves.map((cve) => (
+            {cves.map((cve) => (
               <span key={cve.id} className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-0.5 font-mono text-xs">
                 <span className={cn("size-1.5 rounded-full", SEVERITY_DOT[cve.severity.toLowerCase()] ?? "bg-severity-unknown")} />
                 {cve.id}
               </span>
             ))}
-            {extraCves > 0 && dependency.cves.length > 0 ? (
+            {extraCves > 0 && cves.length > 0 ? (
               <span className="rounded-md border border-line px-2 py-0.5 font-mono text-xs text-muted">+{extraCves} more</span>
             ) : null}
-            {extraCves > 0 && dependency.cves.length === 0 ? (
+            {extraCves > 0 && cves.length === 0 ? (
               <span className="text-xs text-muted">The version of sealift that ran this analysis did not record CVE ids.</span>
             ) : null}
           </div>

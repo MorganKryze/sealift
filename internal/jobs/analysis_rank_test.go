@@ -364,6 +364,39 @@ func TestRankKeepsEachCVEsPackageAndFix(t *testing.T) {
 	}
 }
 
+// One id found in two packages keeps both, each with its own fix, while the
+// vector counts it once: the copy nobody can fix must not hide behind the
+// one that has a fix.
+func TestRankKeepsEveryPackageACVEIsFoundIn(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2021-23337", Package: "lodash", Version: "4.17.20", Severity: rank.High, FixedVersion: "4.17.21"},
+		{ID: "CVE-2021-23337", Package: "lodash.template", Version: "4.5.0", Severity: rank.High},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("lodash", "4.17.20", fakeVersion{version: "4.17.21", published: longAgo})
+	for i := range outcomes {
+		outcomes[i].pkgs = append(outcomes[i].pkgs, npm.LockPackage{Name: "lodash.template", Version: "4.5.0"})
+	}
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	got := dependencyNamed(t, r, "lodash")
+	want := []CVE{
+		{ID: "CVE-2021-23337", Severity: "HIGH", Package: "lodash@4.17.20", FixedIn: "4.17.21"},
+		{ID: "CVE-2021-23337", Severity: "HIGH", Package: "lodash.template@4.5.0", FixedIn: ""},
+	}
+	if !slices.Equal(got.CVEs, want) {
+		t.Errorf("CVEs = %+v, want %+v", got.CVEs, want)
+	}
+	if got.Vector != (Vector{0, 1, 0, 0, 0}) {
+		t.Errorf("Vector = %v, want the id counted once", got.Vector)
+	}
+	if len(got.Candidates) != 1 || !slices.Equal(got.Candidates[0].CVEs, want[1:]) {
+		t.Errorf("4.17.21 = %+v, want it to keep the lodash.template copy with no fix", got.Candidates)
+	}
+}
+
 func TestRankWritesAnEmptyFamiliesList(t *testing.T) {
 	r := newRankRun(t, policy.DefaultReview())
 	rankAll(t, r, rank.Index{}, func() (depInfo, []candidateOutcome) {
