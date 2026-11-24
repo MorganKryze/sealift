@@ -58,7 +58,7 @@ Once all five are ready, it answers 200 with `{"status":"ok"}`. Meanwhile the in
 
 A failed item keeps its cause and tries again every minute, with no restart. A failed database refresh leaves the instance ready when an older database is on the volume: `GET /api/instance` then carries a `warning` with the cause and that database's date. Without a database, the instance stays not ready.
 
-In the lab, at commit 0257b72, the connected Compose file on an empty volume answered 503 for about 25 seconds, then 200, and Docker marked the service `healthy` 31 seconds after the start, with no click. A volume that already holds the pinned Trivy and a database answered 200 within 10 seconds.
+In the lab, at commit 8f5f3df, the connected Compose file on an empty volume answered 503 for about 15 seconds, then 200, and Docker marked the service `healthy` 20 seconds after the start, with no click. A volume that already holds the pinned Trivy and a database answered 200 within 10 seconds.
 
 `/healthz` is a readiness check. Do not use it for liveness: an orchestrator that restarts on a failed liveness probe would restart an instance that is still downloading. `GET /livez` answers 200 with `{"status":"ok"}` whenever the server runs, whatever the preparation's state.
 
@@ -323,13 +323,13 @@ Take [a backup](#backing-up) first. Then:
 3. Start the new release. It installs the pinned Trivy if the volume holds another version, then removes the others, and refreshes the database. `/healthz` answers 200 once it is done. No screen asks for a click.
 4. To change a value, write the policy file and start with the overlay, as [The policy file](#the-policy-file) shows. The log then names each key the file overrides.
 
-In the lab, at commit 0257b72, a copy of a 0.7.0 volume that held 6 projects, 7 analyses and 5 exports opened with every record and field unchanged. The public key's sha256 stayed the same, `private/settings.json` kept its sha256, and a re-export of a 0.7.0 analysis gave the same archive sha256 as 0.7.0's export.
+In the lab, at commit 8f5f3df, a copy of a 0.7.0 volume that held 6 projects, 7 analyses and 5 exports opened with every record and field unchanged. The public key's sha256 stayed the same, `private/settings.json` kept its sha256, and a re-export of a 0.7.0 analysis gave the same archive sha256 as 0.7.0's export.
 
 The API routes that listed or installed tools and saved settings are gone. Each answers 410 Gone with Problem Details that name `GET /api/instance`. [The CHANGELOG](../CHANGELOG.md) names what replaces each.
 
 ### Rolling back
 
-Stop the new release and start 0.7.0 on the same volume. 0.7.0 reads the records, the key and `private/settings.json` as it left them, and uses the pinned Trivy, which it finds active. Values set only in the policy file do not apply under 0.7.0. In the lab, at commit 0257b72, 0.7.0 opened the copy again after the upgrade, listed the same records, and answered healthy.
+Stop the new release and start 0.7.0 on the same volume. 0.7.0 reads the records, the key and `private/settings.json` as it left them, and uses the pinned Trivy, which it finds active. Values set only in the policy file do not apply under 0.7.0. In the lab, at commit 8f5f3df, 0.7.0 opened the copy again after the upgrade, listed the same records, and answered healthy.
 
 ## Backing up
 
