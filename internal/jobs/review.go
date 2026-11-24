@@ -43,7 +43,7 @@ func (e *ErrInvalidReasons) Error() string {
 type asked struct {
 	dep      DependencyResult
 	jumps    []string // selected versions outside the current line
-	kept     string   // the version an install keeps; empty when none is selected
+	kept     string   // the version an install keeps, the current one when none is selected
 	keptCVEs []CVE
 	noFix    []string // ids of the kept version's CVEs that no version fixes
 }
@@ -58,6 +58,11 @@ func askedOf(r Result, selection map[string][]string) []asked {
 			}
 		}
 		a.kept, a.keptCVEs, _ = pickedCVEs(d, selection[d.Name])
+		if a.kept == "" {
+			// The project keeps the current version of a dependency the
+			// selection leaves out.
+			a.kept, a.keptCVEs = d.Current, d.CVEs
+		}
 		for _, c := range a.keptCVEs {
 			if withoutFix(c) && !slices.Contains(a.noFix, c.ID) {
 				a.noFix = append(a.noFix, c.ID)
@@ -129,8 +134,9 @@ func cover(r Result, asks []asked, reasons []Reason) (coverage, []string) {
 // CheckReasons returns one worded problem for each jump or CVE without fix
 // the selection carries with no reason or against the policy, and for each
 // reason that is unreadable or covers nothing. Every selected version counts
-// for a jump; for CVEs, the version an install keeps. Empty when the export
-// may go.
+// for a jump; for CVEs, the version an install keeps, which is the current
+// one for a dependency the selection leaves out. Empty when the export may
+// go.
 func CheckReasons(r Result, selection map[string][]string, reasons []Reason, p policy.Review) []string {
 	asks := askedOf(r, selection)
 	covered, reasonProblems := cover(r, asks, reasons)
@@ -210,9 +216,6 @@ func ReviewOf(r Result, selection map[string][]string, reasons []Reason, project
 	for _, a := range asks {
 		d := a.dep
 		version, cves := a.kept, a.keptCVEs
-		if version == "" {
-			version, cves = d.Current, d.CVEs
-		}
 
 		if len(a.jumps) > 0 {
 			i, text := reasonFor(MajorJumpReason, d.Name)

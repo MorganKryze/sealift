@@ -231,14 +231,14 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	if bad := ValidateSelection(result, req.Selection); len(bad) > 0 {
 		return store.ExportInfo{}, &ErrInvalidSelection{Bad: bad}
 	}
+	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
+		return store.ExportInfo{}, ErrNothingToExport
+	}
 	if problems := CheckReasons(result, req.Selection, req.Reasons, s.Review); len(problems) > 0 {
 		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
 	}
 
 	settings := s.store.Settings()
-	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
-		return store.ExportInfo{}, ErrNothingToExport
-	}
 
 	pending, err := s.store.NewDir("exports", projectID)
 	if err != nil {

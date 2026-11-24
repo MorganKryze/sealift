@@ -54,6 +54,14 @@ func reviewResult() Result {
 	}
 }
 
+// fixableResult is reviewResult with html-minifier's CVE fixed in 4.0.1, so
+// a selection that leaves html-minifier out asks no reason for it.
+func fixableResult() Result {
+	r := reviewResult()
+	r.Dependencies[2].CVEs[0].FixedIn = "4.0.1"
+	return r
+}
+
 func askReasons() policy.Review { return policy.DefaultReview() }
 
 func jumpReason(text string, deps ...string) Reason {
@@ -72,7 +80,7 @@ func assertProblems(t *testing.T, got, want []string) {
 }
 
 func TestCheckReasonsAsksForAJump(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	for _, tc := range []struct {
 		name      string
 		selection map[string][]string
@@ -94,7 +102,7 @@ func TestCheckReasonsAsksForAJump(t *testing.T) {
 
 	// A jump selected beside a better version inside the line crosses too,
 	// so it asks its reason though an install keeps the other version.
-	worse := reviewResult()
+	worse := fixableResult()
 	worse.Dependencies[1].Candidates[1].Vector = Vector{1, 0, 0, 0, 0}
 	worse.Dependencies[1].Candidates[1].CVEs = []CVE{{ID: "CVE-2025-0005", Severity: "CRITICAL", Package: "express@5.1.0", FixedIn: "5.1.1"}}
 	assertProblems(t, CheckReasons(worse, map[string][]string{"express": {"4.20.0", "5.1.0"}}, nil, askReasons()),
@@ -120,8 +128,17 @@ func TestCheckReasonsAsksForACVEWithoutFix(t *testing.T) {
 		[]string{"html-minifier 4.0.0 keeps CVE-2022-37620 and CVE-2022-99999, which no version fixes, and needs a reason"})
 }
 
-func TestCheckReasonsCountsAnUnknownFixAsNone(t *testing.T) {
+func TestCheckReasonsAsksForACVEWithoutFixOnADependencyLeftOut(t *testing.T) {
 	r := reviewResult()
+	// The project keeps html-minifier 4.0.0 when the selection leaves it out.
+	want := []string{"html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason"}
+	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, nil, askReasons()), want)
+	assertProblems(t, CheckReasons(r, map[string][]string{}, nil, askReasons()), want)
+	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, []Reason{cveReason("Templates are ours.", "html-minifier")}, askReasons()), nil)
+}
+
+func TestCheckReasonsCountsAnUnknownFixAsNone(t *testing.T) {
+	r := fixableResult()
 	// The bytes an analysis of sealift 0.7.0 wrote for a CVE: no package,
 	// no fixing version.
 	var old []CVE
@@ -134,14 +151,14 @@ func TestCheckReasonsCountsAnUnknownFixAsNone(t *testing.T) {
 }
 
 func TestCheckReasonsAsksNothingForAFixInAnotherLine(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	// express 4.17.1 keeps CVE-2024-0002, fixed in 5.0.0 only.
 	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.17.1"}}, nil, askReasons()), nil)
 	assertProblems(t, CheckReasons(r, map[string][]string{"express": {"4.20.0"}}, nil, askReasons()), nil)
 }
 
 func TestCheckReasonsAcceptsOneReasonForAFamily(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	sel := map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}}
 	assertProblems(t, CheckReasons(r, sel, nil, askReasons()), []string{
 		"react 18.3.1 to 19.2.0 leaves major 18 and needs a reason",
@@ -188,7 +205,7 @@ func TestCheckReasonsRefusesWhatThePolicyRefuses(t *testing.T) {
 }
 
 func TestCheckReasonsRefusesAReasonThatCoversNothing(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	for _, tc := range []struct {
 		name      string
 		selection map[string][]string
@@ -227,7 +244,7 @@ func TestCheckReasonsRefusesAReasonThatCoversNothing(t *testing.T) {
 }
 
 func TestCheckReasonsRefusesAnUnknownDependency(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	sel := map[string][]string{"express": {"5.1.0"}}
 	got := CheckReasons(r, sel, []Reason{jumpReason("Our tests pass on 5.", "express", "evil\u202ename")}, askReasons())
 	assertProblems(t, got, []string{"reason 1 (major-jump) names a dependency the analysis does not hold"})
@@ -260,7 +277,7 @@ func TestCheckReasonsAsksForANameListedTwice(t *testing.T) {
 }
 
 func TestExportChecksReasonsByTheImportsRule(t *testing.T) {
-	r := reviewResult()
+	r := fixableResult()
 	sel := map[string][]string{"express": {"5.1.0"}}
 	for _, tc := range []struct {
 		name, text, want string
@@ -340,12 +357,18 @@ func TestReviewOfListsTheKeptVersionsCVEs(t *testing.T) {
 	}
 
 	// A dependency left out of the selection keeps its current version's
-	// CVEs, and a 0.7.0 CVE keeps an empty package.
+	// CVEs, with the reason given for those no version fixes. A 0.7.0 CVE
+	// keeps an empty package and counts as one without fix.
 	r.Dependencies[1].CVEs = []CVE{{ID: "CVE-2021-23337", Severity: "HIGH"}}
-	got = ReviewOf(r, map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}}, reasons[:1], nil)
+	sel = map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}}
+	reasons = append(reasons, cveReason("Only our server parses bodies.", "express"))
+	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+		t.Fatalf("the selection should pass: %q", problems)
+	}
+	got = ReviewOf(r, sel, reasons, nil)
 	want = []archive.ReviewCVE{
-		{Dependency: "express", Version: "4.17.1", ID: "CVE-2021-23337", Severity: "HIGH"},
-		{Dependency: "html-minifier", Version: "4.0.0", ID: "CVE-2022-37620", Severity: "HIGH", Package: "html-minifier"},
+		{Dependency: "express", Version: "4.17.1", ID: "CVE-2021-23337", Severity: "HIGH", Reason: "Only our server parses bodies."},
+		{Dependency: "html-minifier", Version: "4.0.0", ID: "CVE-2022-37620", Severity: "HIGH", Package: "html-minifier", Reason: "Templates are ours."},
 	}
 	if !reflect.DeepEqual(got.Left, want) {
 		t.Errorf("left without a selection =\n %+v\nwant\n %+v", got.Left, want)

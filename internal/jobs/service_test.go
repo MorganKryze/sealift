@@ -682,14 +682,16 @@ func (j storeIDJob) StoreID() string { return j.id }
 
 // A selection with no version and no current tree packs an archive with
 // no package in it, which a user would carry through the kiosk believing
-// it fixed every CVE.
+// it fixed every CVE. It says so before it asks a reason for lodash's CVE,
+// which nothing would carry.
 func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	svc, st := newTestService(t)
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[{"name":"lodash","current":"4.17.20","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2021-23337","severity":"HIGH"}],"candidates":[]}],"warnings":[]}`
 	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
 	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
 		t.Fatalf("mkdir: %v", err)

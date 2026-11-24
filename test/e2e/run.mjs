@@ -95,28 +95,28 @@ function resolvesFromRegistry(registryUrl, name, version) {
 
 // reasonsFor builds the reasons the server asks of a selection: one for
 // every selected version that leaves its line, and one per dependency whose
-// kept version (the best selected one, as an install keeps) carries a CVE
-// with no fixing version.
+// kept version (the best selected one, as an install keeps, or the current
+// one when none is selected) carries a CVE with no fixing version.
 function reasonsFor(result, selection) {
   const compare = (a, b) => {
     const i = a.findIndex((n, j) => n !== b[j]);
     return i === -1 ? 0 : a[i] - b[i];
   };
   const jumps = [];
-  const reasons = [];
+  const withoutFix = new Set();
   for (const d of result.dependencies) {
     const versions = selection[d.name] ?? [];
+    const current = { vector: d.vector, cves: d.cves ?? [] };
     let kept = null;
     for (const version of versions) {
-      const picked = version === d.current ? { vector: d.vector, cves: d.cves ?? [] } : d.candidates.find((c) => c.version === version);
+      const picked = version === d.current ? current : d.candidates.find((c) => c.version === version);
       if (!picked) continue;
       if (version !== d.current && picked.leavesLine) jumps.push(d.name);
       if (!kept || compare(picked.vector, kept.vector) < 0) kept = picked;
     }
-    if (kept && (kept.cves ?? []).some((c) => !c.fixedIn)) {
-      reasons.push({ kind: "cve-without-fix", dependencies: [d.name], text: "The end-to-end fixture keeps this CVE to test the review." });
-    }
+    if ((kept ?? current).cves?.some((c) => !c.fixedIn)) withoutFix.add(d.name);
   }
+  const reasons = [...withoutFix].map((name) => ({ kind: "cve-without-fix", dependencies: [name], text: "The end-to-end fixture keeps this CVE to test the review." }));
   const jumped = [...new Set(jumps)];
   if (jumped.length > 0) {
     reasons.unshift({ kind: "major-jump", dependencies: jumped, text: "The end-to-end fixture takes this jump to test the review." });

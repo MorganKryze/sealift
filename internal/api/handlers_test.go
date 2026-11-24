@@ -2627,7 +2627,9 @@ func TestQueueExportRepeatsNoReasonText(t *testing.T) {
 	if err := json.Unmarshal(data, &problem); err != nil {
 		t.Fatal(err)
 	}
-	want := "reason 1 (major-jump): the reason holds a control, line-separating, bidirectional or format character; " +
+	// is-even, left out of the selection, keeps its CVE without fix.
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason; " +
+		"reason 1 (major-jump): the reason holds a control, line-separating, bidirectional or format character; " +
 		"reason 2 (cve-without-fix) covers nothing the selection takes"
 	if problem.Detail == nil {
 		t.Fatal("the problem has no detail")
