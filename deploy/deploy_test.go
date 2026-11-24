@@ -3,11 +3,16 @@ package deploy
 
 import (
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/store"
 )
 
 func load(t *testing.T, path string, out any) {
@@ -212,5 +217,116 @@ func TestConnectedEphemeralCompose(t *testing.T) {
 	// compose merges tmpfs lists: a second /tmp would clash with the base file's.
 	if slices.ContainsFunc(s.Tmpfs, func(m string) bool { return strings.HasPrefix(m, "/tmp") }) {
 		t.Errorf("the overlay repeats /tmp, which compose.yaml already mounts")
+	}
+}
+
+// A first start downloads Trivy, its database, pnpm and uv before /healthz
+// answers 200, so the healthcheck must not count those minutes as failures.
+func TestConnectedHealthcheckWaitsForThePreparation(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Healthcheck struct {
+				Interval      string
+				StartPeriod   string `yaml:"start_period"`
+				StartInterval string `yaml:"start_interval"`
+			}
+		}
+	}
+	load(t, "connected/compose.yaml", &c)
+	h := c.Services["sealift"].Healthcheck
+	duration := func(name, v string) time.Duration {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			t.Fatalf("%s = %q: %v", name, v, err)
+		}
+		return d
+	}
+	if d := duration("start_period", h.StartPeriod); d < 10*time.Minute {
+		t.Errorf("start_period = %s, want at least 10m, the time a first start may take to download its tools", d)
+	}
+	start, interval := duration("start_interval", h.StartInterval), duration("interval", h.Interval)
+	if start <= 0 || start >= interval {
+		t.Errorf("start_interval = %s, want above zero and under interval %s, so the instance turns healthy soon after it is ready", start, interval)
+	}
+}
+
+// The policy overlay mounts the policy folder read-only and names its file,
+// on top of compose.yaml, as the ephemeral overlay does.
+func TestPolicyOverlayMountsReadOnly(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Volumes     []string
+		}
+	}
+	load(t, "connected/compose.policy.yaml", &c)
+	s, ok := c.Services["sealift"]
+	if !ok || len(c.Services) != 1 {
+		t.Fatalf("services = %v, want sealift alone", c.Services)
+	}
+	if !slices.Equal(s.Volumes, []string{"./policy:/etc/sealift:ro"}) {
+		t.Errorf("volumes = %v, want [./policy:/etc/sealift:ro]", s.Volumes)
+	}
+	want := "/etc/sealift/policy.yaml"
+	if s.Environment["SEALIFT_POLICY"] != want {
+		t.Errorf("SEALIFT_POLICY = %q, want %q", s.Environment["SEALIFT_POLICY"], want)
+	}
+	if _, err := os.Stat("connected/policy/policy.yaml"); err != nil {
+		t.Errorf("the mounted folder holds no policy.yaml: %v", err)
+	}
+}
+
+// The example policy spells out the defaults, so mounting it unchanged
+// changes nothing.
+func TestExamplePolicyLoads(t *testing.T) {
+	p, err := policy.Load("connected/policy/policy.yaml", store.Settings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()}
+	if !reflect.DeepEqual(p, want) {
+		t.Errorf("example policy = %+v, want the defaults %+v", p, want)
+	}
+}
+
+// The lab mounts a policy whose brand differs from the default in every
+// field, so each one shows on screen.
+func TestLabPolicyChangesEveryBrandField(t *testing.T) {
+	var c struct {
+		Services map[string]struct {
+			Environment map[string]string
+			Volumes     []string
+		}
+	}
+	load(t, "../lab/compose.yaml", &c)
+	s := c.Services["sealift"]
+	if !slices.Contains(s.Volumes, "./policy:/etc/sealift:ro") {
+		t.Errorf("lab sealift volumes = %v, want ./policy:/etc/sealift:ro", s.Volumes)
+	}
+	if s.Environment["SEALIFT_POLICY"] != "/etc/sealift/policy.yaml" {
+		t.Errorf("lab SEALIFT_POLICY = %q, want /etc/sealift/policy.yaml", s.Environment["SEALIFT_POLICY"])
+	}
+	p, err := policy.Load("../lab/policy/policy.yaml", store.Settings{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, d := p.Brand, policy.DefaultBrand()
+	for _, f := range []struct {
+		name     string
+		got, def string
+	}{
+		{"name", b.Name, d.Name},
+		{"accent", b.Accent, d.Accent},
+		{"sides.online", b.Online, d.Online},
+		{"sides.offline", b.Offline, d.Offline},
+		{"reviewWord", b.ReviewWord, d.ReviewWord},
+		{"logo type", b.LogoType, d.LogoType},
+	} {
+		if f.got == f.def {
+			t.Errorf("lab brand %s = %q, the default", f.name, f.got)
+		}
+	}
+	if b.Contact == nil {
+		t.Error("lab brand has no contact, the default")
 	}
 }

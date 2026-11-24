@@ -1,0 +1,13 @@
+# The lab's policy: a brand that differs from the default in every field,
+# so each one shows on screen. The targets and limits keep their defaults.
+brand:
+  name: Harbour lab
+  logo: logo.svg
+  accent: "#b4531f"
+  sides:
+    online: Connected
+    offline: Air-gapped
+  reviewWord: Review
+  contact:
+    label: Lab support
+    url: mailto:lab-support@example.com
