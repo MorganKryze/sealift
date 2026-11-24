@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -139,5 +140,57 @@ func TestLockHoldersRefusesPastTheVisitCap(t *testing.T) {
 	_, err := LockHolders(strings.NewReader(fanInLock(200, 10)), []string{"l1@1.0.0"})
 	if err == nil || !strings.Contains(err.Error(), "visits") {
 		t.Errorf("LockHolders past its cap = %v, want a refusal naming the visits", err)
+	}
+}
+
+// Walking back from l0 in fanInLock(3, 2) visits l0, the hub and the three
+// directs: five visits fit a cap of five, not one of four.
+func TestLockHoldersAllowsAWalkOfExactlyTheCap(t *testing.T) {
+	saved := maxLockVisits
+	defer func() { maxLockVisits = saved }()
+	maxLockVisits = 5
+	if _, err := LockHolders(strings.NewReader(fanInLock(3, 2)), []string{"l0@1.0.0"}); err != nil {
+		t.Errorf("a walk of exactly the cap = %v, want it allowed", err)
+	}
+	maxLockVisits = 4
+	if _, err := LockHolders(strings.NewReader(fanInLock(3, 2)), []string{"l0@1.0.0"}); !errors.Is(err, ErrLockTooLarge) {
+		t.Errorf("a walk one past the cap = %v, want ErrLockTooLarge", err)
+	}
+}
+
+// Two keys of five visits each fit a per-key cap of nine, but the cap
+// counts the whole call.
+func TestLockHoldersSumsTheCapOverEveryKey(t *testing.T) {
+	saved := maxLockVisits
+	defer func() { maxLockVisits = saved }()
+	maxLockVisits = 9
+	if _, err := LockHolders(strings.NewReader(fanInLock(3, 2)), []string{"l0@1.0.0", "l1@1.0.0"}); !errors.Is(err, ErrLockTooLarge) {
+		t.Errorf("two keys of five visits under a cap of nine = %v, want ErrLockTooLarge", err)
+	}
+}
+
+func TestLockHoldersCountsEveryAliasOfOnePackage(t *testing.T) {
+	lock := `lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      first:
+        specifier: npm:other@1.0.0
+        version: other@1.0.0
+      second:
+        specifier: npm:other@1.0.0
+        version: other@1.0.0
+snapshots:
+  other@1.0.0:
+    dependencies:
+      deep: 3.0.0
+  deep@3.0.0: {}
+`
+	holders, err := LockHolders(strings.NewReader(lock), []string{"deep@3.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := holders["deep@3.0.0"], []string{"first", "second"}; !slices.Equal(got, want) {
+		t.Errorf("deep's holders = %q, want %q", got, want)
 	}
 }
