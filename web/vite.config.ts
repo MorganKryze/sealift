@@ -10,8 +10,8 @@ import { defineConfig } from "vitest/config"
 // port while the default 8080 stays running for other work.
 const apiTarget = process.env.SEALIFT_API ?? "http://127.0.0.1:8080"
 
-// The proxy leaves the browser's Host as it came: the tool installs refuse a
-// request whose Origin does not name the Host they receive.
+// The proxy leaves the browser's Host as it came: the signing key's
+// regenerate refuses a request whose Origin does not name the Host it receives.
 export const apiProxy = {
   "/api": {
     target: apiTarget,
