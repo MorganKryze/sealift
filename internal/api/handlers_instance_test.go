@@ -1,13 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/store"
+	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 func getInstance(t *testing.T, url string) Instance {
@@ -136,5 +143,219 @@ func TestEphemeralAnswersAreNotStored(t *testing.T) {
 		if ephemeral && got != "no-store" || !ephemeral && got == "no-store" {
 			t.Errorf("ephemeral %v: Cache-Control = %q", ephemeral, got)
 		}
+	}
+}
+
+func TestInstanceListsEachPreparingItem(t *testing.T) {
+	srv, h := newTestServer(t)
+	next := time.Date(2026, 11, 24, 9, 31, 0, 0, time.UTC)
+	h.Ready = fixedReadiness{Items: []tools.Item{
+		{Name: "trivy", Version: "0.55.0", State: tools.ItemReady},
+		{Name: "trivy-db", State: tools.ItemFailed, Reason: "vulnerability database download: connection reset by peer", NextTry: next},
+		{Name: "signing-key", Version: "3f9a", State: tools.ItemReady},
+		{Name: "pnpm", Version: "10.34.5", State: tools.ItemReady},
+		{Name: "uv", Version: "0.13.7", State: tools.ItemPreparing},
+	}}
+	in := getInstance(t, srv.URL)
+	if in.Ready {
+		t.Error("ready = true while two items are not ready")
+	}
+	if in.Warning != nil {
+		t.Errorf("warning = %q, want none", *in.Warning)
+	}
+	reason := "vulnerability database download: connection reset by peer"
+	trivy, key, pnpm, uv := "0.55.0", "3f9a", "10.34.5", "0.13.7"
+	want := []PreparingItem{
+		{Name: PreparingItemNameTrivy, Version: &trivy, State: ItemReady},
+		{Name: PreparingItemNameTrivyDb, State: ItemFailed, Reason: &reason, NextTry: &next},
+		{Name: PreparingItemNameSigningKey, Version: &key, State: ItemReady},
+		{Name: PreparingItemNamePnpm, Version: &pnpm, State: ItemReady},
+		{Name: PreparingItemNameUv, Version: &uv, State: ItemPreparing},
+	}
+	if !reflect.DeepEqual(in.Preparing, want) {
+		got, _ := json.Marshal(in.Preparing)
+		t.Errorf("preparing = %s", got)
+	}
+}
+
+func TestInstanceIsReadyWithTheRefreshWarning(t *testing.T) {
+	srv, h := newTestServer(t)
+	warning := "could not refresh the vulnerability database: timeout; using the database from 2026-11-20"
+	h.Ready = fixedReadiness{Ready: true, Warning: warning, Items: []tools.Item{
+		{Name: "trivy", Version: "0.55.0", State: tools.ItemReady},
+	}}
+	in := getInstance(t, srv.URL)
+	if !in.Ready || in.Warning == nil || *in.Warning != warning {
+		t.Errorf("ready = %v, warning = %v, want ready with %q", in.Ready, in.Warning, warning)
+	}
+}
+
+func TestInstanceReportsTheBrand(t *testing.T) {
+	srv, h := newTestServer(t)
+	h.Policy.Brand = policy.Brand{
+		Name: "Harbor", Accent: "#0b6e99", Online: "Outside", Offline: "Inside", ReviewWord: "MR",
+		Logo: []byte("\x89PNG\r\n\x1a\n"), LogoType: "image/png",
+		Contact: &policy.Contact{Label: "Platform team", URL: "mailto:platform@example.org"},
+	}
+	got := getInstance(t, srv.URL).Brand
+	accent := "#0b6e99"
+	want := Brand{
+		Name: "Harbor", Accent: &accent, Online: "Outside", Offline: "Inside", ReviewWord: "MR", Logo: true,
+		Contact: &Contact{Label: "Platform team", Url: "mailto:platform@example.org"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("brand = %+v, want %+v", got, want)
+	}
+}
+
+func TestInstanceReportsTheBrandDefaults(t *testing.T) {
+	srv, _ := newTestServer(t)
+	got := getInstance(t, srv.URL).Brand
+	want := Brand{Name: "sealift", Online: "Online", Offline: "Offline", ReviewWord: "PR"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("brand = %+v, want %+v", got, want)
+	}
+}
+
+func TestInstanceReportsThePolicy(t *testing.T) {
+	srv, h := newTestServer(t)
+	npmTarget := store.Target{OS: "linux", CPU: "arm64", Libc: "musl", Node: "20.18.0", PnpmVer: "9.15.0"}
+	pipTarget := store.PipTarget{Python: "3.12.4", OS: "linux", CPU: "x86_64", Glibc: "2.31", UvVer: "0.13.7"}
+	h.Policy.Settings = store.Settings{Target: npmTarget, MinReleaseAgeDays: 30, ResolveParallelism: 2, DownloadParallelism: 5}
+	h.Policy.Pip = pipTarget
+	got := getInstance(t, srv.URL).Policy
+	want := Policy{
+		Target: targetToAPI(npmTarget), PipTarget: pipTargetToAPI(pipTarget),
+		MinReleaseAgeDays: 30, ResolveParallelism: 2, DownloadParallelism: 5,
+	}
+	if got != want {
+		t.Errorf("policy = %+v, want %+v", got, want)
+	}
+}
+
+func TestInstanceReportsToolVersions(t *testing.T) {
+	srv, h := newTestServer(t)
+	for _, dir := range []string{"tools/pnpm/10.34.5", "tools/pnpm/9.15.0", "tools/uv/0.13.7"} {
+		if err := os.MkdirAll(filepath.Join(h.Store.Root(), dir), 0o770); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := getInstance(t, srv.URL).Tools
+	date := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	want := InstanceTools{Trivy: tools.PinnedTrivy.Version, TrivyDbDate: &date, Pnpm: []string{"10.34.5", "9.15.0"}, Uv: []string{"0.13.7"}}
+	if got.TrivyDbDate == nil || !got.TrivyDbDate.Equal(date) {
+		t.Errorf("trivyDbDate = %v, want %v", got.TrivyDbDate, date)
+	}
+	got.TrivyDbDate = want.TrivyDbDate
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tools = %+v, want %+v", got, want)
+	}
+}
+
+func TestInstanceReportsNoToolsOnAnEmptyVolume(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
+	h := NewHandlers(st, nil, tm, fakeTrivy{})
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	t.Cleanup(srv.Close)
+	got := getInstance(t, srv.URL).Tools
+	want := InstanceTools{Trivy: tools.PinnedTrivy.Version, Pnpm: []string{}, Uv: []string{}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tools = %+v, want %+v", got, want)
+	}
+}
+
+func getLogo(t *testing.T, url string) (*http.Response, []byte) {
+	t.Helper()
+	resp, err := http.Get(url + "/api/instance/logo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, body
+}
+
+func TestInstanceLogoCarriesTheSandboxHeaders(t *testing.T) {
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
+	png := []byte("\x89PNG\r\n\x1a\nrest")
+	for _, logo := range []struct {
+		data []byte
+		kind string
+	}{{svg, "image/svg+xml"}, {png, "image/png"}} {
+		srv, h := newTestServer(t)
+		h.Policy.Brand.Logo, h.Policy.Brand.LogoType = logo.data, logo.kind
+		resp, body := getLogo(t, srv.URL)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", logo.kind, resp.StatusCode)
+		}
+		for name, want := range map[string]string{
+			"Content-Type":            logo.kind,
+			"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+			"X-Content-Type-Options":  "nosniff",
+		} {
+			if got := resp.Header.Get(name); got != want {
+				t.Errorf("%s: %s = %q, want %q", logo.kind, name, got, want)
+			}
+		}
+		if !bytes.Equal(body, logo.data) {
+			t.Errorf("%s: body = %q, want the bytes read at start", logo.kind, body)
+		}
+	}
+}
+
+func TestInstanceLogoIs404WithoutALogo(t *testing.T) {
+	srv, _ := newTestServer(t)
+	resp, body := getLogo(t, srv.URL)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/problem+json" {
+		t.Errorf("Content-Type = %q, want application/problem+json", got)
+	}
+	var p Problem
+	if err := json.Unmarshal(body, &p); err != nil || p.Status != http.StatusNotFound {
+		t.Errorf("problem = %s (%v), want a 404 problem", body, err)
+	}
+}
+
+func TestInstanceKeepsAnsweringWhenAToolFolderCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder whatever its mode")
+	}
+	srv, h := newTestServer(t)
+	h.Ephemeral = 30 * time.Minute
+	h.Ready = fixedReadiness{Items: []tools.Item{{Name: "uv", Version: "0.13.7", State: tools.ItemPreparing}}}
+	for _, dir := range []string{"tools/pnpm/10.34.5", "tools/uv/0.13.7", "tools/trivy/0.55.0"} {
+		if err := os.MkdirAll(filepath.Join(h.Store.Root(), dir), 0o770); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{"tools/pnpm", "tools/trivy"} {
+		locked := filepath.Join(h.Store.Root(), dir)
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o770) })
+	}
+
+	in := getInstance(t, srv.URL)
+	if !in.Ephemeral || in.IdleMinutes == nil || *in.IdleMinutes != 30 {
+		t.Errorf("ephemeral = %v, idleMinutes = %v, want true and 30", in.Ephemeral, in.IdleMinutes)
+	}
+	if len(in.Preparing) != 1 || in.Preparing[0].Name != PreparingItemNameUv {
+		t.Errorf("preparing = %+v, want the uv item", in.Preparing)
+	}
+	want := InstanceTools{Trivy: tools.PinnedTrivy.Version, Pnpm: []string{}, Uv: []string{"0.13.7"}}
+	got := in.Tools
+	got.TrivyDbDate = nil
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("tools = %+v, want %+v", got, want)
 	}
 }

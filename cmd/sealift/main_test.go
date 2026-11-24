@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -63,38 +64,58 @@ func TestToolsCredential(t *testing.T) {
 	})
 }
 
-// TestRunServesHealthAndStopsOnSignal starts the real wiring on a free port,
-// so a broken store, queue or route shows up here rather than in the image.
-func TestRunServesHealthAndStopsOnSignal(t *testing.T) {
-	localGitHub(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+// TestRunServesTheInterfaceWhilePreparing starts the real wiring on a free
+// port, with a GitHub that accepts the connection and never answers, so a
+// broken store, queue or route shows up here rather than in the image, and
+// a hung preparation neither blocks the interface nor the stop.
+func TestRunServesTheInterfaceWhilePreparing(t *testing.T) {
+	localUpstreams(t)
+	hung := make(chan struct{})
+	gh := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(gh.Close)
+	t.Cleanup(func() { close(hung) })
+	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
 
+	addr := freeAddr(t)
 	root := filepath.Join(t.TempDir(), "data")
 	done := make(chan error, 1)
 	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
 
-	deadline := time.Now().Add(5 * time.Second)
 	var resp *http.Response
-	for time.Now().Before(deadline) {
-		resp, err = http.Get("http://" + addr + "/healthz")
-		if err == nil {
+	var err error
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if resp, err = http.Get("http://" + addr + "/"); err == nil {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("health check never answered: %v", err)
+		t.Fatalf("the interface never answered: %v", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
+		t.Errorf("GET / = %d, want 200", resp.StatusCode)
+	}
+
+	resp, err = http.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Status  string
+		Missing []string
+	}
+	err = json.NewDecoder(resp.Body).Decode(&health)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || health.Status != "preparing" || !slices.Contains(health.Missing, "trivy") {
+		t.Errorf("/healthz = %d %+v, want 503 preparing with trivy missing", resp.StatusCode, health)
 	}
 	if _, statErr := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(statErr) {
 		t.Errorf("a fresh volume holds a settings file (stat: %v), want none", statErr)
@@ -137,7 +158,7 @@ func (j *blockingJob) Run(ctx context.Context, emit func(jobs.Event)) error {
 // job before shutting the server down, so the connection goes idle quickly
 // and run returns well under the 10 second shutdown timeout.
 func TestRunCancelsRunningJobBeforeShuttingDownServer(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	started := make(chan struct{})
 	onQueueReady = func(q *jobs.Queue) {
 		if _, err := q.Submit(&blockingJob{started: started}); err != nil {
@@ -239,10 +260,11 @@ func TestSubcommand(t *testing.T) {
 	}
 }
 
-// localGitHub points SEALIFT_GITHUB_API at a local server that answers 404 and
-// reports the paths it is asked for. A test that starts run sets it first, so
-// no test reaches api.github.com.
-func localGitHub(t *testing.T) <-chan string {
+// localUpstreams points SEALIFT_GITHUB_API at a local server that answers 404
+// and reports the paths it is asked for, and SEALIFT_NPM_REGISTRY and
+// SEALIFT_PIP_INDEX at another that answers 404. A test that starts run sets
+// it first, so the preparation at start reaches nothing outside the machine.
+func localUpstreams(t *testing.T) <-chan string {
 	t.Helper()
 	asked := make(chan string, 8)
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -254,62 +276,24 @@ func localGitHub(t *testing.T) <-chan string {
 	}))
 	t.Cleanup(gh.Close)
 	t.Setenv("SEALIFT_GITHUB_API", gh.URL)
+	registries := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(registries.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registries.URL)
+	t.Setenv("SEALIFT_PIP_INDEX", registries.URL+"/simple/")
 	return asked
 }
 
-// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
-// manager: GET /api/tools asks GitHub nothing, the Trivy install looks up
-// the pinned release, and the server named by the variable must be the one
-// asked.
-func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
-	asked := localGitHub(t)
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+// startAndStop serves a fresh volume on a free port until fn returns, then
+// signals the process and waits for run to return. The server logs JSON to
+// logs.
+func startAndStop(t *testing.T, logs io.Writer, fn func(addr string)) {
+	t.Helper()
+	addr := freeAddr(t)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		done <- run(addr, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewJSONHandler(logs, nil)))
 	}()
-
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	var resp *http.Response
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if resp, err = client.Get("http://" + addr + "/api/tools"); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatalf("GET /api/tools never answered: %v", err)
-	}
-	resp.Body.Close()
-	select {
-	case path := <-asked:
-		t.Errorf("GET /api/tools asked GitHub for %q, want nothing", path)
-	default:
-	}
-
-	resp, err = client.Post("http://"+addr+"/api/tools/trivy/update", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatalf("POST /api/tools/trivy/update: %v", err)
-	}
-	resp.Body.Close()
-	select {
-	case path := <-asked:
-		if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
-			t.Errorf("fake GitHub asked for %q, want %q", path, want)
-		}
-	default:
-		t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
-	}
-
+	fn(addr)
 	p, err := os.FindProcess(os.Getpid())
 	if err != nil {
 		t.Fatal(err)
@@ -325,6 +309,101 @@ func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("run did not return after SIGTERM")
 	}
+}
+
+// TestRunReadsGitHubAPIFromEnv proves SEALIFT_GITHUB_API reaches the tools
+// manager: the preparation at start looks up the pinned Trivy release on the
+// server the variable names.
+func TestRunReadsGitHubAPIFromEnv(t *testing.T) {
+	asked := localUpstreams(t)
+	startAndStop(t, io.Discard, func(string) {
+		select {
+		case path := <-asked:
+			if want := "/repos/aquasecurity/trivy/releases/tags/v" + tools.PinnedTrivy.Version; path != want {
+				t.Errorf("fake GitHub asked for %q, want %q", path, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the fake GitHub was never asked: SEALIFT_GITHUB_API did not reach the tools manager")
+		}
+	})
+}
+
+// TestRunPassesTheNpmRegistryToTheTools proves SEALIFT_NPM_REGISTRY reaches
+// the tools manager as well as the analysis's registry client: the pnpm the
+// preparation installs comes from the registry the variable names.
+func TestRunPassesTheNpmRegistryToTheTools(t *testing.T) {
+	localUpstreams(t)
+	asked := make(chan string, 8)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case asked <- r.URL.Path:
+		default:
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(registry.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registry.URL)
+	startAndStop(t, io.Discard, func(string) {
+		select {
+		case path := <-asked:
+			if path != "/pnpm" {
+				t.Errorf("the registry was asked for %q, want /pnpm", path)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the registry was never asked: SEALIFT_NPM_REGISTRY did not reach the tools manager")
+		}
+	})
+}
+
+// TestRunPreparesThePolicysPnpmAndUv proves the probe answers from the
+// preparer, built with the policy's pnpm and uv: both fail against local
+// stand-ins, their causes name the version asked, and /healthz lists them.
+func TestRunPreparesThePolicysPnpmAndUv(t *testing.T) {
+	localUpstreams(t)
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pnpm" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"pnpm","versions":{}}`)
+	}))
+	t.Cleanup(registry.Close)
+	t.Setenv("SEALIFT_NPM_REGISTRY", registry.URL)
+	logs := &lockedBuffer{}
+	startAndStop(t, logs, func(addr string) {
+		causes := map[string]string{}
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && len(causes) < 3; time.Sleep(20 * time.Millisecond) {
+			for line := range strings.Lines(logs.String()) {
+				var entry struct{ Msg, Item, Cause string }
+				if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "preparation failed, retrying" {
+					causes[entry.Item] = entry.Cause
+				}
+			}
+		}
+		for item, version := range map[string]string{"pnpm": store.DefaultSettings.Target.PnpmVer, "uv": store.DefaultPipTarget.UvVer} {
+			if want := item + " " + version + ":"; !strings.HasPrefix(causes[item], want) {
+				t.Errorf("%s's cause = %q, want it to start with %q", item, causes[item], want)
+			}
+		}
+		if _, ok := causes["trivy"]; !ok {
+			t.Errorf("no failed trivy in the log:\n%s", logs)
+		}
+
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"status":"preparing","missing":["trivy","trivy-db","pnpm","uv"]}`
+		if resp.StatusCode != http.StatusServiceUnavailable || strings.TrimSpace(string(body)) != want {
+			t.Errorf("/healthz = %d %s, want 503 %s", resp.StatusCode, body, want)
+		}
+	})
 }
 
 // TestNewToolsManagerGitHubAPI covers the lookup address the manager gets from
@@ -441,7 +520,7 @@ func freeAddr(t *testing.T) string {
 }
 
 func TestServerServesItsSigningKey(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	addr := freeAddr(t)
 	root := filepath.Join(t.TempDir(), "data")
 	done := make(chan error, 1)
@@ -561,7 +640,7 @@ func TestNewToolsManagerReadsGitHubToken(t *testing.T) {
 // that signals the process and waits for run to return.
 func startRun(t *testing.T, root string, log *slog.Logger) (string, func()) {
 	t.Helper()
-	localGitHub(t)
+	localUpstreams(t)
 	addr := freeAddr(t)
 	done := make(chan error, 1)
 	go func() { done <- run(addr, root, log) }()
@@ -636,7 +715,7 @@ func refusedStart(t *testing.T, root string) error {
 }
 
 func TestRunRefusesABadPolicy(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	dir := t.TempDir()
 	for name, c := range map[string]struct{ body, want string }{
 		"out of range": {"minReleaseAgeDays: 120\n", "minReleaseAgeDays must be between 1 and 90"},
@@ -687,7 +766,7 @@ func loggedKeys(logs, msg string) []string {
 }
 
 func TestRunRefusesAStoredSettingOutsideTheRules(t *testing.T) {
-	localGitHub(t)
+	localUpstreams(t)
 	t.Setenv("SEALIFT_POLICY", "")
 	for name, c := range map[string]struct {
 		node string
@@ -741,28 +820,53 @@ func TestRunAppliesThePolicy(t *testing.T) {
 	// applies runs another version than the one the policy names.
 	writeFile(t, policy, `targets:
   npm: {os: linux, cpu: arm64, libc: musl, node: 22.18.0, pnpm: 10.30.1}
+  pip: {python: 3.12.4, os: linux, cpu: x86_64, glibc: 2.31, uv: 0.13.7}
 minReleaseAgeDays: 30
 parallelism: {resolve: 2, download: 3}
+brand: {name: Harbor}
 `)
 	t.Setenv("SEALIFT_POLICY", policy)
 	root := filepath.Join(t.TempDir(), "data")
 	var logs bytes.Buffer
 	addr, stop := startRun(t, root, slog.New(slog.NewJSONHandler(&logs, nil)))
 
-	resp, err := http.Get("http://" + addr + "/api/settings")
-	if err != nil {
-		t.Fatal(err)
+	get := func(path string, into any) error {
+		resp, err := http.Get("http://" + addr + path)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		return json.NewDecoder(resp.Body).Decode(into)
 	}
 	var got api.Settings
-	err = json.NewDecoder(resp.Body).Decode(&got)
-	resp.Body.Close()
+	var instance api.Instance
+	settingsErr := get("/api/settings", &got)
+	instanceErr := get("/api/instance", &instance)
 	stop()
-	if err != nil {
-		t.Fatal(err)
+	if settingsErr != nil {
+		t.Fatal(settingsErr)
+	}
+	if instanceErr != nil {
+		t.Fatal(instanceErr)
 	}
 	if got.Target.Cpu != "arm64" || got.Target.Libc != "musl" || got.Target.Node != "22.18.0" || got.Target.PnpmVer != "10.30.1" ||
 		got.MinReleaseAgeDays != 30 || got.ResolveParallelism != 2 || got.DownloadParallelism != 3 {
 		t.Errorf("GET /api/settings = %+v, want the policy's values", got)
+	}
+	// The instance answer and a new pip project's default read the policy
+	// the handlers hold, a value apart from the stored settings above.
+	if instance.Brand.Name != "Harbor" {
+		t.Errorf("GET /api/instance brand.name = %q, want the policy's Harbor", instance.Brand.Name)
+	}
+	wantPip := api.PipTarget{Python: "3.12.4", Os: "linux", Cpu: "x86_64", Glibc: "2.31", UvVer: "0.13.7"}
+	if instance.Policy.PipTarget != wantPip {
+		t.Errorf("GET /api/instance policy.pipTarget = %+v, want the policy's %+v", instance.Policy.PipTarget, wantPip)
+	}
+	if instance.Policy.Target.PnpmVer != "10.30.1" || instance.Policy.MinReleaseAgeDays != 30 {
+		t.Errorf("GET /api/instance policy = %+v, want the policy's values", instance.Policy)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "private", "settings.json")); !os.IsNotExist(err) {
 		t.Errorf("the policy was written to the volume (stat: %v)", err)

@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
 
 // NewHandlers builds the Handlers every operation of the contract runs
-// against.
+// against, under the default policy.
 func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy runner.Trivy) *Handlers {
 	return &Handlers{
 		EventsHandler: &EventsHandler{Jobs: svc},
@@ -20,20 +21,24 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager, trivy ru
 		Service:       svc,
 		Tools:         tm,
 		Trivy:         trivy,
+		Ready:         toolsReadiness{tm},
+		Policy:        policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()},
 	}
 }
 
-// Routes returns every route this backend serves: the health check
-// outside the contract, every operation of api/openapi.yaml mounted at
-// base URL /api through the generated strict server, and the frontend
-// build in static for every other path. refuseCrossSite wraps all of it and
+// Routes returns every route this backend serves: the readiness and
+// liveness checks at the root, the readiness one answered from h.Ready;
+// every other operation of api/openapi.yaml mounted at base URL /api
+// through the generated strict server; and the frontend build in static
+// for every other path. refuseCrossSite wraps all of it and
 // guards the signing key's regenerate route and the tool installs. WatchJob
 // (the event stream) is one of the contract's operations: Handlers embeds
 // *EventsHandler, so the generated dispatch reaches it exactly like any JSON
 // operation.
 func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", HealthHandler)
+	mux.HandleFunc("GET /healthz", HealthHandler(h.Ready))
+	mux.HandleFunc("GET /livez", LiveHandler)
 
 	strict := NewStrictHandlerWithOptions(h, nil, StrictHTTPServerOptions{
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {

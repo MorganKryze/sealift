@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -210,5 +211,22 @@ func TestInstalledPnpmListsExtractedVersions(t *testing.T) {
 	want := []string{"10.34.5", "9.15.0"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("InstalledPnpm = %v, want %v (sorted)", got, want)
+	}
+}
+
+func TestInstalledPnpmSkipsStagingFolders(t *testing.T) {
+	root := t.TempDir()
+	m := NewManager(fakeVolume{root: root}, http.DefaultClient, nil)
+	for _, dir := range []string{"10.34.5", "10.34.5.tmp", "9.15.0", "9.15.0.old-1732441200"} {
+		if err := os.MkdirAll(filepath.Join(root, "tools", "pnpm", dir), 0o770); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := m.InstalledPnpm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"10.34.5", "9.15.0"}; !slices.Equal(got, want) {
+		t.Errorf("InstalledPnpm() = %v, want %v", got, want)
 	}
 }

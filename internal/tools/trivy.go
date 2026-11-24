@@ -90,6 +90,12 @@ func (m *Manager) TrivyState(_ context.Context) (TrivyState, error) {
 	}, nil
 }
 
+// Scanner reports the pinned Trivy and the vulnerability database's date.
+// Neither read can fail: a missing or unreadable database is a zero time.
+func (m *Manager) Scanner() (pinned string, dbDate time.Time) {
+	return m.trivyPin().Version, m.trivyDBDate()
+}
+
 // Ready reports whether an analysis or export can run without sealift
 // installing anything on its own: the pinned Trivy active and a
 // vulnerability database, both already on the data volume. Another active

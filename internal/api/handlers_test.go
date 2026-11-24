@@ -1841,6 +1841,25 @@ func TestCreatePipProject(t *testing.T) {
 	}
 }
 
+// A pip project whose request names no target gets the one the policy sets,
+// whatever the built-in default.
+func TestPipProjectTakesThePolicyTarget(t *testing.T) {
+	srv, h := newTestServer(t)
+	allowPipAnalyses(t, h)
+	h.Policy.Pip = store.PipTarget{Python: "3.12.4", OS: "linux", CPU: "x86_64", Glibc: "2.31", UvVer: store.DefaultPipTarget.UvVer}
+	status, data := postParts(t, srv, pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n")))
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body: %s", status, data)
+	}
+	var project Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if want := pipTargetToAPI(h.Policy.Pip); project.PipTarget == nil || *project.PipTarget != want {
+		t.Errorf("pipTarget = %+v, want the policy's %+v", project.PipTarget, want)
+	}
+}
+
 // fakeUv is a runner.Uv that resolves every requirement to itself.
 type fakeUv struct{}
 

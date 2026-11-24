@@ -159,7 +159,7 @@ A fresh clone builds without Node: `web/dist/index.html` is a tracked placeholde
 go run ./cmd/sealift -addr 127.0.0.1:8080 -data "$(mktemp -d)"
 ```
 
-The first run shows the setup screen, which downloads Trivy and its database into the data directory. Outside the image, sealift runs pnpm and Trivy as your own user. The switch to a separate `tools` user happens only when `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` are set, as the image does. `SEALIFT_NPM_REGISTRY` points the registry client at another registry, which the end-to-end test uses.
+The first run prepares itself. The server downloads the pinned Trivy, its vulnerability database, and the pnpm and uv versions of the default targets into the data directory. `/healthz` answers 503 until all of them are in place, while the interface already works. A failed download keeps its cause in the log and runs again a minute later. The dev loop sets no variable, so these downloads come from GitHub, the npm registry and PyPI. `SEALIFT_GITHUB_API`, `SEALIFT_NPM_REGISTRY` and `SEALIFT_PIP_INDEX` point them elsewhere. The browser gate points all three at a local stand-in, so it reaches nothing outside the machine. Outside the image, sealift runs pnpm and Trivy as your own user. The switch to a separate `tools` user happens only when `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` are set, as the image does. The end-to-end test sets `SEALIFT_NPM_REGISTRY` to its own registry, which serves both the analyses and the pnpm download.
 
 ### Run the web dev server
 
@@ -252,7 +252,7 @@ The repository has no mutation-testing setup. A new test should still fail for t
 | `e2e`, on amd64 and arm64 | The Compose end-to-end test | `just e2e` |
 | `chart` | `helm lint --strict` and the render tests of `charts/`, with Helm 3.22.1; the tests fail instead of skipping | `just chart` |
 
-`.github/workflows/image.yml` builds the image on pushes to `main`, on version tags and on pull requests. A smoke test first builds it natively, starts it, calls `/healthz`, and checks the `app` user, that the `tools` user can write to `/data` but cannot read `/data/private/settings.json`, and that `HOME` exists. It then builds each architecture on its own runner. Only pushes and tags publish, and a `v` tag adds the version and `latest` tags to the manifest.
+`.github/workflows/image.yml` builds the image on pushes to `main`, on version tags and on pull requests. A smoke test first builds it natively and starts it with `SEALIFT_GITHUB_TOKEN`. It waits up to 600 s for `/healthz` to answer 200, then checks the `app` user, that the `tools` user can write to `/data` but cannot read `/data/private/signing-key.pem`, and that `HOME` exists. It then builds each architecture on its own runner. Only pushes and tags publish, and a `v` tag adds the version and `latest` tags to the manifest.
 
 Before you open a pull request, run `just check`, `just web-check`, `just docs`, and `just web-build` if you touched the web. Add `just integration` when you touched `internal/runner` or `internal/tools`, `just e2e` for a change to the analysis, the export or the image, and the browser gate for a change to a screen. The pre-commit hook covers the Go checks only.
 

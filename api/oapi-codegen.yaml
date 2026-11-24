@@ -4,4 +4,8 @@ generate:
   std-http-server: true
   strict-server: true
   embedded-spec: false
+output-options:
+  # The probes answer at the root, outside the base URL; server.go mounts them.
+  exclude-tags:
+    - probes
 output: internal/api/api.gen.go
