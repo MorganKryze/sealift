@@ -1448,3 +1448,22 @@ func TestSameSelectionSameArchiveWhateverTheReasons(t *testing.T) {
 		t.Error("the two manifests should carry their own reason, the test proves nothing")
 	}
 }
+
+func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	if err := os.MkdirAll(exportDir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	shipped := []shippedPackage{{File: strings.Repeat("a", archive.MaxManifestSize)}}
+	err := exp.writeManifest(shipped, report.ArchiveManifest{}, h.store.SigningKey(), nil)
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 bytes the import reads") {
+		t.Fatalf("writeManifest = %v, want the manifest refused for its size", err)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
+	}
+}
