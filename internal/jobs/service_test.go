@@ -1006,6 +1006,63 @@ func TestAnalysisThatFailedBeforeItBeganKeepsItsCause(t *testing.T) {
 	}
 }
 
+// TestAnalysisThatFailedAfterItBeganKeepsItsSteps proves the prepare step
+// is written only for a run that never started: a run that wrote its own
+// steps, then failed without committing itself, keeps them and the cause
+// its failed step recorded.
+func TestAnalysisThatFailedAfterItBeganKeepsItsSteps(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	pending, err := st.NewDir("analyses", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	createdAt, _ := store.JobCreatedAt(pending.ID())
+	if err := svc.seedPending(pending, createdAt, project); err != nil {
+		t.Fatalf("seedPending: %v", err)
+	}
+
+	steps := []stepRecord{
+		{Name: "validate", State: string(store.Done), DurationMs: 3},
+		{Name: "prepare-tools", State: string(store.Done), DurationMs: 40},
+		{Name: "resolve-project", State: string(store.Failed), DurationMs: 900, Error: "pnpm install: exit status 1"},
+	}
+	job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+		status := statusFile{State: store.Running, CreatedAt: createdAt, Target: project.Target, Steps: steps}
+		if err := st.WriteJSON(filepath.Join(pending.Path(), "status.json"), status); err != nil {
+			return err
+		}
+		// Returns without renaming, as Analysis.Run does when its own
+		// commit fails.
+		return errors.New("jobs: write status.json: no space left on device")
+	}}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, "", pending)
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+	info, err := st.AnalysisInfo(project.ID, pending.ID())
+	if err != nil {
+		t.Fatalf("AnalysisInfo: %v", err)
+	}
+	if info.State != store.Failed {
+		t.Errorf("State = %q, want %q", info.State, store.Failed)
+	}
+	want := store.StepFailure{Step: "resolve-project", Message: "pnpm install: exit status 1"}
+	if info.Failure == nil || *info.Failure != want {
+		t.Errorf("Failure = %+v, want %+v", info.Failure, want)
+	}
+	var status statusFile
+	if err := st.ReadJSON(filepath.Join(pending.Final(), "status.json"), &status); err != nil {
+		t.Fatalf("read status.json: %v", err)
+	}
+	if !slices.Equal(status.Steps, steps) {
+		t.Errorf("steps = %+v, want the run's own %+v", status.Steps, steps)
+	}
+}
+
 // TestAnalysisThatRanKeepsItsRunWhenItsStateCannotBeReconciled proves the
 // finalizer never discards an analysis that wrote something. Its own
 // commit can fail (a full volume fails the status write there and again
