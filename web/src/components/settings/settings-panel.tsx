@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import { createContext, useContext, useState, type ReactNode } from "react"
 
-import { getSettings } from "@/api/settings"
-import { SettingsForm } from "@/components/settings/settings-form"
+import { getInstance } from "@/api/settings"
+import { PolicySection } from "@/components/settings/policy-section"
 import { SigningKeySection } from "@/components/settings/signing-key-section"
 import { ToolsPanel } from "@/components/settings/tools-panel"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -73,7 +73,7 @@ export function SettingsPanelProvider({ children }: { children: ReactNode }) {
 }
 
 function SettingsPanelBody() {
-  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
+  const instanceQuery = useQuery({ queryKey: ["instance"], queryFn: getInstance })
 
   return (
     <div className="flex flex-col gap-8 px-6 py-6">
@@ -85,19 +85,19 @@ function SettingsPanelBody() {
         <ThemeToggle />
       </section>
 
-      {settingsQuery.isPending ? (
+      {instanceQuery.isPending ? (
         <p role="status" className="text-sm text-muted">
           Loading settings…
         </p>
-      ) : settingsQuery.isError ? (
+      ) : instanceQuery.isError ? (
         <p role="alert" className="text-sm text-severity-critical-fg">
-          Could not load the settings: {settingsQuery.error.message}
+          Could not load the settings: {instanceQuery.error.message}
         </p>
       ) : (
         <>
-          <SettingsForm settings={settingsQuery.data} />
+          <PolicySection policy={instanceQuery.data.policy} ephemeral={instanceQuery.data.ephemeral} idleMinutes={instanceQuery.data.idleMinutes} />
           <SigningKeySection />
-          <ToolsPanel minReleaseAgeDays={settingsQuery.data.minReleaseAgeDays} pnpmVersion={settingsQuery.data.target.pnpmVer} />
+          <ToolsPanel tools={instanceQuery.data.tools} />
         </>
       )}
     </div>

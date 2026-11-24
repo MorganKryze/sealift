@@ -159,7 +159,7 @@ A fresh clone builds without Node: `web/dist/index.html` is a tracked placeholde
 go run ./cmd/sealift -addr 127.0.0.1:8080 -data "$(mktemp -d)"
 ```
 
-The first run shows the setup screen, which downloads Trivy and its database into the data directory. Outside the image, sealift runs pnpm and Trivy as your own user. The switch to a separate `tools` user happens only when `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` are set, as the image does. `SEALIFT_NPM_REGISTRY` points the registry client at another registry, which the end-to-end test uses.
+The first run prepares itself. The server downloads the pinned Trivy, its vulnerability database, and the pnpm and uv versions of the default targets into the data directory. `/healthz` answers 503 until all of them are in place, while the interface already works. A failed download keeps its cause in the log and runs again a minute later. The dev loop sets no variable, so these downloads come from GitHub, the npm registry and PyPI. `SEALIFT_GITHUB_API`, `SEALIFT_NPM_REGISTRY` and `SEALIFT_PIP_INDEX` point them elsewhere. The browser gate points all three at a local stand-in, so it reaches nothing outside the machine. Outside the image, sealift runs pnpm and Trivy as your own user. The switch to a separate `tools` user happens only when `SEALIFT_TOOLS_UID` and `SEALIFT_TOOLS_GID` are set, as the image does. The end-to-end test sets `SEALIFT_NPM_REGISTRY` to its own registry, which serves both the analyses and the pnpm download.
 
 ### Run the web dev server
 
@@ -222,7 +222,7 @@ pnpm -C web exec playwright install chromium
 pnpm -C web exec playwright test tests/ui-gate.spec.mjs
 ```
 
-On every import route the gate also fails when the page calls a collection route (`/api/projects`, `/api/settings`, `/api/tools`, `/api/jobs`) or the browser reports a Content-Security-Policy violation. [Web](web.md#checks) lists the users and the states the import fixtures give them.
+On every import route the gate also fails when the page calls a collection route (`/api/projects`, `/api/settings`, `/api/jobs`) or the browser reports a Content-Security-Policy violation. [Web](web.md#checks) lists the users and the states the import fixtures give them.
 
 To add a screen to the gate:
 
@@ -252,7 +252,7 @@ The repository has no mutation-testing setup. A new test should still fail for t
 | `e2e`, on amd64 and arm64 | The Compose end-to-end test | `just e2e` |
 | `chart` | `helm lint --strict` and the render tests of `charts/`, with Helm 3.22.1; the tests fail instead of skipping | `just chart` |
 
-`.github/workflows/image.yml` builds the image on pushes to `main`, on version tags and on pull requests. A smoke test first builds it natively, starts it, calls `/healthz`, and checks the `app` user, that the `tools` user can write to `/data` but cannot read `/data/private/settings.json`, and that `HOME` exists. It then builds each architecture on its own runner. Only pushes and tags publish, and a `v` tag adds the version and `latest` tags to the manifest.
+`.github/workflows/image.yml` builds the image on pushes to `main`, on version tags and on pull requests. A smoke test first builds it natively and starts it with `SEALIFT_GITHUB_TOKEN`. It waits up to 600 s for `/healthz` to answer 200, then checks the `app` user, that the `tools` user can write to `/data` but cannot read `/data/private/signing-key.pem`, and that `HOME` exists. It then builds each architecture on its own runner. Only pushes and tags publish, and a `v` tag adds the version and `latest` tags to the manifest.
 
 Before you open a pull request, run `just check`, `just web-check`, `just docs`, and `just web-build` if you touched the web. Add `just integration` when you touched `internal/runner` or `internal/tools`, `just e2e` for a change to the analysis, the export or the image, and the browser gate for a change to a screen. The pre-commit hook covers the Go checks only.
 
@@ -333,7 +333,7 @@ The same selection from the same analysis therefore gives the same bytes and the
 Nothing rewrites data on the volume when sealift upgrades. A newer sealift reads what an older one wrote, and an older record stays readable for as long as its release has been published.
 
 - A new field is optional. Records use `omitempty` and pointers, so a record without the field reads as "not recorded". `Report.ArchiveChecked` in `internal/importer/report.go` is a `*bool` for this reason.
-- `internal/store.Open` loads `private/settings.json` as written and fills no defaults, so a setting added later reads as its zero value until someone saves. Choose a zero value that keeps the old behavior, or check for it where the value is used.
+- `private/settings.json` holds what 0.7.0 and earlier saved, and nothing writes it any more. `internal/policy.Load` gives each value from the policy file, else from that file, else from the default. A stored zero takes the default, and the start log names the key. A key added to the policy file has no stored value to read.
 - Import records carry `FormatVersion`, and `manifest.json` carries `formatVersion`. Raise a version only when the meaning of a field changes in a way an older reader would misread. Do not raise it to add a field.
 - Keep a fixture of each shape a release has written, as `internal/store/imports/testdata/import-v0.4.0-incomplete.json` does, and test that it reads and that rewriting it adds no `null`.
 - The interface shows an absent value in words, as in `Not recorded`, and does not invent one.
@@ -342,7 +342,7 @@ Nothing rewrites data on the volume when sealift upgrades. A newer sealift reads
 
 Each part gets the access it needs and no more:
 
-- pnpm and Trivy run as the `tools` user. `private/settings.json` is mode 0600 and readable by `app` only, so the tools cannot read the settings.
+- pnpm, uv and Trivy run as the `tools` user. `private/` is readable by `app` only, so the tools cannot read the signing key or the settings 0.7.0 saved.
 - The import binary has no capability, and the image runs as `app`, not root. The import roles are built to run under `--cap-drop ALL`, which the operator sets in the Compose file or `docker run`.
 - `internal/importer/s3` can list, head, read and delete, and has no call that writes an object. Deletion happens only after a complete import, and only when the archive and manifest still carry the ETag the import recorded.
 - The import service reads the token from one header, the one `token.header` names (`X-Access-Token` by default), and takes the user from the checked claims through the request context and from nowhere else. A user sees only their own folder in MinIO and their own imports.
@@ -387,14 +387,14 @@ A route for the import service follows the same steps with `api/import.yaml`, `i
 
 Use `web/src/import/routes/` for the route, `web/src/components/import/` for components and `web/src/import/api/` for the client. Import only what the ESLint boundary allows. A new call must also pass the `CONTRACT` pattern and the path type of `importFetch` in `web/src/import/api/client.ts`. Add a route to `IMPORT.routes` in the gate and a record to `web/tests/import-fixtures.mjs` for any state it shows. Check it on the lab with `SEALIFT_IMAGE=sealift:dev`, as [Web](web.md#the-import-screens) lists. Update `docs/importing.md` and `docs/air-gap.md`.
 
-### A setting
+### A policy key
 
-1. Add the field to `Settings` in `internal/store/types.go`, its default to `defaultSettings` and its range check to `internal/store/store.go`.
-2. Add it to the `Settings` schema in `api/openapi.yaml`, then run `just generate`.
-3. Carry it through `UpdateSettings` and `settingsToAPI` in `internal/api/handlers_settings.go`. `PUT /api/settings` replaces every field, so a field left out of `UpdateSettings` is saved as its zero value.
+1. Add the key to `rawPolicy`, or the raw type it belongs to, in `internal/policy/policy.go` or `brand.go`, with its default and its range check, and the field it fills to `Policy`. A refusal names the key in full and the rule, and does not repeat the file's value. Add the raw type to `keyPrefix` when it is new, so an unknown key under it is named in full.
+2. Test the default, both ends of the range and a refusal in `internal/policy/policy_test.go`, and assert the refusal's text.
+3. Add it to the `Policy` or `Brand` schema in `api/openapi.yaml`, then run `just generate`, and fill it in `internal/api/handlers_instance.go`.
 4. Use the value where it applies. A running job keeps the values it started with.
-5. Add it to the form in `web/src/components/settings/settings-form.tsx`, with its range and its error text, and extend `settings-form.test.tsx`.
-6. Account for a `settings.json` written before the field existed (see "Stored data has no migrations" above) and test it in `internal/store/store_test.go`.
+5. Show it, read-only, in `web/src/components/settings/policy-section.tsx`, and extend `policy-section.test.tsx`.
+6. Add it, commented out, to `deploy/connected/policy/policy.yaml`. `TestExamplePolicyLoads` in `deploy/deploy_test.go` checks that the example, uncommented, gives the defaults.
 7. Update `docs/settings.md` and the defaults line of `llms.txt`.
 
 ### An import check

@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness
+         * @description Answers 200 once every item of the preparation is ready, 503 with the names of the others until then. The causes are in GET /api/instance.
+         */
+        get: operations["getHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/livez": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Liveness
+         * @description Answers 200 while the process serves requests, preparing or not, so a liveness probe never restarts an instance that is still downloading.
+         */
+        get: operations["getLive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects": {
         parameters: {
             query?: never;
@@ -278,8 +318,7 @@ export interface paths {
         };
         /** Get settings */
         get: operations["getSettings"];
-        /** Update settings */
-        put: operations["updateSettings"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -294,8 +333,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** How this instance was deployed */
+        /** How this instance was deployed and what it has prepared */
         get: operations["getInstance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instance/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The logo the policy file names
+         * @description The bytes read at start, with their type. The headers keep a script in an SVG from running when this address is opened directly.
+         */
+        get: operations["getInstanceLogo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -335,91 +394,6 @@ export interface paths {
          * @description Answers 403 for a Host or an Origin that is not this server's own, for Sec-Fetch-Site cross-site, and for a body that is not application/json. The old key stays in use when the new one cannot be written.
          */
         post: operations["regenerateSigningKey"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Installed and available tool versions, DB date */
-        get: operations["getTools"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Install a new Trivy release */
-        post: operations["updateTrivy"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/activate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Activate an installed Trivy version */
-        post: operations["activateTrivy"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/uv/install": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Install a uv release from the package index */
-        post: operations["installUv"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tools/trivy/db/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Force a Trivy DB download */
-        post: operations["updateTrivyDB"];
         delete?: never;
         options?: never;
         head?: never;
@@ -515,8 +489,92 @@ export interface components {
             ephemeral: boolean;
             /** @description Present in ephemeral mode only. */
             idleMinutes?: number;
+            /** @description Whether every item of the preparation is ready. */
+            ready: boolean;
+            /** @description A database refresh that failed while an older database stays in use, with its cause. */
+            warning?: string;
+            /** @description Each item the start prepares, in order. */
+            preparing: components["schemas"]["PreparingItem"][];
+            brand: components["schemas"]["Brand"];
+            policy: components["schemas"]["Policy"];
+            tools: components["schemas"]["InstanceTools"];
         };
-        /** @description Every value the interface can change. */
+        /** @description One thing an analysis needs, as the start prepares it. */
+        PreparingItem: {
+            /** @enum {string} */
+            name: "trivy" | "trivy-db" | "signing-key" | "pnpm" | "uv";
+            /** @description The pinned Trivy, the database's date, the public key's sha256, or the pnpm or uv version. */
+            version?: string;
+            /** @enum {string} */
+            state: "preparing" | "ready" | "failed";
+            /** @description A failed item's cause. */
+            reason?: string;
+            /**
+             * Format: date-time
+             * @description A failed item's next attempt.
+             */
+            nextTry?: string;
+        };
+        /** @description The name and the marks the interface shows. */
+        Brand: {
+            /** @example sealift */
+            name: string;
+            /**
+             * @description The label of the connected side.
+             * @example Online
+             */
+            online: string;
+            /**
+             * @description The label of the air-gapped side.
+             * @example Offline
+             */
+            offline: string;
+            /**
+             * @description The word for a reviewed request.
+             * @example PR
+             */
+            reviewWord: string;
+            /** @description Whether GET /instance/logo serves a logo. */
+            logo: boolean;
+            /**
+             * @description A colour written #rrggbb. Absent for the default one.
+             * @example #0b6e99
+             */
+            accent?: string;
+            contact?: components["schemas"]["Contact"];
+        };
+        /** @description Who the interface points a user to. */
+        Contact: {
+            label: string;
+            /** @description An https or mailto address. */
+            url: string;
+        };
+        /** @description The defaults and limits the deployment sets for every new project and analysis. */
+        Policy: {
+            target: components["schemas"]["Target"];
+            pipTarget: components["schemas"]["PipTarget"];
+            minReleaseAgeDays: number;
+            resolveParallelism: number;
+            downloadParallelism: number;
+        };
+        /** @description The tool versions on the data volume. */
+        InstanceTools: {
+            /**
+             * @description The Trivy release this instance runs.
+             * @example 0.55.0
+             */
+            trivy: string;
+            /**
+             * Format: date-time
+             * @description Last update of the vulnerability database. Absent before the first one.
+             */
+            trivyDbDate?: string;
+            /** @description The pnpm versions installed, sorted. */
+            pnpm: string[];
+            /** @description The uv versions installed, sorted. */
+            uv: string[];
+        };
+        /** @description The values the deployment set, read only; the policy file changes them. */
         Settings: {
             target: components["schemas"]["Target"];
             minReleaseAgeDays: number;
@@ -716,27 +774,6 @@ export interface components {
             files?: string[];
             failure?: components["schemas"]["Failure"];
         };
-        /** @description Installed and available pnpm, uv and Trivy versions, and the DB date. */
-        ToolsState: {
-            pnpmInstalled: string[];
-            /** @description The uv versions installed on the data volume, sorted */
-            uvInstalled?: string[];
-            trivyActive: string;
-            trivyInstalled: string[];
-            trivyLatest: string;
-            /** @description Duration since the latest Trivy release, as a Go duration string */
-            trivyLatestAge: string;
-            /** Format: date-time */
-            trivyDbDate: string;
-            /** @description Size in bytes of the latest Trivy release asset for this host, 0 when the latest release is itself unavailable */
-            latestSizeBytes: number;
-            /** @description Newest Trivy release old enough to install without force, set only while the latest release is younger than the minimum release age */
-            trivyRecommended?: string;
-            /** @description Whether trivy and its database are both in place */
-            ready: boolean;
-            /** @description Names of what ready needs and does not have yet */
-            missing: string[];
-        };
         /**
          * @description Discriminator for the data payload of an Event.
          * @enum {string}
@@ -809,6 +846,66 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "ok";
+                    };
+                };
+            };
+            /** @description Still preparing */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "preparing";
+                        /** @description The items not ready yet. */
+                        missing: string[];
+                    };
+                };
+            };
+        };
+    };
+    getLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @constant */
+                        status: "ok";
+                    };
+                };
+            };
+        };
+    };
     listProjects: {
         parameters: {
             query?: {
@@ -1250,31 +1347,6 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    updateSettings: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Settings"];
-            };
-        };
-        responses: {
-            /** @description Updated settings */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Settings"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
     getInstance: {
         parameters: {
             query?: never;
@@ -1284,7 +1356,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The deployment mode */
+            /** @description The deployment mode, the preparation, the policy, the brand and the tool versions */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1293,6 +1365,31 @@ export interface operations {
                     "application/json": components["schemas"]["Instance"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInstanceLogo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The logo */
+            200: {
+                headers: {
+                    "Content-Security-Policy": string;
+                    "X-Content-Type-Options": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/svg+xml": string;
+                };
+            };
+            404: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -1341,135 +1438,6 @@ export interface operations {
             };
             403: components["responses"]["Problem"];
             500: components["responses"]["Problem"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    getTools: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Tools state */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    updateTrivy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description Install this release instead of the latest, such as the ToolsState.trivyRecommended version. Still subject to the minimum age check unless force is set. */
-                    version?: string;
-                    /** @description Install the latest release regardless of its age */
-                    force: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the update */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    activateTrivy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    version: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the activation */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    installUv: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description The uv release to install, such as 0.13.7 */
-                    version: string;
-                    /** @description Install the release even when it is younger than the minimum release age */
-                    force?: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description Tools state after the install */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    updateTrivyDB: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Tools state after the DB update */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolsState"];
-                };
-            };
             default: components["responses"]["Problem"];
         };
     };

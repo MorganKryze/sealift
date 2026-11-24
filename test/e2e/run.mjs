@@ -108,32 +108,13 @@ async function main() {
 
   const manifest = readFileSync("project/package.json");
 
-  // On a fresh volume, before trivy and its database are both in place,
-  // creating a project must be refused rather than queuing an analysis
-  // that only fails once it reaches trivy itself.
-  const precheckForm = new FormData();
-  precheckForm.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");
-  const precheckRes = await fetch(`${api}/projects`, { method: "POST", body: precheckForm });
-  if (precheckRes.status !== 409) {
-    throw new Error(`create project before tools are ready -> ${precheckRes.status}, want 409`);
+  // The start prepares Trivy, its database, pnpm and uv before /healthz
+  // answers 200; the instance answer says the same before the first project.
+  const instance = await json(`${api}/instance`);
+  if (instance.ready !== true) {
+    throw new Error(`GET /api/instance -> ready ${instance.ready}, want true: ${JSON.stringify(instance.preparing)}`);
   }
-  console.log("create project refused before tools are ready, as expected");
-
-  // Nothing installs Trivy on a fresh volume before the first analysis
-  // needs it; the interface's force-update button is the real path to
-  // reach for one, so this drives that same route. The vulnerability
-  // database is a separate install: nothing populates it until an
-  // analysis runs UpdateDB itself, which the readiness gate above would
-  // otherwise never let happen.
-  const tools = await json(`${api}/tools/trivy/update`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force: true }),
-  });
-  console.log("trivy installed:", tools.trivyActive);
-
-  const toolsAfterDB = await json(`${api}/tools/trivy/db/update`, { method: "POST" });
-  console.log("trivy database installed:", toolsAfterDB.trivyDbDate);
+  console.log("instance ready: trivy", instance.tools.trivy, "database", instance.tools.trivyDbDate);
 
   const form = new FormData();
   form.append("manifest", new Blob([manifest], { type: "application/json" }), "package.json");

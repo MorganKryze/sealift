@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -25,10 +24,6 @@ import (
 // defaultGitHubAPI is the public GitHub API, overridden in tests through
 // Manager.GitHubAPI.
 const defaultGitHubAPI = "https://api.github.com"
-
-// defaultLookupTimeout is how long TrivyState waits on GitHub before it
-// reports the installed versions alone.
-const defaultLookupTimeout = 3 * time.Second
 
 // Volume is the narrow view of the data volume that Manager needs. The
 // store package builds it; a caller outside the container can supply any
@@ -38,8 +33,7 @@ type Volume interface {
 	Settings() store.Settings
 }
 
-// Manager installs pnpm and Trivy under the data volume and switches which
-// installed Trivy version is active.
+// Manager installs pnpm, uv and the pinned Trivy under the data volume.
 type Manager struct {
 	vol  Volume
 	http *http.Client
@@ -60,16 +54,16 @@ type Manager struct {
 	// GitHubAPI overrides the GitHub API base URL. Empty uses the public
 	// API; tests point it at an httptest server.
 	GitHubAPI string
-	// GitHubToken authenticates the release lookups against the GitHub
-	// API, to lift the anonymous rate limit. Empty sends no credentials.
+	// GitHubToken authenticates the pinned release's lookup against the
+	// GitHub API, to lift the anonymous rate limit. Empty sends no
+	// credentials.
 	GitHubToken string
 	// Arch overrides the host CPU architecture used to pick the Trivy
 	// release asset. Empty uses runtime.GOARCH.
 	Arch string
-	// LookupTimeout bounds the GitHub lookups TrivyState makes, together.
-	// Zero uses defaultLookupTimeout. Downloads and installs are not bound
-	// by it: they are explicit actions and keep the client's timeout.
-	LookupTimeout time.Duration
+	// Trivy is the release EnsureTrivy installs and Ready wants active.
+	// Zero runs PinnedTrivy; tests set a pin of their own.
+	Trivy TrivyPin
 }
 
 // NewManager returns a Manager that installs tools into vol's data volume,

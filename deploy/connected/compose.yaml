@@ -29,6 +29,11 @@ services:
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
+      # A first start downloads Trivy, its database, pnpm and uv before
+      # /healthz answers 200. Failures in the first 10 minutes do not count,
+      # and the check runs every 5 s until the first success.
+      start_period: 10m
+      start_interval: 5s
 
 # External, so that a sealift-data volume from a docker run install is kept
 # and the volume has the same name whatever the project is called. Create it

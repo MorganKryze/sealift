@@ -47,12 +47,105 @@ func TestOpenCreatesLayoutModes(t *testing.T) {
 		}
 	}
 
-	info, err := os.Stat(filepath.Join(root, "private", "settings.json"))
+	reopened := t.TempDir()
+	path := writeSettings070(t, reopened)
+	if _, err := Open(reopened); err != nil {
+		t.Fatalf("Open on a 0.7.0 volume: %v", err)
+	}
+	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat settings.json: %v", err)
 	}
 	if got := info.Mode().Perm(); got != settingsMode {
 		t.Errorf("settings.json mode = %o, want %o", got, settingsMode)
+	}
+}
+
+// settings070 holds the bytes 0.7.0 writes to private/settings.json once its
+// operator sets a minimum release age of 21 days. 0.7.0 writes no pipTarget.
+const settings070 = `{
+  "target": {
+    "os": "linux",
+    "cpu": "x64",
+    "libc": "glibc",
+    "node": "22.17.1",
+    "pnpmVer": "10.34.5"
+  },
+  "minReleaseAgeDays": 21,
+  "resolveParallelism": 4,
+  "downloadParallelism": 16
+}`
+
+// writeSettings070 writes settings070 under root the way 0.7.0 leaves it
+// and returns its path.
+func writeSettings070(t *testing.T, root string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "private"), privateMode); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "private", "settings.json")
+	if err := os.WriteFile(path, []byte(settings070), settingsMode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestFreshVolumeHoldsNoSettingsFile(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := Open(root); err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "private", "settings.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a fresh volume holds private/settings.json (stat: %v), want none", err)
+	}
+	if got, ok := s.StoredSettings(); ok || got != (Settings{}) {
+		t.Errorf("StoredSettings() = %+v, %v, want nothing stored", got, ok)
+	}
+	if s.Settings() != DefaultSettings {
+		t.Errorf("Settings() = %+v, want the defaults %+v", s.Settings(), DefaultSettings)
+	}
+}
+
+func TestUseSettingsWritesNothing(t *testing.T) {
+	for name, prepare := range map[string]func(t *testing.T, root string){
+		"fresh volume": func(*testing.T, string) {},
+		"0.7.0 volume": func(t *testing.T, root string) { writeSettings070(t, root) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			prepare(t, root)
+			before, _ := os.ReadFile(filepath.Join(root, "private", "settings.json"))
+			s, err := Open(root)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			want := DefaultSettings
+			want.MinReleaseAgeDays = 30
+			want.DownloadParallelism = 8
+			if err := s.UseSettings(want); err != nil {
+				t.Fatalf("UseSettings: %v", err)
+			}
+			if got := s.Settings(); got != want {
+				t.Errorf("Settings() = %+v, want %+v", got, want)
+			}
+			after, _ := os.ReadFile(filepath.Join(root, "private", "settings.json"))
+			if string(after) != string(before) {
+				t.Errorf("settings.json went from %q to %q, want it untouched", before, after)
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "private"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != "settings.json" && e.Name() != "signing-key.pem" {
+					t.Errorf("private/ holds %s after UseSettings", e.Name())
+				}
+			}
+		})
 	}
 }
 
@@ -66,13 +159,13 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
-	if s.Settings() != defaultSettings {
-		t.Errorf("Settings() = %+v, want the defaults %+v", s.Settings(), defaultSettings)
+	if s.Settings() != DefaultSettings {
+		t.Errorf("Settings() = %+v, want the defaults %+v", s.Settings(), DefaultSettings)
 	}
 }
 
 // TestOpenStartsWithSettledParallelism pins the shipped defaults with literals,
-// since every other test compares against defaultSettings itself.
+// since every other test compares against DefaultSettings itself.
 func TestOpenStartsWithSettledParallelism(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
@@ -87,28 +180,24 @@ func TestOpenStartsWithSettledParallelism(t *testing.T) {
 	}
 }
 
-func TestSettingsRoundTripKeepsLimits(t *testing.T) {
+func TestStoredSettingsReadsA070File(t *testing.T) {
 	root := t.TempDir()
+	path := writeSettings070(t, root)
 	s, err := Open(root)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
-	want := defaultSettings
+	want := DefaultSettings
 	want.MinReleaseAgeDays = 21
-	if err := s.SaveSettings(want); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
+	got, ok := s.StoredSettings()
+	if !ok || got != want {
+		t.Errorf("StoredSettings() = %+v, %v, want %+v", got, ok, want)
 	}
-	if got := s.Settings(); got != want {
-		t.Fatalf("Settings() in memory = %+v, want %+v", got, want)
+	if s.Settings() != want {
+		t.Errorf("Settings() = %+v, want the stored %+v", s.Settings(), want)
 	}
-
-	reopened, err := Open(root)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	if got := reopened.Settings(); got != want {
-		t.Fatalf("Settings() after reopen = %+v, want %+v", got, want)
+	if raw, _ := os.ReadFile(path); string(raw) != settings070 {
+		t.Errorf("Open changed settings.json to %s", raw)
 	}
 }
 
@@ -183,22 +272,22 @@ func TestOpenRewritesA04Settings(t *testing.T) {
 	}
 }
 
-func TestSaveSettingsRefusesEmptyTargetField(t *testing.T) {
+func TestUseSettingsRefusesAnEmptyTargetField(t *testing.T) {
 	root := t.TempDir()
 	s, err := Open(root)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
-	bad := defaultSettings
+	bad := DefaultSettings
 	bad.Target.Node = ""
-	if err := s.SaveSettings(bad); err == nil {
-		t.Fatal("SaveSettings with an empty Node accepted, want an error")
+	if err := s.UseSettings(bad); err == nil {
+		t.Fatal("UseSettings with an empty Node accepted, want an error")
 	}
 
-	// The settings on disk and in memory must stay the last valid ones.
-	if got := s.Settings(); got != defaultSettings {
-		t.Errorf("Settings() after a refused save = %+v, want %+v", got, defaultSettings)
+	// The settings in memory must stay the last valid ones.
+	if got := s.Settings(); got != DefaultSettings {
+		t.Errorf("Settings() after a refused change = %+v, want %+v", got, DefaultSettings)
 	}
 }
 
@@ -207,7 +296,7 @@ func TestSaveSettingsRefusesEmptyTargetField(t *testing.T) {
 // minReleaseAgeDays, resolveParallelism, downloadParallelism)
 // instead of the exported Go field names.
 func TestSettingsJSONMatchesTheContract(t *testing.T) {
-	settings := defaultSettings
+	settings := DefaultSettings
 
 	data, err := json.Marshal(settings)
 	if err != nil {
@@ -240,37 +329,6 @@ func TestSettingsJSONMatchesTheContract(t *testing.T) {
 		if _, ok := target[k]; !ok {
 			t.Errorf("Target JSON missing key %q, got %v", k, target)
 		}
-	}
-}
-
-// TestSettingsJSONFileRoundTrip proves a settings.json written to disk with
-// the contract's field names reads back into the same Settings value.
-func TestSettingsJSONFileRoundTrip(t *testing.T) {
-	root := t.TempDir()
-	s, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-
-	want := defaultSettings
-	if err := s.SaveSettings(want); err != nil {
-		t.Fatalf("SaveSettings: %v", err)
-	}
-
-	raw, err := os.ReadFile(filepath.Join(root, "private", "settings.json"))
-	if err != nil {
-		t.Fatalf("read settings.json: %v", err)
-	}
-	if !jsonHasKey(t, raw, "minReleaseAgeDays") {
-		t.Fatalf("settings.json = %s, want contract field names", raw)
-	}
-
-	var got Settings
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if got != want {
-		t.Fatalf("round-tripped Settings = %+v, want %+v", got, want)
 	}
 }
 
@@ -307,7 +365,7 @@ func TestStoreFileIsGroupWritable(t *testing.T) {
 	}
 }
 
-func TestSaveSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
+func TestUseSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -319,9 +377,9 @@ func TestSaveSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
 	} {
 		set := s.Settings()
 		change(&set)
-		err := s.SaveSettings(set)
+		err := s.UseSettings(set)
 		if !errors.Is(err, ErrInvalidTarget) {
-			t.Errorf("%s: SaveSettings = %v, want ErrInvalidTarget", field, err)
+			t.Errorf("%s: UseSettings = %v, want ErrInvalidTarget", field, err)
 			continue
 		}
 		if !strings.Contains(err.Error(), field) || strings.Contains(err.Error(), "{") {
@@ -330,7 +388,7 @@ func TestSaveSettingsNamesTheTargetFieldItRefuses(t *testing.T) {
 	}
 }
 
-func TestSaveSettingsRefusesLimitsOutOfRange(t *testing.T) {
+func TestUseSettingsRefusesALimitOutOfRange(t *testing.T) {
 	s, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -342,9 +400,9 @@ func TestSaveSettingsRefusesLimitsOutOfRange(t *testing.T) {
 	} {
 		set := s.Settings()
 		change(&set)
-		err := s.SaveSettings(set)
+		err := s.UseSettings(set)
 		if !errors.Is(err, ErrInvalidLimits) || !strings.Contains(err.Error(), name) {
-			t.Errorf("%s: SaveSettings = %v, want ErrInvalidLimits naming it", name, err)
+			t.Errorf("%s: UseSettings = %v, want ErrInvalidLimits naming it", name, err)
 		}
 	}
 }

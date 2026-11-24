@@ -24,8 +24,11 @@ services:
     networks: [connected]
     ports:
       - 127.0.0.1:18450:8080
+    environment:
+      SEALIFT_POLICY: /etc/sealift/policy.yaml
     volumes:
       - sealift-data:/data
+      - ./policy:/etc/sealift:ro
 
   nexus:
     image: sonatype/nexus3:3.96.5@sha256:d70482a3d5d44c8733fb244742fef5ca8ac967da56ccb97398f807bb8d3e585e

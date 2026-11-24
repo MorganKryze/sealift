@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     environment:
       SEALIFT_NPM_REGISTRY: http://registry:4873
+      SEALIFT_ALLOW_HTTP_REGISTRY: "true"
       NPM_CONFIG_REGISTRY: http://registry:4873
       # Lifts GitHub's anonymous rate limit for the Trivy release lookup.
       SEALIFT_GITHUB_TOKEN: ${GITHUB_TOKEN:-}
@@ -43,7 +44,7 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 2s
-      retries: 60
+      retries: 300
 
   test:
     image: node:22-bookworm-slim

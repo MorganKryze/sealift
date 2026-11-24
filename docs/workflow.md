@@ -4,23 +4,19 @@ This page walks through each screen of a session, in order, with the label of ev
 
 The step bar at the top of a session shows Drop, Analyse, Review and Export. A finished step shows a check mark and opens again on a click. A running step shows a spinner, a failed one a cross.
 
-## Setup
+## Preparing
 
-The first run opens on Prepare sealift. It lists three things sealift needs, with their state and size:
+While the instance prepares, the home shows Preparing sealift. sealift prepares each item on its own at start, and the screen has no button:
 
 | Item | Where it comes from |
 | --- | --- |
-| Trivy | `github.com/aquasecurity/trivy`, checked against its sha256 |
+| Trivy and its version | `github.com/aquasecurity/trivy`, the release the binary pins, checked against the sha256 built into sealift |
 | Vulnerability database | `mirror.gcr.io`, updated every six hours upstream; sealift refreshes it before each analysis |
-| Signing key | sealift: an Ed25519 key it generated for this volume, shown with its public key sha256 and **Copy public key** |
+| Signing key | sealift: an Ed25519 key it generated for this volume, shown with its public key sha256 |
+| pnpm and its version | the npm registry, checked against the integrity it publishes. It resolves npm projects |
+| uv and its version | the package index, checked against the sha256 it publishes. It resolves pip projects |
 
-**Install Trivy (45.2 MB) and its database (about 120 MB, 1.4 GB once unpacked)** starts both downloads. Nothing downloads before this click. Each row then shows its download running, then the version installed. The signing key needs no action: its card reads Ready from the first start. Carry its public key to the import side once, over a channel you trust. **Continue** appears once Trivy and its database are installed.
-
-When the latest Trivy release is younger than the minimum release age, the button names the newest release past that age instead, such as **Install Trivy 0.73.0 and its database**, and **Install Trivy 0.74.0 anyway** installs the latest. A failed install shows the cause and **Retry**.
-
-The setup screen opens again whenever Trivy or its database goes missing.
-
-![The setup screen before install](assets/setup.png)
+Each item reads Preparing, Ready or Failed. A failed item shows its cause and Next try at, with the time; sealift tries again every minute. The home opens once every item is ready, with no reload. [Deployment](deployment.md#readiness) explains readiness for whoever runs the instance.
 
 ## Home
 
@@ -91,7 +87,7 @@ sealift runs one job at a time. An analysis started while another analysis or an
 When a step fails, the screen reads Analysis stopped, with the cause under What went wrong and the actions that fit:
 
 - **Retry** starts the analysis again from the beginning, with the same file.
-- **Open settings** opens the settings panel, to change a limit before retrying. A session keeps the target it started with; a new target applies to new sessions.
+- **Open settings** opens the settings panel, which shows the target and the limits in effect. The deployment's policy file sets them. A session keeps the target it started with; a new target applies to new sessions.
 - **Choose another file** goes back to the drop screen.
 - **Show the log** unfolds everything pnpm and Trivy wrote, with the error code the message above leaves out.
 

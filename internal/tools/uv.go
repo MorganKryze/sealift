@@ -76,6 +76,32 @@ func ParseIndexURL(raw string) (string, error) {
 	return raw, nil
 }
 
+// ParseRegistryURL checks the npm registry pnpm and the analyses read.
+// Empty keeps npm.DefaultRegistry. The registry must be https, or http on
+// a loopback host, or http on any host when allowHTTP is set, which
+// insecure then reports. Credentials may stand in the URL, so the error
+// never repeats the value.
+func ParseRegistryURL(raw string, allowHTTP bool) (u string, insecure bool, err error) {
+	if raw == "" {
+		return "", false, nil
+	}
+	parsed, perr := url.Parse(raw)
+	switch {
+	case perr != nil:
+		return "", false, errors.New("the npm registry is not a readable URL")
+	case parsed.Scheme != "https" && parsed.Scheme != "http":
+		return "", false, errors.New("the npm registry must be an https URL, or an http URL on a loopback host")
+	case parsed.Host == "":
+		return "", false, errors.New("the npm registry URL has no host")
+	case parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()):
+		if !allowHTTP {
+			return "", false, errors.New("an http npm registry must be on a loopback host unless SEALIFT_ALLOW_HTTP_REGISTRY=true")
+		}
+		return raw, true, nil
+	}
+	return raw, false, nil
+}
+
 func loopbackHost(host string) bool {
 	if host == "localhost" {
 		return true
@@ -94,10 +120,9 @@ func (m *Manager) pipIndex() string {
 // EnsureUv installs a uv release from the package index if it is not
 // already present, and returns the path to tools/uv/<version>/uv. The
 // wheel for this host is checked against the sha256 the index lists, and a
-// release younger than Settings().MinReleaseAgeDays is refused unless force
-// is true. Only the uv binary is copied out of the wheel: nothing in it
+// release younger than Settings().MinReleaseAgeDays is refused. Only the uv binary is copied out of the wheel: nothing in it
 // runs or is built.
-func (m *Manager) EnsureUv(ctx context.Context, version string, force bool) (string, error) {
+func (m *Manager) EnsureUv(ctx context.Context, version string) (string, error) {
 	if !uvVersion.MatchString(version) {
 		return "", fmt.Errorf("%w: a release number such as 0.13.7 is expected", ErrInvalidUvVersion)
 	}
@@ -126,7 +151,7 @@ func (m *Manager) EnsureUv(ctx context.Context, version string, force bool) (str
 	if blocked != "" {
 		return "", fmt.Errorf("uv %s: the index has no wheel for linux %s (%s)", version, cpu, blocked)
 	}
-	if err := m.checkUvAge(version, wheel.UploadTime, force); err != nil {
+	if err := m.checkUvAge(version, wheel.UploadTime); err != nil {
 		return "", err
 	}
 	name, err := pip.ParseWheelName(wheel.Filename)
@@ -165,18 +190,19 @@ func (m *Manager) EnsureUv(ctx context.Context, version string, force bool) (str
 }
 
 // checkUvAge refuses a release younger than the minimum age, or one whose
-// age the index does not give, unless force is true.
-func (m *Manager) checkUvAge(version string, uploaded time.Time, force bool) error {
+// age the index does not give. The refusal says what the operator can do
+// now, since no route installs a tool on demand.
+func (m *Manager) checkUvAge(version string, uploaded time.Time) error {
 	days := m.vol.Settings().MinReleaseAgeDays
 	minAge := time.Duration(days) * 24 * time.Hour
-	if force || minAge <= 0 {
+	if minAge <= 0 {
 		return nil
 	}
 	if uploaded.IsZero() {
-		return releaseTooRecent{fmt.Sprintf("uv %s: the index gives no upload time, so its age against the minimum release age of %d days is unknown; install it with force to accept it", version, days)}
+		return releaseTooRecent{fmt.Sprintf("uv %s: the index gives no upload time, so its age against the minimum release age of %d days is unknown; pin an older uv in the project's target or the policy file", version, days)}
 	}
 	if age := time.Since(uploaded); age < minAge {
-		return releaseTooRecent{fmt.Sprintf("uv %s was uploaded %s ago, under the minimum release age of %d days; install it with force to accept it", version, age.Round(time.Hour), days)}
+		return releaseTooRecent{fmt.Sprintf("uv %s was uploaded %s ago, under the minimum release age of %d days; pin an older uv in the project's target or the policy file, or wait until it is %d days old", version, age.Round(time.Hour), days, days)}
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -188,7 +189,7 @@ func TestEnsureUvInstallsTheWheelsBinary(t *testing.T) {
 	idx := newUvIndex(t, monthOld)
 	m, root := newUvManager(t, idx.URL(), nil)
 
-	bin, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	bin, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if err != nil {
 		t.Fatalf("EnsureUv: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestEnsureUvChecksSha256(t *testing.T) {
 	idx.sha256 = strings.Repeat("ab", 32)
 	m, root := newUvManager(t, idx.URL(), nil)
 
-	_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	_, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if err == nil || !strings.Contains(err.Error(), "sha256") {
 		t.Fatalf("EnsureUv error = %v, want a sha256 mismatch", err)
 	}
@@ -236,42 +237,37 @@ func TestEnsureUvChecksSha256(t *testing.T) {
 	}
 }
 
-func TestEnsureUvRefusesYoungReleaseUnlessForced(t *testing.T) {
+func TestEnsureUvRefusesYoungRelease(t *testing.T) {
 	idx := newUvIndex(t, time.Now().Add(-24*time.Hour))
 	m, root := newUvManager(t, idx.URL(), nil)
 
-	_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	_, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if !errors.Is(err, ErrReleaseTooRecent) {
 		t.Fatalf("EnsureUv error = %v, want ErrReleaseTooRecent", err)
 	}
-	for _, part := range []string{"uv 0.13.7", "14 days", "force"} {
+	for _, part := range []string{"uv 0.13.7", "14 days", "pin an older uv", "wait"} {
 		if !strings.Contains(err.Error(), part) {
 			t.Errorf("refusal %q does not name %q", err, part)
 		}
 	}
+	if strings.Contains(err.Error(), "force") {
+		t.Errorf("refusal %q points to a force install no route offers", err)
+	}
 	if files := listFiles(t, root); len(files) != 0 {
 		t.Errorf("a refused release left %v", files)
 	}
-
-	bin, err := m.EnsureUv(context.Background(), uvTestVersion, true)
-	if err != nil {
-		t.Fatalf("EnsureUv(force): %v", err)
-	}
-	if _, err := os.Stat(bin); err != nil {
-		t.Fatalf("a forced install left no binary: %v", err)
-	}
 }
 
-func TestEnsureUvRefusesAReleaseWithNoUploadTimeUnlessForced(t *testing.T) {
+func TestEnsureUvRefusesAReleaseWithNoUploadTime(t *testing.T) {
 	idx := newUvIndex(t, time.Time{})
 	m, _ := newUvManager(t, idx.URL(), nil)
 
-	_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	_, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if !errors.Is(err, ErrReleaseTooRecent) || !strings.Contains(err.Error(), "no upload time") {
 		t.Fatalf("EnsureUv error = %v, want ErrReleaseTooRecent naming the missing upload time", err)
 	}
-	if _, err := m.EnsureUv(context.Background(), uvTestVersion, true); err != nil {
-		t.Fatalf("EnsureUv(force): %v", err)
+	if strings.Contains(err.Error(), "force") || !strings.Contains(err.Error(), "pin") {
+		t.Errorf("refusal %q does not say what to do now", err)
 	}
 }
 
@@ -314,7 +310,7 @@ func TestEnsureUvCopiesOnlyTheBinary(t *testing.T) {
 			idx.serveCrafted(craftWheel(t, c.entries))
 			m, root := newUvManager(t, idx.URL(), nil)
 
-			_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+			_, err := m.EnsureUv(context.Background(), uvTestVersion)
 			files := listFiles(t, root)
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -341,7 +337,7 @@ func TestEnsureUvRefusesAWheelOverItsBound(t *testing.T) {
 	idx.wheelLen = 64<<20 + 1
 	m, root := newUvManager(t, idx.URL(), nil)
 
-	_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	_, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if err == nil || !strings.Contains(err.Error(), "64 MiB") {
 		t.Fatalf("EnsureUv error = %v, want a refusal naming 64 MiB", err)
 	}
@@ -353,13 +349,13 @@ func TestEnsureUvRefusesAWheelOverItsBound(t *testing.T) {
 func TestEnsureUvSkipsAnInstalledVersion(t *testing.T) {
 	idx := newUvIndex(t, monthOld)
 	m, _ := newUvManager(t, idx.URL(), nil)
-	first, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	first, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if err != nil {
 		t.Fatalf("first EnsureUv: %v", err)
 	}
 	before := idx.Requests()
 
-	again, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+	again, err := m.EnsureUv(context.Background(), uvTestVersion)
 	if err != nil {
 		t.Fatalf("second EnsureUv: %v", err)
 	}
@@ -391,7 +387,7 @@ func TestEnsureUvReadsOnlyTheIndex(t *testing.T) {
 	m.GitHubAPI = "http://192.0.2.1"
 	m.NPMRegistry = "http://192.0.2.1"
 
-	if _, err := m.EnsureUv(context.Background(), uvTestVersion, false); err != nil {
+	if _, err := m.EnsureUv(context.Background(), uvTestVersion); err != nil {
 		t.Fatalf("EnsureUv: %v", err)
 	}
 	u, _ := url.Parse(idx.URL())
@@ -410,7 +406,7 @@ func TestEnsureUvRefusesBadVersion(t *testing.T) {
 	m, root := newUvManager(t, idx.URL(), nil)
 	for _, v := range []string{"", "0.13", "0.13.7.1", "v0.13.7", "latest", "../0.13.7", "0.13.7/../../x", "0.13.7 ", "12345.0.0"} {
 		t.Run(v, func(t *testing.T) {
-			_, err := m.EnsureUv(context.Background(), v, true)
+			_, err := m.EnsureUv(context.Background(), v)
 			if !errors.Is(err, ErrInvalidUvVersion) || !strings.Contains(err.Error(), "such as 0.13.7") {
 				t.Fatalf("EnsureUv(%q) error = %v, want ErrInvalidUvVersion with an example", v, err)
 			}
@@ -436,7 +432,7 @@ func TestEnsureUvChoosesTheHostsCPU(t *testing.T) {
 			idx := newUvIndex(t, monthOld)
 			m, root := newUvManager(t, idx.URL(), nil)
 			m.Arch = c.arch
-			_, err := m.EnsureUv(context.Background(), uvTestVersion, false)
+			_, err := m.EnsureUv(context.Background(), uvTestVersion)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("EnsureUv error = %v, want one naming %q", err, c.wantErr)
 			}
@@ -477,6 +473,7 @@ func TestParseIndexURL(t *testing.T) {
 		{raw: "http://[::1]:9/simple/", want: "http://[::1]:9/simple/"},
 		{raw: "ftp://mirror.example.org/simple/", wantErr: "https"},
 		{raw: "http://example.org/simple/", wantErr: "loopback"},
+		{raw: "http://localhost.evil.com/simple/", wantErr: "loopback"},
 		{raw: "https://u:p@host/simple/", wantErr: "credentials"},
 		{raw: "https://u@host/simple/", wantErr: "credentials"},
 		{raw: "https:///simple/", wantErr: "host"},
@@ -499,5 +496,56 @@ func TestParseIndexURL(t *testing.T) {
 				t.Fatalf("ParseIndexURL(%q) = %q, %v, want %q", c.raw, got, err, c.want)
 			}
 		})
+	}
+}
+
+func TestParseRegistryURL(t *testing.T) {
+	cases := []struct {
+		raw       string
+		allowHTTP bool
+		want      string
+		insecure  bool
+		wantErr   string
+	}{
+		{raw: "", want: ""},
+		{raw: "https://npm.example.org/", want: "https://npm.example.org/"},
+		{raw: "https://ci:s3cret@npm.example.org/", want: "https://ci:s3cret@npm.example.org/"},
+		{raw: "http://127.0.0.1:4873", want: "http://127.0.0.1:4873"},
+		{raw: "http://localhost:4873", want: "http://localhost:4873"},
+		{raw: "http://registry:4873", wantErr: "SEALIFT_ALLOW_HTTP_REGISTRY"},
+		{raw: "http://localhost.evil.com", wantErr: "SEALIFT_ALLOW_HTTP_REGISTRY"},
+		{raw: "http://ci:s3cret@registry:4873", wantErr: "SEALIFT_ALLOW_HTTP_REGISTRY"},
+		{raw: "http://registry:4873", allowHTTP: true, want: "http://registry:4873", insecure: true},
+		{raw: "ftp://npm.example.org/", allowHTTP: true, wantErr: "https"},
+		{raw: "https:///", wantErr: "host"},
+		{raw: "npm.example.org", wantErr: "https"},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%s allow=%v", c.raw, c.allowHTTP), func(t *testing.T) {
+			got, insecure, err := ParseRegistryURL(c.raw, c.allowHTTP)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("ParseRegistryURL(%q) = %q, %v, want an error naming %q", c.raw, got, err, c.wantErr)
+				}
+				if strings.Contains(err.Error(), c.raw) || strings.Contains(err.Error(), "s3cret") {
+					t.Errorf("error %q repeats the value", err)
+				}
+				return
+			}
+			if err != nil || got != c.want || insecure != c.insecure {
+				t.Fatalf("ParseRegistryURL(%q) = %q, %v, %v, want %q, %v", c.raw, got, insecure, err, c.want, c.insecure)
+			}
+		})
+	}
+}
+
+func TestUvMinimumAgeBoundary(t *testing.T) {
+	m := NewManager(fakeVolume{root: t.TempDir(), settings: store.Settings{MinReleaseAgeDays: 14}}, nil, nil)
+	var tooRecent releaseTooRecent
+	if err := m.checkUvAge("0.9.0", time.Now().Add(-13*24*time.Hour)); !errors.As(err, &tooRecent) {
+		t.Errorf("13 days old: got %v, want a refusal", err)
+	}
+	if err := m.checkUvAge("0.9.0", time.Now().Add(-14*24*time.Hour-time.Hour)); err != nil {
+		t.Errorf("14 days and one hour old: got %v, want nil", err)
 	}
 }

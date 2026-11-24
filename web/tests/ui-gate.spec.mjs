@@ -6,6 +6,78 @@
 // at baseURL, and the import server with its token check on (see import-fixtures.mjs). No start
 // command, or a missing package, fails the run: it never skips. No screenshot diff, no clock, no
 // random input. Fill the blocks below; `exceptions` take a selector, the check they lift and the reason.
+
+// GET /api/instance as the collection server answered it on an empty volume, with its stand-in upstream
+// answering 404 to everything: Trivy, pnpm and uv failed once and wait for their next try. Captured once
+// from the real server; the seeded volume is ready, so the gate shows this state through `answers`.
+const PREPARING = {
+  "brand": {
+    "logo": false,
+    "name": "sealift",
+    "offline": "Offline",
+    "online": "Online",
+    "reviewWord": "PR"
+  },
+  "ephemeral": false,
+  "policy": {
+    "downloadParallelism": 16,
+    "minReleaseAgeDays": 14,
+    "pipTarget": {
+      "cpu": "x86_64",
+      "glibc": "2.28",
+      "os": "linux",
+      "python": "3.11.2",
+      "uvVer": "0.13.7"
+    },
+    "resolveParallelism": 4,
+    "target": {
+      "cpu": "x64",
+      "libc": "glibc",
+      "node": "22.17.1",
+      "os": "linux",
+      "pnpmVer": "10.34.5"
+    }
+  },
+  "preparing": [
+    {
+      "name": "trivy",
+      "nextTry": "2026-11-24T12:09:45.79156+01:00",
+      "reason": "could not reach GitHub to look up Trivy releases: release 0.76.2: GET http://127.0.0.1:56403/repos/aquasecurity/trivy/releases/tags/v0.76.2: 404 Not Found",
+      "state": "failed",
+      "version": "0.76.2"
+    },
+    {
+      "name": "trivy-db",
+      "state": "preparing"
+    },
+    {
+      "name": "signing-key",
+      "state": "ready",
+      "version": "ef1bea90874fe11f644bbcad4acda3214dce976a0908b6b7f0b395b1673d46f8"
+    },
+    {
+      "name": "pnpm",
+      "nextTry": "2026-11-24T12:09:45.793535+01:00",
+      "reason": "pnpm packument: packument pnpm: not found in registry",
+      "state": "failed",
+      "version": "10.34.5"
+    },
+    {
+      "name": "uv",
+      "nextTry": "2026-11-24T12:09:45.792933+01:00",
+      "reason": "uv 0.13.7: pip: not found on the index",
+      "state": "failed",
+      "version": "0.13.7"
+    }
+  ],
+  "ready": false,
+  "tools": {
+    "pnpm": [],
+    "trivy": "0.76.2",
+    "uv": []
+  }
+}
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -24,6 +96,11 @@ export const UI = {
   states: [
     { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
   ],
+  // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
+  // `ready` is the text that proves the page drew that answer.
+  answers: [
+    { path: "/", api: "/api/instance", body: PREPARING, ready: "Preparing sealift" },
+  ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
   // CSS px. A desktop tool used with a mouse; WCAG 2.2 AA asks for 24.
@@ -31,6 +108,8 @@ export const UI = {
   exceptions: [
     // Radix places these zero-size spans around an open dialog to trap focus; nobody clicks them.
     { selector: "[data-radix-focus-guard]", check: "target", reason: "focus trap sentinel" },
+    // The drop zone's file input is visually hidden and out of the tab order; Choose a file opens it.
+    { selector: "input[type=file].sr-only", check: "target", reason: "hidden file input behind a button" },
   ],
 }
 
@@ -100,8 +179,8 @@ test.describe.configure({ mode: "default", retries: 0 })
 const CONTROLS = `a, button, input, select, textarea, summary, [role=button], [tabindex]:not([tabindex="-1"])`
 const POLLS = 60
 
-const answers = async (url = UI.baseURL) => {
-  try { await fetch(url); return true } catch { return false }
+const answers = async (url = UI.baseURL, accept = () => true) => {
+  try { return accept(await fetch(url)) } catch { return false }
 }
 const pause = (ms) => new Promise((done) => setTimeout(done, ms))
 
@@ -114,7 +193,7 @@ function settle() {
 
 let binary = ""
 let scratch = ""
-let github = null
+let upstream = null
 let startedCollection = false
 let fixtures = null
 const children = []
@@ -127,18 +206,17 @@ const spawnServer = (command, args, options) => {
   return child
 }
 
-// A stand-in for api.github.com: the collection server looks up the latest Trivy release when a page asks
-// for the tools, and the gate keeps that lookup on this machine. The release is old enough to need no
-// recommendation, so the server asks for nothing else. `paths` records what it was asked.
-const startFakeGitHub = () =>
+// A stand-in for api.github.com, the npm registry and the package index, so the collection server's preparation at
+// start stays on this machine. It answers 404 to everything, so the server stays preparing. `paths` records what it
+// was asked.
+const startFakeUpstream = () =>
   new Promise((done, fail) => {
     const paths = []
     const server = createServer((req, res) => {
       paths.push(req.url)
-      const release = { tag_name: "v0.74.0", draft: false, prerelease: false, published_at: "2026-01-01T00:00:00Z", assets: [] }
       res.setHeader("content-type", "application/json")
-      if (req.url === "/repos/aquasecurity/trivy/releases/latest") res.end(JSON.stringify(release))
-      else { res.statusCode = 404; res.end("{}") }
+      res.statusCode = 404
+      res.end("{}")
     })
     server.on("error", fail)
     server.listen(0, "127.0.0.1", () => done({ url: `http://127.0.0.1:${server.address().port}`, paths, close: () => new Promise((end) => { server.close(end); server.closeAllConnections() }) }))
@@ -153,9 +231,9 @@ const run = (command, args) =>
     child.on("exit", (code) => (code === 0 ? done() : fail(new Error(`${command} ${args.join(" ")} exited with ${code}\n${out}`))))
   })
 
-const waitFor = async (url, what, child) => {
+const waitFor = async (url, what, child, accept) => {
   for (let i = 0; i < POLLS; i++) {
-    if (await answers(url)) return
+    if (await answers(url, accept)) return
     if (child && child.exitCode !== null) throw new Error(`${what} stopped with ${child.exitCode}\n${child.log}`)
     await pause(1000)
   }
@@ -179,16 +257,18 @@ test.beforeAll(async () => {
   const out = resolve("test-results", "gate")
   mkdirSync(out, { recursive: true })
   binary = join(out, "sealift")
-  github = await startFakeGitHub()
+  upstream = await startFakeUpstream()
   // The binary embeds web/dist, so the build comes first and the binary is built once for both roles.
   await run("pnpm", ["run", "build"])
   await run("go", ["build", "-o", binary, "../cmd/sealift"])
 
   if (!(await answers(UI.baseURL))) {
     if (!UI.start) throw new Error(`nothing answers at ${UI.baseURL} and UI.start is empty`)
-    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: github.url } })
+    const collection = spawnServer(UI.start, [], { shell: true, env: { ...process.env, SEALIFT: binary, SEALIFT_GITHUB_API: upstream.url, SEALIFT_NPM_REGISTRY: upstream.url, SEALIFT_PIP_INDEX: `${upstream.url}/simple/` } })
     startedCollection = true
     await waitFor(UI.baseURL, "the collection server", collection)
+    // The seed lays out every tool the start prepares, so the server turns ready without a download.
+    await waitFor(`${UI.baseURL}/healthz`, "the collection server's readiness", collection, (res) => res.ok)
   }
 
   if (await answers(`${IMPORT.baseURL}/healthz`)) throw new Error(`${IMPORT.baseURL} answers already: the gate starts its own import server and will not reuse another`)
@@ -201,8 +281,8 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await Promise.all(children.splice(0).map(stop))
   if (fixtures) await fixtures.close()
-  if (github) await github.close()
-  github = null
+  if (upstream) await upstream.close()
+  upstream = null
   fixtures = null
   if (scratch) rmSync(scratch, { recursive: true, force: true })
   scratch = ""
@@ -303,7 +383,7 @@ for (const route of UI.routes) {
           url: new URL(route, UI.baseURL).href,
           width,
           theme,
-          // /api/tools asks GitHub for the latest Trivy, which can take 30 s, so idle is a best effort.
+          // The page's event stream stays open, so idle is a best effort.
           ready: (p) => p.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {}),
         })
         expect(failures, failures.join("\n")).toEqual([])
@@ -325,6 +405,24 @@ for (const state of UI.states) {
             await p.getByRole(state.open.role, { name: state.open.name }).click()
             await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
           },
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
+for (const state of UI.answers) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${state.path} answered by ${state.api} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${state.path} · ${state.api} fixed · ${width}px · ${theme}`,
+          url: new URL(state.path, UI.baseURL).href,
+          width,
+          theme,
+          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: state.body })),
+          ready: (p) => p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
         })
         expect(failures, failures.join("\n")).toEqual([])
       })
@@ -404,8 +502,11 @@ for (const route of IMPORT.routes) {
   }
 }
 
-test("the collection server looked up Trivy through the local stand-in, not api.github.com", () => {
+test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return
-  expect(github.paths).toContain("/repos/aquasecurity/trivy/releases/latest")
+  const health = await fetch(`${UI.baseURL}/healthz`)
+  expect(health.status).toBe(200)
+  expect(await health.json()).toEqual({ status: "ok" })
+  expect([...new Set(upstream.paths)].sort()).toEqual([])
 })

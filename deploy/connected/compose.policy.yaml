@@ -1,0 +1,13 @@
+# A policy file, on top of compose.yaml:
+#   docker compose -f compose.yaml -f compose.policy.yaml up -d
+# sealift reads policy/policy.yaml at start: the default targets, the
+# minimum release age, the parallelism and the brand. The example sets no
+# key. A key the file sets replaces the value saved in Settings. A bad
+# value stops the start, and the log names the key. Restart the service
+# after editing the file.
+services:
+  sealift:
+    environment:
+      SEALIFT_POLICY: /etc/sealift/policy.yaml
+    volumes:
+      - ./policy:/etc/sealift:ro

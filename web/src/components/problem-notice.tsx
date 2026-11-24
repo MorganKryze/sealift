@@ -48,7 +48,7 @@ export function ProblemNotice({ status, problem, className, children }: ProblemN
           ) : null}
           {problem?.type === "tools-missing" ? (
             <Link to="/" className="mt-2 inline-block font-medium text-accent underline underline-offset-2">
-              Open setup
+              Follow their preparation on Home
             </Link>
           ) : null}
           {children}

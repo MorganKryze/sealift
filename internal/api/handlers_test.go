@@ -1,8 +1,12 @@
 package api
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -378,42 +382,55 @@ func TestQueueExportAnalysisNotDoneAnswers409(t *testing.T) {
 	}
 }
 
-// TestUpdateTrivyRefusesARecentReleaseAnswers409 proves the fix for G2:
-// tools.ErrReleaseTooRecent is a deliberate protection the request ran
-// into, not a server failure, and its detail keeps naming the minimum
-// age a client needs to explain the refusal.
-func TestUpdateTrivyRefusesARecentReleaseAnswers409(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/aquasecurity/trivy/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		body := fmt.Sprintf(`{"tag_name":"v1.2.3","published_at":%q,"assets":[]}`, time.Now().UTC().Format(time.RFC3339))
-		_, _ = w.Write([]byte(body))
-	})
-	ghSrv := httptest.NewServer(mux)
-	defer ghSrv.Close()
+// pinnedTrivyRelease points h at a GitHub stand-in that serves release
+// 1.2.3 of Trivy for amd64, makes 1.2.3 the pin, and returns the paths the
+// stand-in was asked for.
+func pinnedTrivyRelease(t *testing.T, h *Handlers) func() []string {
+	t.Helper()
+	const version = "1.2.3"
+	var tarball bytes.Buffer
+	gz := gzip.NewWriter(&tarball)
+	tw := tar.NewWriter(gz)
+	body := "#!/bin/sh\necho fake trivy\n"
+	if err := tw.WriteHeader(&tar.Header{Name: "trivy", Mode: 0o755, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(tarball.Bytes())
+	asset := "trivy_" + version + "_Linux-64bit.tar.gz"
 
-	q := jobs.NewQueue(nil)
-	defer q.Close()
-	h := newTestHandlers(t, q)
-	h.Tools.GitHubAPI = ghSrv.URL
-	srv := httptest.NewServer(Routes(h, testStatic()))
-	defer srv.Close()
-
-	resp, err := http.Post(srv.URL+"/api/tools/trivy/update", "application/json", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		t.Fatalf("POST update trivy: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 409, body: %s", resp.StatusCode, data)
-	}
-	var problem Problem
-	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
-		t.Fatalf("decode problem: %v", err)
-	}
-	if problem.Detail == nil || !strings.Contains(*problem.Detail, "minimum age") {
-		t.Fatalf("problem.Detail = %v, want it to name the minimum age", problem.Detail)
+	var mu sync.Mutex
+	var paths []string
+	var gh *httptest.Server
+	gh = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/repos/aquasecurity/trivy/releases/tags/v" + version:
+			_, _ = fmt.Fprintf(w, `{"tag_name":"v%s","assets":[{"name":%q,"browser_download_url":%q}]}`, version, asset, gh.URL+"/"+asset)
+		case "/" + asset:
+			_, _ = w.Write(tarball.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(gh.Close)
+	h.Tools.GitHubAPI = gh.URL
+	h.Tools.Arch = "amd64"
+	h.Tools.Trivy = tools.TrivyPin{Version: version, SHA256: map[string]string{"amd64": hex.EncodeToString(sum[:])}}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(paths)
 	}
 }
 
@@ -447,7 +464,7 @@ func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, trivy, &npm.Client{})
-	return NewHandlers(st, svc, tm, trivy)
+	return NewHandlers(st, svc, tm)
 }
 
 // waitForExportState polls GetExport until it reports one of wantStates
@@ -559,7 +576,7 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	tm.NPMRegistry = unroutable
 	reg := &npm.Client{Registry: unroutable, Attempts: 1, Backoff: func(int) time.Duration { return 0 }}
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, exportTrivyFake{}, reg)
-	h := NewHandlers(st, svc, tm, exportTrivyFake{})
+	h := NewHandlers(st, svc, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
@@ -797,56 +814,19 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 }
 
 func TestSettingsHaveNoSignatureKey(t *testing.T) {
-	srv, h := newTestServer(t)
+	srv, _ := newTestServer(t)
 
-	read := func(resp *http.Response) map[string]any {
-		t.Helper()
-		defer resp.Body.Close()
-		var got map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
-			t.Fatalf("decode settings: %v", err)
-		}
-		return got
-	}
-
-	getResp, err := http.Get(srv.URL + "/api/settings")
+	resp, err := http.Get(srv.URL + "/api/settings")
 	if err != nil {
 		t.Fatalf("GET /api/settings: %v", err)
 	}
-	got := read(getResp)
+	defer resp.Body.Close()
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
 	if _, ok := got["signatureKey"]; ok {
 		t.Fatalf("GET /api/settings = %v, want no signatureKey", got)
-	}
-
-	got["signatureKey"] = "top-secret"
-	got["minReleaseAgeDays"] = 21
-	body, _ := json.Marshal(got)
-	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build PUT: %v", err)
-	}
-	putReq.Header.Set("Content-Type", "application/json")
-	putResp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("PUT /api/settings: %v", err)
-	}
-	if putResp.StatusCode != http.StatusOK {
-		t.Fatalf("PUT status = %d, want 200", putResp.StatusCode)
-	}
-	updated := read(putResp)
-	if _, ok := updated["signatureKey"]; ok {
-		t.Fatalf("PUT answer = %v, want no signatureKey", updated)
-	}
-	if updated["minReleaseAgeDays"] != float64(21) {
-		t.Errorf("minReleaseAgeDays = %v, want 21", updated["minReleaseAgeDays"])
-	}
-
-	saved, err := os.ReadFile(filepath.Join(h.Store.Root(), "private", "settings.json"))
-	if err != nil {
-		t.Fatalf("read settings.json: %v", err)
-	}
-	if strings.Contains(string(saved), "signatureKey") || strings.Contains(string(saved), "top-secret") {
-		t.Fatalf("settings.json = %s, want no signatureKey", saved)
 	}
 }
 
@@ -1089,27 +1069,6 @@ func TestSetProjectTarget(t *testing.T) {
 	}
 	if updated.Target.Node != "20.0.0" {
 		t.Fatalf("Target.Node = %q, want %q", updated.Target.Node, "20.0.0")
-	}
-}
-
-func TestGetToolsSucceedsWithoutNetworkAccess(t *testing.T) {
-	srv, _ := newTestServer(t)
-
-	resp, err := http.Get(srv.URL + "/api/tools")
-	if err != nil {
-		t.Fatalf("GET /api/tools: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 200, body: %s", resp.StatusCode, body)
-	}
-	var state ToolsState
-	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.PnpmInstalled == nil || state.TrivyInstalled == nil {
-		t.Errorf("ToolsState = %+v, want non-nil empty slices, not null", state)
 	}
 }
 
@@ -1550,7 +1509,7 @@ func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
 	tm.GitHubAPI = unroutable
 	tm.NPMRegistry = unroutable
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, fakeTrivy{}, &npm.Client{})
-	h := NewHandlers(st, svc, tm, fakeTrivy{})
+	h := NewHandlers(st, svc, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 
@@ -1577,31 +1536,6 @@ func TestCreateProjectRefusesWhenToolsNotReady(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("Projects = %v, want none: a refused request must create nothing", projects)
-	}
-}
-
-// TestUpdateSettingsInvalidTargetAnswers400 proves an invalid target
-// answers 400: the caller's own mistake, not a server failure.
-func TestUpdateSettingsInvalidTargetAnswers400(t *testing.T) {
-	srv, h := newTestServer(t)
-	settings := h.Store.Settings()
-	settingsAPI := settingsToAPI(settings)
-	settingsAPI.Target.Os = ""
-
-	body, _ := json.Marshal(settingsAPI)
-	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build PUT: %v", err)
-	}
-	putReq.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(putReq)
-	if err != nil {
-		t.Fatalf("PUT /api/settings: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
 	}
 }
 
@@ -1768,6 +1702,25 @@ func TestCreatePipProject(t *testing.T) {
 				t.Errorf("stored files = %+v, %v", files, err)
 			}
 		})
+	}
+}
+
+// A pip project whose request names no target gets the one the policy sets,
+// whatever the built-in default.
+func TestPipProjectTakesThePolicyTarget(t *testing.T) {
+	srv, h := newTestServer(t)
+	allowPipAnalyses(t, h)
+	h.Policy.Pip = store.PipTarget{Python: "3.12.4", OS: "linux", CPU: "x86_64", Glibc: "2.31", UvVer: store.DefaultPipTarget.UvVer}
+	status, data := postParts(t, srv, pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n")))
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body: %s", status, data)
+	}
+	var project Project
+	if err := json.Unmarshal(data, &project); err != nil {
+		t.Fatalf("decode project: %v", err)
+	}
+	if want := pipTargetToAPI(h.Policy.Pip); project.PipTarget == nil || *project.PipTarget != want {
+		t.Errorf("pipTarget = %+v, want the policy's %+v", project.PipTarget, want)
 	}
 }
 
@@ -2056,95 +2009,6 @@ func uvIndexServer(t *testing.T) (index string, requests func() int) {
 	}
 }
 
-func postInstallUv(t *testing.T, srv *httptest.Server, body string) (int, []byte) {
-	t.Helper()
-	resp, err := http.Post(srv.URL+"/api/tools/uv/install", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST install uv: %v", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, data
-}
-
-func TestInstallUvRoute(t *testing.T) {
-	srv, h := newTestServer(t)
-	index, _ := uvIndexServer(t)
-	h.Tools.PipIndex = index
-	h.Tools.Arch = "amd64"
-
-	status, data := postInstallUv(t, srv, `{"version":"0.13.7"}`)
-	if status != http.StatusOK {
-		t.Fatalf("install 0.13.7: status = %d, body %s", status, data)
-	}
-	var state ToolsState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7" {
-		t.Fatalf("uvInstalled = %v, want [0.13.7]", state.UvInstalled)
-	}
-
-	refusals := []struct {
-		name, body string
-		status     int
-		detail     []string
-	}{
-		{"a young release without force", `{"version":"0.13.8"}`, http.StatusConflict, []string{"uv 0.13.8", "14 days", "force"}},
-		{"a bad version", `{"version":"../0.13.7"}`, http.StatusBadRequest, []string{"invalid uv version", "such as 0.13.7"}},
-	}
-	for _, c := range refusals {
-		t.Run(c.name, func(t *testing.T) {
-			status, data := postInstallUv(t, srv, c.body)
-			if status != c.status {
-				t.Fatalf("status = %d, want %d, body %s", status, c.status, data)
-			}
-			var p Problem
-			if err := json.Unmarshal(data, &p); err != nil {
-				t.Fatalf("decode problem: %v", err)
-			}
-			for _, part := range c.detail {
-				if p.Detail == nil || !strings.Contains(*p.Detail, part) {
-					t.Errorf("detail = %v, want it to name %q", p.Detail, part)
-				}
-			}
-		})
-	}
-
-	status, data = postInstallUv(t, srv, `{"version":"0.13.8","force":true}`)
-	if status != http.StatusOK {
-		t.Fatalf("forced install of 0.13.8: status = %d, body %s", status, data)
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatalf("decode tools state: %v", err)
-	}
-	if state.UvInstalled == nil || strings.Join(*state.UvInstalled, ",") != "0.13.7,0.13.8" {
-		t.Fatalf("uvInstalled = %v, want [0.13.7 0.13.8]", state.UvInstalled)
-	}
-}
-
-func TestToolsStateAsksNothingOfTheIndex(t *testing.T) {
-	srv, h := newTestServer(t)
-	index, requests := uvIndexServer(t)
-	h.Tools.PipIndex = index
-
-	resp, err := http.Get(srv.URL + "/api/tools")
-	if err != nil {
-		t.Fatalf("GET /api/tools: %v", err)
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body %s", resp.StatusCode, data)
-	}
-	if n := requests(); n != 0 {
-		t.Errorf("GET /api/tools made %d requests to the package index, want 0", n)
-	}
-	if !strings.Contains(string(data), `"uvInstalled":[]`) {
-		t.Errorf("body %s does not send uvInstalled as an empty list", data)
-	}
-}
-
 // writeAnalysisFiles commits an analysis directory holding files, as a job
 // would leave it.
 func writeAnalysisFiles(t *testing.T, st *store.Store, projectID, id string, files map[string]string) {
@@ -2422,6 +2286,150 @@ func readTestFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// volumeTools records every entry under the volume's tools folder: a
+// file's sha256, a link's target, a folder's name.
+func volumeTools(t *testing.T, root string) map[string]string {
+	t.Helper()
+	entries := map[string]string{}
+	err := filepath.WalkDir(filepath.Join(root, "tools"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.Type()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			entries[rel] = "link " + target
+			return err
+		case d.IsDir():
+			entries[rel] = "dir"
+		default:
+			data, err := os.ReadFile(path)
+			sum := sha256.Sum256(data)
+			entries[rel] = "file " + hex.EncodeToString(sum[:])
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read the tools folder: %v", err)
+	}
+	return entries
+}
+
+// TestToolAndSettingsRoutesAreGone proves no request installs a tool or
+// writes the settings: the deployment prepares the one and sets the other.
+func TestToolAndSettingsRoutesAreGone(t *testing.T) {
+	srv, h := newTestServer(t)
+	githubRequests := pinnedTrivyRelease(t, h)
+	index, indexRequests := uvIndexServer(t)
+	h.Tools.PipIndex = index
+	settings, _ := json.Marshal(settingsToAPI(h.Store.Settings()))
+	beforeSettings := h.Store.Settings()
+	before := volumeTools(t, h.Store.Root())
+
+	routes := []struct{ method, path, body string }{
+		{http.MethodGet, "/api/tools", ""},
+		{http.MethodPost, "/api/tools/trivy/update", `{"force":true}`},
+		{http.MethodPost, "/api/tools/trivy/activate", `{"version":"1.2.3"}`},
+		{http.MethodPost, "/api/tools/trivy/db/update", `{}`},
+		{http.MethodPost, "/api/tools/uv/install", `{"version":"0.13.8","force":true}`},
+		{http.MethodPut, "/api/settings", string(settings)},
+	}
+	for _, route := range routes {
+		req, err := http.NewRequest(route.method, srv.URL+route.path, strings.NewReader(route.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", route.method, route.path, err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusGone {
+			t.Errorf("%s %s = %d, want 410: %s", route.method, route.path, resp.StatusCode, data)
+		}
+	}
+
+	if after := volumeTools(t, h.Store.Root()); !reflect.DeepEqual(after, before) {
+		t.Errorf("the tools folder changed:\nbefore %v\nafter  %v", before, after)
+	}
+	if got := githubRequests(); len(got) != 0 {
+		t.Errorf("the routes asked GitHub for %v, want nothing", got)
+	}
+	if n := indexRequests(); n != 0 {
+		t.Errorf("the routes made %d requests to the package index, want 0", n)
+	}
+	if got := h.Store.Settings(); got != beforeSettings {
+		t.Errorf("Settings() = %+v, want %+v", got, beforeSettings)
+	}
+	if _, err := os.Lstat(filepath.Join(h.Store.Root(), "private", "settings.json")); !os.IsNotExist(err) {
+		t.Errorf("a settings file appeared on the volume (stat: %v)", err)
+	}
+}
+
+// TestJobRoutesWaitForThePreparation proves the routes that start work
+// read the start's preparation, not the tools manager alone: with Trivy and
+// its database in place but pnpm still preparing, creating a project of
+// either ecosystem, queueing an analysis and queueing an export each answer
+// 409 naming pnpm.
+func TestJobRoutesWaitForThePreparation(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject while ready: status = %d", resp.StatusCode)
+	}
+	if ready, _ := h.Tools.Ready(); !ready {
+		t.Fatal("the tools manager must report ready for this test to mean anything")
+	}
+	h.Ready = fixedReadiness{Items: []tools.Item{
+		{Name: "trivy", State: tools.ItemReady},
+		{Name: "trivy-db", State: tools.ItemReady},
+		{Name: "pnpm", Version: "10.34.5", State: tools.ItemPreparing},
+	}}
+
+	check := func(what string, status int, data []byte) {
+		t.Helper()
+		if status != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409, body: %s", what, status, data)
+			return
+		}
+		var p Problem
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatalf("%s: decode problem: %v", what, err)
+		}
+		if p.Missing == nil || !slices.Equal(*p.Missing, []string{"pnpm"}) {
+			t.Errorf("%s: missing = %v, want [pnpm]", what, p.Missing)
+		}
+	}
+	post := func(path string, body any) (int, []byte) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r, err := http.Post(srv.URL+path, "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		defer r.Body.Close()
+		data, _ := io.ReadAll(r.Body)
+		return r.StatusCode, data
+	}
+
+	_, resp = createProject(t, srv, `{"name":"is-odd","dependencies":{"is-odd":"3.0.1"}}`)
+	data, _ := io.ReadAll(resp.Body)
+	check("create an npm project", resp.StatusCode, data)
+	status, data := postParts(t, srv, pipParts("Data tools", requirementsPart("requirements.txt", "requests==2.32.3\n")))
+	check("create a pip project", status, data)
+	status, data = post("/api/projects/"+project.Id+"/analyses", struct{}{})
+	check("queue an analysis", status, data)
+	status, data = post("/api/projects/"+project.Id+"/analyses/20260917T101502Z/exports", ExportRequest{Selection: map[string][]string{}})
+	check("queue an export", status, data)
 }
 
 // occupyComingSeconds creates a committed directory under dir for every

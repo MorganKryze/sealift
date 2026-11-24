@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -17,7 +19,9 @@ var errPnpmBinMissing = errors.New("pnpm package has no package/bin/pnpm.cjs")
 
 // EnsurePnpm installs the given pnpm version from the npm registry if it is
 // not already present, and returns the path to its package/bin/pnpm.cjs.
-// The minimum release age does not apply: the caller pins the version.
+// A version the registry published less than Settings().MinReleaseAgeDays
+// ago, or gives no publish time for, is refused with ErrReleaseTooRecent:
+// a project target can name any pnpm, so the pin alone vouches for nothing.
 //
 // It takes the same lock UpdateTrivy and ActivateTrivy do: two concurrent
 // installs of the same version would otherwise share the one fixed
@@ -45,6 +49,10 @@ func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error
 	meta, ok := pkg.Versions[version]
 	if !ok {
 		return "", fmt.Errorf("pnpm %s: %w", version, npm.ErrNotFound)
+	}
+	published, _ := pkg.Published(version)
+	if err := m.checkPnpmAge(version, published); err != nil {
+		return "", err
 	}
 
 	tmp, err := os.MkdirTemp("", "sealift-pnpm-")
@@ -75,7 +83,9 @@ func (m *Manager) EnsurePnpm(ctx context.Context, version string) (string, error
 	return bin, nil
 }
 
-// InstalledPnpm lists every pnpm version present under tools/pnpm/, sorted.
+// InstalledPnpm lists every pnpm version present under tools/pnpm/, sorted,
+// skipping the "<version>.tmp" and "<version>.old-<suffix>" staging
+// directories installDir leaves while it runs.
 func (m *Manager) InstalledPnpm() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(m.vol.Root(), "tools", "pnpm"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -86,10 +96,27 @@ func (m *Manager) InstalledPnpm() ([]string, error) {
 	}
 	versions := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") && !strings.Contains(e.Name(), ".old-") {
 			versions = append(versions, e.Name())
 		}
 	}
 	sort.Strings(versions)
 	return versions, nil
+}
+
+// checkPnpmAge is checkUvAge for pnpm, with the publish time from the
+// registry's packument.
+func (m *Manager) checkPnpmAge(version string, published time.Time) error {
+	days := m.vol.Settings().MinReleaseAgeDays
+	minAge := time.Duration(days) * 24 * time.Hour
+	if minAge <= 0 {
+		return nil
+	}
+	if published.IsZero() {
+		return releaseTooRecent{fmt.Sprintf("pnpm %s: the registry gives no publish time, so its age against the minimum release age of %d days is unknown; pin an older pnpm in the project's target or the policy file", version, days)}
+	}
+	if age := time.Since(published); age < minAge {
+		return releaseTooRecent{fmt.Sprintf("pnpm %s was published %s ago, under the minimum release age of %d days; pin an older pnpm in the project's target or the policy file, or wait until it is %d days old", version, age.Round(time.Hour), days, days)}
+	}
+	return nil
 }
