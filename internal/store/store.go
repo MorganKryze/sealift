@@ -48,6 +48,12 @@ const (
 
 // DefaultSettings are the values that apply when neither the deployment nor
 // an older release's settings.json sets them.
+//
+// ResolveParallelism is 4 because each resolution is one pnpm process, and 8
+// would double peak memory inside a desktop container where an OOM kill is
+// worse than a slower analysis. DownloadParallelism is 16, and stays a
+// setting so a deployment behind a limiting proxy can lower it.
+// TestOpenStartsWithSettledParallelism pins both.
 var DefaultSettings = Settings{
 	Target: Target{
 		OS:      "linux",

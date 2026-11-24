@@ -38,6 +38,15 @@ Each removed route below answers 410 Gone, with Problem Details that name `GET /
 - `POST /api/tools/uv/install`: the start installs the default pip target's uv, and an analysis installs another target's uv.
 - `PUT /api/settings`: the policy file sets every value. `GET /api/settings` stays, read-only.
 
+### Fixed
+
+- Cancelling an analysis still waiting in the queue keeps it in the session as Analysis cancelled, with Start it again. It used to vanish and leave No analysis yet with no action. For a pip project, the API keeps the cancelled record the same way.
+- Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.
+- An analysis or an export waiting for another job reads Waiting for another job, with no step in progress and no package counters, instead of looking like the running one.
+- A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
+- An analysis that fails before its first step, for example when sealift cannot write its log, shows the cause under What went wrong. It used to show Analysis stopped with nothing under it.
+- On the home screen, a past session whose analysis or export waits in the queue reads Waiting for another job. It used to read Analysing or Exporting.
+
 ### Security
 
 - Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.

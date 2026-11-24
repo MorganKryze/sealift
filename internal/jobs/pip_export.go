@@ -760,11 +760,15 @@ func (e *PipExport) failed(ctx context.Context, steps []stepRecord) {
 	}
 }
 
-// withoutPath keeps the cause of a file system error and drops its path.
+// withoutPath keeps the cause of a file system error and drops its paths.
 func withoutPath(err error) error {
 	var pe *fs.PathError
 	if errors.As(err, &pe) {
 		return pe.Err
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err
 	}
 	return err
 }

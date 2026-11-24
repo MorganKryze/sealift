@@ -135,7 +135,8 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
   const progressPercent =
     events.progress && events.progress.total > 0 ? Math.round((events.progress.done / events.progress.total) * 100) : null
 
-  const title = failed ? (cancelled ? "Export cancelled" : "Export failed") : "Building the archive"
+  const queued = exportRecord.state === "queued" && !failed
+  const title = failed ? (cancelled ? "Export cancelled" : "Export failed") : queued ? "Waiting for another job" : "Building the archive"
 
   return (
     <>
@@ -144,13 +145,15 @@ function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onC
         <p className="mt-1.5 max-w-[62ch] text-muted">
           {failed
             ? (failureMessage ?? (stoppedAt ? `Stopped at ${stoppedAt.name}.` : "Stopped. The next action is below."))
-            : events.progress?.estimatedRemainingMs !== undefined
+            : queued
+              ? "sealift runs one job at a time. This export starts when the one before it ends. You can leave this page."
+              : events.progress?.estimatedRemainingMs !== undefined
               ? `Downloading each package from the registry, checking its integrity, then packing. About ${formatDuration(events.progress.estimatedRemainingMs)} remaining.`
               : "Downloading each package from the registry, checking its integrity, then packing."}
         </p>
       </div>
 
-      {!failed ? (
+      {!failed && !queued ? (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Card className="p-4">

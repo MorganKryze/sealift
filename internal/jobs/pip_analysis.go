@@ -120,7 +120,7 @@ func (r *pipRun) releaseCut() time.Time {
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
-		return fmt.Errorf("jobs: open log.txt: %w", ferr)
+		return fmt.Errorf("jobs: open log.txt: %w", withoutPath(ferr))
 	}
 	defer logFile.Close()
 
@@ -131,7 +131,7 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	if werr := a.Store.WriteJSON(filepath.Join(a.Dir, "status.json"), statusFile{
 		State: store.Running, CreatedAt: createdAt, PipTarget: &target,
 	}); werr != nil {
-		return fmt.Errorf("jobs: write initial status.json: %w", werr)
+		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
 	r := &pipRun{stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}

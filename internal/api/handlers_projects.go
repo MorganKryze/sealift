@@ -11,7 +11,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
@@ -27,7 +26,7 @@ func (h *Handlers) liveAnalysisOrExport(projectID string) (analysis *Analysis, e
 	if !ok {
 		return nil, nil
 	}
-	createdAt, _ := time.Parse(idLayout, id)
+	createdAt, _ := store.JobCreatedAt(id)
 	switch kind {
 	case "analysis":
 		a := Analysis{Id: id, ProjectId: projectID, State: State(state), CreatedAt: createdAt}
