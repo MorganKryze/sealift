@@ -47,6 +47,37 @@ func projectedVector(project []rank.Finding, deps []DependencyResult, selection 
 	return v
 }
 
+// projectedFor is the estimate summary.md prints and cves.after signs.
+// With the project tree, the lockfile keeps every current version beside
+// the selected ones, so it counts the project's set and every version the
+// archive holds, as review.left lists them.
+func projectedFor(r Result, req ExportRequest, project []rank.Finding) rank.Vector {
+	if !req.IncludeProject {
+		return projectedVector(project, r.Dependencies, req.Selection)
+	}
+	set := map[string]rank.Severity{}
+	add := func(id string, sev rank.Severity) {
+		if prev, ok := set[id]; !ok || sev < prev {
+			set[id] = sev
+		}
+	}
+	for _, f := range project {
+		add(f.ID, f.Severity)
+	}
+	for _, a := range askedOf(r, req) {
+		for _, h := range a.held {
+			for _, c := range h.cves {
+				add(c.ID, rank.ParseSeverity(c.Severity))
+			}
+		}
+	}
+	var v rank.Vector
+	for _, sev := range set {
+		v[sev]++
+	}
+	return v
+}
+
 // pickedCVEs returns the best selected version of d, the version an install
 // keeps, with its vulnerabilities and whether it replaces the current one.
 // The version is empty when nothing of d is selected.

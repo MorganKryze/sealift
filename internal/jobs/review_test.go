@@ -622,3 +622,89 @@ func TestReviewOfPutsTheReasonOnlyOnCVEsWithoutFix(t *testing.T) {
 		t.Fatalf("review.left = %+v, want both html-minifier CVEs", got.Left)
 	}
 }
+
+// withProject is req shipping the project tree, whose lockfile scan holds
+// findings.
+func withProject(req ExportRequest, findings ...rank.Finding) ExportRequest {
+	req.IncludeProject = true
+	req.ProjectFindings = findings
+	return req
+}
+
+func TestCheckReasonsReadsTheProjectScansCVEsWithoutFix(t *testing.T) {
+	r := reviewResult()
+	// react's own scan found nothing; the lockfile's scan finds one.
+	reactCVE := rank.Finding{ID: "CVE-2025-0100", Package: "react", Version: "18.3.1", Severity: rank.High}
+	// body-parser sits under express, which the analysis already knows.
+	transitive := rank.Finding{ID: "CVE-2025-0200", Package: "body-parser", Version: "1.19.0", Severity: rank.Low}
+	minifier := cveReason("Templates are ours.", "html-minifier")
+	req := withProject(request(map[string][]string{}, minifier), reactCVE, transitive)
+
+	assertProblems(t, CheckReasons(r, req, askReasons()), []string{
+		"express 4.17.1 keeps CVE-2025-0200, which no version fixes, and needs a reason",
+		"react 18.3.1 keeps CVE-2025-0100, which no version fixes, and needs a reason",
+	})
+
+	refuse := askReasons()
+	refuse.CVEWithoutFix = policy.Refuse
+	got := CheckReasons(r, req, refuse)
+	for _, want := range []string{
+		"review.cveWithoutFix is refuse: express 4.17.1 keeps CVE-2025-0200, which no version fixes, and cannot cross",
+		"review.cveWithoutFix is refuse: react 18.3.1 keeps CVE-2025-0100, which no version fixes, and cannot cross",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("under refuse, problems = %q, want %q", got, want)
+		}
+	}
+
+	req.Reasons = append(req.Reasons, cveReason("Only the admin page renders it.", "react"), cveReason("Bodies come from us.", "express"))
+	if problems := CheckReasons(r, req, askReasons()); len(problems) > 0 {
+		t.Fatalf("with every reason, problems = %q", problems)
+	}
+	left := ReviewOf(r, req, nil).Left
+	if !slices.ContainsFunc(left, func(c archive.ReviewCVE) bool {
+		return c.Dependency == "react" && c.ID == "CVE-2025-0100" && c.Reason == "Only the admin page renders it."
+	}) {
+		t.Errorf("review.left = %+v, want react's project CVE with its reason", left)
+	}
+}
+
+// A package of the lockfile no dependency's scan names still holds a CVE
+// that ships: refuse refuses it.
+func TestCheckReasonsRefusesAProjectCVENoDependencyNames(t *testing.T) {
+	r := reviewResult()
+	refuse := askReasons()
+	refuse.CVEWithoutFix = policy.Refuse
+	req := withProject(request(map[string][]string{}), rank.Finding{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0", Severity: rank.High})
+	got := CheckReasons(r, req, refuse)
+	want := "review.cveWithoutFix is refuse: the project tree keeps qs 6.0.0 with CVE-2025-0300, which no version fixes, and cannot cross"
+	if !slices.Contains(got, want) {
+		t.Errorf("problems = %q, want %q", got, want)
+	}
+}
+
+// With the project tree, cves.after counts what the lockfile keeps, so it
+// agrees with review.left.
+func TestProjectedWithTheProjectCountsWhatReviewLeftLists(t *testing.T) {
+	r := fixableResult()
+	sel := map[string][]string{"express": {"4.20.0"}}
+	var findings []rank.Finding
+	for _, d := range r.Dependencies {
+		for _, c := range d.CVEs {
+			findings = append(findings, rank.Finding{ID: c.ID, Package: packageName(c.Package), Version: d.Current, Severity: rank.ParseSeverity(c.Severity), FixedVersion: c.FixedIn})
+		}
+	}
+	req := withProject(request(sel), findings...)
+	after := projectedFor(r, req, findings)
+	ids := map[string]bool{}
+	for _, c := range ReviewOf(r, req, &after).Left {
+		ids[c.ID] = true
+	}
+	total := 0
+	for _, n := range after {
+		total += n
+	}
+	if total != len(ids) || total == 0 {
+		t.Errorf("cves.after counts %d (%v), review.left lists %d ids", total, after, len(ids))
+	}
+}

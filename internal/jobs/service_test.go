@@ -1432,3 +1432,35 @@ func TestQueueExportRefusesReasonsForPip(t *testing.T) {
 	}
 	noExportReserved(t, f.project)
 }
+
+// The queue reads the analysis's lockfile scan when the project tree
+// ships: a CVE no version fixes on a dependency whose own scan was clean
+// is refused under refuse before anything is reserved.
+func TestQueueExportReadsTheProjectScanWhenTheTreeShips(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.Review = policy.DefaultReview()
+	svc.Review.CVEWithoutFix = policy.Refuse
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad","dependencies":{"lodash":"4.17.21"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[{"name":"lodash","current":"4.17.21","vector":[0,0,0,0,0],"cves":[],"candidates":[]}],"warnings":[]}`
+	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-2025-0400", "PkgName": "lodash", "InstalledVersion": "4.17.21", "Severity": "HIGH", "Title": "t"}
+  ]}]}`
+	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, data := range map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking, "project.trivy.json": scan} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	var reasons *ErrInvalidReasons
+	if !errors.As(err, &reasons) || !strings.Contains(err.Error(), "lodash 4.17.21 keeps CVE-2025-0400") {
+		t.Fatalf("QueueExport = %v, want lodash's project CVE refused", err)
+	}
+	noExportReserved(t, project)
+}
