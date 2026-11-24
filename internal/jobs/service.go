@@ -263,7 +263,13 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	}
 	if req.IncludeProject {
 		req.ProjectFindings = projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
-		req.ProjectHolders = projectHolders(filepath.Join(project.Dir, "analyses", analysisID))
+		if keys := lockKeysToPlace(result, req.ProjectFindings); len(keys) > 0 {
+			holders, err := projectHolders(filepath.Join(project.Dir, "analyses", analysisID), keys)
+			if err != nil {
+				return store.ExportInfo{}, err
+			}
+			req.ProjectHolders = holders
+		}
 	}
 	if problems := CheckReasons(result, req, s.Review); len(problems) > 0 {
 		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
@@ -699,18 +705,22 @@ func projectFindings(analysisDir string) []rank.Finding {
 }
 
 // projectHolders reads the analysis's project lockfile into the direct
-// dependencies that hold each package. An unreadable lockfile places
+// dependencies that hold each of keys. An unreadable lockfile places
 // nothing, so a CVE without a fix only it would place refuses the export.
-func projectHolders(analysisDir string) map[string][]string {
+// A lockfile too large to walk fails the export with its cause.
+func projectHolders(analysisDir string, keys []string) (map[string][]string, error) {
 	f, err := openRegularFile(filepath.Join(analysisDir, "project", "pnpm-lock.yaml"))
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer f.Close()
-	holders, err := npm.LockHolders(f)
+	holders, err := npm.LockHolders(f, keys)
+	if errors.Is(err, npm.ErrLockTooLarge) {
+		return nil, fmt.Errorf("jobs: project lockfile of analysis %s: %w", filepath.Base(analysisDir), err)
+	}
 	if err != nil {
 		slog.Warn("jobs: unreadable project lockfile", "dir", analysisDir, "error", err)
-		return nil
+		return nil, nil
 	}
-	return holders
+	return holders, nil
 }

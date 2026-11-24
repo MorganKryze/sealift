@@ -817,3 +817,21 @@ func TestCheckReasonsPlacesAProjectFindingOnADependencyOnlyAtItsCurrentVersion(t
 		}
 	}
 }
+
+// Only a lockfile CVE without a fix that no dependency's scan places needs
+// the lockfile walked; the walk starts from its package alone.
+func TestLockKeysToPlaceNamesUnplacedFindingsWithoutFix(t *testing.T) {
+	r := reviewResult()
+	findings := []rank.Finding{
+		{ID: "CVE-2025-0300", Package: "qs", Version: "6.0.0"},
+		{ID: "CVE-2025-0302", Package: "qs", Version: "6.0.0"},
+		{ID: "CVE-2025-0301", Package: "ms", Version: "2.0.0", FixedVersion: "2.1.0"},
+		{ID: "CVE-2025-0100", Package: "react", Version: "18.3.1"},
+	}
+	if got, want := lockKeysToPlace(r, findings), []string{"qs@6.0.0"}; !slices.Equal(got, want) {
+		t.Errorf("lockKeysToPlace = %q, want %q", got, want)
+	}
+	if got := lockKeysToPlace(r, findings[2:]); len(got) != 0 {
+		t.Errorf("with every finding placed or fixed, lockKeysToPlace = %q, want none", got)
+	}
+}

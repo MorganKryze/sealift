@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -48,7 +49,7 @@ snapshots:
 `
 
 func TestLockHoldersWalksEachDirectDependencysTree(t *testing.T) {
-	holders, err := LockHolders(strings.NewReader(graphLock))
+	holders, err := LockHolders(strings.NewReader(graphLock), []string{"qs@6.0.0", "body-parser@1.0.0", "loose-envify@1.4.0", "express@4.17.1", "deep@3.0.0", "missing@1.0.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestLockHoldersReadsTheFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	holders, err := LockHolders(f)
+	holders, err := LockHolders(f, []string{"@babel/core@7.26.9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,59 @@ func TestLockHoldersReadsTheFixture(t *testing.T) {
 }
 
 func TestLockHoldersRefusesAnotherVersion(t *testing.T) {
-	if _, err := LockHolders(strings.NewReader("lockfileVersion: '6.0'\n")); err == nil {
+	if _, err := LockHolders(strings.NewReader("lockfileVersion: '6.0'\n"), []string{"qs@6.0.0"}); err == nil {
 		t.Error("LockHolders accepted lockfile 6.0")
+	}
+}
+
+// fanInLock is a lockfile whose directs all depend on one hub that holds
+// leaves other packages: a forward walk per direct costs directs times nodes.
+func fanInLock(directs, leaves int) string {
+	var b strings.Builder
+	b.WriteString("lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n")
+	for i := range directs {
+		fmt.Fprintf(&b, "      d%d:\n        specifier: 1.0.0\n        version: 1.0.0\n", i)
+	}
+	b.WriteString("snapshots:\n")
+	for i := range directs {
+		fmt.Fprintf(&b, "  d%d@1.0.0:\n    dependencies:\n      hub: 1.0.0\n", i)
+	}
+	b.WriteString("  hub@1.0.0:\n    dependencies:\n")
+	for i := range leaves {
+		fmt.Fprintf(&b, "      l%d: 1.0.0\n", i)
+	}
+	for i := range leaves {
+		fmt.Fprintf(&b, "  l%d@1.0.0: {}\n", i)
+	}
+	return b.String()
+}
+
+func TestLockHoldersWalksBackFromTheAskedKeysOnly(t *testing.T) {
+	lock := fanInLock(1000, 19000)
+	// A forward walk per direct would visit 20 million packages; walking
+	// back from l7 visits l7, the hub and the 1,000 directs. Parsing the
+	// YAML dominates the time, so the visit cap is the bound checked.
+	saved := maxLockVisits
+	maxLockVisits = 25000
+	defer func() { maxLockVisits = saved }()
+	holders, err := LockHolders(strings.NewReader(lock), []string{"l7@1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(holders["l7@1.0.0"]); got != 1000 {
+		t.Errorf("l7 has %d holders, want 1000", got)
+	}
+	if got := holders["l8@1.0.0"]; got != nil {
+		t.Errorf("a package nobody asked about has holders %q", got)
+	}
+}
+
+func TestLockHoldersRefusesPastTheVisitCap(t *testing.T) {
+	saved := maxLockVisits
+	maxLockVisits = 100
+	defer func() { maxLockVisits = saved }()
+	_, err := LockHolders(strings.NewReader(fanInLock(200, 10)), []string{"l1@1.0.0"})
+	if err == nil || !strings.Contains(err.Error(), "visits") {
+		t.Errorf("LockHolders past its cap = %v, want a refusal naming the visits", err)
 	}
 }

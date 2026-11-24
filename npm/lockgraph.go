@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -26,11 +27,21 @@ type rawLockGraph struct {
 	} `yaml:"snapshots"`
 }
 
-// LockHolders reads a pnpm 9.0 lockfile and maps each package it holds,
-// keyed "name@version", to the sorted names of the importer's direct
-// dependencies whose tree reaches it. A package no direct dependency
-// reaches is absent.
-func LockHolders(r io.Reader) (map[string][]string, error) {
+// maxLockVisits caps the packages a LockHolders call visits, summed over
+// its keys. A real lockfile holds a few thousand packages and the walk
+// asks about a handful of them, so a million visits leaves wide room while
+// keeping a crafted lockfile from holding an export for minutes.
+var maxLockVisits = 1_000_000
+
+// ErrLockTooLarge is LockHolders refusing a walk past maxLockVisits.
+var ErrLockTooLarge = errors.New("pnpm lockfile too large to walk")
+
+// LockHolders reads a pnpm 9.0 lockfile and maps each of keys, written
+// "name@version", to the sorted names of the importer's direct
+// dependencies whose tree reaches it. A key no direct dependency reaches
+// is absent. It walks back from each key and refuses a lockfile that
+// would take more than maxLockVisits visits.
+func LockHolders(r io.Reader, keys []string) (map[string][]string, error) {
 	var raw rawLockGraph
 	if err := yaml.NewDecoder(r).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse pnpm lockfile: %w", err)
@@ -38,38 +49,61 @@ func LockHolders(r io.Reader) (map[string][]string, error) {
 	if raw.LockfileVersion != "9.0" {
 		return nil, fmt.Errorf("pnpm lockfile version %q: only 9.0 is supported", raw.LockfileVersion)
 	}
-	edges := map[string][]string{}
+	parents := map[string][]string{}
 	for key, s := range raw.Snapshots {
 		from := snapshotKey(key)
 		for _, deps := range []map[string]string{s.Dependencies, s.OptionalDependencies} {
 			for name, version := range deps {
-				edges[from] = append(edges[from], refKey(name, version))
+				to := refKey(name, version)
+				parents[to] = append(parents[to], from)
 			}
 		}
 	}
-	holders := map[string][]string{}
+	directs := map[string][]string{}
 	for _, imp := range raw.Importers {
 		for _, deps := range []map[string]lockRef{imp.Dependencies, imp.DevDependencies, imp.OptionalDependencies} {
 			for direct, ref := range deps {
-				seen := map[string]bool{}
-				queue := []string{refKey(direct, ref.Version)}
-				for len(queue) > 0 {
-					key := queue[0]
-					queue = queue[1:]
-					if seen[key] {
-						continue
-					}
-					seen[key] = true
-					if !slices.Contains(holders[key], direct) {
-						holders[key] = append(holders[key], direct)
-					}
-					queue = append(queue, edges[key]...)
+				root := refKey(direct, ref.Version)
+				if !slices.Contains(directs[root], direct) {
+					directs[root] = append(directs[root], direct)
 				}
 			}
 		}
 	}
-	for key := range holders {
-		slices.Sort(holders[key])
+	holders := map[string][]string{}
+	visits := 0
+	for _, target := range keys {
+		if _, done := holders[target]; done {
+			continue
+		}
+		var found []string
+		seen := map[string]bool{target: true}
+		queue := []string{target}
+		for len(queue) > 0 {
+			key := queue[0]
+			queue = queue[1:]
+			if visits++; visits > maxLockVisits {
+				return nil, fmt.Errorf("%w: walking back to its packages takes more than %d visits", ErrLockTooLarge, maxLockVisits)
+			}
+			for _, d := range directs[key] {
+				if !slices.Contains(found, d) {
+					found = append(found, d)
+				}
+			}
+			for _, p := range parents[key] {
+				if !seen[p] {
+					seen[p] = true
+					queue = append(queue, p)
+				}
+			}
+		}
+		slices.Sort(found)
+		holders[target] = found
+	}
+	for key, found := range holders {
+		if len(found) == 0 {
+			delete(holders, key)
+		}
 	}
 	return holders, nil
 }
