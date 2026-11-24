@@ -560,7 +560,7 @@ export interface components {
         };
         /** @description What a selection needs before it can cross. */
         ReviewPolicy: {
-            /** @description Whether an analysis proposes versions outside the current major. */
+            /** @description Whether an analysis proposes versions outside the current line. */
             proposeOtherMajors: boolean;
             majorJump: components["schemas"]["ReviewRule"];
             cveWithoutFix: components["schemas"]["ReviewRule"];
@@ -706,7 +706,7 @@ export interface components {
             /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
-            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none. */
+            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it. */
             jump?: string;
             /** @description The name of the family this dependency's jump belongs to. Absent when its jump moves alone. */
             family?: string;

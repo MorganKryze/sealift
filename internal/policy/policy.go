@@ -56,13 +56,13 @@ const (
 // Review holds the review rules of the policy file's review key.
 type Review struct {
 	// ProposeOtherMajors lets an analysis propose a version outside the
-	// current major.
+	// current line.
 	ProposeOtherMajors bool
 	MajorJump          Rule
 	CVEWithoutFix      Rule
 }
 
-// DefaultReview proposes inside the current major only and asks a reason
+// DefaultReview proposes inside the current line only and asks a reason
 // for a major jump and for a CVE without fix.
 func DefaultReview() Review {
 	return Review{MajorJump: AskReason, CVEWithoutFix: AskReason}

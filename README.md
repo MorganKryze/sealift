@@ -29,7 +29,7 @@ On the connected side, from a project's `package.json`:
 
 - scans the project with Trivy and counts its CVEs by severity;
 - resolves every newer version of each direct dependency with the project's peer dependencies, and scans each one;
-- proposes, for each dependency, the oldest version inside its current major (its minor below 1.0.0) that fixes the most CVEs, and holds back any release younger than 14 days;
+- proposes, for each dependency, the oldest version inside its current major (its minor below 1.0.0, its patch below 0.1.0) that fixes the most CVEs, and holds back any release younger than 14 days;
 - names the version outside that line each dependency could jump to, and groups the jumps that must move together;
 - flags what deserves a second look: a major jump, a lost provenance, a new publisher, an added install script;
 - lets you review the proposal, change any version, or keep the current one, and asks a reason for a major jump or a CVE that no version fixes;

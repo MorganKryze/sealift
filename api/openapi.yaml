@@ -853,7 +853,7 @@ components:
       properties:
         proposeOtherMajors:
           type: boolean
-          description: Whether an analysis proposes versions outside the current major.
+          description: Whether an analysis proposes versions outside the current line.
         majorJump:
           $ref: "#/components/schemas/ReviewRule"
         cveWithoutFix:
@@ -1147,7 +1147,8 @@ components:
           type: string
           description: >-
             The first unblocked candidate outside the current line, in the
-            order a proposal is taken. Absent when there is none.
+            order a proposal is taken. Absent when there is none, and in an
+            analysis sealift 0.7.0 recorded, which did not write it.
         family:
           type: string
           description: >-

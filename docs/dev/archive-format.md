@@ -67,7 +67,7 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 ## The review
 
-A manifest may carry a `review` object: what the selection updates, keeps and takes out of its line, the CVEs the project keeps, and the reasons given for them. A dependency's line is the range npm's caret gives its current version: the same major from 1.0.0, the same minor below it. The signature covers the review with the rest of the manifest. The archive's bytes do not depend on it.
+A manifest may carry a `review` object: what the selection updates, keeps and takes out of its line, the CVEs the project keeps, and the reasons given for them. A dependency's line is the range npm's caret gives its current version: the same major from 1.0.0, the same minor below it, the same patch below 0.1.0. The signature covers the review with the rest of the manifest. The archive's bytes do not depend on it.
 
 ```json
 {

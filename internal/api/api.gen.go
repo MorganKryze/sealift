@@ -338,7 +338,7 @@ type DependencyResult struct {
 	// Family The name of the family this dependency's jump belongs to. Absent when its jump moves alone.
 	Family *string `json:"family,omitempty"`
 
-	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none.
+	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it.
 	Jump *string `json:"jump,omitempty"`
 	Name string  `json:"name"`
 
@@ -695,7 +695,7 @@ type ReviewPolicy struct {
 	// MajorJump reason lets the selection cross with a reason written for it; refuse stops it.
 	MajorJump ReviewRule `json:"majorJump"`
 
-	// ProposeOtherMajors Whether an analysis proposes versions outside the current major.
+	// ProposeOtherMajors Whether an analysis proposes versions outside the current line.
 	ProposeOtherMajors bool `json:"proposeOtherMajors"`
 }
 
