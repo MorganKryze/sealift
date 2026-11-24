@@ -39,6 +39,7 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("GET /livez", LiveHandler)
 
 	strict := NewStrictHandlerWithOptions(h, nil, StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: requestError,
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			// The event stream's response starts writing before it can
 			// fail, so by the time an error reaches here the status line
@@ -64,7 +65,7 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("/api/tools/", toolsGone)
 	mux.HandleFunc("PUT /api/settings", gone("the settings write is gone: the deployment sets them in its policy file, and GET /api/instance reports them"))
 	mux.Handle("/", SPA(static))
-	routes := refuseCrossSite(mux, allowedHosts(h.ListenAddr))
+	routes := refuseCrossSite(boundJSONBodies(mux), allowedHosts(h.ListenAddr))
 	if h.Ephemeral > 0 {
 		return noStore(routes)
 	}

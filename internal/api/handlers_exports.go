@@ -19,6 +19,10 @@ func (h *Handlers) QueueExport(_ context.Context, req QueueExportRequestObject) 
 		return QueueExportdefaultApplicationProblemPlusJSONResponse(toolsMissingProblem(missing)), nil
 	}
 	body := *req.Body
+	if bound := exportRequestBound(body); bound != "" {
+		p := NewProblem(http.StatusBadRequest, "export request too large", bound)
+		return QueueExportdefaultApplicationProblemPlusJSONResponse(problemBody{Body: p, StatusCode: http.StatusBadRequest}), nil
+	}
 	jobsReq := jobs.ExportRequest{
 		Selection:      body.Selection,
 		IncludeProject: body.IncludeProject != nil && *body.IncludeProject,
