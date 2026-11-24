@@ -3,7 +3,9 @@ package deploy
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -348,5 +350,95 @@ func TestLabPolicyChangesEveryBrandField(t *testing.T) {
 	}
 	if b.Contact == nil {
 		t.Error("lab brand has no contact, the default")
+	}
+}
+
+// uncommentPolicy turns the example's commented keys into YAML and leaves
+// its prose out: a commented key is a "#" line whose text starts with a key
+// or a nested comment.
+func uncommentPolicy(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := regexp.MustCompile(`^\s*([A-Za-z]+:|#)`)
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		text, ok := strings.CutPrefix(line, "# ")
+		if ok && key.MatchString(text) {
+			out = append(out, text)
+		}
+	}
+	return []byte(strings.Join(out, "\n") + "\n")
+}
+
+// keyPaths lists every mapping key of a YAML document, dotted from the root.
+func keyPaths(n *yaml.Node, prefix string, out *[]string) {
+	if n.Kind == yaml.DocumentNode {
+		for _, c := range n.Content {
+			keyPaths(c, prefix, out)
+		}
+		return
+	}
+	if n.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		p := prefix + n.Content[i].Value
+		*out = append(*out, p)
+		keyPaths(n.Content[i+1], p+".", out)
+	}
+}
+
+// The example spells out every key the policy reads, and the values it
+// shows are the defaults: uncommented, it loads to the defaults plus the
+// three brand keys that have none.
+func TestExamplePolicySpellsOutEveryDefault(t *testing.T) {
+	text := uncommentPolicy(t, "connected/policy/policy.yaml")
+	var doc yaml.Node
+	if err := yaml.Unmarshal(text, &doc); err != nil {
+		t.Fatalf("the uncommented example is not YAML: %v\n%s", err, text)
+	}
+	var got []string
+	keyPaths(&doc, "", &got)
+	want := []string{
+		"targets", "targets.npm", "targets.npm.os", "targets.npm.cpu", "targets.npm.libc", "targets.npm.node", "targets.npm.pnpm",
+		"targets.pip", "targets.pip.python", "targets.pip.os", "targets.pip.cpu", "targets.pip.glibc", "targets.pip.uv",
+		"minReleaseAgeDays",
+		"parallelism", "parallelism.resolve", "parallelism.download",
+		"brand", "brand.name", "brand.sides", "brand.sides.online", "brand.sides.offline", "brand.reviewWord",
+		"brand.logo", "brand.accent", "brand.contact", "brand.contact.label", "brand.contact.url",
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("keys of the uncommented example = %v, want %v", got, want)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+	logo := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>`)
+	if err := os.WriteFile(path, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logo.svg"), logo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Load refuses an unknown key, so a key the example misspells fails here.
+	p, err := policy.Load(path, store.Settings{}, false)
+	if err != nil {
+		t.Fatalf("the uncommented example does not load: %v", err)
+	}
+	wantBrand := policy.DefaultBrand()
+	wantBrand.Logo, wantBrand.LogoType = p.Brand.Logo, p.Brand.LogoType
+	wantBrand.Accent = "#0b6e99"
+	wantBrand.Contact = &policy.Contact{Label: "Platform team", URL: "mailto:platform@example.com"}
+	wantP := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: wantBrand}
+	if !reflect.DeepEqual(p, wantP) {
+		t.Errorf("uncommented example = %+v, want the defaults %+v", p, wantP)
+	}
+	if p.Brand.LogoType != "image/svg+xml" {
+		t.Errorf("logo type = %q, want image/svg+xml", p.Brand.LogoType)
 	}
 }
