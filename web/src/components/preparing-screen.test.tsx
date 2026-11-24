@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, render, screen, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { getInstance, type Instance } from "@/api/settings"
@@ -97,7 +97,32 @@ describe("PreparingScreen", () => {
     expect(status).toHaveTextContent("Vulnerability database: Ready")
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
+
+  it("puts a failed item's cause and next try in its status", () => {
+    renderScreen()
+    const status = within(item(/^Vulnerability database$/)).getByRole("status")
+    expect(status).toHaveTextContent(CAUSE)
+    expect(status).toHaveTextContent(`Next try at ${new Date(NEXT_TRY).toLocaleTimeString()}.`)
+  })
+
+  it("shows a reason that holds markup as text", () => {
+    const reason = '<img src="x" onerror="alert(1)"><b>502 Bad Gateway</b>'
+    renderScreen([{ name: "trivy", version: "0.76.2", state: "failed", reason }])
+    const row = item(/^Trivy 0.76.2$/)
+    expect(within(row).getByText(reason)).toBeInTheDocument()
+    expect(row.querySelector("img, b")).toBeNull()
+  })
 })
+
+function renderWhenReady() {
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <WhenReady>
+        <p>Home</p>
+      </WhenReady>
+    </QueryClientProvider>,
+  )
+}
 
 describe("WhenReady", () => {
   it("shows the children once the instance is ready", async () => {
@@ -125,5 +150,45 @@ describe("WhenReady", () => {
       await vi.advanceTimersByTimeAsync(9000)
     })
     expect(vi.mocked(getInstance).mock.calls.length).toBe(calls)
+  })
+
+  it("offers a retry when the first answer fails", async () => {
+    vi.mocked(getInstance).mockRejectedValueOnce(new Error("network")).mockResolvedValue(instance(preparing))
+    renderWhenReady()
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach sealift.")
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    expect(await screen.findByRole("heading", { name: "Preparing sealift" })).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("says sealift is unreachable when a later poll fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(getInstance).mockResolvedValueOnce(instance(preparing)).mockRejectedValue(new Error("network"))
+    renderWhenReady()
+    expect(await screen.findByRole("heading", { name: "Preparing sealift" })).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach sealift.")
+    expect(screen.queryByText(CAUSE)).not.toBeInTheDocument()
+  })
+
+  it("announces that preparation ended", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(getInstance).mockResolvedValueOnce(instance(preparing)).mockResolvedValue(instance(allReady))
+    renderWhenReady()
+    expect(await screen.findByRole("heading", { name: "Preparing sealift" })).toBeInTheDocument()
+    const before = screen.getAllByRole("status")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    await screen.findByText("Home")
+    const live = screen.getByRole("status")
+    expect(live).toHaveTextContent("sealift is ready.")
+    // Mounted while preparing, so the change is announced.
+    expect(before).toContain(live)
   })
 })

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { Check, Database, KeyRound, LoaderCircle, Package, ShieldCheck, TriangleAlert } from "lucide-react"
-import { type ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 
 import { getInstance, type Instance } from "@/api/settings"
 import { Button } from "@/components/ui/button"
@@ -12,17 +12,38 @@ type Item = Instance["preparing"][number]
 
 const POLL_MS = 3000
 
-/** Shows the preparing screen until the instance is ready, then its children; it asks again every 3 s until then. */
-export function WhenReady({ children }: { children: ReactNode }) {
-  const query = useQuery({
+function useInstance() {
+  return useQuery({
     queryKey: ["instance"],
     queryFn: getInstance,
     refetchInterval: (q) => (q.state.data?.ready ? false : POLL_MS),
   })
+}
 
+/** Shows the preparing screen until the instance is ready, then its children; it asks again every 3 s until then. */
+export function WhenReady({ children }: { children: ReactNode }) {
+  const query = useInstance()
+
+  // Set once a poll answered not ready, so the home that follows says
+  // preparation ended; a reload on a ready instance says nothing.
+  const [waited, setWaited] = useState(false)
+  if (query.data && !query.data.ready && !waited) setWaited(true)
+
+  return (
+    <>
+      <WhenReadyContent query={query}>{children}</WhenReadyContent>
+      {/* Kept mounted across the swap to the home, so a screen reader hears the end of preparation. */}
+      <p role="status" className="sr-only">
+        {query.data?.ready && waited ? "sealift is ready." : ""}
+      </p>
+    </>
+  )
+}
+
+function WhenReadyContent({ query, children }: { query: ReturnType<typeof useInstance>; children: ReactNode }) {
   if (query.data?.ready) return children
-  if (query.data) return <PreparingScreen instance={query.data} />
 
+  // A failed poll wins over cached data: the states and next-try times on screen may be stale.
   if (query.isError) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
@@ -33,6 +54,7 @@ export function WhenReady({ children }: { children: ReactNode }) {
       </div>
     )
   }
+  if (query.data) return <PreparingScreen instance={query.data} />
 
   return (
     <div role="status" className="flex flex-1 items-center justify-center p-8 text-muted">
@@ -110,43 +132,44 @@ function PreparingRow({ item }: { item: Item }) {
     <Card className="grid grid-cols-[40px_1fr_auto] items-start gap-3.5 p-4">
       <span
         className={cn(
-          "grid size-10 flex-none place-items-center rounded-[10px] border",
+          "col-start-1 row-start-1 grid size-10 flex-none place-items-center rounded-[10px] border",
           ready ? "border-transparent bg-accent/15 text-accent" : "border-line bg-card text-muted",
         )}
       >
         {ICONS[item.name]}
       </span>
-      <div className="min-w-0">
+      <div className="col-start-2 row-start-1 min-w-0">
         <h2 className="text-sm font-semibold text-ink">{name}</h2>
         <p className="text-sm text-muted">{description(item)}</p>
         {item.name === "signing-key" && item.version ? (
           <code className="mt-2 block font-mono text-[13px] text-ink [overflow-wrap:anywhere]">{item.version}</code>
         ) : null}
+      </div>
+      {/* One status per item, kept mounted across polls, so each change is announced once and politely. It holds a failure's cause and next try, so those are heard too; `contents` lets its parts sit in the card's grid. */}
+      <div role="status" className="contents">
+        <p
+          className={cn(
+            "col-start-3 row-start-1 inline-flex items-center gap-1.5 pt-2.5 text-sm font-medium whitespace-nowrap",
+            ready ? "text-severity-resolved-fg" : failed ? "text-severity-critical-fg" : "text-ink",
+          )}
+        >
+          <span className="sr-only">{name}: </span>
+          {ready ? (
+            <Check className="size-3.5" strokeWidth={3} aria-hidden="true" />
+          ) : failed ? (
+            <TriangleAlert className="size-3.5" aria-hidden="true" />
+          ) : (
+            <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
+          )}
+          {STATE_WORDS[item.state]}
+        </p>
         {failed ? (
-          <div className="mt-2 flex flex-col gap-1 text-sm">
+          <div className="col-start-2 -mt-1.5 flex min-w-0 flex-col gap-1 text-sm">
             {item.reason ? <p className="text-severity-critical-fg [overflow-wrap:anywhere]">{item.reason}</p> : null}
             {item.nextTry ? <p className="text-muted">Next try at {new Date(item.nextTry).toLocaleTimeString()}.</p> : null}
           </div>
         ) : null}
       </div>
-      {/* One status per item, kept mounted across polls, so each change is announced once and politely. */}
-      <p
-        role="status"
-        className={cn(
-          "inline-flex items-center gap-1.5 pt-2.5 text-sm font-medium whitespace-nowrap",
-          ready ? "text-severity-resolved-fg" : failed ? "text-severity-critical-fg" : "text-ink",
-        )}
-      >
-        <span className="sr-only">{name}: </span>
-        {ready ? (
-          <Check className="size-3.5" strokeWidth={3} aria-hidden="true" />
-        ) : failed ? (
-          <TriangleAlert className="size-3.5" aria-hidden="true" />
-        ) : (
-          <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" />
-        )}
-        {STATE_WORDS[item.state]}
-      </p>
     </Card>
   )
 }
