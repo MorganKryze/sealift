@@ -41,7 +41,8 @@ Each removed route below answers 410 Gone, with Problem Details that name `GET /
 ### Security
 
 - Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.
-- No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them.
+- No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them. A project's target can still name another pnpm or uv, and both are held to the minimum release age.
+- `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.
 - The policy's logo must be a regular PNG or SVG file of at most 256 KiB, and is served with a `Content-Security-Policy` that blocks scripts and `X-Content-Type-Options: nosniff`. A contact address must be `https:` or `mailto:`, and brand text with a control character is refused.
 
 ## [0.7.0] - 2026-11-23
