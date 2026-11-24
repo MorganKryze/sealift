@@ -1,12 +1,12 @@
 # Deployment
 
-This page covers running sealift for a team: Compose, a reverse proxy, the data volume, upgrades and backups. To deploy both sides from written steps, with a Helm chart for the import service on Kubernetes, read [the runbook](runbook.md), [Helm chart](helm.md) and [Request to the administrators](admin-request.md). [Getting started](getting-started.md) has the one-line `docker run` for a first try.
+This page covers running sealift for a team: Compose, readiness, the policy file, a reverse proxy, the data volume, upgrades and backups. To deploy both sides from written steps, with a Helm chart for the import service on Kubernetes, read [the runbook](runbook.md), [Helm chart](helm.md) and [Request to the administrators](admin-request.md). [Getting started](getting-started.md) has the one-line `docker run` for a first try.
 
 ## The image
 
 `ghcr.io/morgankryze/sealift` is published for `linux/amd64` and `linux/arm64`. Tags carry no `v`: `0.2.2`, and `latest` for the newest release. Pin a version in production and upgrade on purpose.
 
-The image holds the sealift binary, the web interface and Node 22. The rest lands in the volume: the setup screen downloads Trivy and its database, and the first analysis downloads pnpm 10.34.5 from the npm registry, checked against its published integrity.
+The image holds the sealift binary, the web interface and Node 22. The rest lands in the volume, downloaded at start with no action from anyone: the Trivy release the binary pins, its vulnerability database, and the pnpm and uv versions the default targets name. [Readiness](#readiness) says when the instance can take an analysis.
 
 ## Compose
 
@@ -33,20 +33,61 @@ services:
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
+      start_period: 10m
+      start_interval: 5s
 
 volumes:
   sealift-data:
 ```
 
-This setup was checked with an analysis and an export. The root filesystem is read-only; sealift writes only to `/data` and `/tmp`.
+`deploy/connected/compose.yaml` holds the same service. This setup was checked with an analysis and an export. The root filesystem is read-only; sealift writes only to `/data` and `/tmp`.
 
 sealift runs as user `app` (uid 10000) and starts pnpm and Trivy as a second user, `tools` (uid 10001), so neither they nor any package they handle can read `private/`, which holds the settings and the signing key. Switching users needs `SETUID` and `SETGID`, and stopping a cancelled job needs `KILL`. Every other capability can go.
 
 `no-new-privileges` stops the switch to the `tools` user, and every analysis fails with `fork/exec ... operation not permitted`. A Docker daemon can set it for every container through `"no-new-privileges": true` in `daemon.json`, so the Compose file turns it off by name with `security_opt: [no-new-privileges=false]`. Leaving the option out is not enough on such a host. `docker inspect` shows `SecurityOpt: null` either way; `docker exec <container> grep NoNewPrivs /proc/1/status` shows what applies, and it must print `0`. sealift also logs an error at startup when it finds the flag set.
 
+## Readiness
+
+At start, sealift prepares five items, in this order: it checks the signing key, then installs the pinned Trivy and downloads its database, while it installs pnpm and uv beside them. Until every item is ready, `GET /healthz` answers 503 and names what is missing:
+
+```
+{"status":"preparing","missing":["trivy-db","pnpm"]}
+```
+
+Once all five are ready, it answers 200 with `{"status":"ok"}`. Meanwhile the interface and the API answer: the home shows Preparing sealift, with each item, its state and, for a failed one, its cause and the time of its next try. The home opens by itself once the instance is ready. The API refuses to create a session or start an analysis until Trivy and its database are in place. `GET /api/instance` gives each item's state and cause, as [the API reference](dev/api.md#instance) shows.
+
+A failed item keeps its cause and tries again every minute, with no restart. A failed database refresh leaves the instance ready when an older database is on the volume: `GET /api/instance` then carries a `warning` with the cause and that database's date. Without a database, the instance stays not ready.
+
+In the lab, at commit 0257b72, the connected Compose file on an empty volume answered 503 for about 25 seconds, then 200, and Docker marked the service `healthy` 31 seconds after the start, with no click. A volume that already holds the pinned Trivy and a database answered 200 within 10 seconds.
+
+`/healthz` is a readiness check. Do not use it for liveness: an orchestrator that restarts on a failed liveness probe would restart an instance that is still downloading. `GET /livez` answers 200 with `{"status":"ok"}` whenever the server runs, whatever the preparation's state.
+
+| Probe | Address |
+| --- | --- |
+| Readiness, or Docker's `healthcheck` | `/healthz` |
+| Liveness | `/livez` |
+
+The Compose healthcheck gives the first start 10 minutes (`start_period`), during which a failure does not count, and checks every 5 seconds until the first success (`start_interval`). `start_interval` needs Docker Engine 25 or later.
+
+## The policy file
+
+The policy file sets the default targets, the minimum release age, the parallelism and the brand. [Settings](settings.md) lists each key, its default and its range. `SEALIFT_POLICY` names the file; without it, the defaults apply, and an upgraded volume keeps the values it saved.
+
+`deploy/connected/compose.policy.yaml` is an overlay, like the ephemeral one. It mounts `./policy/` read-only at `/etc/sealift/` and sets `SEALIFT_POLICY=/etc/sealift/policy.yaml`:
+
+```sh
+docker compose -f compose.yaml -f compose.policy.yaml up -d
+```
+
+`deploy/connected/policy/policy.yaml` is the example. Every key in it is commented out, so it changes nothing until you edit it. A key you uncomment replaces the value an upgraded instance saved. Keep the file and the logo outside `/data`, on a read-only mount, as the overlay does: the container then cannot change them.
+
+sealift reads the file and the logo once, at start: restart the service after an edit. A bad value stops the start, and the log names the file, the key and the rule.
+
+On Kubernetes, a ConfigMap mounted as a folder presents each file through a link, and sealift refuses a logo that is a link. Mount the logo with `subPath`, which gives a regular file. The policy file itself may be a link.
+
 ## Access
 
-sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts), and a tool install refuses a request whose `Origin` differs from its `Host`, described under [Reverse proxy](#reverse-proxy); no other route looks at the Host. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
+sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts); no other route looks at the Host. No route installs a tool or changes the policy. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
 
 <!-- illustrative -->
 ```sh
@@ -83,18 +124,18 @@ location / {
 
 A buffering proxy shows as progress that stalls, then jumps to the end.
 
-The proxy must also pass on the `Host` the browser sent. `POST /api/tools/trivy/update` and `POST /api/tools/uv/install` compare a request's `Origin` with its `Host`, port included, and refuse it with 403 when they differ. Behind a proxy that rewrites the `Host`, the setup screen cannot install Trivy. Caddy keeps the `Host` as it came. Nginx sends the address in `proxy_pass` instead, so the example sets `proxy_set_header Host $http_host`. `$host` drops the port and fails behind a proxy that listens on a port other than 80 or 443.
-
 ## Outbound access
 
-sealift needs HTTPS to:
+sealift needs HTTPS to these hosts, at start and for each analysis and export. A host the start cannot reach keeps the instance not ready, and `GET /api/instance` gives the cause.
 
-| Host | For |
-| --- | --- |
-| `api.github.com`, `github.com` and the download host it redirects to | Trivy releases and their checksums |
-| `mirror.gcr.io` | The Trivy vulnerability database |
-| `registry.npmjs.org` | pnpm, package metadata and tarballs |
-| `pypi.org` and `files.pythonhosted.org` | uv, Python package index pages and wheels |
+| Host | At start | Later |
+| --- | --- | --- |
+| `api.github.com`, `github.com` and the download host it redirects to | The pinned Trivy release: one lookup of its tag, then its asset | Nothing |
+| `mirror.gcr.io` | The Trivy vulnerability database | A refresh before each analysis |
+| `registry.npmjs.org` | The default target's pnpm | Package metadata and tarballs, and the pnpm of a target that names another version |
+| `pypi.org` and `files.pythonhosted.org` | The default pip target's uv | Index pages and wheels, and the uv of a target that names another version |
+
+Once the pinned Trivy is on the volume, sealift asks GitHub nothing more, a restart included.
 
 To resolve and download packages through an npm mirror, set both variables to its URL:
 
@@ -104,11 +145,11 @@ To resolve and download packages through an npm mirror, set both variables to it
       NPM_CONFIG_REGISTRY: https://npm-mirror.example.internal
 ```
 
-`SEALIFT_NPM_REGISTRY` is where sealift reads package metadata; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads. The first analysis still downloads pnpm itself from `registry.npmjs.org`, so keep that host open.
+`SEALIFT_NPM_REGISTRY` is where sealift reads package metadata and downloads pnpm; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads.
 
-`SEALIFT_GITHUB_API` replaces `https://api.github.com` as the place sealift looks up Trivy releases. Leave it unset unless you serve a mirror of that API. The value must be an `https` URL without credentials; `http` is accepted only on `localhost`, `127.0.0.1` and `::1`, and sealift refuses to start on any other value. The mirror is fully trusted: it supplies the release date that the minimum release age checks, the checksums file, and the address sealift downloads the Trivy binary from, so the sha256 check proves nothing against a hostile mirror.
+`SEALIFT_GITHUB_API` replaces `https://api.github.com` as the place sealift looks up the pinned Trivy release. Leave it unset unless you serve a mirror of that API. The value must be an `https` URL without credentials; `http` is accepted only on `localhost`, `127.0.0.1` and `::1`, and sealift refuses to start on any other value. The mirror supplies the address sealift downloads Trivy from. It can delay Trivy and cannot swap it: sealift installs the download only when its sha256 equals the one the binary pins.
 
-`SEALIFT_GITHUB_TOKEN` is a GitHub token that sealift sends as `Authorization: Bearer` on its release lookups at the GitHub API, and nowhere else: pnpm and Trivy run without it. When `SEALIFT_GITHUB_API` is set, the token goes to that address, so a mirror receives it. It stays out of logs, errors, answers and the tools' environment. Set it when GitHub answers `403` because many users share your outbound address and use up the anonymous rate limit. A token with no scopes is enough. Unset keeps the lookups anonymous.
+`SEALIFT_GITHUB_TOKEN` is a GitHub token that sealift sends as `Authorization: Bearer` on its release lookup at the GitHub API, and nowhere else: pnpm and Trivy run without it. When `SEALIFT_GITHUB_API` is set, the token goes to that address, so a mirror receives it. It stays out of logs, errors, answers and the tools' environment. Set it when GitHub answers `403` because many users share your outbound address and use up the anonymous rate limit. A token with no scopes is enough. Unset keeps the lookups anonymous.
 
 ## The data volume
 
@@ -116,21 +157,22 @@ Everything sealift keeps lives under `/data`:
 
 ```
 /data
-  private/settings.json    settings (app only)
+  private/settings.json    the settings 0.7.0 and earlier saved, read and never written (app only)
   private/signing-key.pem  the private signing key, mode 0600 (app only)
   projects/<session>/
     project.json           the session: name, target, the manifest's sha256
     package.json           the manifest as dropped
     analyses/<id>/         each analysis: its result, its log, the resolved project
     exports/<id>/          each export: the archive, its manifest, the manifest's signature and four reports
-  tools/trivy/<version>/   every Trivy installed; tools/trivy/current is the active one
-  tools/pnpm/<version>/    pnpm, downloaded on the first analysis
+  tools/trivy/<version>/   the pinned Trivy; tools/trivy/current points at it
+  tools/pnpm/<version>/    pnpm, the default target's downloaded at start
+  tools/uv/<version>/      uv, the default pip target's downloaded at start
   trivy-cache/db/          the vulnerability database, about 1.4 GB
   cache/                   downloaded tarballs and resolution caches
   home/                    the home directory of pnpm and Trivy
 ```
 
-`cache/` can be deleted while sealift is stopped; the next export downloads again. Deleting `private/settings.json` resets the settings. Deleting `private/signing-key.pem` makes the next start generate a new key.
+`cache/` can be deleted while sealift is stopped; the next export downloads again. Deleting `private/settings.json` drops the values 0.7.0 saved: the policy file and the defaults then apply. Once the pinned Trivy is active, the start removes every other version from `tools/trivy/`. Deleting `private/signing-key.pem` makes the next start generate a new key.
 
 ## Ephemeral mode
 
@@ -270,6 +312,23 @@ docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.i
 
 With Compose, change the tag and run `docker compose up -d`. Sessions, archives, settings and the signing key carry over. A job running during the upgrade is discarded: its session shows its previous state, and you start the job again.
 
+### From 0.7.0
+
+Take [a backup](#backing-up) first. Then:
+
+1. Copy the new `compose.yaml` from the release, or add `start_period: 10m` and `start_interval: 5s` to your healthcheck, so the first start's downloads do not mark the service unhealthy.
+2. Leave the policy file out for the first start. The instance keeps every value its settings held, and the log names no override.
+3. Start the new release. It installs the pinned Trivy if the volume holds another version, then removes the others, and refreshes the database. `/healthz` answers 200 once it is done. No screen asks for a click.
+4. To change a value, write the policy file and start with the overlay, as [The policy file](#the-policy-file) shows. The log then names each key the file overrides.
+
+In the lab, at commit 0257b72, a copy of a 0.7.0 volume that held 6 projects, 7 analyses and 5 exports opened with every record and field unchanged. The public key's sha256 stayed the same, `private/settings.json` kept its sha256, and a re-export of a 0.7.0 analysis gave the same archive sha256 as 0.7.0's export.
+
+The API routes that listed or installed tools and saved settings are gone, and answer 404 or 405. [The CHANGELOG](../CHANGELOG.md) names what replaces each.
+
+### Rolling back
+
+Stop the new release and start 0.7.0 on the same volume. 0.7.0 reads the records, the key and `private/settings.json` as it left them, and uses the pinned Trivy, which it finds active. Values set only in the policy file do not apply under 0.7.0. In the lab, at commit 0257b72, 0.7.0 opened the copy again after the upgrade, listed the same records, and answered healthy.
+
 ## Backing up
 
 Stop sealift, then archive the volume:
@@ -282,4 +341,4 @@ docker run --rm -v sealift-data:/data:ro -v "$PWD":/backup alpine \
 docker start sealift
 ```
 
-The archive holds `private/signing-key.pem`. The two excluded folders are downloads: after a restore, the setup screen downloads the database again. Restore by extracting the archive into an empty volume before the first start.
+The archive holds `private/signing-key.pem`. The two excluded folders are downloads: after a restore, the start downloads the database again. Restore by extracting the archive into an empty volume before the first start.

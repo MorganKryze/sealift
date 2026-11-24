@@ -2,7 +2,7 @@
 
 This page lists every route of the HTTP API, what it is for, and how it fails, then describes the event stream. [`api/openapi.yaml`](../../api/openapi.yaml) is the contract; the Go server interface and the TypeScript types are generated from it with `just generate`.
 
-Every route lives under `/api`, except `/healthz`. Request and response bodies are JSON unless stated.
+Every route lives under `/api`, except `/healthz` and `/livez`. Request and response bodies are JSON unless stated.
 
 ## Errors
 
@@ -18,13 +18,18 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 | --- | --- |
 | 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
 | 404 | An unknown project, analysis or export |
-| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; a Trivy or uv release younger than the minimum release age |
-| 502 | GitHub cannot be reached to list Trivy releases |
+| 409 | Trivy or its database is missing (`tools-missing`); the analysis is not done; the project has a job queued or running |
 | 500 | Anything else; the server log has the cause |
 
 ## Health
 
-`GET /healthz` answers while the server runs.
+`GET /healthz` is the readiness check. It answers 503 until every item the start prepares is ready, with the names of the others, and 200 after:
+
+```json
+{"status":"preparing","missing":["trivy-db","uv"]}
+```
+
+The body names the items only; their causes are in [`GET /api/instance`](#instance). `GET /livez` is the liveness check: 200 with `{"status":"ok"}` while the server runs, whatever the preparation's state. [Deployment](../deployment.md#readiness) says which probe uses which.
 
 <!-- run -->
 <!-- expect: {"status":"ok"} -->
@@ -148,10 +153,43 @@ Downloaded wheels stay in the shared cache `cache/wheels/`, named by their sha25
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/settings` | Every setting: the target and the three limits. |
-| `PUT /api/settings` | Replace every setting. A `signatureKey` in the body is ignored and never saved. 400 for a target or limit out of range. |
+| `GET /api/settings` | The npm target and the three limits in effect: the policy file's, else the values 0.7.0 saved, else the defaults. Read-only. |
 
-[Settings](../settings.md#from-the-api) shows both, with real answers.
+[Settings](../settings.md#from-the-api) shows a real answer, and how each value is set.
+
+## Instance
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/instance` | How the instance was deployed and what it has prepared: `ready`, `preparing`, `warning`, `policy`, `brand`, `tools`, `ephemeral` and `idleMinutes`. |
+| `GET /api/instance/logo` | The logo the policy file names, as read at start, with its type. 404 when the policy names none. |
+
+`preparing` lists the five items in order: `trivy`, `trivy-db`, `signing-key`, `pnpm` and `uv`. Each has a `state`, `preparing`, `ready` or `failed`, and a `version`: the pinned Trivy, the database's date, the public key's sha256, or the pnpm or uv version. A failed item adds `reason`, cut at 300 characters, and `nextTry`. `ready` is true once all five are ready. `warning` holds a database refresh that failed while an older database stays in use. `policy` holds both targets and the three limits, and `brand` the name, the side labels, the review word, `logo` (whether the logo route serves one), and `accent` and `contact` when the policy sets them. `tools` gives the Trivy version, the database's date and the pnpm and uv versions on the volume.
+
+<!-- run -->
+<!-- expect: "ready":true -->
+```sh
+curl -s http://localhost:8080/api/instance
+```
+
+```json
+{"brand":{"logo":false,"name":"sealift","offline":"Offline","online":"Online","reviewWord":"PR"},"ephemeral":false,"policy":{"downloadParallelism":16,"minReleaseAgeDays":14,"pipTarget":{"cpu":"x86_64","glibc":"2.28","os":"linux","python":"3.11.2","uvVer":"0.13.7"},"resolveParallelism":4,"target":{"cpu":"x64","libc":"glibc","node":"22.17.1","os":"linux","pnpmVer":"10.34.5"}},"preparing":[{"name":"trivy","state":"ready","version":"0.76.2"},{"name":"trivy-db","state":"ready","version":"2026-11-24T07:08:30Z"},{"name":"signing-key","state":"ready","version":"<64 lowercase hex digits>"},{"name":"pnpm","state":"ready","version":"10.34.5"},{"name":"uv","state":"ready","version":"0.13.7"}],"ready":true,"tools":{"pnpm":["10.34.5"],"trivy":"0.76.2","trivyDbDate":"2026-11-24T07:08:30.89Z","uv":["0.13.7"]}}
+```
+
+The logo route answers with `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`, so a script in an SVG logo does not run when its address is opened directly.
+
+### Removed routes
+
+The routes that listed or installed tools and saved settings are gone. The deployment now prepares the tools and sets the policy, so no request can. Each answers 404 or 405. Paths are under `/api`:
+
+| Removed | Use instead |
+| --- | --- |
+| `GET /tools` | `GET /instance`: `tools`, `preparing` and `ready` |
+| `POST /tools/trivy/update` | the pinned Trivy, installed at start |
+| `POST /tools/trivy/activate` | nothing: sealift runs the pinned Trivy only |
+| `POST /tools/trivy/db/update` | the refresh at start and before each analysis |
+| `POST /tools/uv/install` | the default pip target's uv, installed at start; another uv installs during the analysis that needs it |
+| `PUT /settings` | the policy file, read at start |
 
 ## Signing key
 
@@ -172,27 +210,9 @@ A regenerate answers:
 
 A request with no `Origin` and a JSON body passes the check, as curl must. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a PEM private key or is not Ed25519: it never replaces a key file by itself.
 
-## Tools
+## Package index
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/tools` | Installed and latest Trivy versions, the database date, pnpm and uv versions (`uvInstalled`), and `ready` with `missing`. It asks nothing of the package index. |
-| `POST /api/tools/trivy/update` | Install a Trivy release: the latest, or `version`. 409 when it is younger than the minimum release age, unless `force` is true. 502 when GitHub cannot be reached. |
-| `POST /api/tools/trivy/activate` | Switch to another installed Trivy, body `{"version":"0.74.0"}`. |
-| `POST /api/tools/trivy/db/update` | Download the vulnerability database now. |
-| `POST /api/tools/uv/install` | Install a uv release from the package index, body `{"version":"0.13.7"}`. sealift checks the wheel against the sha256 the index publishes. 409 when the release is younger than the minimum release age, unless `force` is true. 400 for a version that is not a release number. |
-
-<!-- run -->
-<!-- expect: "trivyActive" -->
-```sh
-curl -s http://localhost:8080/api/tools
-```
-
-```json
-{"latestSizeBytes":45424969,"missing":[],"pnpmInstalled":["10.34.5"],"ready":true,"trivyActive":"0.74.0","trivyDbDate":"2026-09-23T07:12:28.724391795Z","trivyInstalled":["0.74.0"],"trivyLatest":"0.74.0","trivyLatestAge":"960h59m15.099150044s"}
-```
-
-A pip analysis installs its target's uv by itself at `prepare-tools`, never forced. uv and the pip analyses read one package index, `https://pypi.org/simple/`. `SEALIFT_PIP_INDEX` replaces it, for tests and development only. The value must be an `https` URL, or `http` on `localhost`, `127.0.0.1` or `::1`, with no credentials, query or fragment. sealift refuses to start on any other value and names the variable.
+A pip analysis whose target names a uv the start did not prepare installs it at `prepare-tools`, under the minimum release age. uv and the pip analyses read one package index, `https://pypi.org/simple/`. `SEALIFT_PIP_INDEX` replaces it, for tests and development only. The value must be an `https` URL, or `http` on `localhost`, `127.0.0.1` or `::1`, with no credentials, query or fragment. sealift refuses to start on any other value and names the variable.
 
 ## The event stream
 

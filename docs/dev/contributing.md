@@ -222,7 +222,7 @@ pnpm -C web exec playwright install chromium
 pnpm -C web exec playwright test tests/ui-gate.spec.mjs
 ```
 
-On every import route the gate also fails when the page calls a collection route (`/api/projects`, `/api/settings`, `/api/tools`, `/api/jobs`) or the browser reports a Content-Security-Policy violation. [Web](web.md#checks) lists the users and the states the import fixtures give them.
+On every import route the gate also fails when the page calls a collection route (`/api/projects`, `/api/settings`, `/api/jobs`) or the browser reports a Content-Security-Policy violation. [Web](web.md#checks) lists the users and the states the import fixtures give them.
 
 To add a screen to the gate:
 
@@ -333,7 +333,7 @@ The same selection from the same analysis therefore gives the same bytes and the
 Nothing rewrites data on the volume when sealift upgrades. A newer sealift reads what an older one wrote, and an older record stays readable for as long as its release has been published.
 
 - A new field is optional. Records use `omitempty` and pointers, so a record without the field reads as "not recorded". `Report.ArchiveChecked` in `internal/importer/report.go` is a `*bool` for this reason.
-- `internal/store.Open` loads `private/settings.json` as written and fills no defaults, so a setting added later reads as its zero value until someone saves. Choose a zero value that keeps the old behavior, or check for it where the value is used.
+- `private/settings.json` holds what 0.7.0 and earlier saved, and nothing writes it any more. `internal/policy.Load` gives each value from the policy file, else from that file, else from the default. A stored zero takes the default, and the start log names the key. A key added to the policy file has no stored value to read.
 - Import records carry `FormatVersion`, and `manifest.json` carries `formatVersion`. Raise a version only when the meaning of a field changes in a way an older reader would misread. Do not raise it to add a field.
 - Keep a fixture of each shape a release has written, as `internal/store/imports/testdata/import-v0.4.0-incomplete.json` does, and test that it reads and that rewriting it adds no `null`.
 - The interface shows an absent value in words, as in `Not recorded`, and does not invent one.
@@ -342,7 +342,7 @@ Nothing rewrites data on the volume when sealift upgrades. A newer sealift reads
 
 Each part gets the access it needs and no more:
 
-- pnpm and Trivy run as the `tools` user. `private/settings.json` is mode 0600 and readable by `app` only, so the tools cannot read the settings.
+- pnpm, uv and Trivy run as the `tools` user. `private/` is readable by `app` only, so the tools cannot read the signing key or the settings 0.7.0 saved.
 - The import binary has no capability, and the image runs as `app`, not root. The import roles are built to run under `--cap-drop ALL`, which the operator sets in the Compose file or `docker run`.
 - `internal/importer/s3` can list, head, read and delete, and has no call that writes an object. Deletion happens only after a complete import, and only when the archive and manifest still carry the ETag the import recorded.
 - The import service reads the token from one header, the one `token.header` names (`X-Access-Token` by default), and takes the user from the checked claims through the request context and from nowhere else. A user sees only their own folder in MinIO and their own imports.
@@ -387,14 +387,14 @@ A route for the import service follows the same steps with `api/import.yaml`, `i
 
 Use `web/src/import/routes/` for the route, `web/src/components/import/` for components and `web/src/import/api/` for the client. Import only what the ESLint boundary allows. A new call must also pass the `CONTRACT` pattern and the path type of `importFetch` in `web/src/import/api/client.ts`. Add a route to `IMPORT.routes` in the gate and a record to `web/tests/import-fixtures.mjs` for any state it shows. Check it on the lab with `SEALIFT_IMAGE=sealift:dev`, as [Web](web.md#the-import-screens) lists. Update `docs/importing.md` and `docs/air-gap.md`.
 
-### A setting
+### A policy key
 
-1. Add the field to `Settings` in `internal/store/types.go`, its default to `defaultSettings` and its range check to `internal/store/store.go`.
-2. Add it to the `Settings` schema in `api/openapi.yaml`, then run `just generate`.
-3. Carry it through `UpdateSettings` and `settingsToAPI` in `internal/api/handlers_settings.go`. `PUT /api/settings` replaces every field, so a field left out of `UpdateSettings` is saved as its zero value.
+1. Add the key to `rawPolicy`, or the raw type it belongs to, in `internal/policy/policy.go` or `brand.go`, with its default and its range check, and the field it fills to `Policy`. A refusal names the key in full and the rule, and does not repeat the file's value. Add the raw type to `keyPrefix` when it is new, so an unknown key under it is named in full.
+2. Test the default, both ends of the range and a refusal in `internal/policy/policy_test.go`, and assert the refusal's text.
+3. Add it to the `Policy` or `Brand` schema in `api/openapi.yaml`, then run `just generate`, and fill it in `internal/api/handlers_instance.go`.
 4. Use the value where it applies. A running job keeps the values it started with.
-5. Add it to the form in `web/src/components/settings/settings-form.tsx`, with its range and its error text, and extend `settings-form.test.tsx`.
-6. Account for a `settings.json` written before the field existed (see "Stored data has no migrations" above) and test it in `internal/store/store_test.go`.
+5. Show it, read-only, in `web/src/components/settings/policy-section.tsx`, and extend `policy-section.test.tsx`.
+6. Add it, commented out, to `deploy/connected/policy/policy.yaml`. `TestExamplePolicyLoads` in `deploy/deploy_test.go` checks that the example, uncommented, gives the defaults.
 7. Update `docs/settings.md` and the defaults line of `llms.txt`.
 
 ### An import check

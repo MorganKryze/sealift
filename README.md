@@ -44,12 +44,14 @@ On the air-gapped side, the team receives:
 
 ## How it works
 
+At start, sealift downloads what an analysis needs and checks each download: Trivy at the version and sha256 its binary pins, Trivy's vulnerability database, pnpm and uv. The home opens once all of them are in place. The deployment sets the targets, the minimum release age and the parallelism in a policy file.
+
 | | |
 | --- | --- |
-| ![The setup screen, listing Trivy, its vulnerability database and the signing key](docs/assets/setup.png) | ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) |
-| **Setup.** sealift lists Trivy, its database and the signing key it generated, with their sizes, and downloads nothing until you press Install. | **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. |
-| ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) | ![Archive ready: the archive with its sha256, and six files](docs/assets/export-done.png) |
-| **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, signs the manifest, then shows the sha256, the key that signed and the reports. |
+| ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) | ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) |
+| **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. | **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. |
+| ![The review: 45 CVEs today, none with the selection, express opened on its candidates](docs/assets/review.png) | ![Archive ready: the archive with its sha256, and six files](docs/assets/export-done.png) |
+| **Review.** sealift proposes a version for each dependency and says why. Change any of them, or keep the current one. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, signs the manifest, then shows the sha256, the key that signed and the reports. |
 
 ## Quickstart
 
@@ -57,7 +59,7 @@ On the air-gapped side, the team receives:
 docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.io/morgankryze/sealift:latest
 ```
 
-Open <http://localhost:8080>. [Getting started](docs/getting-started.md) walks through a first archive in about ten minutes.
+Open <http://localhost:8080>. The page shows Preparing sealift until the first downloads finish. [Getting started](docs/getting-started.md) walks through a first archive in about ten minutes.
 
 ## Documentation
 

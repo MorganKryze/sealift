@@ -94,8 +94,8 @@ Copy `deploy/connected/compose.yaml` and `deploy/connected/.env.example` from th
    docker compose ps
    ```
 
-   `docker volume create` prints `sealift-data`, also when the volume exists, and changes nothing then. Without it, `docker compose up` stops with `external volume "sealift-data" not found`. The service shows `healthy` after a minute. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
-2. Open the page and follow the setup screen, which downloads Trivy and its database. [Getting started](getting-started.md) walks through the first archive.
+   `docker volume create` prints `sealift-data`, also when the volume exists, and changes nothing then. Without it, `docker compose up` stops with `external volume "sealift-data" not found`. On its first start, sealift downloads the pinned Trivy, its database, pnpm and uv by itself, and the service shows `healthy` once they are in place: in the lab, at commit 0257b72, 31 seconds after the start on an empty volume. Until then `docker compose ps` shows `health: starting`, and `/healthz` names what is missing. It binds `127.0.0.1` only, since sealift has no login. Reach it by an SSH tunnel or through a proxy that authenticates, as [Deployment](deployment.md#access) says.
+2. To set the targets, the minimum release age or the brand, copy `compose.policy.yaml` and the `policy/` folder from `deploy/connected/` beside the Compose file, edit `policy/policy.yaml`, and run `docker compose -f compose.yaml -f compose.policy.yaml up -d`, which recreates the service with the policy. [Settings](settings.md) lists the keys. Then open the page: [Getting started](getting-started.md) walks through the first archive.
 3. Open **Settings**, press **Download** in the signing key section and keep the file as `public-key.pem`. Read the `Public key sha256` next to it and write it down. This is the file that goes into the values and the value that the air-gapped side must show. Send the fingerprint by [another channel](#values-that-cross-by-another-channel).
 4. Export an archive as [Workflow](workflow.md) describes, or a Python project's archive through the API as [the API](dev/api.md#pip-exports) shows. Record the archive's sha256 on this side, before the key:
 
@@ -489,7 +489,7 @@ The check passes when the command prints no path and kubectl ends with `command 
 5. For the first release that imports Python packages: have the MinIO policy extended to `packages/pip/`, as [the request](admin-request.md#minio) gives it, or **Archives** shows `MinIO could not list packages/pip/: ` with MinIO's reason on every refresh. Set `nexus.pipRepository`, and `nexus.pipUser` with its Secret key when the role is on a second user, or a Python archive is refused with `the settings name no pip repository: set nexus.pip.repository`.
 6. Sync. An import that is running at the sync ends `interrupted`, and a retry continues it.
 
-The connected side changes `SEALIFT_IMAGE` in `.env`, then `docker compose pull && docker compose up -d`. Sessions, archives, settings and the key carry over.
+The connected side changes `SEALIFT_IMAGE` in `.env`, then `docker compose pull && docker compose up -d`. Sessions, archives, settings and the key carry over. From 0.7.0, copy the release's `compose.yaml` first, for its longer healthcheck start, as [Deployment](deployment.md#from-070) describes with the rollback.
 
 ## Backup and restore
 

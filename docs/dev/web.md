@@ -92,7 +92,7 @@ Each user stands for one state of the screens:
 | `dave` | answers 500 | none |
 | `frank` | an empty folder | a folder that cannot be read, so the list answers 500 |
 
-`IMPORT.routes` in the spec names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings`, `/api/tools` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
+`IMPORT.routes` in the spec names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
 
 Playwright's `-g` filter matches the file name before the title, so `-g "import "` selects the import role and `-g "^import "` selects nothing.
 

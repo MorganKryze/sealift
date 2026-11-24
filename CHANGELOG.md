@@ -6,6 +6,42 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- sealift prepares itself at start, with no click: it installs the Trivy release its binary pins, downloads the vulnerability database, checks the signing key, and installs the pnpm and uv versions the default targets name. A failed step keeps its cause and tries again every minute. [Deployment](docs/deployment.md#readiness) describes it.
+- A policy file, named by `SEALIFT_POLICY`, sets the npm and pip target defaults, the minimum release age, the resolve and download parallelism, and the brand: name, logo, accent, side labels, review word and contact. sealift refuses to start on an unknown key or a value out of range, and names the file, the key and the rule. [Settings](docs/settings.md) lists every key.
+- `deploy/connected/compose.policy.yaml` mounts a policy folder read-only, and `deploy/connected/policy/policy.yaml` is an example with every key commented out.
+- `GET /api/instance` reports readiness, item by item with each cause, the policy in effect, the brand and the tool versions. `GET /api/instance/logo` serves the policy's logo.
+- `GET /livez` answers 200 while the server runs, for a liveness probe.
+- The home shows Preparing sealift, with each item and its state, until the instance is ready, then opens by itself.
+
+### Changed
+
+- `/healthz` is a readiness check: it answers 503 with the names of the missing items until every one is ready, then 200. Use `/livez` for liveness, or an orchestrator restarts an instance that is still downloading.
+- `deploy/connected/compose.yaml` gives the first start 10 minutes before a failed healthcheck counts, and checks every 5 seconds until the first success. `start_interval` needs Docker Engine 25 or later.
+- The Settings panel shows the policy read-only in its Policy section, and the scanner as the Trivy version and the database date, with no control.
+- Settings that 0.7.0 saved in `private/settings.json` still apply, and a value the policy file sets wins over them. The start log names each key the file overrides. sealift reads that file and never writes it, so a new volume holds none, and 0.7.0 still reads it after a rollback.
+- Once the pinned Trivy is active, the start removes every other Trivy version from the volume. An analysis is refused while another version is active.
+- `SEALIFT_NPM_REGISTRY` now also serves the download of pnpm.
+- The brand is read, checked and served through the API. The screens keep sealift's name and colours until a later release draws it.
+
+### Removed
+
+- The setup screen and its install button: the start installs what it showed.
+- The settings form: the policy file replaces it.
+- `GET /api/tools`: `GET /api/instance` reports the same versions, with readiness.
+- `POST /api/tools/trivy/update`: the start installs the pinned Trivy.
+- `POST /api/tools/trivy/activate`: sealift runs the pinned Trivy only.
+- `POST /api/tools/trivy/db/update`: the start refreshes the database, and so does each analysis.
+- `POST /api/tools/uv/install`: the start installs the default pip target's uv, and an analysis installs another target's uv.
+- `PUT /api/settings`: the policy file sets every value. `GET /api/settings` stays, read-only.
+
+### Security
+
+- Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.
+- No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them.
+- The policy's logo must be a regular PNG or SVG file of at most 256 KiB, and is served with a `Content-Security-Policy` that blocks scripts and `X-Content-Type-Options: nosniff`. A contact address must be `https:` or `mailto:`, and brand text with a control character is refused.
+
 ## [0.7.0] - 2026-11-23
 
 ### Added
