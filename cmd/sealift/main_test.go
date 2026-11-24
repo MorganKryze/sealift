@@ -952,3 +952,40 @@ func TestNewToolsManagerNpmRegistry(t *testing.T) {
 		})
 	}
 }
+
+// TestRunStopsOnABusyAddressBeforePreparing proves the listener binds before
+// the preparation starts: on an address another process holds, run returns
+// the bind error, prepares no item, asks nothing of GitHub and leaves tools/ empty.
+func TestRunStopsOnABusyAddressBeforePreparing(t *testing.T) {
+	asked := localUpstreams(t)
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	root := filepath.Join(t.TempDir(), "data")
+
+	var logs lockedBuffer
+	done := make(chan error, 1)
+	go func() { done <- run(held.Addr().String(), root, slog.New(slog.NewJSONHandler(&logs, nil))) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run on a busy address returned nil")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run on a busy address did not return")
+	}
+	select {
+	case path := <-asked:
+		t.Errorf("the preparation asked GitHub for %s before the bind failed", path)
+	default:
+	}
+	if strings.Contains(logs.String(), `"msg":"prepared"`) {
+		t.Errorf("the preparation ran before the bind failed: %s", logs.String())
+	}
+	// store.Open creates tools/ empty; the preparation is what fills it.
+	if entries, err := os.ReadDir(filepath.Join(root, "tools")); err != nil || len(entries) != 0 {
+		t.Errorf("tools/ holds %v after a failed bind (%v), want it empty", entries, err)
+	}
+}

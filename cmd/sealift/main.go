@@ -143,6 +143,12 @@ func run(addr, root string, log *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the event stream stays open for a whole job.
 	}
+	// Bound before the preparation starts, so a busy address stops the
+	// start before anything under tools/ is written.
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	// The preparation writes under root, so run returns only once it has
@@ -152,7 +158,7 @@ func run(addr, root string, log *slog.Logger) error {
 	defer func() { stop(); <-prepared }()
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
+	go func() { serveErr <- srv.Serve(listener) }()
 
 	log.Info("listening", "addr", addr, "data", root, "ephemeral", idle > 0)
 	if idle > 0 {
