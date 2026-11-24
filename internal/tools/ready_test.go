@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -361,5 +362,42 @@ func TestPreparerStopsWithItsContext(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after its context ended")
+	}
+}
+
+func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
+	cases := map[string]struct {
+		userinfo string
+		secrets  []string
+	}{
+		"a percent-encoded password": {"user:s3cr%40t", []string{"s3cr%40t", "s3cr@t", "user"}},
+		"a token as the username":    {"npmTok3nValue", []string{"npmTok3nValue"}},
+		"an encoded username":        {"np%6dTok3n:pa55word", []string{"np%6dTok3n", "npmTok3n", "pa55word"}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "down", http.StatusInternalServerError)
+			}))
+			t.Cleanup(failing.Close)
+			pr := newPreparation(t, monthOld)
+			pr.m.NPMRegistry = strings.Replace(failing.URL, "://", "://"+c.userinfo+"@", 1)
+			pr.run(t)
+
+			r := waitState(t, pr.p, "a failed pnpm", func(r Readiness) bool { return item(r, "pnpm").State == ItemFailed })
+			reason := item(r, "pnpm").Reason
+			if !strings.Contains(reason, "500 Internal Server Error") || !strings.Contains(reason, "[redacted]@127.0.0.1") {
+				t.Errorf("reason = %q, want the registry's answer with its credentials redacted", reason)
+			}
+			logs := pr.logs.String()
+			for _, secret := range c.secrets {
+				if strings.Contains(reason, secret) {
+					t.Errorf("reason = %q holds %q", reason, secret)
+				}
+				if strings.Contains(logs, secret) {
+					t.Errorf("the log holds %q:\n%s", secret, logs)
+				}
+			}
+		})
 	}
 }

@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -227,8 +229,8 @@ func lastLine(out string) string {
 }
 
 // clean makes a cause safe to show and log: control and format characters
-// go, whitespace collapses, the GitHub token and a registry password become
-// "[redacted]", and the result is cut at causeLimit characters.
+// go, whitespace collapses, the GitHub token and the registry's credentials
+// become "[redacted]", and the result is cut at causeLimit characters.
 func (p *Preparer) clean(cause string) string {
 	cause = strings.Map(func(r rune) rune {
 		switch {
@@ -249,15 +251,31 @@ func (p *Preparer) clean(cause string) string {
 	return cause
 }
 
+// secrets lists the GitHub token and every form of the registry URL's
+// credentials: the userinfo as written, as escaped and as decoded, whole and
+// in parts, username included, since a token can stand alone as one. Longer
+// values come first, so a value inside another never leaves part of it.
 func (p *Preparer) secrets() []string {
-	var out []string
-	if p.m.GitHubToken != "" {
-		out = append(out, p.m.GitHubToken)
+	out := []string{p.m.GitHubToken}
+	raw := p.m.NPMRegistry
+	if i := strings.Index(raw, "//"); i >= 0 {
+		raw = raw[i+2:]
+	}
+	if i := strings.IndexAny(raw, "/?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	if i := strings.LastIndex(raw, "@"); i >= 0 {
+		info := raw[:i]
+		user, pass, _ := strings.Cut(info, ":")
+		out = append(out, info, user, pass)
 	}
 	if u, err := url.Parse(p.m.NPMRegistry); err == nil && u.User != nil {
-		if pass, ok := u.User.Password(); ok && pass != "" {
-			out = append(out, pass)
-		}
+		escaped := u.User.String()
+		user, pass, _ := strings.Cut(escaped, ":")
+		decoded, _ := u.User.Password()
+		out = append(out, escaped, user, pass, u.User.Username(), decoded)
 	}
-	return out
+	out = slices.DeleteFunc(out, func(s string) bool { return s == "" })
+	slices.SortFunc(out, func(a, b string) int { return cmp.Or(len(b)-len(a), strings.Compare(a, b)) })
+	return slices.Compact(out)
 }
