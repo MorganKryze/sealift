@@ -137,7 +137,7 @@ The file stays on the volume, so 0.7.0 still reads it after a rollback. 0.7.0 th
 | Section | Shows |
 | --- | --- |
 | Appearance | System, Light or Dark. The choice is saved in this browser only, so each person using sealift keeps their own |
-| Policy | Set by your deployment. The npm target, the pip target, Minimum release age, Resolve parallelism, Download parallelism, and Mode, which says whether the instance is ephemeral |
+| Policy | Set by your deployment. The npm target, the pip target, Minimum release age, Resolve parallelism, Download parallelism, the three review rules (Proposals, Major jump, CVE without fix), and Mode, which says whether the instance is ephemeral |
 | Signing key | The public key and its sha256, described below |
 | Scanner | The Trivy version and the date of the vulnerability database. sealift refreshes the database before each analysis |
 
@@ -153,6 +153,25 @@ The section shows two values:
 **Regenerate key** asks Regenerate the signing key? first. Confirming replaces the key pair. **Keep the current key**, or Escape, leaves it. After a regenerate, the import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before, which carry the old signature. Carry the new public key before your next crossing.
 
 The key lives in the volume. Delete the volume, or `private/signing-key.pem`, and the next start generates another key, which the import side must receive. A key file that exists and cannot be read, is not a PEM private key or is not Ed25519 stops sealift at start with the file's name: it never replaces a key by itself.
+
+## Review rules
+
+Three rules decide what an export needs before it crosses. The deployment sets them under `review` in the policy file that `SEALIFT_POLICY` names, and no control in the panel changes them:
+
+```yaml
+review:
+  proposeOtherMajors: false
+  majorJump: reason
+  cveWithoutFix: reason
+```
+
+| Key | Values | Default | What it changes |
+| --- | --- | --- | --- |
+| `review.proposeOtherMajors` | `true`, `false` | `false` | With `true`, an analysis may propose a version outside the dependency's current line, as sealift 0.7.0 did |
+| `review.majorJump` | `reason`, `refuse` | `reason` | An export that takes a version outside its line needs a reason, or is refused whatever reason it holds |
+| `review.cveWithoutFix` | `reason`, `refuse` | `reason` | An export whose archive holds a version with a CVE that no version fixes needs a reason, or is refused. A pip export takes no reasons: under `refuse`, it is refused with 409 when its set holds such a CVE |
+
+A key the file leaves out keeps its default. Any other value stops sealift at start with the key and the values it takes, such as `review.majorJump must be one of reason, refuse`. The rules apply to every analysis and export after the start. An analysis keeps the proposals it made under the rule of its time: a new analysis applies a changed `review.proposeOtherMajors`. `GET /api/instance` reports the three rules under `policy.review`. [How sealift chooses](how-sealift-chooses.md#reasons) explains the line and the reasons.
 
 ## From the API
 

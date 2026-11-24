@@ -30,6 +30,11 @@ const PREPARING = {
       "uvVer": "0.13.7"
     },
     "resolveParallelism": 4,
+    "review": {
+      "cveWithoutFix": "reason",
+      "majorJump": "reason",
+      "proposeOtherMajors": false
+    },
     "target": {
       "cpu": "x64",
       "libc": "glibc",
@@ -95,6 +100,23 @@ export const UI = {
   // and name the pressed control must bring up.
   states: [
     { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
+  ],
+  // A session route with sessionStorage written before the page loads, as the review screen keeps the
+  // selection and the reasons there; `ready` is the text that proves the analysis arrived.
+  sessions: [
+    {
+      path: "/sessions/reasons/review",
+      storage: { "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] } },
+      ready: "3 reasons missing: react 19, express, html-minifier",
+    },
+    {
+      path: "/sessions/reasons/review",
+      storage: {
+        "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] },
+        "sealift:reasons:20261124T101500Z": { "major-jump:react 19": "first line\nsecond line", "major-jump:express": "the routes need express 5" },
+      },
+      ready: "Keep the reason on one line, with no tab or control character.",
+    },
   ],
   // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
   // `ready` is the text that proves the page drew that answer.
@@ -412,6 +434,27 @@ for (const state of UI.states) {
   }
 }
 
+for (const session of UI.sessions) {
+  for (const width of UI.widths) {
+    for (const theme of UI.themes) {
+      test(`${session.path} ${session.ready} ${width} ${theme}`, async ({ page }) => {
+        const failures = await inspect(page, {
+          where: `${session.path} · ${session.ready} · ${width}px · ${theme}`,
+          url: new URL(session.path, UI.baseURL).href,
+          width,
+          theme,
+          prepare: (p) =>
+            p.addInitScript((storage) => {
+              for (const [key, value] of Object.entries(storage)) sessionStorage.setItem(key, JSON.stringify(value))
+            }, session.storage),
+          ready: (p) => p.getByText(session.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
+        })
+        expect(failures, failures.join("\n")).toEqual([])
+      })
+    }
+  }
+}
+
 for (const state of UI.answers) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
@@ -500,6 +543,30 @@ for (const route of IMPORT.routes) {
       })
     }
   }
+}
+
+// Twenty reasons and the Export bar at its tallest: at the bottom of the page, the last reason field and
+// the text typed in it sit above the bar.
+for (const width of UI.widths) {
+  test(`/sessions/worst/review keeps the last reason above the Export bar ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    await page.addInitScript(() => {
+      sessionStorage.setItem("sealift:selection:20261124T111500Z", JSON.stringify({ "keeps-cve-20": ["1.0.1"] }))
+    })
+    await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
+    await page.getByText(/^20 reasons missing: /).waitFor({ timeout: 15_000 })
+    const last = page.locator("textarea").last()
+    await last.fill("x")
+    await last.focus()
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+    await page.evaluate(settle)
+    const hidden = await page.evaluate(() => {
+      const field = [...document.querySelectorAll("textarea")].at(-1).getBoundingClientRect()
+      const bar = document.getElementById("export-waits").closest(".fixed").getBoundingClientRect()
+      return Math.max(0, field.bottom - bar.top)
+    })
+    expect(hidden, `${hidden} px of the last reason field sit under the Export bar at ${width}px`).toBe(0)
+  })
 }
 
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {

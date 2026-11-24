@@ -102,3 +102,15 @@ export function reasonFor(dependency: DependencyResult, selectedVersion: string)
   const effect = fixed > 0 ? `Fixes ${plural(fixed)}` : fixed < 0 ? `Adds ${plural(-fixed)}` : "Fixes no CVE"
   return `${effect}, ${jumpText}`
 }
+
+/** Keeps the first entry of each CVE id: an analysis lists an id once per package it was found in, most severe first. */
+export function distinctCves(cves: DependencyResult["cves"]): DependencyResult["cves"] {
+  const seen = new Set<string>()
+  return cves.filter((cve) => {
+    if (seen.has(cve.id)) {
+      return false
+    }
+    seen.add(cve.id)
+    return true
+  })
+}

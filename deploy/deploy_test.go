@@ -286,7 +286,7 @@ func TestExamplePolicyLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand()}
+	want := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: policy.DefaultBrand(), Review: policy.DefaultReview()}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("example policy = %+v, want the defaults %+v", p, want)
 	}
@@ -409,6 +409,7 @@ func TestExamplePolicySpellsOutEveryDefault(t *testing.T) {
 		"parallelism", "parallelism.resolve", "parallelism.download",
 		"brand", "brand.name", "brand.sides", "brand.sides.online", "brand.sides.offline", "brand.reviewWord",
 		"brand.logo", "brand.accent", "brand.contact", "brand.contact.label", "brand.contact.url",
+		"review", "review.proposeOtherMajors", "review.majorJump", "review.cveWithoutFix",
 	}
 	slices.Sort(got)
 	slices.Sort(want)
@@ -434,7 +435,7 @@ func TestExamplePolicySpellsOutEveryDefault(t *testing.T) {
 	wantBrand.Logo, wantBrand.LogoType = p.Brand.Logo, p.Brand.LogoType
 	wantBrand.Accent = "#0b6e99"
 	wantBrand.Contact = &policy.Contact{Label: "Platform team", URL: "mailto:platform@example.com"}
-	wantP := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: wantBrand}
+	wantP := policy.Policy{Settings: store.DefaultSettings, Pip: store.DefaultPipTarget, Brand: wantBrand, Review: policy.DefaultReview()}
 	if !reflect.DeepEqual(p, wantP) {
 		t.Errorf("uncommented example = %+v, want the defaults %+v", p, wantP)
 	}

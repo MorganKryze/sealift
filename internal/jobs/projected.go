@@ -23,7 +23,7 @@ func projectedVector(project []rank.Finding, deps []DependencyResult, selection 
 	var kept, added []CVE
 	removed := map[string]bool{}
 	for _, d := range deps {
-		cves, replaced := pickedCVEs(d, selection[d.Name])
+		_, cves, replaced := pickedCVEs(d, selection[d.Name])
 		if !replaced {
 			kept = append(kept, d.CVEs...)
 			continue
@@ -47,10 +47,42 @@ func projectedVector(project []rank.Finding, deps []DependencyResult, selection 
 	return v
 }
 
-// pickedCVEs returns the vulnerabilities of the best selected version of d,
-// and whether that version replaces the current one.
-func pickedCVEs(d DependencyResult, selected []string) ([]CVE, bool) {
-	bestVec, bestCVEs, replaced, found := rank.Vector{}, []CVE(nil), false, false
+// projectedFor is the estimate summary.md prints and cves.after signs.
+// With the project tree, the lockfile keeps every current version beside
+// the selected ones, so it counts the project's set and every version the
+// archive holds, as review.left lists them.
+func projectedFor(r Result, req ExportRequest, project []rank.Finding) rank.Vector {
+	if !req.IncludeProject {
+		return projectedVector(project, r.Dependencies, req.Selection)
+	}
+	set := map[string]rank.Severity{}
+	add := func(id string, sev rank.Severity) {
+		if prev, ok := set[id]; !ok || sev < prev {
+			set[id] = sev
+		}
+	}
+	for _, f := range project {
+		add(f.ID, f.Severity)
+	}
+	for _, a := range askedOf(r, req) {
+		for _, h := range a.held {
+			for _, c := range h.cves {
+				add(c.ID, rank.ParseSeverity(c.Severity))
+			}
+		}
+	}
+	var v rank.Vector
+	for _, sev := range set {
+		v[sev]++
+	}
+	return v
+}
+
+// pickedCVEs returns the best selected version of d, the version an install
+// keeps, with its vulnerabilities and whether it replaces the current one.
+// The version is empty when nothing of d is selected.
+func pickedCVEs(d DependencyResult, selected []string) (string, []CVE, bool) {
+	bestVersion, bestVec, bestCVEs, replaced := "", rank.Vector{}, []CVE(nil), false
 	for _, version := range selected {
 		vec, cves, isCandidate := rank.Vector(d.Vector), d.CVEs, false
 		if version != d.Current {
@@ -60,9 +92,9 @@ func pickedCVEs(d DependencyResult, selected []string) ([]CVE, bool) {
 			}
 			vec, cves, isCandidate = rank.Vector(c.Vector), c.CVEs, true
 		}
-		if !found || vec.Compare(bestVec) < 0 {
-			bestVec, bestCVEs, replaced, found = vec, cves, isCandidate, true
+		if bestVersion == "" || vec.Compare(bestVec) < 0 {
+			bestVersion, bestVec, bestCVEs, replaced = version, vec, cves, isCandidate
 		}
 	}
-	return bestCVEs, replaced
+	return bestVersion, bestCVEs, replaced
 }

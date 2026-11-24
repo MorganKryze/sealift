@@ -16,7 +16,7 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 
 | Status | When |
 | --- | --- |
-| 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, a target or limit out of range |
+| 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, an export whose reasons fall short, a target or limit out of range |
 | 404 | An unknown project, analysis or export |
 | 409 | A tool the job needs is still being prepared or missing (`tools-missing`); the analysis is not done; the project has a job queued or running |
 | 500 | Anything else; the server log has the cause |
@@ -83,6 +83,20 @@ The project is created with its first analysis queued, as for npm.
 | `GET /api/projects/{projectId}/analyses/{analysisId}/log` | The full log, as `text/plain`. |
 | `POST /api/projects/{projectId}/analyses/{analysisId}/cancel` | Cancel the analysis, running or queued. |
 
+A done npm analysis carries `result`. Beside each dependency's `current`, `vector`, `cves`, `candidates` and `best`, it holds what the review and the reasons need:
+
+| Field | Content |
+| --- | --- |
+| `candidates[].leavesLine` | Whether the candidate leaves the line of the current version, the range npm's caret gives it. The server sets it when it reads the analysis, so every analysis has it. |
+| `best` | The proposal, inside the line unless the policy sets `review.proposeOtherMajors`. Absent when no candidate improves on the current version. |
+| `jump` | The first unblocked candidate outside the line, in the order a proposal is taken. Absent when there is none. |
+| `family` | The name of the family the dependency's jump belongs to, such as `react 19`. Absent when the jump moves alone. |
+| `cves[].package` | The package and version Trivy found the CVE in, as `name@version`. |
+| `cves[].fixedIn` | The versions Trivy names as fixing it, as Trivy prints them, such as `4.19.2, 5.0.0`. Empty when none is known. |
+| `families` | On `result`: each group of dependencies whose jumps must move together, with `name` and `members`, sorted by name. |
+
+An analysis written by sealift 0.7.0 has no `jump`, `family` or `families`, and its CVEs have no `package` or `fixedIn`: an export counts each of them as a CVE without fix. [How sealift chooses](../how-sealift-chooses.md#the-current-line) explains the line, the jump and families.
+
 The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupted`. A failed analysis carries `failure` with the step id and the message:
 
 ```json
@@ -128,13 +142,56 @@ A done pip analysis is exported as a whole: see [pip exports](#pip-exports).
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["5.1.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. 400 for a version the analysis did not resolve, or an export that packs nothing; 409 when the analysis is not done, or when a tool the export needs is not ready (`tools-missing`). |
+| `POST /api/projects/{projectId}/analyses/{analysisId}/exports` | Queue an export. The body maps each dependency to the versions to include: `{"selection":{"express":["4.20.0"]}}`. `includeProject: true` also packs the current project's own packages; the interface leaves it false. `reasons` carries the reasons the selection needs, below. 400 for a version the analysis did not resolve, an export that packs nothing, or reasons that fall short; 409 when the analysis is not done, when `includeProject` is true and the analysis has no readable scan of the project's lockfile (`project.trivy.json`) or its lockfile is too large to walk, or when a tool the export needs is not ready (`tools-missing`). |
 | `GET /api/projects/{projectId}/exports/{exportId}` | The export: state, steps, failure, and once done its files. |
 | `DELETE /api/projects/{projectId}/exports/{exportId}` | Delete the export and its files. |
 | `POST /api/projects/{projectId}/exports/{exportId}/cancel` | Cancel the export, running or queued. |
 | `GET /api/projects/{projectId}/exports/{exportId}/files/{name}` | Download one file of a finished export: the archive, `manifest.json`, `manifest.json.sig` or a report. |
 
 A dependency left out of the selection, or given an empty list, stays at its current version.
+
+### Reasons
+
+An npm export that takes a version outside its dependency's line, or whose archive holds a version with a CVE that no version fixes, sends a reason for each in `reasons`:
+
+```json
+{
+  "selection": {"express": ["5.1.0"], "html-minifier": []},
+  "reasons": [
+    {"kind": "major-jump", "dependencies": ["express"], "text": "Our routes moved to express 5 in the last release."},
+    {"kind": "cve-without-fix", "dependencies": ["html-minifier"], "text": "It minifies our own templates only, at build time."}
+  ]
+}
+```
+
+| Field | Content |
+| --- | --- |
+| `kind` | `major-jump` for a jump out of the line, `cve-without-fix` for CVEs that no version fixes |
+| `dependencies` | The dependencies the reason covers, by name, at least one. A family needs one `major-jump` reason naming its members. A `cve-without-fix` reason covers every such CVE of the dependencies it names. |
+| `text` | 1 to 300 characters once trimmed, on one line, with no control, line-separating, bidirectional or other format character; at most 1,200 characters before trimming. The manifest signs the trimmed text. |
+
+The versions the archive holds count for CVEs: each selected version, and the current one when `includeProject` is true. A dependency the selection leaves out keeps its current version on the air-gapped side, so its CVEs without fix need a reason too, and the policy never refuses them. A CVE with no `fixedIn` counts as one without fix.
+
+The server checks the reasons after the selection, whatever the client sends. A shortfall answers 400 with the title `invalid export reasons` and one problem per shortfall in `detail`, joined by `; `. A problem names dependencies, versions and CVE ids, and a reason by its position and kind, never by its text:
+
+| Problem | When |
+| --- | --- |
+| `express 4.17.1 to 5.1.0 leaves major 4 and needs a reason` | A selected version leaves its line and no `major-jump` reason names its dependency. Below 1.0.0 it reads `leaves line 0.18`. |
+| `html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and needs a reason` | A held version keeps a CVE without fix and no `cve-without-fix` reason names its dependency |
+| `review.majorJump is refuse: react 18.3.1 to 19.2.0 cannot cross` | The policy refuses jumps, whatever the reasons |
+| `review.cveWithoutFix is refuse: html-minifier 4.0.0 keeps CVE-2022-37620, which no version fixes, and cannot cross` | The policy refuses CVEs without fix in a version the archive holds |
+| `reason 2 (major-jump) covers nothing the selection takes` | The reason names no dependency that needs one of its kind, or only ones an earlier reason covers |
+| `reason 1 (cve-without-fix): the reason is empty` | The text breaks the reason rule; the problem names the rule, such as `is longer than 300 characters` |
+| `reason 3 (major-jump) names a dependency the analysis does not hold` | A name the analysis does not list |
+| `reason 2 (major-jump) names no dependency` | The reason's `dependencies` is empty |
+| `reason 1 has an unknown kind` | `kind` is neither `major-jump` nor `cve-without-fix` |
+
+<!-- illustrative -->
+```json
+{"detail":"express 4.17.1 to 5.1.0 leaves major 4 and needs a reason; reason 2 (major-jump) covers nothing the selection takes","status":400,"title":"invalid export reasons","type":"about:blank"}
+```
+
+A done export signs the reasons into the `review` of `manifest.json`. [Archive format](archive-format.md#the-review) describes it.
 
 ### pip exports
 

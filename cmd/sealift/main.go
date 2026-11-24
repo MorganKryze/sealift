@@ -115,6 +115,7 @@ func run(addr, root string, log *slog.Logger) error {
 		onQueueReady(queue)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
+	service.Review = pol.Review
 	// uv needs an interpreter to start, and builds and runs nothing with it.
 	// Without one, pip analyses fail at resolve and say so.
 	python, err := exec.LookPath("python3")
@@ -124,6 +125,9 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	uvRunner := runner.NewUvCLI(python, filepath.Join(root, "cache", "uv"), asUser)
 	service.SetPip(uvRunner, &pip.Client{Index: toolsManager.PipIndex})
+	if onServiceReady != nil {
+		onServiceReady(service)
+	}
 	handlers := api.NewHandlers(st, service, toolsManager)
 	handlers.ListenAddr = addr
 	handlers.Ephemeral = idle
@@ -218,6 +222,11 @@ func applyPolicy(st *store.Store, path string, log *slog.Logger) (policy.Policy,
 // created. Only a test in this package sets it, to submit a job before the
 // server starts accepting connections.
 var onQueueReady func(*jobs.Queue)
+
+// onServiceReady, when non-nil, is called with the service once it is set
+// up. Only a test in this package sets it, to read what the service hands
+// each analysis.
+var onServiceReady func(*jobs.Service)
 
 // toolsCredential builds the credential pnpm and Trivy run under, from the
 // uid and gid docker-entrypoint.sh exports as SEALIFT_TOOLS_UID and

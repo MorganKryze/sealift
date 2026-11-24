@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -277,5 +278,186 @@ func assertRefusal(t *testing.T, err error, reason string) {
 	}
 	if r.Error() != r.Reason {
 		t.Errorf("Error() = %q, want the reason %q", r.Error(), r.Reason)
+	}
+}
+
+func TestParseManifestReadsAReview(t *testing.T) {
+	doc := manifestDoc()
+	doc["review"] = reviewDoc("express", "4.17.1", "5.1.0")
+	m, err := ParseManifest(encode(t, doc))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.ReviewProblem != "" {
+		t.Fatalf("ReviewProblem = %q", m.ReviewProblem)
+	}
+	if want := wantReview("express", "4.17.1", "5.1.0"); !reflect.DeepEqual(m.Review, want) {
+		t.Errorf("Review = %+v, want %+v", m.Review, want)
+	}
+}
+
+func TestParseManifestReadsAReviewWithoutProjectedCounts(t *testing.T) {
+	doc := manifestDoc()
+	doc["review"] = map[string]any{"cves": map[string]any{"before": []any{0, 0, 0, 0, 0}}}
+	m, err := ParseManifest(encode(t, doc))
+	if err != nil || m.ReviewProblem != "" || m.Review == nil {
+		t.Fatalf("ParseManifest = %+v, %v", m, err)
+	}
+	if m.Review.CVEs.After != nil || m.Review.Updates != nil || m.Review.Left != nil || m.Review.Unchanged != 0 {
+		t.Errorf("Review = %+v", m.Review)
+	}
+}
+
+func TestParseManifestWithoutAReviewReadsNotCarried(t *testing.T) {
+	for name, edit := range map[string]func(map[string]any){
+		"absent": func(map[string]any) {},
+		"null":   func(d map[string]any) { d["review"] = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := manifestDoc()
+			edit(doc)
+			m, err := ParseManifest(encode(t, doc))
+			if err != nil {
+				t.Fatalf("ParseManifest: %v", err)
+			}
+			if m.Review != nil || m.ReviewProblem != "" {
+				t.Errorf("Review = %+v, ReviewProblem = %q", m.Review, m.ReviewProblem)
+			}
+		})
+	}
+}
+
+func repeated(entry map[string]any, n int) []any {
+	list := make([]any, n)
+	for i := range list {
+		list[i] = entry
+	}
+	return list
+}
+
+// TestTheReviewListsHoldTheirBound reads each list of a review at its bound.
+func TestTheReviewListsHoldTheirBound(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(r map[string]any)
+		got  func(r *Review) int
+	}{
+		{"updates", func(r map[string]any) { r["updates"] = repeated(entryOf(r, "updates", 0), maxReviewEntries) }, func(r *Review) int { return len(r.Updates) }},
+		{"kept", func(r map[string]any) { r["kept"] = repeated(entryOf(r, "kept", 0), maxReviewEntries) }, func(r *Review) int { return len(r.Kept) }},
+		{"jumps", func(r map[string]any) { r["jumps"] = repeated(entryOf(r, "jumps", 1), maxReviewEntries) }, func(r *Review) int { return len(r.Jumps) }},
+		{"packages of a jump", func(r map[string]any) {
+			j := entryOf(r, "jumps", 0)
+			j["packages"] = repeated(j["packages"].([]any)[0].(map[string]any), maxReviewEntries)
+		}, func(r *Review) int { return len(r.Jumps[0].Packages) }},
+		{"left", func(r map[string]any) { r["left"] = repeated(entryOf(r, "left", 1), maxReviewEntries) }, func(r *Review) int { return len(r.Left) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := manifestDoc()
+			doc["review"] = reviewDoc("express", "4.17.1", "5.1.0")
+			tt.edit(reviewOf(doc))
+			m, err := ParseManifest(encode(t, doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Review == nil {
+				t.Fatalf("the review was kept out: %s", m.ReviewProblem)
+			}
+			if n := tt.got(m.Review); n != maxReviewEntries {
+				t.Errorf("read %d entries, want %d", n, maxReviewEntries)
+			}
+		})
+	}
+}
+
+func TestAnUnreadableReviewRefusesNothing(t *testing.T) {
+	many := make([]any, maxReviewEntries+1)
+	for i := range many {
+		many[i] = map[string]any{}
+	}
+	tests := []struct {
+		name    string
+		edit    func(review map[string]any, doc map[string]any)
+		problem string
+	}{
+		{"a string", func(_, d map[string]any) { d["review"] = "owned" }, "review is not an object"},
+		{"a vector of 4", func(r, _ map[string]any) {
+			r["cves"].(map[string]any)["before"] = []any{1, 2, 3, 4}
+		}, "review.cves.before does not hold 5 counts"},
+		{"a vector of 6", func(r, _ map[string]any) {
+			entryOf(r, "updates", 0)["fixed"] = []any{1, 2, 3, 4, 5, 6}
+		}, "review.updates[0].fixed does not hold 5 counts"},
+		{"a null count", func(r, _ map[string]any) {
+			entryOf(r, "updates", 0)["left"] = []any{0, nil, 0, 0, 0}
+		}, "review.updates[0].left holds a null count"},
+		{"a null count before", func(r, _ map[string]any) {
+			r["cves"].(map[string]any)["before"] = []any{nil, 0, 0, 0, 0}
+		}, "review.cves.before holds a null count"},
+		{"a negative count", func(r, _ map[string]any) {
+			r["cves"].(map[string]any)["after"] = []any{0, 0, -1, 0, 0}
+		}, "review.cves.after holds a negative count"},
+		{"no counts before", func(r, _ map[string]any) { delete(r, "cves") }, "review.cves.before is missing"},
+		{"a severity SEVERE", func(r, _ map[string]any) { entryOf(r, "left", 1)["severity"] = "SEVERE" }, "review.left[1].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN"},
+		{"a reason with a bidi override", func(r, _ map[string]any) {
+			entryOf(r, "jumps", 0)["reason"] = "owned\u202eevil"
+		}, "review.jumps[0].reason holds a control, line-separating, bidirectional or format character"},
+		{"a jump without reason", func(r, _ map[string]any) { delete(entryOf(r, "jumps", 1), "reason") }, "review.jumps[1].reason is empty"},
+		{"a version of 300 bytes", func(r, _ map[string]any) {
+			entryOf(r, "updates", 0)["to"] = "1.0.0-owned" + strings.Repeat("a", 300-len("1.0.0-owned"))
+		}, "review.updates[0].to is longer than 256 bytes"},
+		{"a range for a version", func(r, _ map[string]any) { entryOf(r, "kept", 0)["version"] = "^4.0.0-owned" }, "review.kept[0].version is not an exact version"},
+		{"an invalid name", func(r, _ map[string]any) {
+			entryOf(r, "jumps", 0)["packages"].([]any)[0].(map[string]any)["name"] = "../owned"
+		}, "review.jumps[0].packages[0].name is not a valid package name"},
+		{"an id with an escape sequence", func(r, _ map[string]any) {
+			entryOf(r, "left", 0)["id"] = "owned\x1b[2J"
+		}, "review.left[0].id holds a control or unprintable character"},
+		{"a kept CVE's reason with a bidi override", func(r, _ map[string]any) {
+			entryOf(r, "left", 0)["reason"] = "owned\u202eevil"
+		}, "review.left[0].reason holds a control, line-separating, bidirectional or format character"},
+		{"a fixing version with an escape sequence", func(r, _ map[string]any) {
+			entryOf(r, "left", 1)["fixedIn"] = "owned\x1b[2J"
+		}, "review.left[1].fixedIn holds a control or unprintable character"},
+		{"an invalid package of a kept CVE", func(r, _ map[string]any) { entryOf(r, "left", 0)["package"] = "../owned" }, "review.left[0].package is not a valid package name"},
+		{"a jump that is not an exact version", func(r, _ map[string]any) { entryOf(r, "kept", 0)["jump"] = "owned\n" }, "review.kept[0].jump is not an exact version"},
+		{"a family of 300 bytes", func(r, _ map[string]any) {
+			entryOf(r, "jumps", 0)["family"] = "owned" + strings.Repeat("a", 300)
+		}, "review.jumps[0].family is longer than 256 bytes"},
+		{"a count of the wrong type", func(r, _ map[string]any) { r["unchanged"] = "owned" }, "review.unchanged has the wrong type"},
+		{"100,001 left", func(r, _ map[string]any) { r["left"] = repeated(entryOf(r, "left", 1), maxReviewEntries+1) }, "review.left holds more than 100000 entries"},
+		{"100,001 updates", func(r, _ map[string]any) { r["updates"] = repeated(entryOf(r, "updates", 0), maxReviewEntries+1) }, "review.updates holds more than 100000 entries"},
+		{"100,001 kept", func(r, _ map[string]any) { r["kept"] = repeated(entryOf(r, "kept", 0), maxReviewEntries+1) }, "review.kept holds more than 100000 entries"},
+		{"100,001 jumps", func(r, _ map[string]any) { r["jumps"] = repeated(entryOf(r, "jumps", 1), maxReviewEntries+1) }, "review.jumps holds more than 100000 entries"},
+		{"100,001 packages in a jump", func(r, _ map[string]any) {
+			j := entryOf(r, "jumps", 0)
+			j["packages"] = repeated(j["packages"].([]any)[0].(map[string]any), maxReviewEntries+1)
+		}, "review.jumps[0].packages holds more than 100000 entries"},
+		{"many empty entries", func(r, _ map[string]any) { r["left"] = many }, "review.left holds more than 100000 entries"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := manifestDoc()
+			doc["review"] = reviewDoc("express", "4.17.1", "5.1.0")
+			tt.edit(reviewOf(doc), doc)
+			m, err := ParseManifest(encode(t, doc))
+			if err != nil {
+				t.Fatalf("an unreadable review refused the manifest: %v", err)
+			}
+			if len(m.Packages) != 1 || m.Packages[0].Name != "express" || m.Archive.SHA256 != testSHA256 {
+				t.Errorf("the manifest lost its packages: %+v", m)
+			}
+			if m.Review != nil {
+				t.Errorf("Review = %+v, want nil", m.Review)
+			}
+			if !strings.Contains(m.ReviewProblem, tt.problem) {
+				t.Errorf("ReviewProblem = %q, want it to contain %q", m.ReviewProblem, tt.problem)
+			}
+			assertRepeatsNoValue(t, errors.New(m.ReviewProblem))
+			for _, value := range []string{"SEVERE", "aaaa"} {
+				if strings.Contains(m.ReviewProblem, value) {
+					t.Errorf("ReviewProblem repeats a value: %q", m.ReviewProblem)
+				}
+			}
+		})
 	}
 }

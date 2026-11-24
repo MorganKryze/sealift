@@ -107,7 +107,7 @@ Dependencies fall into three groups:
 
 | Group | Holds |
 | --- | --- |
-| To decide | A proposal that may break: a major jump, a 0.x minor jump, or a signal worth a second look |
+| To decide | A proposal with a signal worth a second look, or one that may break, which only a policy that allows other lines proposes |
 | Proposed | Jumps that fix CVEs |
 | Nothing to do | No CVE, or no newer version helps |
 
@@ -122,6 +122,19 @@ A row names the dependency, the CVEs its proposal fixes, the kind of jump, the r
 [How sealift chooses](how-sealift-chooses.md) explains the proposal and each signal.
 
 The bar at the bottom counts the changes and the CVEs left. **Confirm and build the archive** starts the export with the selection.
+
+### Reasons
+
+A selection that takes a version outside its dependency's line, or keeps a CVE that no version fixes, needs a reason for each. The Reasons block appears above the bar with one field per reason:
+
+- a family, or a lone dependency, the selection takes out of its line, labelled Leaves its line, with each move under it, such as `react 18.3.1 to 19.2.0`;
+- a dependency whose version in the archive keeps a CVE with no known fix, labelled Keeps a CVE with no known fix, with the version and the CVE ids under it.
+
+A dependency the selection keeps at its current version counts too: the project keeps that version on the air-gapped side. Write each reason on one line, 300 characters at most. Enter adds nothing, and a pasted line break shows its problem under the field: Keep the reason on one line, with no tab or control character.
+
+While a field is empty or breaks that rule, **Confirm and build the archive** stays disabled, and the text before it names what is missing: 2 reasons missing: react 19, html-minifier. Past five names, the text ends with the count of the others, such as and 3 more. The reasons stay in this browser beside the selection, so a **Retry** on the export screen sends them again.
+
+When the server still refuses, the block shows The server refused the export for its reasons, with the server's words. The deployment's policy can refuse a jump or a CVE without fix whatever the reason says; the server's words then name the policy key. [How sealift chooses](how-sealift-chooses.md#reasons) lists what asks a reason, and the signed manifest carries each one to the import side.
 
 The review also comes in dark:
 

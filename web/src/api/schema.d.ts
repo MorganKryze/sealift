@@ -556,7 +556,20 @@ export interface components {
             minReleaseAgeDays: number;
             resolveParallelism: number;
             downloadParallelism: number;
+            review: components["schemas"]["ReviewPolicy"];
         };
+        /** @description What a selection needs before it can cross. */
+        ReviewPolicy: {
+            /** @description Whether an analysis proposes versions outside the current line. */
+            proposeOtherMajors: boolean;
+            majorJump: components["schemas"]["ReviewRule"];
+            cveWithoutFix: components["schemas"]["ReviewRule"];
+        };
+        /**
+         * @description reason lets the selection cross with a reason written for it; refuse stops it.
+         * @enum {string}
+         */
+        ReviewRule: "reason" | "refuse";
         /** @description The tool versions on the data volume. */
         InstanceTools: {
             /**
@@ -639,7 +652,7 @@ export interface components {
         };
         /** @description CVE counts by severity, critical to unknown */
         Vector: number[];
-        /** @description One vulnerability behind a Vector count */
+        /** @description One vulnerability behind a Vector count, in one package. An id found in two packages appears once for each, and the vector counts it once. */
         Cve: {
             /** @example CVE-2024-29041 */
             id: string;
@@ -648,6 +661,16 @@ export interface components {
              * @example HIGH
              */
             severity: string;
+            /**
+             * @description The package and version Trivy found it in, as name@version. Absent from an analysis written before it was kept.
+             * @example express@4.17.1
+             */
+            package?: string;
+            /**
+             * @description The versions Trivy names as fixing it, as Trivy prints them. Empty when none is known; absent from an analysis written before it was kept, whose fix is unknown.
+             * @example 4.19.2, 5.0.0
+             */
+            fixedIn?: string;
         };
         /** @description One reason a candidate is blocked or worth a second look */
         Signal: {
@@ -659,7 +682,7 @@ export interface components {
         Candidate: {
             version: string;
             vector: components["schemas"]["Vector"];
-            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             signals: components["schemas"]["Signal"][];
             /** @description Whether this candidate was resolved and scanned before the rest */
@@ -670,17 +693,23 @@ export interface components {
              * @description Empty when the registry has no publication time
              */
             published?: string;
+            /** @description Whether this version leaves the line of the current one, the range npm's caret gives it. Set when the analysis is read. */
+            leavesLine: boolean;
         };
         /** @description One direct dependency's current CVEs and its ranked candidates */
         DependencyResult: {
             name: string;
             current: string;
-            /** @description Empty when no candidate improves on the current version */
+            /** @description Empty when no candidate inside the current line improves on the current version; the policy's review.proposeOtherMajors widens the search to every candidate */
             best?: string;
             vector: components["schemas"]["Vector"];
-            /** @description The vulnerabilities behind vector, sorted by severity then id */
+            /** @description The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package */
             cves: components["schemas"]["Cve"][];
             candidates: components["schemas"]["Candidate"][];
+            /** @description The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it. */
+            jump?: string;
+            /** @description The name of the family this dependency's jump belongs to. Absent when its jump moves alone. */
+            family?: string;
         };
         /** @description What an analysis writes to candidates.json and ranking.json */
         AnalysisResult: {
@@ -690,6 +719,18 @@ export interface components {
             after?: components["schemas"]["Vector"] | null;
             dependencies: components["schemas"]["DependencyResult"][];
             warnings: string[];
+            /** @description The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed. */
+            families?: components["schemas"]["Family"][];
+        };
+        /** @description Dependencies whose jumps must move together */
+        Family: {
+            /**
+             * @description The member the others name, and the line of its jump
+             * @example react 19
+             */
+            name: string;
+            /** @description Sorted by name */
+            members: string[];
         };
         /** @description What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. */
         PipAnalysisResult: {
@@ -752,7 +793,7 @@ export interface components {
         };
         /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
         ExportRequest: {
-            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. */
+            /** @description Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415. */
             selection: {
                 [key: string]: string[];
             };
@@ -761,6 +802,17 @@ export interface components {
              * @default false
              */
             includeProject: boolean;
+            /** @description The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000. */
+            reasons?: components["schemas"]["Reason"][];
+        };
+        /** @description Why a selection takes a jump or keeps a CVE that no version fixes. */
+        Reason: {
+            /** @enum {string} */
+            kind: "major-jump" | "cve-without-fix";
+            /** @description The dependencies the reason covers, by name, each at most 214 bytes. */
+            dependencies: string[];
+            /** @description 1 to 300 characters once trimmed, on one line, with no control, line-separating, bidirectional or other format character. */
+            text: string;
         };
         /** @description One export job, its state and its files. */
         Export: {

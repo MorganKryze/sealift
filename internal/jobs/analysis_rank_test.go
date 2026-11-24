@@ -2,12 +2,16 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/rank"
@@ -111,5 +115,331 @@ func TestRankDependency_CVEsListTheVulnerabilitiesBehindTheVector(t *testing.T) 
 	}
 	if len(dr.Candidates[0].CVEs) != 0 {
 		t.Errorf("4.21.2 candidate's CVEs = %+v, want none", dr.Candidates[0].CVEs)
+	}
+}
+
+// fakeVersion is one version of a fake packument: when it was published and
+// the peers it declares.
+type fakeVersion struct {
+	version   string
+	published time.Time
+	peers     map[string]string
+}
+
+var longAgo = time.Date(2025, 3, 31, 14, 0, 0, 0, time.UTC)
+
+// fakeDependency builds what steps 5 and 6 hand the rank step for one
+// dependency: its packument and an outcome per version, each version
+// resolving to the package alone, ascending as npm.NewerStable gives them.
+func fakeDependency(name, current string, newer ...fakeVersion) (depInfo, []candidateOutcome) {
+	dep := npm.Dependency{Name: name, Version: current}
+	pk := npm.Packument{
+		Name:     name,
+		Versions: map[string]npm.VersionMeta{current: {Version: current}},
+		Time:     map[string]json.RawMessage{current: publishedAt(longAgo.AddDate(-2, 0, 0))},
+	}
+	d := depInfo{dep: dep, packument: pk}
+	outcomes := []candidateOutcome{{
+		task: candidateTask{dep: dep, version: current, current: true},
+		pkgs: []npm.LockPackage{{Name: name, Version: current}},
+	}}
+	for _, v := range newer {
+		pk.Versions[v.version] = npm.VersionMeta{Version: v.version, PeerDependencies: v.peers}
+		pk.Time[v.version] = publishedAt(v.published)
+		d.newer = append(d.newer, v.version)
+		outcomes = append(outcomes, candidateOutcome{
+			task: candidateTask{dep: dep, version: v.version, key: true},
+			pkgs: []npm.LockPackage{{Name: name, Version: v.version}},
+		})
+	}
+	return d, outcomes
+}
+
+func publishedAt(t time.Time) json.RawMessage {
+	raw, _ := json.Marshal(t)
+	return raw
+}
+
+// newRankRun returns a run whose rank step writes candidates.json to a
+// temporary directory, with a seven-day minimum release age.
+func newRankRun(t *testing.T, review policy.Review) *run {
+	t.Helper()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return &run{
+		a: &Analysis{
+			Store:    st,
+			Dir:      t.TempDir(),
+			Review:   review,
+			Settings: store.Settings{MinReleaseAgeDays: 7},
+			Project:  store.Project{Target: store.Target{Node: "22.17.1"}},
+		},
+		stepLog: stepLog{ctx: context.Background(), emit: func(Event) {}},
+		result:  &Result{Dependencies: []DependencyResult{}, Warnings: []string{}},
+	}
+}
+
+// rankAll runs the rank step over deps, each with its outcomes.
+func rankAll(t *testing.T, r *run, index rank.Index, deps ...func() (depInfo, []candidateOutcome)) {
+	t.Helper()
+	var infos []depInfo
+	var outcomes []candidateOutcome
+	for _, dep := range deps {
+		d, o := dep()
+		infos = append(infos, d)
+		outcomes = append(outcomes, o...)
+	}
+	if err := r.stepRank(infos, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+}
+
+func dependencyNamed(t *testing.T, r *run, name string) DependencyResult {
+	t.Helper()
+	i := slices.IndexFunc(r.result.Dependencies, func(d DependencyResult) bool { return d.Name == name })
+	if i < 0 {
+		t.Fatalf("no result for %s in %+v", name, r.result.Dependencies)
+	}
+	return r.result.Dependencies[i]
+}
+
+// expressWithAJump is express 4.17.1 with a known CVE, 4.22.3 inside its
+// line but published yesterday, and a clean 5.1.0.
+func expressWithAJump() (depInfo, []candidateOutcome) {
+	return fakeDependency("express", "4.17.1",
+		fakeVersion{version: "4.22.3", published: time.Now().Add(-24 * time.Hour)},
+		fakeVersion{version: "5.1.0", published: longAgo})
+}
+
+var expressIndex = rank.NewIndex([]rank.Finding{
+	{ID: "CVE-2024-29041", Package: "express", Version: "4.17.1", Severity: rank.Medium, FixedVersion: "4.19.2, 5.0.0-beta.3"},
+})
+
+func TestRankProposesInsideTheLine(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	rankAll(t, r, expressIndex, expressWithAJump)
+
+	got := dependencyNamed(t, r, "express")
+	if got.Best != "" {
+		t.Errorf("Best = %q, want none: 4.22.3 is too recent and 5.1.0 leaves major 4", got.Best)
+	}
+	if got.Jump != "5.1.0" {
+		t.Errorf("Jump = %q, want 5.1.0", got.Jump)
+	}
+}
+
+func TestRankProposesOtherMajorsWhenThePolicyAllows(t *testing.T) {
+	review := policy.DefaultReview()
+	review.ProposeOtherMajors = true
+	r := newRankRun(t, review)
+	rankAll(t, r, expressIndex, expressWithAJump)
+
+	got := dependencyNamed(t, r, "express")
+	if got.Best != "5.1.0" || got.Jump != "5.1.0" {
+		t.Errorf("Best, Jump = %q, %q, want 5.1.0 for both", got.Best, got.Jump)
+	}
+}
+
+func TestRankNamesTheJump(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2024-29041", Package: "express", Version: "4.17.1", Severity: rank.Medium},
+		{ID: "CVE-2025-00001", Package: "express", Version: "5.0.0", Severity: rank.Low},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	rankAll(t, r, index,
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("express", "4.17.1",
+				fakeVersion{version: "4.21.2", published: longAgo},
+				fakeVersion{version: "5.0.0", published: longAgo},
+				fakeVersion{version: "5.1.0", published: longAgo})
+		},
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("lodash", "4.17.20", fakeVersion{version: "4.17.21", published: longAgo})
+		})
+
+	express := dependencyNamed(t, r, "express")
+	if express.Best != "4.21.2" || express.Jump != "5.1.0" {
+		t.Errorf("express Best, Jump = %q, %q, want 4.21.2 and 5.1.0, the outside candidate with fewer CVEs", express.Best, express.Jump)
+	}
+	lodash := dependencyNamed(t, r, "lodash")
+	encoded, err := json.Marshal(lodash)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), `"jump"`) {
+		t.Errorf("lodash has no version outside its line, so its result carries no jump: %s", encoded)
+	}
+}
+
+func TestRankGroupsFamiliesFromPeers(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	rankAll(t, r, rank.Index{},
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("react", "18.3.1", fakeVersion{version: "19.2.0", published: longAgo})
+		},
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("react-dom", "18.3.1",
+				fakeVersion{version: "19.2.0", published: longAgo, peers: map[string]string{"react": "^19.2.0"}})
+		},
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("@types/react", "18.3.12", fakeVersion{version: "19.2.0", published: longAgo})
+		},
+		func() (depInfo, []candidateOutcome) {
+			return fakeDependency("express", "4.17.1", fakeVersion{version: "5.1.0", published: longAgo})
+		})
+
+	want := []Family{{Name: "react 19", Members: []string{"@types/react", "react", "react-dom"}}}
+	if !slices.EqualFunc(r.result.Families, want, func(a, b Family) bool {
+		return a.Name == b.Name && slices.Equal(a.Members, b.Members)
+	}) {
+		t.Errorf("Families = %+v, want %+v", r.result.Families, want)
+	}
+	for _, name := range []string{"react", "react-dom", "@types/react"} {
+		if got := dependencyNamed(t, r, name).Family; got != "react 19" {
+			t.Errorf("%s Family = %q, want react 19", name, got)
+		}
+	}
+	if got := dependencyNamed(t, r, "express"); got.Jump != "5.1.0" || got.Family != "" {
+		t.Errorf("express Jump, Family = %q, %q, want a lone jump to 5.1.0", got.Jump, got.Family)
+	}
+}
+
+// A package listed in both dependencies and devDependencies reaches the
+// rank step twice under one name; the family must still see the peers of
+// the entry whose jump declares them.
+func TestRankKeepsThePeersOfADependencyListedTwice(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	react, _ := fakeDependency("react", "18.3.1", fakeVersion{version: "19.2.0", published: longAgo})
+	reactDOM, _ := fakeDependency("react-dom", "18.3.1",
+		fakeVersion{version: "19.2.0", published: longAgo, peers: map[string]string{"react": "^19.2.0"}},
+		fakeVersion{version: "20.0.0", published: longAgo})
+	devReactDOM := reactDOM
+	devReactDOM.dep.Version = "19.2.0"
+	r.result.Dependencies = []DependencyResult{
+		{Name: "react", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "19.2.0", Jump: "20.0.0"},
+	}
+
+	r.setFamilies([]depInfo{react, reactDOM, devReactDOM})
+
+	if len(r.result.Families) != 1 || r.result.Families[0].Name != "react 19" {
+		t.Fatalf("Families = %+v, want the react 19 family", r.result.Families)
+	}
+	if got := r.result.Dependencies[1].Family; got != "react 19" {
+		t.Errorf("react-dom 18.3.1 Family = %q, want react 19", got)
+	}
+	if got := r.result.Dependencies[2].Family; got != "" {
+		t.Errorf("react-dom 19.2.0 jumps to 20.0.0, outside the family, but Family = %q", got)
+	}
+}
+
+// The second entry of a name jumps elsewhere: its jump's peers say nothing
+// about the first entry's jump, so the first must not join a family by them.
+func TestRankKeepsADuplicateJumpsPeersToItself(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	react, _ := fakeDependency("react", "18.3.1", fakeVersion{version: "19.2.0", published: longAgo})
+	reactDOM, _ := fakeDependency("react-dom", "18.3.1",
+		fakeVersion{version: "19.2.0", published: longAgo},
+		fakeVersion{version: "20.0.0", published: longAgo, peers: map[string]string{"react": "^19.2.0"}})
+	devReactDOM := reactDOM
+	devReactDOM.dep.Version = "19.2.0"
+	r.result.Dependencies = []DependencyResult{
+		{Name: "react", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "18.3.1", Jump: "19.2.0"},
+		{Name: "react-dom", Current: "19.2.0", Jump: "20.0.0"},
+	}
+
+	r.setFamilies([]depInfo{react, reactDOM, devReactDOM})
+
+	if len(r.result.Families) != 0 {
+		t.Errorf("Families = %+v, want none: react-dom 19.2.0 declares no peer", r.result.Families)
+	}
+	for _, d := range r.result.Dependencies {
+		if d.Family != "" {
+			t.Errorf("%s %s Family = %q, want none", d.Name, d.Current, d.Family)
+		}
+	}
+}
+
+func TestRankKeepsEachCVEsPackageAndFix(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2024-29041", Package: "express", Version: "4.17.1", Severity: rank.High, FixedVersion: "4.19.2, 5.0.0"},
+		{ID: "CVE-2022-37620", Package: "html-minifier", Version: "4.0.0", Severity: rank.Medium},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("express", "4.17.1")
+	outcomes[0].pkgs = append(outcomes[0].pkgs, npm.LockPackage{Name: "html-minifier", Version: "4.0.0"})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	want := []CVE{
+		{ID: "CVE-2024-29041", Severity: "HIGH", Package: "express@4.17.1", FixedIn: "4.19.2, 5.0.0"},
+		{ID: "CVE-2022-37620", Severity: "MEDIUM", Package: "html-minifier@4.0.0", FixedIn: ""},
+	}
+	if got := dependencyNamed(t, r, "express").CVEs; !slices.Equal(got, want) {
+		t.Errorf("CVEs = %+v, want %+v", got, want)
+	}
+	encoded, err := json.Marshal(want[1])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"fixedIn":""`) {
+		t.Errorf("a CVE with no known fix must say so with an empty fixedIn, an absent one means unknown: %s", encoded)
+	}
+}
+
+// One id found in two packages keeps both, each with its own fix, while the
+// vector counts it once: the copy nobody can fix must not hide behind the
+// one that has a fix.
+func TestRankKeepsEveryPackageACVEIsFoundIn(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2021-23337", Package: "lodash", Version: "4.17.20", Severity: rank.High, FixedVersion: "4.17.21"},
+		{ID: "CVE-2021-23337", Package: "lodash.template", Version: "4.5.0", Severity: rank.High},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("lodash", "4.17.20", fakeVersion{version: "4.17.21", published: longAgo})
+	for i := range outcomes {
+		outcomes[i].pkgs = append(outcomes[i].pkgs, npm.LockPackage{Name: "lodash.template", Version: "4.5.0"})
+	}
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	got := dependencyNamed(t, r, "lodash")
+	want := []CVE{
+		{ID: "CVE-2021-23337", Severity: "HIGH", Package: "lodash@4.17.20", FixedIn: "4.17.21"},
+		{ID: "CVE-2021-23337", Severity: "HIGH", Package: "lodash.template@4.5.0", FixedIn: ""},
+	}
+	if !slices.Equal(got.CVEs, want) {
+		t.Errorf("CVEs = %+v, want %+v", got.CVEs, want)
+	}
+	if got.Vector != (Vector{0, 1, 0, 0, 0}) {
+		t.Errorf("Vector = %v, want the id counted once", got.Vector)
+	}
+	if len(got.Candidates) != 1 || !slices.Equal(got.Candidates[0].CVEs, want[1:]) {
+		t.Errorf("4.17.21 = %+v, want it to keep the lodash.template copy with no fix", got.Candidates)
+	}
+}
+
+func TestRankWritesAnEmptyFamiliesList(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	rankAll(t, r, rank.Index{}, func() (depInfo, []candidateOutcome) {
+		return fakeDependency("lodash", "4.17.20", fakeVersion{version: "4.17.21", published: longAgo})
+	})
+
+	raw, err := os.ReadFile(filepath.Join(r.a.Dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	var written map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := string(written["families"]); got != "[]" {
+		t.Errorf("families = %q, want []: a result without the key reads as one from an older release", got)
 	}
 }

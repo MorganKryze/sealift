@@ -65,6 +65,88 @@ A tarball's file name comes from the package name and version, with a scope fold
 
 `manifest.json` travels next to the archive, not inside it: the archive's sha256 cannot be part of its own content.
 
+## The review
+
+A manifest may carry a `review` object: what the selection updates, keeps and takes out of its line, the CVEs the project keeps, and the reasons given for them. A dependency's line is the range npm's caret gives its current version: the same major from 1.0.0, the same minor below it, the same patch below 0.1.0. The signature covers the review with the rest of the manifest. The archive's bytes do not depend on it.
+
+```json
+{
+  "cves": {
+    "before": [1, 4, 6, 2, 0],
+    "after": [0, 1, 3, 1, 0]
+  },
+  "updates": [
+    {
+      "name": "express",
+      "from": "4.17.1",
+      "to": "4.20.0",
+      "fixed": [1, 2, 2, 0, 0],
+      "left": [0, 0, 0, 1, 0]
+    }
+  ],
+  "kept": [
+    {
+      "name": "debug",
+      "version": "2.6.9",
+      "jump": "4.4.3"
+    }
+  ],
+  "jumps": [
+    {
+      "family": "react 19",
+      "packages": [
+        { "name": "react", "from": "18.3.1", "to": "19.2.0" },
+        { "name": "react-dom", "from": "18.3.1", "to": "19.2.0" }
+      ],
+      "reason": "The app moved to React 19 in its last release, and its tests pass."
+    }
+  ],
+  "left": [
+    {
+      "dependency": "html-minifier",
+      "version": "4.0.0",
+      "id": "CVE-2022-37620",
+      "severity": "HIGH",
+      "package": "html-minifier",
+      "fixedIn": "",
+      "reason": "No release fixes it. The build minifies our own templates only."
+    },
+    {
+      "dependency": "express",
+      "version": "4.20.0",
+      "id": "CVE-2024-47764",
+      "severity": "LOW",
+      "package": "cookie",
+      "fixedIn": "0.7.0"
+    }
+  ],
+  "unchanged": 12
+}
+```
+
+The counts in this example are made up. Each count vector holds the number of CVEs by severity: critical, high, medium, low and unknown, in that order.
+
+| Field | Meaning |
+| --- | --- |
+| `cves.before` | The project's CVE counts before the selection |
+| `cves.after` | The project's CVE counts once the selection applies, estimated as `summary.md` estimates them. Absent when the project scan could not be read |
+| `updates[]` | A dependency the selection moves within its line: `name`, `from`, `to`, and the counts of the CVEs the move fixes (`fixed`) and leaves (`left`) |
+| `kept[]` | A dependency kept on its line: `name`, `version`, and `jump`, the version outside the line it could take |
+| `jumps[]` | A family, or a lone dependency, the selection takes out of its line: `family` (absent for a lone dependency), `packages[]` with `name`, `from` and `to`, and the `reason` given for the jump |
+| `left[]` | A CVE the project keeps: the `dependency` and the `version` it keeps, the CVE `id`, its `severity`, the `package` Trivy found it in (empty when unknown), `fixedIn`, the versions Trivy names as fixing it (empty when none), and the `reason` given when no version fixes it |
+| `unchanged` | The number of other dependencies, which the selection leaves as they are |
+
+The review changes nothing the import must check, so it keeps `formatVersion` 2, as rule 6 of [What `sealift import` checks](#what-sealift-import-checks) allows. The import of sealift 0.7.0 ignores the key. Imports after 0.7.0 read it by these rules:
+
+1. The review is read within the manifest's 16 MiB bound. Each list holds at most 100,000 entries, and `cves.before` is present.
+2. Each `name`, `dependency` and `package` is a valid package name, and each version an exact version of at most 256 bytes, as rule 4 reads them. `id`, `fixedIn` and `family` are at most 256 bytes of printable characters, as rule 5 reads text. `severity` is one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` and `UNKNOWN`. Each count vector holds 5 counts of zero or more.
+3. A reason holds 1 to 300 characters once trimmed, on one line, within 4,800 bytes. Letters, marks, numbers, punctuation, symbols, the plain space and the no-break spaces U+00A0, U+202F and U+3000 pass. A control character, a line or paragraph separator (U+2028, U+2029), a bidirectional override or any other format character breaks the rule. `archive.CheckReason` is that rule, the one a writer of the review applies too.
+4. A review that breaks a rule is kept out with a problem that names the field and repeats no value, such as `review.left[1].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN`. The import still checks and publishes the packages as before: a review never refuses an archive.
+
+`archive.CheckReview` reads a whole review through the import's own reader and returns the problem rule 4 would name. A writer that runs it before signing learns at the export that the import would keep the review out.
+
+A manifest without `review`, as every archive from 0.7.0 or earlier, reads as a review not carried by this archive, and that is no problem. The import report does not show the review.
+
 ## manifest.json.sig
 
 An export writes `manifest.json.sig` beside `manifest.json`. It holds an Ed25519 signature (RFC 8032, pure, no context and no prehash) over the exact bytes of `manifest.json` as written. Carry the archive, `manifest.json` and `manifest.json.sig` together.
@@ -253,7 +335,7 @@ The digests in this example are made up and match no published wheel.
 | `packages[].sha256` | The hex sha256 the package index published for the wheel |
 | `packages[].shippedSha512` | Hex sha512 of the file under `out/`, the same bytes as `sha256` |
 
-The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. A pip manifest may carry a `review` read by the rules of [The review](#the-review), with pip's names and versions. A pip export writes none. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
 
 ## Telling the formats apart
 

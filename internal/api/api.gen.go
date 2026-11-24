@@ -137,6 +137,42 @@ func (e PreparingItemState) Valid() bool {
 	}
 }
 
+// Defines values for ReasonKind.
+const (
+	CveWithoutFix ReasonKind = "cve-without-fix"
+	MajorJump     ReasonKind = "major-jump"
+)
+
+// Valid indicates whether the value is a known member of the ReasonKind enum.
+func (e ReasonKind) Valid() bool {
+	switch e {
+	case CveWithoutFix:
+		return true
+	case MajorJump:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReviewRule.
+const (
+	RuleReason ReviewRule = "reason"
+	RuleRefuse ReviewRule = "refuse"
+)
+
+// Valid indicates whether the value is a known member of the ReviewRule enum.
+func (e ReviewRule) Valid() bool {
+	switch e {
+	case RuleReason:
+		return true
+	case RuleRefuse:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for State.
 const (
 	Cancelled   State = "cancelled"
@@ -207,6 +243,9 @@ type AnalysisResult struct {
 	Before       Vector             `json:"before"`
 	Dependencies []DependencyResult `json:"dependencies"`
 
+	// Families The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed.
+	Families *[]Family `json:"families,omitempty"`
+
 	// Target The system a resolution or an export is prepared for
 	Target   Target   `json:"target"`
 	Warnings []string `json:"warnings"`
@@ -236,11 +275,14 @@ type Brand struct {
 
 // Candidate One newer version of a dependency, ranked against the current one
 type Candidate struct {
-	// Cves The vulnerabilities behind vector, sorted by severity then id
+	// Cves The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
 	Cves []Cve `json:"cves"`
 
 	// Key Whether this candidate was resolved and scanned before the rest
 	Key bool `json:"key"`
+
+	// LeavesLine Whether this version leaves the line of the current one, the range npm's caret gives it. Set when the analysis is read.
+	LeavesLine bool `json:"leavesLine"`
 
 	// Published Empty when the registry has no publication time
 	Published *time.Time `json:"published,omitempty"`
@@ -270,9 +312,14 @@ type Contact struct {
 	Url string `json:"url"`
 }
 
-// Cve One vulnerability behind a Vector count
+// Cve One vulnerability behind a Vector count, in one package. An id found in two packages appears once for each, and the vector counts it once.
 type Cve struct {
-	Id string `json:"id"`
+	// FixedIn The versions Trivy names as fixing it, as Trivy prints them. Empty when none is known; absent from an analysis written before it was kept, whose fix is unknown.
+	FixedIn *string `json:"fixedIn,omitempty"`
+	Id      string  `json:"id"`
+
+	// Package The package and version Trivy found it in, as name@version. Absent from an analysis written before it was kept.
+	Package *string `json:"package,omitempty"`
 
 	// Severity As Trivy prints it, upper case
 	Severity string `json:"severity"`
@@ -280,14 +327,20 @@ type Cve struct {
 
 // DependencyResult One direct dependency's current CVEs and its ranked candidates
 type DependencyResult struct {
-	// Best Empty when no candidate improves on the current version
+	// Best Empty when no candidate inside the current line improves on the current version; the policy's review.proposeOtherMajors widens the search to every candidate
 	Best       *string     `json:"best,omitempty"`
 	Candidates []Candidate `json:"candidates"`
 	Current    string      `json:"current"`
 
-	// Cves The vulnerabilities behind vector, sorted by severity then id
-	Cves []Cve  `json:"cves"`
-	Name string `json:"name"`
+	// Cves The vulnerabilities behind vector, once per id and package, sorted by severity, id, then package
+	Cves []Cve `json:"cves"`
+
+	// Family The name of the family this dependency's jump belongs to. Absent when its jump moves alone.
+	Family *string `json:"family,omitempty"`
+
+	// Jump The first unblocked candidate outside the current line, in the order a proposal is taken. Absent when there is none, and in an analysis sealift 0.7.0 recorded, which did not write it.
+	Jump *string `json:"jump,omitempty"`
+	Name string  `json:"name"`
 
 	// Vector CVE counts by severity, critical to unknown
 	Vector Vector `json:"vector"`
@@ -347,7 +400,10 @@ type ExportRequest struct {
 	// IncludeProject Add the current project tree to an npm export. A pip export ignores it.
 	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty.
+	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000.
+	Reasons *[]Reason `json:"reasons,omitempty"`
+
+	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415.
 	Selection map[string][]string `json:"selection"`
 }
 
@@ -355,6 +411,15 @@ type ExportRequest struct {
 type Failure struct {
 	Message string `json:"message"`
 	Step    string `json:"step"`
+}
+
+// Family Dependencies whose jumps must move together
+type Family struct {
+	// Members Sorted by name
+	Members []string `json:"members"`
+
+	// Name The member the others name, and the line of its jump
+	Name string `json:"name"`
 }
 
 // Instance How this instance was deployed. In ephemeral mode, a project and the shared caches are erased when it is deleted, and every project is deleted once it has been idle for idleMinutes.
@@ -491,6 +556,9 @@ type Policy struct {
 	PipTarget          PipTarget `json:"pipTarget"`
 	ResolveParallelism int       `json:"resolveParallelism"`
 
+	// Review What a selection needs before it can cross.
+	Review ReviewPolicy `json:"review"`
+
 	// Target The system a resolution or an export is prepared for
 	Target Target `json:"target"`
 }
@@ -605,6 +673,34 @@ type ProjectSummary struct {
 	// Target The system a resolution or an export is prepared for
 	Target *Target `json:"target,omitempty"`
 }
+
+// Reason Why a selection takes a jump or keeps a CVE that no version fixes.
+type Reason struct {
+	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes.
+	Dependencies []string   `json:"dependencies"`
+	Kind         ReasonKind `json:"kind"`
+
+	// Text 1 to 300 characters once trimmed, on one line, with no control, line-separating, bidirectional or other format character.
+	Text string `json:"text"`
+}
+
+// ReasonKind defines model for Reason.Kind.
+type ReasonKind string
+
+// ReviewPolicy What a selection needs before it can cross.
+type ReviewPolicy struct {
+	// CveWithoutFix reason lets the selection cross with a reason written for it; refuse stops it.
+	CveWithoutFix ReviewRule `json:"cveWithoutFix"`
+
+	// MajorJump reason lets the selection cross with a reason written for it; refuse stops it.
+	MajorJump ReviewRule `json:"majorJump"`
+
+	// ProposeOtherMajors Whether an analysis proposes versions outside the current line.
+	ProposeOtherMajors bool `json:"proposeOtherMajors"`
+}
+
+// ReviewRule reason lets the selection cross with a reason written for it; refuse stops it.
+type ReviewRule string
 
 // Settings The values the deployment set, read only; the policy file changes them.
 type Settings struct {

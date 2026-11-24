@@ -4,7 +4,7 @@ import { useState } from "react"
 
 import { apiFetch, ApiError } from "@/api/client"
 import { getSigningKey } from "@/api/settings"
-import { cancelExport, queueExport, type Analysis, type DependencyResult, type Export, type Project } from "@/api/projects"
+import { cancelExport, queueExport, type Analysis, type AnalysisResult, type Export, type Project } from "@/api/projects"
 import { Mark } from "@/components/brand/Mark"
 import { EraseProject } from "@/components/ephemeral"
 import { ProblemNotice } from "@/components/problem-notice"
@@ -13,8 +13,9 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { useJobEvents } from "@/hooks/use-job-events"
-import { useSelection } from "@/hooks/use-selection"
+import { useReasons, useSelection } from "@/hooks/use-selection"
 import { exportSelection } from "@/lib/exportSelection"
+import { reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
 import { sessionSteps, TERMINAL_FAILED_STATES } from "@/lib/sessionSteps"
 import { cn, formatBytes, formatDuration } from "@/lib/utils"
 
@@ -58,7 +59,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
           key={relatedExport.id}
           projectId={project.id}
           analysisId={analysis.id}
-          dependencies={analysis.result?.dependencies ?? []}
+          result={analysis.result}
           exportRecord={relatedExport}
           onChanged={onChanged}
         />
@@ -77,7 +78,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
 interface ExportProgressProps {
   projectId: string
   analysisId: string
-  dependencies: DependencyResult[]
+  result?: AnalysisResult
   exportRecord: Export
   onChanged: () => void
 }
@@ -91,16 +92,20 @@ interface ExportProgressProps {
  * carries the same cause a beat earlier, before the next poll refreshes
  * exportRecord itself.
  */
-function ExportProgress({ projectId, analysisId, dependencies, exportRecord, onChanged }: ExportProgressProps) {
+function ExportProgress({ projectId, analysisId, result, exportRecord, onChanged }: ExportProgressProps) {
   const selection = useSelection(analysisId)
+  const reasons = useReasons(analysisId)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
   const active = exportRecord.state === "queued" || exportRecord.state === "running"
   const events = useJobEvents(exportRecord.id, active, onChanged)
 
   const retryMutation = useMutation({
-    mutationFn: () =>
-      queueExport(projectId, analysisId, { selection: exportSelection(dependencies, selection.selection), includeProject: false }),
+    mutationFn: () => {
+      const toExport = exportSelection(result?.dependencies ?? [], selection.selection)
+      const needed = result ? requiredReasons(result, toExport) : []
+      return queueExport(projectId, analysisId, { selection: toExport, includeProject: false, reasons: reasonsToSend(needed, reasons.reasons) })
+    },
     onSuccess: onChanged,
   })
   const retryError = retryMutation.error instanceof ApiError ? retryMutation.error : null

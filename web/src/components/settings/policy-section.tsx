@@ -17,6 +17,8 @@ function npmPlatform({ os, cpu, libc }: Instance["policy"]["target"]) {
   return listed ? listed.label : [osName(os), cpu, libc].filter(Boolean).join(" ")
 }
 
+const rule = (value: Instance["policy"]["review"]["majorJump"]) => (value === "refuse" ? "Refused" : "Needs a reason")
+
 const minutes = (n: number) => `${n} ${n === 1 ? "minute" : "minutes"}`
 
 /** The defaults and limits the deployment sets, shown read-only: the policy file changes them, not this panel. */
@@ -28,6 +30,9 @@ export function PolicySection({ policy, ephemeral, idleMinutes }: PolicySectionP
     ["Minimum release age", `${policy.minReleaseAgeDays} ${policy.minReleaseAgeDays === 1 ? "day" : "days"}`],
     ["Resolve parallelism", `${policy.resolveParallelism} at once`],
     ["Download parallelism", `${policy.downloadParallelism} at once`],
+    ["Proposals", policy.review.proposeOtherMajors ? "Any version" : "Inside the current line"],
+    ["Major jump", rule(policy.review.majorJump)],
+    ["CVE without fix", rule(policy.review.cveWithoutFix)],
     [
       "Mode",
       ephemeral && idleMinutes !== undefined

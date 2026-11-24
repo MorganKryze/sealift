@@ -26,6 +26,7 @@ function instance(preparing: Instance["preparing"]): Instance {
       minReleaseAgeDays: 14,
       resolveParallelism: 4,
       downloadParallelism: 16,
+      review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason" },
     },
     tools: { trivy: "0.76.2", pnpm: [], uv: [] },
   }

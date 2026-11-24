@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { DependencyResult, Signal } from "@/api/projects"
-import { afterVectorOf, groupDependencies, groupOf, jumpKind, reasonFor } from "@/lib/reviewGroups"
+import { afterVectorOf, distinctCves, groupDependencies, groupOf, jumpKind, reasonFor } from "@/lib/reviewGroups"
 
 function candidate(version: string, overrides: Partial<DependencyResult["candidates"][number]> = {}) {
   return {
@@ -11,6 +11,7 @@ function candidate(version: string, overrides: Partial<DependencyResult["candida
     signals: [] as Signal[],
     key: true,
     resolved: true,
+    leavesLine: false,
     ...overrides,
   }
 }
@@ -179,5 +180,16 @@ describe("reasonFor", () => {
       candidates: [candidate("4.17.3", { vector: [0, 1, 0, 0, 0] })],
     })
     expect(reasonFor(dep, "4.17.3")).toBe("Fixes no CVE, minor or patch")
+  })
+})
+
+describe("distinctCves", () => {
+  it("lists an id found in two packages once, with its first entry", () => {
+    const cves = [
+      { id: "CVE-2021-23337", severity: "HIGH", package: "lodash@4.17.20", fixedIn: "4.17.21" },
+      { id: "CVE-2021-23337", severity: "HIGH", package: "lodash.template@4.5.0", fixedIn: "" },
+      { id: "CVE-2020-8203", severity: "HIGH", package: "lodash@4.17.20", fixedIn: "4.17.19" },
+    ]
+    expect(distinctCves(cves)).toEqual([cves[0], cves[2]])
   })
 })

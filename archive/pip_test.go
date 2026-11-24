@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode"
@@ -501,5 +502,43 @@ func TestVerifyPipNeedsAnAbsoluteDirectory(t *testing.T) {
 	var r *Refusal
 	if err == nil || errors.As(err, &r) {
 		t.Errorf("a relative directory is a local error, not a refusal: %v", err)
+	}
+}
+
+func TestParsePipManifestReadsAReview(t *testing.T) {
+	doc := pipManifestDoc()
+	doc["review"] = reviewDoc("jinja2", "3.1.4", "3.1.6")
+	m, err := ParsePipManifest(encode(t, doc))
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	if m.ReviewProblem != "" {
+		t.Fatalf("ReviewProblem = %q", m.ReviewProblem)
+	}
+	if want := wantReview("jinja2", "3.1.4", "3.1.6"); !reflect.DeepEqual(m.Review, want) {
+		t.Errorf("Review = %+v, want %+v", m.Review, want)
+	}
+}
+
+func TestParsePipManifestWithoutAReviewReadsNotCarried(t *testing.T) {
+	m, err := ParsePipManifest(encode(t, pipManifestDoc()))
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	if m.Review != nil || m.ReviewProblem != "" {
+		t.Errorf("Review = %+v, ReviewProblem = %q", m.Review, m.ReviewProblem)
+	}
+}
+
+func TestAnUnreadablePipReviewRefusesNothing(t *testing.T) {
+	doc := pipManifestDoc()
+	doc["review"] = reviewDoc("jinja2", "3.1.4", "3.1.6")
+	entryOf(reviewOf(doc), "kept", 0)["name"] = "owned/jinja2"
+	m, err := ParsePipManifest(encode(t, doc))
+	if err != nil {
+		t.Fatalf("an unreadable review refused the manifest: %v", err)
+	}
+	if len(m.Packages) != 1 || m.Review != nil || m.ReviewProblem != "review.kept[0].name is not a valid package name" {
+		t.Errorf("manifest = %+v", m)
 	}
 }

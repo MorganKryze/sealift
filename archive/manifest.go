@@ -41,6 +41,13 @@ type Manifest struct {
 	Target        Target
 	Archive       Summary
 	Packages      []Package
+	// Review is the review the manifest carries; nil when it carries none or
+	// when ReviewProblem says why it was kept out.
+	Review *Review
+	// ReviewProblem names the field of an unreadable review and repeats no
+	// value; empty when the review was read or is absent. It never refuses
+	// the manifest.
+	ReviewProblem string
 }
 
 // Target is the platform and toolchain the packages were resolved for.
@@ -93,7 +100,8 @@ type rawManifest struct {
 		SHA256 string `json:"sha256"`
 		Size   *int64 `json:"size"`
 	} `json:"archive"`
-	Packages []rawPackage `json:"packages"`
+	Packages []rawPackage    `json:"packages"`
+	Review   json.RawMessage `json:"review"`
 }
 
 type rawPackage struct {
@@ -234,6 +242,7 @@ func checkManifest(raw rawManifest) (Manifest, error) {
 		versions[id] = true
 		m.Packages = append(m.Packages, pkg)
 	}
+	m.Review, m.ReviewProblem = readReview(raw.Review, npmNames)
 	return m, nil
 }
 

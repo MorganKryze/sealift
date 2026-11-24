@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/internal/piptest"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -150,6 +151,59 @@ func TestQueueAnalysisPicksTheJobByEcosystem(t *testing.T) {
 	})
 }
 
+// foo's only fix, 2.0.0, leaves major 1, so only a review that allows other
+// majors proposes it.
+func TestQueueAnalysisAppliesTheServicesReviewRules(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	project, err := st.CreateProject("demo", []byte(`{"name":"demo","dependencies":{"foo":"1.0.0"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	registry := registryServer(t, map[string]string{"foo": `{"name":"foo","versions":{
+	"1.0.0":{"version":"1.0.0"},
+	"2.0.0":{"version":"2.0.0"}
+},"time":{"1.0.0":"2020-01-01T00:00:00.000Z","2.0.0":"2020-02-01T00:00:00.000Z"}}`})
+	trivy := &fakeTrivy{db: map[string][]fakeFinding{
+		"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "2.0.0"}},
+	}}
+	q := NewQueue(testLogger())
+	t.Cleanup(q.Close)
+	svc := NewService(st, q, newTestToolsManager(t, st), &fakePnpm{}, trivy,
+		&npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }})
+	svc.Review = policy.DefaultReview()
+	svc.Review.ProposeOtherMajors = true
+
+	events, unsubscribe := svc.Subscribe()
+	defer unsubscribe()
+	info, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	for deadline := time.After(10 * time.Second); ; {
+		select {
+		case e := <-events:
+			if e.Kind != "end" {
+				continue
+			}
+		case <-deadline:
+			t.Fatal("the analysis never ended")
+		}
+		break
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
+
+	var result Result
+	if err := st.ReadJSON(filepath.Join(st.Root(), "projects", project.ID, "analyses", info.ID, "ranking.json"), &result); err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	if len(result.Dependencies) != 1 || result.Dependencies[0].Best != "2.0.0" {
+		t.Errorf("dependencies = %+v, want foo to propose 2.0.0, as the service's review allows other majors", result.Dependencies)
+	}
+}
+
 func TestQueueExportRefusesAnAnalysisNotDone(t *testing.T) {
 	svc, st := newTestService(t)
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
@@ -186,6 +240,9 @@ func TestQueueExportNeedsNoKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	info, err := svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
@@ -210,6 +267,9 @@ func TestQueueExportBuildsAndQueuesAJobOnceReady(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// An empty selection is refused on its own (see the test below); the
@@ -241,6 +301,9 @@ func TestQueueExportRefusesAnUnknownSelectionEntry(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// "1.9.9" is neither left-pad's current version nor one of its
@@ -628,14 +691,16 @@ func (j storeIDJob) StoreID() string { return j.id }
 
 // A selection with no version and no current tree packs an archive with
 // no package in it, which a user would carry through the kiosk believing
-// it fixed every CVE.
+// it fixed every CVE. It says so before it asks a reason for lodash's CVE,
+// which nothing would carry.
 func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	svc, st := newTestService(t)
 	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[{"name":"lodash","current":"4.17.20","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2021-23337","severity":"HIGH"}],"candidates":[]}],"warnings":[]}`
 	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
 	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -645,6 +710,9 @@ func TestQueueExportRefusesAnExportWithNothingToPack(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	for name, sel := range map[string]map[string][]string{
@@ -1280,6 +1348,9 @@ func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 	occupyComingSeconds(t, filepath.Join(projectDir, "analyses"))
 	occupyComingSeconds(t, filepath.Join(projectDir, "exports"))
 	blockQueue(t, svc)
@@ -1312,3 +1383,168 @@ func TestQueuedJobWithASuffixedIDKeepsItsCreationTime(t *testing.T) {
 		t.Errorf("QueueExport CreatedAt = %v, want %v", export.CreatedAt, want)
 	}
 }
+
+// withPipCVE rewrites the fixture's pip-result.json so its first package
+// carries one CVE with the fixed versions given.
+func withPipCVE(t *testing.T, f pipFixture, fixed []string) {
+	t.Helper()
+	path := filepath.Join(f.ref.Dir, "pip-result.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r PipResult
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	r.Packages[0].CVEs = append(r.Packages[0].CVEs, PipFinding{ID: "CVE-2025-9999", Severity: "HIGH", FixedVersions: fixed})
+	if data, err = json.Marshal(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o664); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueueExportRefusesAPipCVEWithoutFixUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{})
+	if !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), "review.cveWithoutFix is refuse") || !strings.Contains(err.Error(), "CVE-2025-9999") {
+		t.Fatalf("QueueExport = %v, want a 409 naming review.cveWithoutFix and the CVE", err)
+	}
+	noExportReserved(t, f.project)
+}
+
+func TestQueueExportLetsAPipCVEWithAFixCrossUnderRefuse(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, []string{"9.9.9"})
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.Refuse
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued", err)
+	}
+}
+
+func TestQueueExportLetsAPipCVEWithoutFixCrossUnderReason(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	withPipCVE(t, f, nil)
+	f.svc.Review = policy.DefaultReview()
+	f.svc.Review.CVEWithoutFix = policy.AskReason
+	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
+		t.Fatalf("QueueExport = %v, want queued: pip asks no reason", err)
+	}
+}
+
+func TestQueueExportRefusesReasonsForPip(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	reasons := []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"requests"}, Text: "Only our build calls it."}}
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Reasons: reasons})
+	if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "pip export takes no reasons") {
+		t.Fatalf("QueueExport = %v, want a 400 saying pip takes no reasons", err)
+	}
+	noExportReserved(t, f.project)
+}
+
+// The queue reads the analysis's lockfile scan when the project tree
+// ships: a CVE no version fixes on a dependency whose own scan was clean
+// is refused under refuse before anything is reserved.
+func TestQueueExportReadsTheProjectScanWhenTheTreeShips(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.Review = policy.DefaultReview()
+	svc.Review.CVEWithoutFix = policy.Refuse
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad","dependencies":{"lodash":"4.17.21"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[{"name":"lodash","current":"4.17.21","vector":[0,0,0,0,0],"cves":[],"candidates":[]}],"warnings":[]}`
+	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-2025-0400", "PkgName": "lodash", "InstalledVersion": "4.17.21", "Severity": "HIGH", "Title": "t"}
+  ]}]}`
+	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, data := range map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking, "project.trivy.json": scan} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	var reasons *ErrInvalidReasons
+	if !errors.As(err, &reasons) || !strings.Contains(err.Error(), "lodash 4.17.21 keeps CVE-2025-0400") {
+		t.Fatalf("QueueExport = %v, want lodash's project CVE refused", err)
+	}
+	noExportReserved(t, project)
+}
+
+// The queue walks the analysis's project lockfile: a CVE without a fix on
+// a package only the lockfile places asks its direct dependency a reason.
+func TestQueueExportPlacesALockfileCVEThroughTheProjectLockfile(t *testing.T) {
+	svc, st := newTestService(t)
+	svc.Review = policy.DefaultReview()
+	project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad","dependencies":{"express":"4.17.1"}}`))
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[{"name":"express","current":"4.17.1","vector":[0,0,0,0,0],"cves":[],"candidates":[]}],"warnings":[]}`
+	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+    {"VulnerabilityID": "CVE-2025-0300", "PkgName": "qs", "InstalledVersion": "6.0.0", "Severity": "HIGH", "Title": "t"}
+  ]}]}`
+	lock := "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      express:\n        specifier: 4.17.1\n        version: 4.17.1\nsnapshots:\n  express@4.17.1:\n    dependencies:\n      qs: 6.0.0\n  qs@6.0.0: {}\n"
+	analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+	if err := os.MkdirAll(filepath.Join(analysisDir, "project"), 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, data := range map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking, "project.trivy.json": scan, "project/pnpm-lock.yaml": lock} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err == nil || !strings.Contains(err.Error(), "express 4.17.1 keeps CVE-2025-0300, which no version fixes, and needs a reason") {
+		t.Fatalf("QueueExport = %v, want express asked a reason for qs's CVE", err)
+	}
+	noExportReserved(t, project)
+}
+
+// Shipping the project tree reads the analysis's lockfile scan: a missing
+// or unreadable one fails the export with its cause under either policy,
+// so a CVE it would name never crosses unasked.
+func TestQueueExportFailsWithoutAReadableProjectScan(t *testing.T) {
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	for _, scan := range []string{"", "not json"} {
+		for _, rule := range []policy.Rule{policy.Refuse, policy.AskReason} {
+			svc, st := newTestService(t)
+			svc.Review = policy.DefaultReview()
+			svc.Review.CVEWithoutFix = rule
+			project, err := st.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysisDir := filepath.Join(st.Root(), "projects", project.ID, "analyses", "20260917T101502Z")
+			if err := os.MkdirAll(analysisDir, 0o770); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking}
+			if scan != "" {
+				files["project.trivy.json"] = scan
+			}
+			for name, data := range files {
+				if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = svc.QueueExport(project.ID, "20260917T101502Z", ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+			if !errors.Is(err, ErrNoProjectScan) || !strings.Contains(err.Error(), "project.trivy.json") {
+				t.Errorf("scan %q under %s: QueueExport = %v, want ErrNoProjectScan naming project.trivy.json", scan, rule, err)
+			}
+			noExportReserved(t, project)
+		}
+	}
+}
+
+// emptyProjectScan is a lockfile scan that finds nothing.
+const emptyProjectScan = `{"SchemaVersion": 2, "Results": []}`

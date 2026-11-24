@@ -5,6 +5,7 @@ package report
 import (
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
@@ -22,6 +23,9 @@ type Manifest struct {
 	Target        store.Target    `json:"target"`
 	Archive       ArchiveManifest `json:"archive"`
 	Packages      []PackageEntry  `json:"packages"`
+	// Review is left out when nil, so an export without one writes the
+	// bytes it wrote before reviews existed.
+	Review *archive.Review `json:"review,omitempty"`
 }
 
 // ArchiveManifest describes the archive file itself.
@@ -54,6 +58,7 @@ type PipManifest struct {
 	Target        store.PipTarget `json:"target"`
 	Archive       ArchiveManifest `json:"archive"`
 	Packages      []WheelEntry    `json:"packages"`
+	Review        *archive.Review `json:"review,omitempty"`
 }
 
 // WheelEntry describes one wheel a pip archive carries: sha256 is the

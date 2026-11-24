@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 )
@@ -880,6 +882,121 @@ brand: {name: Harbor}
 	}
 	if len(pnpm) != 1 || pnpm[0] != "10.30.1" {
 		t.Errorf("the start log names pnpm %q for child processes, want the policy's 10.30.1", pnpm)
+	}
+}
+
+func TestRunHandsTheReviewRulesToTheAnalyses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	writeFile(t, path, "review: {proposeOtherMajors: true, majorJump: refuse, cveWithoutFix: refuse}\n")
+	t.Setenv("SEALIFT_POLICY", path)
+	reviews := make(chan policy.Review, 1)
+	onServiceReady = func(s *jobs.Service) { reviews <- s.Review }
+	defer func() { onServiceReady = nil }()
+
+	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop()
+
+	want := policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	select {
+	case got := <-reviews:
+		if got != want {
+			t.Errorf("the service hands each analysis %+v, want the policy's %+v", got, want)
+		}
+	default:
+		t.Fatal("run never handed over its service")
+	}
+}
+
+// layOutReadyTools puts the pinned Trivy, its database and the default
+// pnpm and uv where the start looks for them, so the instance becomes ready
+// with no download.
+func layOutReadyTools(t *testing.T, root string) {
+	t.Helper()
+	trivy := tools.PinnedTrivy.Version
+	writeFile(t, filepath.Join(root, "tools", "trivy", trivy, "trivy"), "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(root, "tools", "trivy", trivy, "trivy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(trivy, filepath.Join(root, "tools", "trivy", "current")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "trivy-cache", "db", "metadata.json"),
+		`{"Version":2,"NextUpdate":"2026-09-21T12:12:00Z","UpdatedAt":"2026-09-21T06:12:00Z","DownloadedAt":"2026-09-21T07:00:00Z"}`)
+	writeFile(t, filepath.Join(root, "tools", "pnpm", store.DefaultSettings.Target.PnpmVer, "package", "bin", "pnpm.cjs"), "process.exit(0)\n")
+	uv := filepath.Join(root, "tools", "uv", store.DefaultPipTarget.UvVer, "uv")
+	writeFile(t, uv, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(uv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The policy file's review block reaches the export check through the real
+// wiring: a jump that carries its reason is still refused under refuse.
+func TestRunAppliesTheReviewRulesToAnExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	writeFile(t, path, "review: {majorJump: refuse}\n")
+	t.Setenv("SEALIFT_POLICY", path)
+	root := filepath.Join(t.TempDir(), "data")
+	layOutReadyTools(t, root)
+	addr, stop := startRun(t, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer stop()
+	base := "http://" + addr
+
+	var ready bool
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && !ready; time.Sleep(50 * time.Millisecond) {
+		resp, err := http.Get(base + "/healthz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		ready = resp.StatusCode == http.StatusOK
+	}
+	if !ready {
+		t.Fatal("the instance never became ready")
+	}
+
+	var form bytes.Buffer
+	w := multipart.NewWriter(&form)
+	part, err := w.CreateFormFile("manifest", "package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(`{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(base+"/api/projects", w.FormDataContentType(), &form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var project api.Project
+	err = json.NewDecoder(resp.Body).Decode(&project)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create project = %d, %v", resp.StatusCode, err)
+	}
+	analysis := filepath.Join(root, "projects", project.Id, "analyses", "20260917T101502Z")
+	writeFile(t, filepath.Join(analysis, "status.json"), `{"state":"done"}`)
+	writeFile(t, filepath.Join(analysis, "candidates.trivy.json"), `{"SchemaVersion":2,"Results":[]}`)
+	writeFile(t, filepath.Join(analysis, "ranking.json"),
+		`{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],`+
+			`"dependencies":[{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"jump":"2.0.0",`+
+			`"candidates":[{"version":"2.0.0","vector":[0,0,0,0,0],"cves":[],"signals":[],"key":true,"resolved":true}]}],"warnings":[],"families":[]}`)
+	for _, dep := range []string{"left-pad@1.3.0", "left-pad@2.0.0"} {
+		writeFile(t, filepath.Join(analysis, "candidates", dep, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages: {}\n")
+	}
+
+	body := `{"selection":{"left-pad":["2.0.0"]},"reasons":[{"kind":"major-jump","dependencies":["left-pad"],"text":"Version 2 keeps the same API for us."}]}`
+	resp, err = http.Post(base+"/api/projects/"+project.Id+"/analyses/20260917T101502Z/exports", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(data), "review.majorJump is refuse") {
+		t.Errorf("export = %d %s, want 400 naming review.majorJump is refuse", resp.StatusCode, data)
 	}
 }
 

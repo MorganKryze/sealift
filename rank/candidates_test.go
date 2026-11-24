@@ -167,3 +167,116 @@ func TestDiff(t *testing.T) {
 		t.Errorf("Diff = %v, want %v", got, want)
 	}
 }
+
+func TestMajorJumpSignalFollowsTheLine(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	policy := Policy{Now: now, MinReleaseAge: 7 * 24 * time.Hour, TargetNode: "22.17.1"}
+	candidate := func(v string) Facts {
+		return Facts{Version: v, Published: now.AddDate(0, 0, -30), NodeCompatible: true, Resolves: true}
+	}
+	for _, tc := range []struct {
+		current, candidate string
+		want               []Hit
+	}{
+		{"0.18.0", "0.19.0", []Hit{{MajorJump, "leaves 0.18.x"}}},
+		{"0.18.0", "0.18.4", nil},
+		{"0.0.3", "0.0.4", []Hit{{MajorJump, "leaves 0.0.3"}}},
+		{"4.17.1", "5.1.0", []Hit{{MajorJump, "leaves major version 4"}}},
+		{"4.17.1", "4.22.3", nil},
+	} {
+		got := Signals(Facts{Version: tc.current}, candidate(tc.candidate), policy)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s to %s: hits = %v, want %v", tc.current, tc.candidate, got, tc.want)
+		}
+	}
+}
+
+func TestProposeKeepsTheLine(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "4.22.3", Hits: []Hit{{Signal: TooRecent}}},
+		{Version: "5.1.0"},
+	}
+	best, hasBest, jump, hasJump := Propose("4.17.1", Vector{0, 1, 0, 0, 0}, candidates, false)
+	if hasBest {
+		t.Errorf("best = %s, want none", best.Version)
+	}
+	if !hasJump || jump.Version != "5.1.0" {
+		t.Errorf("jump = %q (%t), want 5.1.0", jump.Version, hasJump)
+	}
+}
+
+func TestProposeOtherLinesWhenAllowed(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "4.22.3", Hits: []Hit{{Signal: TooRecent}}},
+		{Version: "5.1.0"},
+	}
+	current := Vector{0, 1, 0, 0, 0}
+	best, hasBest, jump, hasJump := Propose("4.17.1", current, candidates, true)
+	want, wantOK := Best("4.17.1", current, candidates)
+	if hasBest != wantOK || best.Version != want.Version || best.Version != "5.1.0" {
+		t.Errorf("best = %q (%t), want %q (%t) as Best gives", best.Version, hasBest, want.Version, wantOK)
+	}
+	if !hasJump || jump.Version != "5.1.0" {
+		t.Errorf("jump = %q (%t), want 5.1.0", jump.Version, hasJump)
+	}
+}
+
+func TestProposeInTheLine(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "4.17.3", Vector: Vector{0, 0, 1, 0, 0}},
+		{Version: "4.22.3"},
+		{Version: "5.1.0"},
+	}
+	best, hasBest, jump, hasJump := Propose("4.17.1", Vector{0, 1, 0, 0, 0}, candidates, false)
+	if !hasBest || best.Version != "4.22.3" {
+		t.Errorf("best = %q (%t), want 4.22.3", best.Version, hasBest)
+	}
+	if !hasJump || jump.Version != "5.1.0" {
+		t.Errorf("jump = %q (%t), want 5.1.0", jump.Version, hasJump)
+	}
+}
+
+func TestJumpIsTheFirstOutsideTheLine(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "0.18.5"},
+		{Version: "1.2.0", Vector: Vector{0, 0, 1, 0, 0}},
+		{Version: "1.0.0"},
+		{Version: "0.19.4"},
+		{Version: "0.19.1"},
+	}
+	_, _, jump, hasJump := Propose("0.18.0", Vector{0, 1, 0, 0, 0}, candidates, false)
+	// 0.19.1 and 1.0.0 tie on CVEs; 0.19.1 is the smaller jump and the lower version.
+	if !hasJump || jump.Version != "0.19.1" {
+		t.Errorf("jump = %q (%t), want 0.19.1", jump.Version, hasJump)
+	}
+}
+
+func TestJumpNeedsNoFewerCVEs(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "4.17.2", Vector: Vector{0, 1, 0, 0, 0}},
+		{Version: "5.0.0", Vector: Vector{1, 2, 0, 0, 0}},
+	}
+	_, hasBest, jump, hasJump := Propose("4.17.1", Vector{0, 1, 0, 0, 0}, candidates, false)
+	if hasBest {
+		t.Error("best found, want none: no candidate in the line has fewer CVEs")
+	}
+	if !hasJump || jump.Version != "5.0.0" {
+		t.Errorf("jump = %q (%t), want 5.0.0", jump.Version, hasJump)
+	}
+}
+
+func TestJumpIgnoresBlockedCandidates(t *testing.T) {
+	candidates := []Candidate{
+		{Version: "5.0.0", Hits: []Hit{{Signal: Deprecated}}},
+		{Version: "5.1.0", Vector: Vector{0, 0, 0, 1, 0}},
+		{Version: "6.0.0", Hits: []Hit{{Signal: Unresolvable}}},
+	}
+	_, _, jump, hasJump := Propose("4.17.1", Vector{0, 1, 0, 0, 0}, candidates, false)
+	if !hasJump || jump.Version != "5.1.0" {
+		t.Errorf("jump = %q (%t), want 5.1.0", jump.Version, hasJump)
+	}
+	_, _, jump, hasJump = Propose("4.17.1", Vector{}, candidates[:1], false)
+	if hasJump {
+		t.Errorf("jump = %s, want none: every candidate outside the line is blocked", jump.Version)
+	}
+}

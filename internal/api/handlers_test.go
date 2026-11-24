@@ -25,6 +25,7 @@ import (
 
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/piptest"
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -218,6 +219,9 @@ func TestGetAnalysisAfterNullSurvivesThroughTheAPI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	resp2, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z", srv.URL, project.Id))
 	if err != nil {
@@ -262,6 +266,9 @@ func TestQueueExportInvalidSelectionReturns400WithEveryEntry(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{"left-pad": {"9.9.9"}}})
@@ -321,6 +328,9 @@ func TestQueueExportInvalidSelectionListsOnlyTheBadVersionWhenOneIsGood(t *testi
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// "1.3.1" is a real candidate; "9.9.9" is not.
@@ -449,12 +459,12 @@ func (exportTrivyFake) ConvertToCycloneDX(_ context.Context, _, outPath string) 
 
 func (exportTrivyFake) UpdateDB(context.Context) (string, error) { return "", nil }
 
-// newTestHandlersWithTrivy is newTestHandlers with the Trivy fake the
-// caller chooses, for a test whose export job must reach the reports
-// step instead of stopping at whatever the shared fakeTrivy leaves
-// unwritten.
-func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue, trivy runner.Trivy) *Handlers {
+// newTestHandlersWithTrivy is newTestHandlers with exportTrivyFake, for a
+// test whose export job must reach the reports step instead of stopping
+// at whatever the shared fakeTrivy leaves unwritten.
+func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue) *Handlers {
 	t.Helper()
+	trivy := exportTrivyFake{}
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -502,7 +512,7 @@ func waitForExportState(t *testing.T, srv *httptest.Server, projectID, exportID 
 func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	defer q.Close()
-	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	h := newTestHandlersWithTrivy(t, q)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	defer srv.Close()
 
@@ -528,6 +538,9 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
 		t.Fatalf("write candidates.trivy.json: %v", err)
@@ -601,6 +614,9 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
 		t.Fatalf("write candidates.trivy.json: %v", err)
@@ -766,6 +782,9 @@ func TestGetProjectLiveExportCarriesItsAnalysisID(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// A blocking job holds the queue busy for the whole test, so the export
@@ -1137,6 +1156,9 @@ func TestCancelAnalysisRouteRejectsALiveExportsID(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
 
 	// A blocking job holds the queue busy for the whole test, so the
 	// export queued behind it stays live (Service still tracking it)
@@ -1210,6 +1232,9 @@ func TestCancelExportLiveExportSucceeds(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	// A blocking job holds the queue busy for the whole test, so the export
@@ -1555,6 +1580,9 @@ func TestQueueExportWithNothingToPackAnswers400(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 
 	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{}})
@@ -2190,7 +2218,7 @@ func waitForEnd(events <-chan jobs.Event, storeID string) {
 
 func TestQueueExportForAPipProject(t *testing.T) {
 	q := jobs.NewQueue(nil)
-	h := newTestHandlersWithTrivy(t, q, exportTrivyFake{})
+	h := newTestHandlersWithTrivy(t, q)
 	t.Cleanup(q.Close)
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
@@ -2286,6 +2314,169 @@ func readTestFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// reasonsAnalysis writes a done analysis where left-pad can leave major 1
+// and is-even keeps a CVE that no version fixes, with a stub lockfile for
+// each version an export may select.
+func reasonsAnalysis(t *testing.T, h *Handlers, projectID string) {
+	t.Helper()
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],"candidates":[]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"jump":"2.0.0","candidates":[{"version":"2.0.0","vector":[0,0,0,0,0],"cves":[],"signals":[],"key":true,"resolved":true}]}` +
+		`],"warnings":[],"families":[]}`
+	analysisDir := filepath.Join(h.Store.Root(), "projects", projectID, "analyses", "20260917T101502Z")
+	for _, dep := range []string{"is-even@1.0.0", "left-pad@1.3.0", "left-pad@2.0.0"} {
+		dir := filepath.Join(analysisDir, "candidates", dep)
+		if err := os.MkdirAll(dir, 0o770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte("lockfileVersion: '9.0'\npackages: {}\n"), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range map[string]string{
+		"status.json":           `{"state":"done"}`,
+		"ranking.json":          ranking,
+		"candidates.trivy.json": `{"SchemaVersion":2,"Results":[]}`,
+	} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(content), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func queueExportWith(t *testing.T, srv *httptest.Server, projectID string, req ExportRequest) *http.Response {
+	t.Helper()
+	body, _ := json.Marshal(req)
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, projectID),
+		"application/json", bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST queueExport: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func reasonsProblem(t *testing.T, resp *http.Response) Problem {
+	t.Helper()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 400, body: %s", resp.StatusCode, data)
+	}
+	var problem Problem
+	if err := json.NewDecoder(resp.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Detail == nil {
+		t.Fatal("the problem has no detail")
+	}
+	return problem
+}
+
+func TestQueueExportNamesEachMissingReason(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}, "is-even": {"1.0.0"}}}))
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason; " +
+		"left-pad 1.3.0 to 2.0.0 leaves major 1 and needs a reason"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+	exports, err := h.Store.Exports(project.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exports) != 0 {
+		t.Errorf("Exports() = %v, want none reserved for a refused request", exports)
+	}
+}
+
+func TestQueueExportRepeatsNoReasonText(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	secret := "internal ticket SEC-4411   <img src=x>"
+	reasons := []Reason{
+		{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: secret},
+		{Kind: CveWithoutFix, Dependencies: []string{"left-pad"}, Text: "left-pad SEC-4411 is fine"},
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}}, Reasons: &reasons})
+	data, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", resp2.StatusCode, data)
+	}
+	for _, leak := range []string{"SEC-4411", "img", "ticket", "fine"} {
+		if strings.Contains(string(data), leak) {
+			t.Errorf("the refusal repeats %q from a reason: %s", leak, data)
+		}
+	}
+	var problem Problem
+	if err := json.Unmarshal(data, &problem); err != nil {
+		t.Fatal(err)
+	}
+	// is-even, left out of the selection, keeps its CVE without fix.
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason; " +
+		"reason 1 (major-jump): the reason holds a control, line-separating, bidirectional or format character; " +
+		"reason 2 (cve-without-fix) covers nothing the selection takes"
+	if problem.Detail == nil {
+		t.Fatal("the problem has no detail")
+	}
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+}
+
+// The project tree ships its lockfile, which holds each current version:
+// is-even 1.0.0 keeps a CVE that no version fixes and crosses beside any
+// version selected.
+func TestQueueExportCountsTheCurrentVersionsTheProjectTreeShips(t *testing.T) {
+	srv, h := newTestServer(t)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,1,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],` +
+		`"candidates":[{"version":"1.0.1","vector":[1,0,0,0,0],"cves":[{"id":"CVE-2025-0002","severity":"CRITICAL","package":"is-even@1.0.1","fixedIn":"1.0.2"}],"signals":[],"key":true,"resolved":true}]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"candidates":[]}` +
+		`],"warnings":[],"families":[]}`
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
+
+	withTree := true
+	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
+	for name, sel := range map[string]map[string][]string{
+		"nothing selected":         {},
+		"a worse version selected": {"is-even": {"1.0.1"}},
+	} {
+		problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel, IncludeProject: &withTree}))
+		if *problem.Detail != want {
+			t.Errorf("%s: detail = %q, want %q", name, *problem.Detail, want)
+		}
+	}
 }
 
 // volumeTools records every entry under the volume's tools folder: a
@@ -2446,6 +2637,122 @@ func occupyComingSeconds(t *testing.T, dir string) {
 	}
 }
 
+// A clean version selected beside the current one the project tree ships
+// does not hide the current one's CVE without fix.
+func TestQueueExportRefusesTheCurrentVersionBesideACleanOne(t *testing.T) {
+	srv, h := newTestServer(t)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,1,0,0,0],"after":[0,0,0,0,0],` +
+		`"dependencies":[` +
+		`{"name":"is-even","current":"1.0.0","vector":[0,1,0,0,0],"cves":[{"id":"CVE-2025-0001","severity":"HIGH","package":"is-even@1.0.0","fixedIn":""}],` +
+		`"candidates":[{"version":"1.0.1","vector":[0,0,0,0,0],"cves":[],"signals":[],"key":true,"resolved":true}]},` +
+		`{"name":"left-pad","current":"1.3.0","vector":[0,0,0,0,0],"cves":[],"candidates":[]}` +
+		`],"warnings":[],"families":[]}`
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "ranking.json"), []byte(ranking), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z", "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
+	}
+	withTree := true
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"is-even": {"1.0.1"}}, IncludeProject: &withTree}))
+	want := "review.cveWithoutFix is refuse: is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and cannot cross"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+}
+
+// The refuse policy covers what the archive holds: a dependency left out
+// stays at its current version in the project and asks a reason only.
+func TestQueueExportAcceptsAReasonForADependencyLeftOutUnderRefuse(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlersWithTrivy(t, q)
+	h.Service.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	sel := map[string][]string{"left-pad": {"1.3.0"}}
+	problem := reasonsProblem(t, queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel}))
+	want := "is-even 1.0.0 keeps CVE-2025-0001, which no version fixes, and needs a reason"
+	if *problem.Detail != want {
+		t.Errorf("detail = %q, want %q", *problem.Detail, want)
+	}
+
+	reasons := []Reason{{Kind: CveWithoutFix, Dependencies: []string{"is-even"}, Text: "We call is-even on our own numbers only."}}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: sel, Reasons: &reasons})
+	if resp2.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	}
+}
+
+func TestQueueExportAcceptsTheReasonsItNeeds(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	defer q.Close()
+	h := newTestHandlersWithTrivy(t, q)
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	defer srv.Close()
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	reasons := []Reason{
+		{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: "Version 2 keeps the same API for us."},
+		{Kind: CveWithoutFix, Dependencies: []string{"is-even"}, Text: "We call is-even on our own numbers only."},
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: map[string][]string{"left-pad": {"2.0.0"}, "is-even": {"1.0.0"}}, Reasons: &reasons})
+	if resp2.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	}
+	var queued Export
+	if err := json.NewDecoder(resp2.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed); final.State != Done {
+		t.Fatalf("export state = %q, want %q", final.State, Done)
+	}
+
+	f, err := h.Store.ExportFile(project.Id, queued.Id, "manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var manifest struct {
+		Review struct {
+			Jumps []struct {
+				Reason string `json:"reason"`
+			} `json:"jumps"`
+			Left []struct {
+				Dependency string `json:"dependency"`
+				Reason     string `json:"reason"`
+			} `json:"left"`
+		} `json:"review"`
+	}
+	if err := json.NewDecoder(f).Decode(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Review.Jumps) != 1 || manifest.Review.Jumps[0].Reason != reasons[0].Text {
+		t.Errorf("review.jumps = %+v, want left-pad's jump with its reason", manifest.Review.Jumps)
+	}
+	if len(manifest.Review.Left) != 1 || manifest.Review.Left[0].Reason != reasons[1].Text {
+		t.Errorf("review.left = %+v, want is-even's CVE with its reason", manifest.Review.Left)
+	}
+}
+
 // suffixedIDTime checks that id carries the store's suffix and returns the
 // time its timestamp part names.
 func suffixedIDTime(t *testing.T, id string) time.Time {
@@ -2491,6 +2798,9 @@ func TestLiveJobWithASuffixedIDShowsItsCreationTime(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(analysisDir, "ranking.json"), []byte(ranking), 0o664); err != nil {
 		t.Fatalf("write ranking.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(emptyProjectScan), 0o664); err != nil {
+		t.Fatalf("write project.trivy.json: %v", err)
 	}
 	occupyComingSeconds(t, filepath.Join(project.Dir, "analyses"))
 	occupyComingSeconds(t, filepath.Join(project.Dir, "exports"))
@@ -2542,4 +2852,330 @@ func TestLiveJobWithASuffixedIDShowsItsCreationTime(t *testing.T) {
 		t.Errorf("CancelExport = %+v, want createdAt %v", cancelledExport, want)
 	}
 	waitForTerminalState(t, h, project.ID, "export", export.ID)
+}
+
+func TestQueueExportBoundsTheRequest(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+
+	manyReasons := make([]Reason, maxRequestEntries+1)
+	for i := range manyReasons {
+		manyReasons[i] = Reason{Kind: MajorJump, Dependencies: []string{"left-pad"}, Text: "x"}
+	}
+	manyNames := make([]string, maxRequestEntries+1)
+	for i := range manyNames {
+		manyNames[i] = "left-pad"
+	}
+	bigSelection := map[string][]string{}
+	for i := range maxRequestEntries + 1 {
+		bigSelection[fmt.Sprintf("p%d", i)] = nil
+	}
+	long := strings.Repeat("a", maxNameBytes+1)
+	tests := []struct {
+		name, detail string
+		req          ExportRequest
+	}{
+		{"10,001 reasons", "the export request holds more than 10000 reasons",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &manyReasons}},
+		{"10,001 dependencies in the selection", "the export selection holds more than 10000 dependencies",
+			ExportRequest{Selection: bigSelection}},
+		{"10,001 dependencies in a reason", "reason 1 holds more than 10000 dependencies",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &[]Reason{{Kind: MajorJump, Dependencies: manyNames, Text: "x"}}}},
+		{"a selected name of 215 bytes", "a dependency name in the export selection is longer than 214 bytes",
+			ExportRequest{Selection: map[string][]string{long: {"1.0.0"}}}},
+		{"a reason's name of 215 bytes", "reason 1 names a dependency longer than 214 bytes",
+			ExportRequest{Selection: map[string][]string{}, Reasons: &[]Reason{{Kind: MajorJump, Dependencies: []string{long}, Text: "x"}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := queueExportWith(t, srv, project.Id, tt.req)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", resp.StatusCode)
+			}
+			var p Problem
+			if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Detail == nil || *p.Detail != tt.detail {
+				t.Errorf("detail = %v, want %q", p.Detail, tt.detail)
+			}
+		})
+	}
+}
+
+func TestQueueExportAcceptsTheRequestAtItsBounds(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0","is-even":"1.0.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	reasons := make([]Reason, maxRequestEntries)
+	for i := range reasons {
+		reasons[i] = Reason{Kind: MajorJump, Dependencies: []string{strings.Repeat("a", maxNameBytes)}, Text: "x"}
+	}
+	selection := map[string][]string{strings.Repeat("b", maxNameBytes): {"1.0.0"}}
+	for i := range maxRequestEntries - 1 {
+		selection[fmt.Sprintf("p%d", i)] = nil
+	}
+	resp2 := queueExportWith(t, srv, project.Id, ExportRequest{Selection: selection, Reasons: &reasons})
+	data, _ := io.ReadAll(resp2.Body)
+	if strings.Contains(string(data), "more than") || strings.Contains(string(data), "longer than 214") {
+		t.Errorf("a request at its bounds was refused by a bound: %s", data)
+	}
+}
+
+func TestAJSONBodyOver16MiBIsRefused(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := `{"selection":{},"pad":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`
+	resp2, err := http.Post(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp2.StatusCode)
+	}
+	var p Problem
+	if err := json.NewDecoder(resp2.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Detail == nil || *p.Detail != "the request body is larger than 16 MiB" {
+		t.Errorf("detail = %v", p.Detail)
+	}
+}
+
+func TestABodyThatIsNotJSONIsRefusedWhateverItsSize(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	url := fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id)
+	big := `{"selection":{},"pad":"` + strings.Repeat("a", 17<<20) + `"}`
+	for _, tt := range []struct{ name, contentType, body string }{
+		{"17 MiB as text/plain", "text/plain", big},
+		{"17 MiB with no type", "", big},
+		{"a small body as text/plain", "text/plain", `{"selection":{}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415", resp.StatusCode)
+			}
+			var p Problem
+			if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAMultipartBodyOverItsBoundIsRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := "--b\r\nContent-Disposition: form-data; name=\"pad\"\r\n\r\n" + strings.Repeat("a", maxMultipartBodyBytes) + "\r\n--b--\r\n"
+	resp, err := http.Post(srv.URL+"/api/projects", "multipart/form-data; boundary=b", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertTooLarge(t, resp, "the request body is larger than 41 MiB")
+}
+
+// A valid manifest followed by a part the handler skips would create the
+// project without the cap: only the cap refuses it.
+func TestAValidManifestPaddedPastTheMultipartBoundIsRefused(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, data := postParts(t, srv, []formPart{
+		{field: "name", data: "pads"},
+		{field: "manifest", filename: "package.json", data: `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`},
+		{field: "pad", data: strings.Repeat("a", maxMultipartBodyBytes)},
+	})
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413: %.200s", status, data)
+	}
+	var p Problem
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatal(err)
+	}
+	if deref(p.Detail) != "the request body is larger than 41 MiB" {
+		t.Errorf("detail = %q", deref(p.Detail))
+	}
+}
+
+// A chunked body declares no length, so only the reader's cap stops it.
+func TestAChunkedJSONBodyOver16MiBIsRefused(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := io.MultiReader(strings.NewReader(`{"selection":{},"pad":"`), strings.NewReader(strings.Repeat("a", maxJSONBodyBytes)), strings.NewReader(`"}`))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if req.ContentLength != 0 {
+		t.Fatalf("ContentLength = %d, want an unknown length", req.ContentLength)
+	}
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	assertTooLarge(t, resp2, "the request body is larger than 16 MiB")
+}
+
+// The body bounds belong to /api: the web shell outside it answers as it
+// always did, and no 415 reaches it.
+func TestBodyBoundsStayUnderTheAPIPrefix(t *testing.T) {
+	srv, _ := newTestServer(t)
+	for _, path := range []string{"/", "/apix", "/projects"} {
+		resp, err := http.Post(srv.URL+path, "text/plain", strings.NewReader("hello"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnsupportedMediaType {
+			t.Errorf("POST %s = 415, want the bounds left to /api/", path)
+		}
+	}
+	resp, err := http.Post(srv.URL+"/api/projects", "text/plain", strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("POST /api/projects as text/plain = %d, want 415", resp.StatusCode)
+	}
+}
+
+func assertTooLarge(t *testing.T, resp *http.Response, detail string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 413: %.200s", resp.StatusCode, data)
+	}
+	var p Problem
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatal(err)
+	}
+	if deref(p.Detail) != detail {
+		t.Errorf("detail = %q, want %q", deref(p.Detail), detail)
+	}
+}
+
+// Only the project upload takes a multipart body: a JSON route sent one
+// keeps the JSON cap.
+func TestAMultipartBodyOnAJSONRouteKeepsTheJSONCap(t *testing.T) {
+	srv, h := newTestServer(t)
+	project, resp := createProject(t, srv, `{"name":"pads","dependencies":{"left-pad":"1.3.0"}}`)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("CreateProject status = %d", resp.StatusCode)
+	}
+	reasonsAnalysis(t, h, project.Id)
+	body := `{"selection":{},"pad":"` + strings.Repeat("a", maxJSONBodyBytes) + `"}`
+	resp2, err := http.Post(fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id), "multipart/form-data; boundary=b", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	assertTooLarge(t, resp2, "the request body is larger than 16 MiB")
+}
+
+// emptyProjectScan is a lockfile scan that finds nothing.
+const emptyProjectScan = `{"SchemaVersion": 2, "Results": []}`
+
+// An export of the project tree conflicts with the analysis's own files
+// when its lockfile scan is missing or its lockfile is too large to walk:
+// both answer 409, neither a server failure.
+func TestQueueExportProjectTreeRefusalsAnswer409(t *testing.T) {
+	var lock, scan strings.Builder
+	lock.WriteString("lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n")
+	for i := range 1100 {
+		fmt.Fprintf(&lock, "      d%d:\n        specifier: 1.0.0\n        version: 1.0.0\n", i)
+	}
+	lock.WriteString("snapshots:\n")
+	for i := range 1100 {
+		fmt.Fprintf(&lock, "  d%d@1.0.0:\n    dependencies:\n      hub: 1.0.0\n", i)
+	}
+	lock.WriteString("  hub@1.0.0:\n    dependencies:\n")
+	for i := range 1000 {
+		fmt.Fprintf(&lock, "      l%d: 1.0.0\n", i)
+	}
+	scan.WriteString(`{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [`)
+	for i := range 1000 {
+		fmt.Fprintf(&lock, "  l%d@1.0.0: {}\n", i)
+		if i > 0 {
+			scan.WriteString(",")
+		}
+		fmt.Fprintf(&scan, `{"VulnerabilityID": "CVE-2025-%04d", "PkgName": "l%d", "InstalledVersion": "1.0.0", "FixedVersion": "1.0.1", "Severity": "LOW", "Title": "t"}`, i, i)
+	}
+	scan.WriteString("]}]}")
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		cause string
+	}{
+		{"no project scan", map[string]string{}, "project.trivy.json"},
+		{"lockfile too large", map[string]string{"project.trivy.json": scan.String(), "project/pnpm-lock.yaml": lock.String()}, "too large"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, h := newTestServer(t)
+			project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("CreateProject status = %d", resp.StatusCode)
+			}
+			analysisDir := filepath.Join(h.Store.Root(), "projects", project.Id, "analyses", "20260917T101502Z")
+			if err := os.MkdirAll(filepath.Join(analysisDir, "project"), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]string{"status.json": `{"state":"done"}`, "ranking.json": ranking}
+			for name, data := range tc.files {
+				files[name] = data
+			}
+			for name, data := range files {
+				if err := os.WriteFile(filepath.Join(analysisDir, name), []byte(data), 0o664); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resp2, err := http.Post(
+				fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+				"application/json", strings.NewReader(`{"selection":{},"includeProject":true}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp2.Body.Close()
+			data, _ := io.ReadAll(resp2.Body)
+			if resp2.StatusCode != http.StatusConflict || !strings.Contains(string(data), tc.cause) {
+				t.Errorf("status = %d, body: %s, want 409 naming %q", resp2.StatusCode, data, tc.cause)
+			}
+		})
+	}
 }

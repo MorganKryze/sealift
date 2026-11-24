@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -30,6 +31,8 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/npm"
 )
@@ -315,33 +318,45 @@ func TestExportSummaryLabelsBothRowsByScope(t *testing.T) {
 // With the project tree in the archive, the archive's own scan counts the
 // old versions too, so the summary also prints the project once the
 // selection applies, from the analysis' project scan.
+// Without the project tree, the selection replaces widgets 1.0.0 and its
+// CVE-OLD goes; with it, the lockfile keeps 1.0.0 and CVE-OLD stays.
 func TestExportSummaryPrintsTheProjectedRow(t *testing.T) {
-	h := newTestHarness(t)
-	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
-	h.buildAnalysis(analysisDir)
-	scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+	for _, tc := range []struct {
+		includeProject bool
+		row            string
+	}{
+		{false, "| After (project with this selection) | 0 | 0 | 0 | 1 | 0 |"},
+		{true, "| After (project with this selection) | 0 | 1 | 0 | 1 | 0 |"},
+	} {
+		t.Run(fmt.Sprintf("includeProject %v", tc.includeProject), func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			scan := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
     {"VulnerabilityID": "CVE-OLD", "PkgName": "widgets", "InstalledVersion": "1.0.0", "Severity": "HIGH", "Title": "o"},
     {"VulnerabilityID": "CVE-OTHER", "PkgName": "helper", "InstalledVersion": "3.0.0", "Severity": "LOW", "Title": "l"}
   ]}]}`
-	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(scan), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
-	exp := h.newExport(t, analysisDir, exportDir, true)
-	for i, d := range exp.Analysis.Result.Dependencies {
-		if d.Name == "widgets" {
-			exp.Analysis.Result.Dependencies[i].CVEs = []CVE{{ID: "CVE-OLD", Severity: "HIGH"}}
-		}
-	}
-	if err := exp.Run(context.Background(), noopEmit); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(summary, []byte("| After (project with this selection) | 0 | 0 | 0 | 1 | 0 |")) {
-		t.Errorf("summary.md lacks the projected row without CVE-OLD:\n%s", summary)
+			if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(scan), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := h.newExport(t, analysisDir, exportDir, tc.includeProject)
+			for i, d := range exp.Analysis.Result.Dependencies {
+				if d.Name == "widgets" {
+					exp.Analysis.Result.Dependencies[i].CVEs = []CVE{{ID: "CVE-OLD", Severity: "HIGH", FixedIn: "1.1.0"}}
+				}
+			}
+			if err := exp.Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			summary, err := os.ReadFile(filepath.Join(exportDir, "summary.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(summary, []byte(tc.row)) {
+				t.Errorf("summary.md lacks %q:\n%s", tc.row, summary)
+			}
+		})
 	}
 }
 
@@ -554,6 +569,19 @@ func TestNPMExportBytesMatchTheLastRelease(t *testing.T) {
 		t.Fatalf("manifest.json has no createdAt line:\n%s", manifest)
 	}
 	manifest = createdAtLine.ReplaceAll(manifest, []byte(`  "createdAt": "2026-09-17T10:15:02Z",`))
+	// The review is new and the last release wrote none: every other byte
+	// must stay as it was.
+	var written report.Manifest
+	if err := json.Unmarshal(manifest, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.Review == nil {
+		t.Fatal("manifest.json carries no review")
+	}
+	written.Review = nil
+	if manifest, err = json.MarshalIndent(written, "", "  "); err != nil {
+		t.Fatal(err)
+	}
 	golden := filepath.Join("testdata", "npm-export-0.6.2", "manifest.json")
 	if os.Getenv("SEALIFT_UPDATE_GOLDEN") == "1" {
 		if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
@@ -1340,5 +1368,215 @@ func TestExportReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
 			}
 			assertExportFailedStatus(t, exportDir, c.step, c.reason)
 		})
+	}
+}
+
+// reviewedExport is the harness' export with a CVE no version fixes on the
+// gadget version an install keeps, and the reason it needs.
+func reviewedExport(t *testing.T, h *testHarness, analysisDir, exportDir, reason string) *Export {
+	t.Helper()
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	gadget := &exp.Analysis.Result.Dependencies[1]
+	gadget.Candidates[1].CVEs = []CVE{{ID: "CVE-GADGET-OTHER", Severity: "MEDIUM", Package: "@scope/gadget@2.2.0"}}
+	exp.Request.Reasons = []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"@scope/gadget"}, Text: reason}}
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, policy.DefaultReview()); len(problems) > 0 {
+		t.Fatalf("the export's reasons should pass: %q", problems)
+	}
+	return exp
+}
+
+func TestExportSignsItsReview(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	if err := os.WriteFile(filepath.Join(analysisDir, "project.trivy.json"), []byte(candidatesTrivyJSON), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := reviewedExport(t, h, analysisDir, exportDir, "Only our own build calls the gadget.")
+	if err := exp.Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertSigned(t, exportDir, h.store.SigningKey())
+
+	data, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := archive.ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if m.ReviewProblem != "" || m.Review == nil {
+		t.Fatalf("the import keeps the review out: %q", m.ReviewProblem)
+	}
+	projected := exp.projected()
+	if projected == nil {
+		t.Fatal("the project scan was not read, the test proves nothing about cves.after")
+	}
+	want := ReviewOf(exp.Analysis.Result, exp.Request, projected)
+	if !reflect.DeepEqual(*m.Review, want) {
+		t.Errorf("signed review =\n %+v\nwant\n %+v", *m.Review, want)
+	}
+	if len(m.Review.Left) != 1 || m.Review.Left[0].Reason != "Only our own build calls the gadget." {
+		t.Errorf("review.left = %+v, want the gadget's CVE with its reason", m.Review.Left)
+	}
+}
+
+func TestSameSelectionSameArchiveWhateverTheReasons(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+
+	var archives [2][]byte
+	var reviews [2]*archive.Review
+	for i, reason := range []string{"Only our own build calls the gadget.", "The gadget runs in a sandbox, so the CVE cannot reach data."} {
+		exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+		if err := reviewedExport(t, h, analysisDir, exportDir, reason).Run(context.Background(), noopEmit); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		archives[i] = data
+		manifest, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := archive.ParseManifest(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum := sha256.Sum256(data); m.Archive.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Errorf("export %d: manifest names sha256 %s, the archive has %x", i, m.Archive.SHA256, sum)
+		}
+		reviews[i] = m.Review
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("the archive's bytes changed with the reasons")
+	}
+	if reviews[0] == nil || reviews[1] == nil || reviews[0].Left[0].Reason == reviews[1].Left[0].Reason {
+		t.Error("the two manifests should carry their own reason, the test proves nothing")
+	}
+}
+
+func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	if err := os.MkdirAll(exportDir, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	shipped := []shippedPackage{{File: strings.Repeat("a", archive.MaxManifestSize)}}
+	err := exp.writeManifest(shipped, report.ArchiveManifest{}, h.store.SigningKey(), nil)
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 bytes the import reads") {
+		t.Fatalf("writeManifest = %v, want the manifest refused for its size", err)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
+	}
+}
+
+func TestExportFailsOnAReviewTheImportWouldKeepOut(t *testing.T) {
+	long := strings.Repeat("9", 257)
+	for name, set := range map[string]func(*CVE){
+		"a cve id over 256 bytes": func(c *CVE) { c.ID = "CVE-" + long },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := reviewedExport(t, h, analysisDir, exportDir, "Only our own build calls the gadget.")
+			gadget := &exp.Analysis.Result.Dependencies[1]
+			gadget.Candidates[1].CVEs = append(gadget.Candidates[1].CVEs, CVE{ID: "CVE-GADGET-FIXED", Severity: "LOW", Package: "@scope/gadget@2.2.0", FixedIn: "2.2.1"})
+			set(&gadget.Candidates[1].CVEs[len(gadget.Candidates[1].CVEs)-1])
+
+			err := exp.Run(context.Background(), noopEmit)
+			const cause = "the import would keep the review out"
+			if err == nil || !strings.Contains(err.Error(), cause) {
+				t.Fatalf("Run = %v, want an error saying %q", err, cause)
+			}
+			if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+				t.Errorf("manifest.json was written: %v", err)
+			}
+		})
+	}
+}
+
+// The shipped set's own scan is the last word before signing: under
+// refuse, a CVE no version fixes that the review does not list fails the
+// export, whatever the analysis said.
+func TestExportRefusesBeforeSigningAShippedCVEWithoutFixTheReviewMisses(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	for i := range exp.Analysis.Result.Dependencies {
+		d := &exp.Analysis.Result.Dependencies[i]
+		d.CVEs = nil
+		for j := range d.Candidates {
+			d.Candidates[j].CVEs = nil
+		}
+	}
+	exp.Review = policy.DefaultReview()
+	exp.Review.CVEWithoutFix = policy.Refuse
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, exp.Review); len(problems) > 0 {
+		t.Fatalf("the queue-time check should pass: %q", problems)
+	}
+
+	err := exp.Run(context.Background(), noopEmit)
+	const cause = "review.cveWithoutFix is refuse, yet the shipped set keeps @scope/gadget 2.1.0 with CVE-GADGET-SHARED"
+	if err == nil || !strings.Contains(err.Error(), cause) {
+		t.Fatalf("Run = %v, want an error saying %q", err, cause)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
+	}
+}
+
+// A dependency the selection leaves out asks a reason under refuse, and
+// review.left lists its CVEs; that listing must not let the same CVE ship
+// in another package of the set unrefused.
+func TestExportRefusesBeforeSigningAShippedCVEWithoutFixALeftOutDependencyLists(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	for i := range exp.Analysis.Result.Dependencies {
+		d := &exp.Analysis.Result.Dependencies[i]
+		d.CVEs = nil
+		for j := range d.Candidates {
+			d.Candidates[j].CVEs = nil
+		}
+	}
+	exp.Analysis.Result.Dependencies = append(exp.Analysis.Result.Dependencies, DependencyResult{
+		Name: "lone", Current: "1.0.0", Best: "1.0.0",
+		CVEs: []CVE{
+			{ID: "CVE-GADGET-SHARED", Severity: "HIGH", Package: "@scope/gadget@2.1.0"},
+			{ID: "CVE-TWICE", Severity: "CRITICAL", Package: "helper@3.0.0"},
+			{ID: "CVE-MIXED", Severity: "HIGH", Package: "helper@3.0.0"},
+			{ID: "CVE-LOW", Severity: "LOW", Package: "helper@3.0.0"},
+		},
+	})
+	exp.Request.Reasons = []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"lone"}, Text: "lone stays offline, reviewed"}}
+	exp.Review = policy.DefaultReview()
+	exp.Review.CVEWithoutFix = policy.Refuse
+	if problems := CheckReasons(exp.Analysis.Result, exp.Request, exp.Review); len(problems) > 0 {
+		t.Fatalf("the queue-time check should pass: %q", problems)
+	}
+
+	err := exp.Run(context.Background(), noopEmit)
+	const cause = "review.cveWithoutFix is refuse, yet the shipped set keeps"
+	if err == nil || !strings.Contains(err.Error(), cause) {
+		t.Fatalf("Run = %v, want an error saying %q", err, cause)
+	}
+	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
+		t.Errorf("manifest.json was written: %v", err)
 	}
 }

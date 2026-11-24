@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { apiFetch } from "@/api/client"
-import type { Analysis, Export, Project } from "@/api/projects"
+import { queueExport, type Analysis, type Export, type Project } from "@/api/projects"
 import { getSigningKey } from "@/api/settings"
 import { ExportScreen } from "@/components/session/export-screen"
 import { useJobEvents } from "@/hooks/use-job-events"
@@ -17,6 +17,10 @@ vi.mock("@/api/client", async () => {
 vi.mock("@/api/settings", async () => {
   const actual = await vi.importActual<typeof import("@/api/settings")>("@/api/settings")
   return { ...actual, getSigningKey: vi.fn() }
+})
+vi.mock("@/api/projects", async () => {
+  const actual = await vi.importActual<typeof import("@/api/projects")>("@/api/projects")
+  return { ...actual, queueExport: vi.fn() }
 })
 vi.mock("@/hooks/use-job-events", () => ({ useJobEvents: vi.fn() }))
 vi.mock("@tanstack/react-router", () => ({
@@ -38,10 +42,10 @@ function exportRecord(over: Partial<Export>): Export {
   return { id: "20260921T102000Z", projectId: "demo", analysisId: analysis.id, state: "done", createdAt: "2026-09-21T10:20:00Z", files: ALL_FILES, ...over }
 }
 
-function renderScreen(record: Export) {
+function renderScreen(record: Export, of: Analysis = analysis) {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <ExportScreen project={project} analysis={analysis} relatedExport={record} onChanged={() => {}} onNavigateStep={() => {}} />
+      <ExportScreen project={project} analysis={of} relatedExport={record} onChanged={() => {}} onNavigateStep={() => {}} />
     </QueryClientProvider>,
   )
 }
@@ -60,6 +64,8 @@ beforeEach(() => {
   vi.mocked(apiFetch).mockReset()
   vi.mocked(getSigningKey).mockReset().mockResolvedValue({ publicKeyPem: "pem", publicKeySha256: CURRENT })
   vi.mocked(useJobEvents).mockReset().mockReturnValue(initialAnalysisEventsState)
+  vi.mocked(queueExport).mockReset()
+  sessionStorage.clear()
 })
 
 describe("the done screen", () => {
@@ -141,5 +147,44 @@ describe("the progress screen", () => {
     expect(screen.queryByRole("link", { name: /download/i })).not.toBeInTheDocument()
     expect(screen.queryByText("manifest.json.sig")).not.toBeInTheDocument()
     expect(apiFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe("a retry", () => {
+  it("a retry sends the same reasons", async () => {
+    const analysed = {
+      ...analysis,
+      result: {
+        target: project.target, before: [0, 0, 1, 0, 0], warnings: [], families: [],
+        dependencies: [
+          {
+            name: "express", current: "4.17.1", jump: "5.1.0", vector: [0, 0, 0, 0, 0], cves: [],
+            candidates: [{ version: "5.1.0", vector: [0, 0, 0, 0, 0], cves: [], signals: [], key: true, resolved: true, leavesLine: true }],
+          },
+          {
+            name: "html-minifier", current: "4.0.0", vector: [0, 0, 1, 0, 0], candidates: [],
+            cves: [{ id: "CVE-2022-37620", severity: "MEDIUM", package: "html-minifier@4.0.0", fixedIn: "" }],
+          },
+        ],
+      },
+    } as Analysis
+    sessionStorage.setItem(`sealift:selection:${analysis.id}`, JSON.stringify({ express: ["5.1.0"] }))
+    sessionStorage.setItem(
+      `sealift:reasons:${analysis.id}`,
+      JSON.stringify({ "major-jump:express": "the routes need express 5", "cve-without-fix:html-minifier": "build tool, never shipped" }),
+    )
+    vi.mocked(queueExport).mockResolvedValue(exportRecord({ id: "20260921T103000Z", state: "queued" }))
+    renderScreen(exportRecord({ state: "failed", files: undefined, failure: { step: "download", message: "registry unreachable" } as Export["failure"] }), analysed)
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(queueExport).toHaveBeenCalled())
+    expect(vi.mocked(queueExport).mock.calls[0][2]).toEqual({
+      selection: { express: ["5.1.0"] },
+      includeProject: false,
+      reasons: [
+        { kind: "major-jump", dependencies: ["express"], text: "the routes need express 5" },
+        { kind: "cve-without-fix", dependencies: ["html-minifier"], text: "build tool, never shipped" },
+      ],
+    })
   })
 })

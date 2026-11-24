@@ -12,17 +12,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
 	"github.com/MorganKryze/sealift/pip"
+	"github.com/MorganKryze/sealift/rank"
 )
 
 // ErrAnalysisNotDone reports a QueueExport call naming an analysis that
 // has not reached state done: queued, running, failed or cancelled all
 // leave nothing ranked yet to select from.
 var ErrAnalysisNotDone = errors.New("jobs: analysis is not done")
+
+// ErrNoProjectScan reports an export of the project tree whose analysis
+// has no readable scan of the project's lockfile, so the CVEs it ships
+// cannot be checked against the review policy.
+var ErrNoProjectScan = errors.New("jobs: no readable project scan")
 
 // ErrNothingToExport reports a QueueExport call that selects no version and
 // leaves out the current tree: the archive would hold no package at all.
@@ -91,6 +98,10 @@ type Service struct {
 	pnpm  runner.Pnpm
 	trivy runner.Trivy
 	reg   *npm.Client
+
+	// Review holds the policy's review rules, copied into each analysis
+	// the Service queues. Set it before the first one.
+	Review policy.Review
 
 	mu          sync.Mutex
 	uv          runner.Uv   // nil until SetPip
@@ -171,6 +182,7 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 		Registry: s.reg,
 		Project:  project,
 		Settings: settings,
+		Review:   s.Review,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
@@ -222,9 +234,10 @@ func (s *Service) seedPending(pending *store.Pending, createdAt time.Time, proje
 // submits it to the queue, returning its queued state at once. analysisID
 // must name a done analysis with a readable ranking.json: the export never
 // resolves anything itself, so it has nothing to fall back to otherwise.
-// The selection is validated against that analysis' own result before
-// anything is reserved, so a bad selection never reaches the queue only
-// to fail deep inside the job once the HTTP response is gone.
+// The selection and its reasons are validated against that analysis' own
+// result and the review policy before anything is reserved, so a bad
+// selection never reaches the queue only to fail deep inside the job once
+// the HTTP response is gone.
 // The project's ecosystem picks Export or PipExport. Unlike Analysis, an
 // export leaves a successful run's directory for Service's finalizer to
 // commit.
@@ -250,11 +263,28 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 	if bad := ValidateSelection(result, req.Selection); len(bad) > 0 {
 		return store.ExportInfo{}, &ErrInvalidSelection{Bad: bad}
 	}
-
-	settings := s.store.Settings()
 	if !req.IncludeProject && !selectsAnyVersion(req.Selection) {
 		return store.ExportInfo{}, ErrNothingToExport
 	}
+	if req.IncludeProject {
+		findings, err := projectFindings(filepath.Join(project.Dir, "analyses", analysisID))
+		if err != nil {
+			return store.ExportInfo{}, err
+		}
+		req.ProjectFindings = findings
+		if keys := lockKeysToPlace(result, req.ProjectFindings); len(keys) > 0 {
+			holders, err := projectHolders(filepath.Join(project.Dir, "analyses", analysisID), keys)
+			if err != nil {
+				return store.ExportInfo{}, err
+			}
+			req.ProjectHolders = holders
+		}
+	}
+	if problems := CheckReasons(result, req, s.Review); len(problems) > 0 {
+		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
+	}
+
+	settings := s.store.Settings()
 
 	pending, err := s.store.NewDir("exports", projectID)
 	if err != nil {
@@ -269,6 +299,7 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 		Settings: settings,
 		Analysis: AnalysisRef{ID: analysisID, Dir: filepath.Join(project.Dir, "analyses", analysisID), Result: result},
 		Request:  req,
+		Review:   s.Review,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}
@@ -281,6 +312,10 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 func (s *Service) queuePipExport(project store.Project, analysisID string, req ExportRequest) (store.ExportInfo, error) {
 	if len(req.Selection) > 0 {
 		return store.ExportInfo{}, ErrPipSelection
+	}
+	if len(req.Reasons) > 0 {
+		// Pip writes no review yet: a reason sent here would be lost.
+		return store.ExportInfo{}, &pipRefusal{text: "jobs: a pip export takes no reasons: its set carries no review yet", class: ErrPipSelection}
 	}
 	analysisInfo, err := s.store.AnalysisInfo(project.ID, analysisID)
 	if err != nil {
@@ -304,6 +339,9 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	}
 	if missing > 0 {
 		return store.ExportInfo{}, fmt.Errorf("%w: %d of %d packages %s no wheel", ErrPipNotExportable, missing, len(result.Packages), plural(missing, "has", "have"))
+	}
+	if err := pipNoFixRefusal(result, s.Review); err != nil {
+		return store.ExportInfo{}, err
 	}
 	s.mu.Lock()
 	index := s.index
@@ -657,4 +695,40 @@ func selectsAnyVersion(sel map[string][]string) bool {
 		}
 	}
 	return false
+}
+
+// projectFindings reads the analysis's scan of the project's lockfile. A
+// missing or unreadable one is ErrNoProjectScan with its cause.
+func projectFindings(analysisDir string) ([]rank.Finding, error) {
+	f, err := openRegularFile(filepath.Join(analysisDir, "project.trivy.json"))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNoProjectScan, err)
+	}
+	defer f.Close()
+	findings, err := rank.ReadTrivyJSON(f)
+	if err != nil {
+		return nil, fmt.Errorf("%w: project.trivy.json: %w", ErrNoProjectScan, err)
+	}
+	return findings, nil
+}
+
+// projectHolders reads the analysis's project lockfile into the direct
+// dependencies that hold each of keys. An unreadable lockfile places
+// nothing, so a CVE without a fix only it would place refuses the export.
+// A lockfile too large to walk fails the export with its cause.
+func projectHolders(analysisDir string, keys []string) (map[string][]string, error) {
+	f, err := openRegularFile(filepath.Join(analysisDir, "project", "pnpm-lock.yaml"))
+	if err != nil {
+		return nil, nil
+	}
+	defer f.Close()
+	holders, err := npm.LockHolders(f, keys)
+	if errors.Is(err, npm.ErrLockTooLarge) {
+		return nil, fmt.Errorf("jobs: project lockfile of analysis %s: %w", filepath.Base(analysisDir), err)
+	}
+	if err != nil {
+		slog.Warn("jobs: unreadable project lockfile", "dir", analysisDir, "error", err)
+		return nil, nil
+	}
+	return holders, nil
 }

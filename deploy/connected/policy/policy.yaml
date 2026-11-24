@@ -43,3 +43,14 @@
 #   contact:
 #     label: Platform team
 #     url: mailto:platform@example.com
+
+# review:
+#   # true lets an analysis propose a version outside the dependency's
+#   # current line, as sealift 0.7.0 did.
+#   proposeOtherMajors: false
+#   # reason or refuse: an export that takes a version outside its line
+#   # needs a reason, or is refused whatever its reason.
+#   majorJump: reason
+#   # reason or refuse: an archive that holds a CVE no version fixes
+#   # needs a reason, or is refused.
+#   cveWithoutFix: reason

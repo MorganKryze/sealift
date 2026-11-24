@@ -1,22 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { ChevronRight, CircleAlert, Info } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import { ProblemError } from "@/api/client"
 import { queueExport, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
 import { getSettings } from "@/api/settings"
 import { ProblemNotice } from "@/components/problem-notice"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
+import { ReasonsBlock } from "@/components/session/reasons-block"
 import { SeverityCounts } from "@/components/severity-counts"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { useSelection } from "@/hooks/use-selection"
+import { useReasons, useSelection } from "@/hooks/use-selection"
 import { exportSelection } from "@/lib/exportSelection"
+import { missingReasons, reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
 import {
   afterVectorOf,
+  distinctCves,
   groupDependencies,
   jumpKind,
   reasonFor,
@@ -45,16 +48,35 @@ const SEVERITY_DOT: Record<string, string> = {
   unknown: "bg-severity-unknown",
 }
 
+/** The height of the element the returned ref lands on, kept current as it resizes. */
+function useHeight(): [number, (element: HTMLElement | null) => void] {
+  const [height, setHeight] = useState(0)
+  const observer = useRef<ResizeObserver | null>(null)
+  const ref = useCallback((element: HTMLElement | null) => {
+    observer.current?.disconnect()
+    observer.current = null
+    if (element === null || typeof ResizeObserver === "undefined") {
+      return
+    }
+    observer.current = new ResizeObserver(() => setHeight(element.offsetHeight))
+    observer.current.observe(element)
+    setHeight(element.offsetHeight)
+  }, [])
+  return [height, ref]
+}
+
 export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreenProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
   const selection = useSelection(analysis.id)
+  const reasons = useReasons(analysis.id)
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [nothingOpen, setNothingOpen] = useState(false)
 
   const result = analysis.result
   const dependencies = result?.dependencies ?? []
+  const [barHeight, barRef] = useHeight()
 
   // Seeded from sealift's own best pick, so the initial export matches the
   // proposal without the user touching anything; re-runs if the analysis
@@ -85,11 +107,16 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     return chosen !== proposed
   })
 
+  const toExport = exportSelection(dependencies, selection.selection)
+  const needed = result ? requiredReasons(result, toExport) : []
+  const missing = missingReasons(needed, reasons.reasons)
+
   const confirmMutation = useMutation({
     mutationFn: () =>
       queueExport(project.id, analysis.id, {
-        selection: exportSelection(dependencies, selection.selection),
+        selection: toExport,
         includeProject: false,
+        reasons: reasonsToSend(needed, reasons.reasons),
       }),
     onSuccess: (created) => {
       queryClient.setQueryData(["project", project.id], (prev: Project | undefined) =>
@@ -99,6 +126,9 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     },
   })
   const confirmError = confirmMutation.error instanceof ProblemError ? confirmMutation.error : null
+  // internal/api answers a selection whose reasons fall short with this title and one problem per line of its detail.
+  const refusal =
+    confirmError?.status === 400 && confirmError.problem?.title === "invalid export reasons" ? (confirmError.problem.detail ?? undefined) : undefined
 
   const steps = sessionSteps({ project, current: "review", onNavigate: onNavigateStep })
 
@@ -141,7 +171,12 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   }
 
   return (
-    <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8 pb-28">
+    <div
+      className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8 pb-28"
+      // The Export bar is fixed and grows with its cause, so the page keeps its real height free below
+      // the last reason field.
+      style={barHeight > 0 ? { paddingBottom: barHeight + 32 } : undefined}
+    >
       <StepBar steps={steps} />
 
       <div className="mb-6">
@@ -198,7 +233,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
               </div>
               <button
                 type="button"
-                className="text-sm font-medium text-accent"
+                className="py-1.5 text-sm font-medium text-accent"
                 aria-expanded={nothingOpen}
                 onClick={() => setNothingOpen((v) => !v)}
               >
@@ -245,7 +280,9 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         )
       })}
 
-      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
+      <ReasonsBlock needed={needed} reasons={reasons.reasons} onChange={reasons.setReason} refusal={refusal} />
+
+      <div ref={barRef} className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
           <div className="text-sm">
             <span className="font-semibold text-ink">
@@ -259,16 +296,22 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
             ) : null}
           </div>
           <div className="flex flex-col items-end gap-2">
+            {missing ? (
+              <p id="export-waits" className="max-w-[60ch] text-right text-sm text-muted">
+                {missing}
+              </p>
+            ) : null}
             <Button
               size="lg"
-              disabled={changedDependencies.length === 0 || confirmMutation.isPending}
+              disabled={changedDependencies.length === 0 || confirmMutation.isPending || missing !== ""}
+              aria-describedby={missing ? "export-waits" : undefined}
               onClick={() => confirmMutation.mutate()}
             >
               {confirmMutation.isPending ? "Building…" : "Confirm and build the archive"}
             </Button>
           </div>
         </div>
-        {confirmError ? (
+        {confirmError && refusal === undefined ? (
           <div className="mx-auto w-full max-w-240 px-5 pb-3.5">
             <ProblemNotice status={confirmError.status} problem={confirmError.problem} />
           </div>
@@ -300,7 +343,8 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
   const listRef = useRef<HTMLDivElement>(null)
   const shownCandidates = showAll ? dependency.candidates : defaultCandidates
   const cveTotal = dependency.vector.reduce((a, b) => a + b, 0)
-  const extraCves = cveTotal - dependency.cves.length
+  const cves = distinctCves(dependency.cves)
+  const extraCves = cveTotal - cves.length
 
   return (
     <div className={cn(isFirst ? "" : "border-t border-line")}>
@@ -335,16 +379,16 @@ function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }
             Current {dependency.current} · {cveTotal} CVE{cveTotal === 1 ? "" : "s"}
           </p>
           <div className="mb-3 flex flex-wrap gap-1.5">
-            {dependency.cves.map((cve) => (
+            {cves.map((cve) => (
               <span key={cve.id} className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-0.5 font-mono text-xs">
                 <span className={cn("size-1.5 rounded-full", SEVERITY_DOT[cve.severity.toLowerCase()] ?? "bg-severity-unknown")} />
                 {cve.id}
               </span>
             ))}
-            {extraCves > 0 && dependency.cves.length > 0 ? (
+            {extraCves > 0 && cves.length > 0 ? (
               <span className="rounded-md border border-line px-2 py-0.5 font-mono text-xs text-muted">+{extraCves} more</span>
             ) : null}
-            {extraCves > 0 && dependency.cves.length === 0 ? (
+            {extraCves > 0 && cves.length === 0 ? (
               <span className="text-xs text-muted">The version of sealift that ran this analysis did not record CVE ids.</span>
             ) : null}
           </div>
