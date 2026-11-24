@@ -365,6 +365,28 @@ func TestReviewOfNamesTheFamilyOfAJump(t *testing.T) {
 	}
 }
 
+func TestReviewOfKeepsEachReasonGivenForPartOfAFamily(t *testing.T) {
+	r := reviewResult()
+	// html-minifier takes its clean version, so the selection asks nothing
+	// beyond the family.
+	sel := map[string][]string{"react": {"19.2.0"}, "react-dom": {"19.2.0"}, "html-minifier": {"4.0.1"}}
+	reasons := []Reason{
+		jumpReason("The app moved to React 19.", "react"),
+		jumpReason("The renderer follows React.", "react-dom"),
+	}
+	if problems := CheckReasons(r, sel, reasons, askReasons()); len(problems) > 0 {
+		t.Fatalf("the selection should pass: %q", problems)
+	}
+	got := ReviewOf(r, sel, reasons, nil)
+	want := []archive.ReviewJump{
+		{Family: "react 19", Packages: []archive.ReviewMove{{Name: "react", From: "18.3.1", To: "19.2.0"}}, Reason: "The app moved to React 19."},
+		{Family: "react 19", Packages: []archive.ReviewMove{{Name: "react-dom", From: "18.3.1", To: "19.2.0"}}, Reason: "The renderer follows React."},
+	}
+	if !reflect.DeepEqual(got.Jumps, want) {
+		t.Errorf("jumps =\n %+v\nwant\n %+v", got.Jumps, want)
+	}
+}
+
 func TestReviewOfLeavesAfterOutWithoutAProjectScan(t *testing.T) {
 	sel, reasons := reviewSelection()
 	got := ReviewOf(reviewResult(), sel, reasons, nil)
