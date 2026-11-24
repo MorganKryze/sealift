@@ -165,10 +165,13 @@ describe("missingReasons", () => {
     { kind: "cve-without-fix", dependencies: ["html-minifier"], label: "html-minifier", detail: "" },
   ]
 
-  it("names each reason left empty or unreadable", () => {
+  it("names each reason left empty, and apart each one to fix", () => {
     expect(missingReasons(needed, {})).toBe("2 reasons missing: react 19, html-minifier")
     expect(missingReasons(needed, { [reasonKey(needed[0])]: "  ", [reasonKey(needed[1])]: "a\nb" })).toBe(
-      "2 reasons missing: react 19, html-minifier",
+      "1 reason missing: react 19. 1 reason to fix: html-minifier",
+    )
+    expect(missingReasons(needed, { [reasonKey(needed[0])]: "x".repeat(301), [reasonKey(needed[1])]: "a\tb" })).toBe(
+      "2 reasons to fix: react 19, html-minifier",
     )
     expect(missingReasons(needed, { [reasonKey(needed[0])]: "ok" })).toBe("1 reason missing: html-minifier")
   })

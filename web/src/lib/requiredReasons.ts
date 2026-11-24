@@ -8,7 +8,7 @@ export type NeededReason = { kind: "major-jump" | "cve-without-fix"; dependencie
 type Reason = NonNullable<ExportRequest["reasons"]>[number]
 
 /** The archive's reader takes 300 characters once trimmed (archive.MaxReasonRunes). */
-const MAX_REASON_CHARACTERS = 300
+export const MAX_REASON_CHARACTERS = 300
 const MAX_REASON_BYTES = 4800
 
 /** Where a reason's text lives in useReasons: unique per kind, family or dependency. */
@@ -119,24 +119,31 @@ export function reasonProblem(text: string): string | undefined {
   return undefined
 }
 
-function written(text: string | undefined): boolean {
-  return text !== undefined && text.trim() !== "" && reasonProblem(text) === undefined
-}
-
-/** The most names the cause before Export lists, so it stays a line or two in the bar. */
+/** The most names each part of the cause lists, so it stays a line or two in the bar. */
 const NAMED_IN_CAUSE = 5
 
-/** Why Export waits, in words, or "" once every needed reason is written. */
-export function missingReasons(needed: NeededReason[], reasons: Record<string, string>): string {
-  const missing = needed.filter((n) => !written(reasons[reasonKey(n)])).map((n) => n.label)
-  if (missing.length === 0) {
-    return ""
-  }
+function counted(labels: string[], what: string): string {
   const names =
-    missing.length > NAMED_IN_CAUSE
-      ? `${missing.slice(0, NAMED_IN_CAUSE).join(", ")} and ${missing.length - NAMED_IN_CAUSE} more`
-      : missing.join(", ")
-  return `${missing.length} reason${missing.length === 1 ? "" : "s"} missing: ${names}`
+    labels.length > NAMED_IN_CAUSE
+      ? `${labels.slice(0, NAMED_IN_CAUSE).join(", ")} and ${labels.length - NAMED_IN_CAUSE} more`
+      : labels.join(", ")
+  return `${labels.length} reason${labels.length === 1 ? "" : "s"} ${what}: ${names}`
+}
+
+/** Why Export waits, in words: the reasons left empty, then those written but refused. "" once all are written. */
+export function missingReasons(needed: NeededReason[], reasons: Record<string, string>): string {
+  const missing: string[] = []
+  const toFix: string[] = []
+  for (const n of needed) {
+    const text = reasons[reasonKey(n)] ?? ""
+    if (text.trim() === "") {
+      missing.push(n.label)
+    } else if (reasonProblem(text) !== undefined) {
+      toFix.push(n.label)
+    }
+  }
+  const parts = [missing.length > 0 ? counted(missing, "missing") : "", toFix.length > 0 ? counted(toFix, "to fix") : ""]
+  return parts.filter((p) => p !== "").join(". ")
 }
 
 /** The reasons an export request carries, trimmed, in the order they were asked. */

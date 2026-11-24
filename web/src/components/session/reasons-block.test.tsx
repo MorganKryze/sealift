@@ -74,6 +74,21 @@ describe("the reasons block on the review screen", () => {
     expect(screen.getByText("html-minifier 4.0.0 keeps CVE-2022-37620, with no known fix")).toBeInTheDocument()
   })
 
+  it("numbers each field as the server's refusal counts them", () => {
+    renderReview()
+    expect(screen.getByLabelText(/^Reason 1\s*react 19/)).toHaveProperty("tagName", "TEXTAREA")
+    expect(screen.getByLabelText(/^Reason 2\s*html-minifier/)).toHaveProperty("tagName", "TEXTAREA")
+  })
+
+  it("counts the characters as a reason nears its limit", () => {
+    renderReview()
+    write(/react 19/, "x".repeat(100))
+    expect(screen.queryByText(/of 300 characters/)).toBeNull()
+    write(/react 19/, "x".repeat(250))
+    expect(screen.getByText("250 of 300 characters")).toBeInTheDocument()
+    expect(screen.getByLabelText(/react 19/).getAttribute("aria-describedby")).toContain("-count")
+  })
+
   it("keeps Export disabled with its cause before it", () => {
     renderReview()
     write(/react 19/, "   ")
@@ -112,7 +127,7 @@ describe("the reasons block on the review screen", () => {
     expect(field).toHaveAttribute("aria-invalid", "true")
     expect(field).toHaveAccessibleDescription(expect.stringContaining("Keep the reason on one line, with no tab or control character."))
     expect(exportButton()).toBeDisabled()
-    expect(screen.getByText("1 reason missing: react 19")).toBeInTheDocument()
+    expect(screen.getByText("1 reason to fix: react 19")).toBeInTheDocument()
   })
 
   it("shows the server's refusal above Export", async () => {

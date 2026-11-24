@@ -1,7 +1,7 @@
 import { useId } from "react"
 
 import { Card } from "@/components/ui/card"
-import { reasonKey, reasonProblem, type NeededReason } from "@/lib/requiredReasons"
+import { MAX_REASON_CHARACTERS, reasonKey, reasonProblem, type NeededReason } from "@/lib/requiredReasons"
 import { cn } from "@/lib/utils"
 
 interface ReasonsBlockProps {
@@ -11,6 +11,9 @@ interface ReasonsBlockProps {
   /** The server's words when it refused the export for its reasons. */
   refusal?: string
 }
+
+/** From this many characters on, a field shows its count against the limit. */
+const COUNT_FROM = MAX_REASON_CHARACTERS - 60
 
 const KIND_WORDS: Record<NeededReason["kind"], string> = {
   "major-jump": "Leaves its line",
@@ -29,9 +32,9 @@ export function ReasonsBlock({ needed, reasons, onChange, refusal }: ReasonsBloc
       <h2 id={`${id}-title`} className="text-lg font-semibold text-ink">
         Reasons
       </h2>
-      <p className="mt-1 mb-2.5 max-w-[70ch] text-sm text-muted">
-        This selection takes a dependency out of its line, or keeps a CVE that no version fixes. Write why for each, on one line: the
-        signed manifest carries the reasons to the other side.
+      <p className="mt-1 mb-2.5 max-w-[56ch] text-sm text-muted">
+        This selection takes a dependency out of its line, or keeps a CVE that no version fixes. Write why for each, on one line,
+        in {MAX_REASON_CHARACTERS} characters at most: the signed manifest carries the reasons to the other side.
       </p>
       {needed.length > 0 ? (
         <Card>
@@ -40,9 +43,12 @@ export function ReasonsBlock({ needed, reasons, onChange, refusal }: ReasonsBloc
             const field = `${id}-${index}`
             const text = reasons[key] ?? ""
             const problem = reasonProblem(text)
+            const length = [...text.trim()].length
+            const described = [`${field}-detail`, length >= COUNT_FROM ? `${field}-count` : "", problem ? `${field}-problem` : ""]
             return (
               <div key={key} className={cn("flex flex-col gap-1.5 px-4.5 py-3.5", index > 0 && "border-t border-line")}>
                 <label htmlFor={field} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                  <span className="text-muted">Reason {index + 1}</span>
                   <span className="font-mono font-semibold text-ink [overflow-wrap:anywhere]">{reason.label}</span>
                   <span className="text-muted">{KIND_WORDS[reason.kind]}</span>
                 </label>
@@ -55,7 +61,7 @@ export function ReasonsBlock({ needed, reasons, onChange, refusal }: ReasonsBloc
                   value={text}
                   spellCheck
                   aria-invalid={problem !== undefined}
-                  aria-describedby={problem ? `${field}-detail ${field}-problem` : `${field}-detail`}
+                  aria-describedby={described.filter((d) => d !== "").join(" ")}
                   // A reason is one line: Enter adds nothing, and a pasted line break shows its problem below.
                   onKeyDown={(event) => {
                     if (event.key === "Enter") event.preventDefault()
@@ -67,6 +73,11 @@ export function ReasonsBlock({ needed, reasons, onChange, refusal }: ReasonsBloc
                     problem ? "border-severity-critical" : "border-line",
                   )}
                 />
+                {length >= COUNT_FROM ? (
+                  <p id={`${field}-count`} className="text-xs text-muted">
+                    {length} of {MAX_REASON_CHARACTERS} characters
+                  </p>
+                ) : null}
                 {problem ? (
                   <p id={`${field}-problem`} className="text-xs text-severity-critical-fg">
                     {problem}
