@@ -35,6 +35,7 @@ Each past session shows its name, its target, its date and one status:
 | Status | Meaning |
 | --- | --- |
 | Not analysed yet | The file was dropped; no analysis ran |
+| Waiting for another job | The analysis or the export waits in the queue for another job to end |
 | Analysing | The analysis is running |
 | Analysis failed | The analysis stopped on an error, or was cancelled |
 | Awaiting export | The analysis finished; no archive yet |

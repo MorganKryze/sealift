@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { apiFetch } from "@/api/client"
-import type { ProjectSummary } from "@/api/projects"
+import type { Analysis, Export, ProjectSummary } from "@/api/projects"
 import { HomeScreen } from "@/components/session/home-screen"
 
 const navigate = vi.fn()
@@ -63,5 +63,38 @@ describe("HomeScreen past sessions", () => {
 
     fireEvent.click(row)
     expect(navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "left-pad-abc123" } })
+  })
+})
+
+describe("HomeScreen session status", () => {
+  const analysis = (state: Analysis["state"]): Analysis => ({
+    id: "20261124T101500Z",
+    projectId: npmRow.id,
+    state,
+    createdAt: "2026-11-24T10:15:00Z",
+  })
+  const archive = (state: Export["state"]): Export => ({
+    id: "20261124T102000Z",
+    projectId: npmRow.id,
+    analysisId: "20261124T101500Z",
+    state,
+    createdAt: "2026-11-24T10:20:00Z",
+  })
+
+  it.each([
+    ["an analysis waiting in the queue", { lastAnalysis: analysis("queued") }, "Waiting for another job"],
+    ["a running analysis", { lastAnalysis: analysis("running") }, "Analysing"],
+    ["an export waiting in the queue", { lastAnalysis: analysis("done"), lastExport: archive("queued") }, "Waiting for another job"],
+    ["a running export", { lastAnalysis: analysis("done"), lastExport: archive("running") }, "Exporting"],
+  ])("labels %s", async (_, jobs, label) => {
+    vi.mocked(apiFetch).mockImplementation((path: string) => {
+      if (path.startsWith("/projects")) return Promise.resolve([{ ...npmRow, ...jobs }]) as never
+      if (path === "/settings") return Promise.resolve({ target: npmRow.target }) as never
+      return Promise.reject(new Error(`unexpected request ${path}`))
+    })
+    renderHome()
+
+    const row = await screen.findByRole("button", { name: /left-pad/ })
+    expect(row).toHaveTextContent(label)
   })
 })

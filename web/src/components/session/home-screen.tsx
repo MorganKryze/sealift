@@ -213,6 +213,8 @@ function HistoryList({ query, onOpen }: HistoryListProps) {
 function sessionStatus(session: ProjectSummary): { label: string; variant: "accent" | "critical" | "default" } {
   const { lastAnalysis, lastExport } = session
   const failedStates = new Set(["failed", "cancelled", "interrupted"])
+  // The session screens' words for a job the queue has not started.
+  const waiting = "Waiting for another job"
 
   if (lastExport?.state === "done") {
     return { label: "Archive ready", variant: "accent" }
@@ -221,7 +223,7 @@ function sessionStatus(session: ProjectSummary): { label: string; variant: "acce
     return { label: "Export failed", variant: "critical" }
   }
   if (isJobActive(lastExport)) {
-    return { label: "Exporting", variant: "default" }
+    return { label: lastExport?.state === "queued" ? waiting : "Exporting", variant: "default" }
   }
   if (lastAnalysis?.state === "done") {
     return { label: "Awaiting export", variant: "default" }
@@ -230,7 +232,7 @@ function sessionStatus(session: ProjectSummary): { label: string; variant: "acce
     return { label: "Analysis failed", variant: "critical" }
   }
   if (isJobActive(lastAnalysis)) {
-    return { label: "Analysing", variant: "default" }
+    return { label: lastAnalysis?.state === "queued" ? waiting : "Analysing", variant: "default" }
   }
   return { label: "Not analysed yet", variant: "default" }
 }

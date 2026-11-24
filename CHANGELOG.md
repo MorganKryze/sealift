@@ -14,6 +14,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The home and setup screens wait at most 3 seconds on GitHub for the latest Trivy release, then show the installed versions alone. A slow or closed network held them for about 30 seconds.
 - A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
 - An analysis that fails before its first step, for example when sealift cannot write its log, shows the cause under What went wrong. It used to show Analysis stopped with nothing under it.
+- On the home screen, a past session whose analysis or export waits in the queue reads Waiting for another job. It used to read Analysing or Exporting.
 
 ## [0.7.0] - 2026-11-23
 
