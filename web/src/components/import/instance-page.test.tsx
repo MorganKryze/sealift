@@ -131,7 +131,7 @@ describe("the import side's frame", () => {
 describe("OfflineInstancePage", () => {
   it("shows the trusted key as a fingerprint", async () => {
     await renderInstance()
-    const key = screen.getByRole("button", { name: "Public key sha256 3f9a1c7e…0b1d3f5a" })
+    const key = screen.getByRole("button", { name: "Public key sha256 3f9a1c7e to 0b1d3f5a" })
     expect(key).toHaveAttribute("aria-expanded", "false")
     expect(screen.getByRole("button", { name: "Copy Public key sha256" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { level: 2, name: "Trusted key" })).toBeInTheDocument()
@@ -181,7 +181,7 @@ describe("OfflineInstancePage", () => {
     expect(within(page).getByRole("radiogroup", { name: "Theme" })).toBeInTheDocument()
     expect(within(page).getAllByRole("radio").map((r) => r.textContent)).toEqual(["System", "Light", "Dark"])
     expect(within(page).getAllByRole("button")).toEqual([
-      within(page).getByRole("button", { name: "Public key sha256 3f9a1c7e…0b1d3f5a" }),
+      within(page).getByRole("button", { name: "Public key sha256 3f9a1c7e to 0b1d3f5a" }),
       within(page).getByRole("button", { name: "Copy Public key sha256" }),
       within(page).getByRole("button", { name: "Compare" }),
     ])

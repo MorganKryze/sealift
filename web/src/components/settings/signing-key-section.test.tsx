@@ -23,7 +23,7 @@ function renderSection() {
   )
 }
 
-const fingerprint = () => screen.findByRole("button", { name: "Public key sha256 3f9a1c7e…0b1d3f5a" })
+const fingerprint = () => screen.findByRole("button", { name: "Public key sha256 3f9a1c7e to 0b1d3f5a" })
 
 beforeEach(() => {
   vi.mocked(getSigningKey).mockReset().mockResolvedValue(key)
@@ -91,8 +91,8 @@ describe("SigningKeySection", () => {
     await fingerprint()
     fireEvent.click(screen.getByRole("button", { name: "How to regenerate" }))
 
-    const names = screen.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.querySelector(".sr-only")?.textContent ?? b.textContent)
-    expect(names).toEqual(["Download public key", "Public key sha256 3f9a1c7e…0b1d3f5a", "Copy Public key sha256", "How to regenerate", "Copy command"])
+    const names = ["Download public key", "Public key sha256 3f9a1c7e to 0b1d3f5a", "Copy Public key sha256", "How to regenerate", "Copy command"]
+    expect(screen.getAllByRole("button")).toEqual(names.map((name) => screen.getByRole("button", { name })))
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
     expect(document.querySelector("input, select, textarea, form")).toBeNull()
     expect(regenerateSigningKey).not.toHaveBeenCalled()

@@ -13,12 +13,23 @@ afterEach(() => vi.restoreAllMocks())
 describe("Fingerprint", () => {
   it("shows the first 8, an ellipsis and the last 8, named first to last", () => {
     render(<Fingerprint value={HASH} label="Public key sha256" />)
-    const button = screen.getByRole("button", { name: "Public key sha256 3f9a1c7e…0b1d3f5a" })
+    const button = screen.getByRole("button", { name: "Public key sha256 3f9a1c7e to 0b1d3f5a" })
     expect(button).toHaveAttribute("aria-expanded", "false")
-    expect(button).toHaveTextContent(/^3f9a1c7e…0b1d3f5a$/)
+    expect(within(button).getByText("…")).toHaveAttribute("aria-hidden", "true")
     expect(within(button).getByText("3f9a1c7e")).toHaveClass("font-semibold")
     expect(within(button).getByText("0b1d3f5a")).toHaveClass("font-semibold")
     expect(button.className).toMatch(/\bborder\b/)
+  })
+
+  it("takes its name from what it holds, with no aria-label", () => {
+    render(<Fingerprint value={HASH} label="Public key sha256" />)
+    const button = screen.getByRole("button", { name: /^Public key sha256/ })
+    expect(button).not.toHaveAttribute("aria-label")
+    expect(within(button).getByText("Public key sha256")).toHaveClass("sr-only")
+    expect(within(button).getByText("to")).toHaveClass("sr-only")
+    fireEvent.click(button)
+    expect(button).not.toHaveAttribute("aria-label")
+    expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e to 0b1d3f5a")
   })
 
   it("opens in place to groups of 8 with aria-expanded and closes on a second press", () => {
@@ -28,16 +39,16 @@ describe("Fingerprint", () => {
     expect(button).toHaveAttribute("aria-expanded", "true")
     expect(within(button).getAllByText(/^[0-9a-f]{8}$/).map((g) => g.textContent)).toEqual(GROUPS)
     expect(button).not.toHaveTextContent("…")
-    expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e…0b1d3f5a")
+    expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e to 0b1d3f5a")
     // Whole groups wrap: each group is one unbreakable piece.
     for (const group of within(button).getAllByText(/^[0-9a-f]{8}$/)) expect(group).toHaveClass("whitespace-nowrap")
     expect(screen.getAllByRole("button", { name: /^Public key sha256/ })).toHaveLength(1)
 
     fireEvent.click(button)
     expect(button).toHaveAttribute("aria-expanded", "false")
-    expect(button).toHaveTextContent(/^3f9a1c7e…0b1d3f5a$/)
+    expect(within(button).getByText("…")).toHaveAttribute("aria-hidden", "true")
     // The name stays put while only aria-expanded changes, and it holds the closed text, so speech input finds the button by what it shows.
-    expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e…0b1d3f5a")
+    expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e to 0b1d3f5a")
   })
 
   it("copies all 64 characters open or closed", async () => {

@@ -17,16 +17,19 @@ export function Fingerprint({ value, label }: { value: string; label: string }) 
       <button
         type="button"
         aria-expanded={open}
-        // Fixed across open and closed, and holding the closed text, so the name never drifts from what shows.
-        aria-label={`${label} ${first}…${last}`}
         onClick={() => setOpen((o) => !o)}
         className={cn(
           "inline-flex min-h-8 max-w-full min-w-0 items-center gap-2 rounded-lg border border-field bg-bg py-1.5 pr-2 pl-2.5 text-left font-mono text-xs leading-5 text-ink transition-colors duration-150 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-hover",
           open && "items-start border-ink-2",
         )}
       >
+        <span className="sr-only">{label}</span>{" "}
         {open ? (
-          <span className="flex min-w-0 flex-wrap gap-x-[1ch] gap-y-0.5 font-semibold">
+          // The groups stay out of the name, so it reads the same open and closed; the copy control carries the whole value.
+          <span className="sr-only">{`${first} to ${last}`}</span>
+        ) : null}
+        {open ? (
+          <span aria-hidden="true" className="flex min-w-0 flex-wrap gap-x-[1ch] gap-y-0.5 font-semibold">
             {groups.map((group, index) => (
               <Fragment key={index}>
                 {index > 0 ? " " : null}
@@ -40,6 +43,8 @@ export function Fingerprint({ value, label }: { value: string; label: string }) 
             <span aria-hidden="true" className="text-muted">
               …
             </span>
+            {" "}
+            <span className="sr-only">to</span>{" "}
             <span className="font-semibold">{last}</span>
           </span>
         )}
