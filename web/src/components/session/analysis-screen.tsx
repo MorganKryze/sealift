@@ -8,7 +8,6 @@ import { cancelAnalysis, queueAnalysis, type Analysis, type Project } from "@/ap
 import { FailureBlock } from "@/components/failure-block"
 import { ProblemNotice } from "@/components/problem-notice"
 import { StepBar, type StepId } from "@/components/step-bar"
-import { useSettingsPanel } from "@/components/settings/settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -59,7 +58,6 @@ export function failureMessage(analysis: Pick<Analysis, "state" | "failure">): s
 }
 
 export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavigateStep }: AnalysisScreenProps) {
-  const settingsPanel = useSettingsPanel()
   const navigate = useNavigate()
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -237,8 +235,8 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
                 {cancelledState ? "Start it again" : "Retry"}
               </Button>
               {cancelledState ? null : (
-                <Button variant="outline" onClick={settingsPanel.open}>
-                  Open settings
+                <Button variant="outline" onClick={() => void navigate({ to: "/instance" })}>
+                  Open Instance
                 </Button>
               )}
               <Button variant="ghost" onClick={() => void navigate({ to: "/" })}>

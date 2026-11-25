@@ -9,8 +9,8 @@ export type Brand = components["schemas"]["Brand"]
 /** What the interface shows when the deployment sets nothing: the only place these values are written. */
 export const DEFAULT_BRAND: Brand = { name: "sealift", online: "Online", offline: "Offline", reviewWord: "PR", logo: false }
 
-// The page colours of the light and dark themes, which the accent must reach 3:1 against.
-const PAGE = { light: "#ffffff", dark: "#111113" }
+/** The page colours of the light and dark themes, which the accent must reach 3:1 against. */
+export const PAGE = { light: "#ffffff", dark: "#111113" }
 
 const BrandContext = createContext<Brand>(DEFAULT_BRAND)
 

@@ -31,7 +31,7 @@ async function renderAt(path: string, { brand = DEFAULT_BRAND, warning, projectN
   })
   const page = (p: string) => createRoute({ getParentRoute: () => root, path: p, component: () => <p>page {p}</p> })
   const router = createRouter({
-    routeTree: root.addChildren([page("/"), page("/settings"), page("/sessions/$sessionId/analysis")]),
+    routeTree: root.addChildren([page("/"), page("/instance"), page("/sessions/$sessionId/analysis")]),
     history: createMemoryHistory({ initialEntries: [path] }),
   })
   const view = render(<RouterProvider router={router} />)
@@ -64,11 +64,11 @@ describe("Frame", () => {
     expect(placeLink("Instance")).not.toHaveAttribute("aria-current")
     const links = within(places()).getAllByRole("link")
     expect(links.map((l) => l.textContent)).toEqual(["Home", "Projects", "Instance"])
-    expect(placeLink("Instance")).toHaveAttribute("href", "/settings")
+    expect(placeLink("Instance")).toHaveAttribute("href", "/instance")
   })
 
   it("marks Instance as the current place on its own page and Home on a session's", async () => {
-    const view = await renderAt("/settings")
+    const view = await renderAt("/instance")
     expect(placeLink("Instance")).toHaveAttribute("aria-current", "page")
     expect(placeLink("Home")).not.toHaveAttribute("aria-current")
     view.unmount()

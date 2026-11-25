@@ -110,6 +110,8 @@ export const UI = {
   start: `data="$(mktemp -d)" && node tests/seed.mjs "$data" && exec "$SEALIFT" -addr 127.0.0.1:18080 -data "$data"`,
   routes: [
     "/",
+    "/instance",
+    // The settings sheet's old address lands on Instance.
     "/settings",
     "/sessions/demo/drop",
     "/sessions/demo/analysis",
@@ -123,7 +125,7 @@ export const UI = {
   // A page with a control pressed first: the state is checked as a route is. `opens` names the role
   // and name the pressed control must bring up.
   states: [
-    { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
+    { path: "/instance", open: { role: "button", name: "How to regenerate", opens: { role: "button", name: "Copy command" } } },
   ],
   // A session route with sessionStorage written before the page loads, as the review screen keeps the
   // selection and the reasons there; `ready` is the text that proves the analysis arrived.
@@ -154,6 +156,14 @@ export const UI = {
       body: READY_WITH_WARNING,
       ready: "Instance",
       focus: { role: "link", name: "Instance", opens: { role: "tooltip" } },
+    },
+    {
+      path: "/instance",
+      api: "/api/instance",
+      name: "warning ephemeral and accent",
+      // An accent that reads on the light page and falls under 3:1 on the dark one.
+      body: { ...READY_WITH_WARNING, ephemeral: true, idleMinutes: 30, brand: { ...READY_WITH_WARNING.brand, accent: "#1d4ed8" } },
+      ready: "Dark shows the ink in its place.",
     },
   ],
   widths: [1024, 1280],

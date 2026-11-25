@@ -10,7 +10,7 @@ export const ONLINE_PLACES: Place[] = [
   { to: "/projects", label: "Projects", icon: FolderGit2 },
 ]
 
-export const ONLINE_INSTANCE: Place = { to: "/settings", label: "Instance", icon: ServerCog }
+export const ONLINE_INSTANCE: Place = { to: "/instance", label: "Instance", icon: ServerCog }
 
 /**
  * The breadcrumb for a path of the connected side. Once the project has loaded, its page reads the
@@ -18,7 +18,7 @@ export const ONLINE_INSTANCE: Place = { to: "/settings", label: "Instance", icon
  */
 export function onlineCrumbs(pathname: string, project?: string | Pick<Project, "name" | "analyses">): Crumb[] {
   const name = typeof project === "string" ? project : project?.name
-  if (pathname === "/settings") return [{ label: ONLINE_INSTANCE.label }]
+  if (pathname === "/instance") return [{ label: ONLINE_INSTANCE.label }]
   if (pathname === "/projects") return [{ label: "Projects" }]
   if (pathname.startsWith("/projects/")) return [{ label: "Projects", to: "/projects" }, { label: name ?? "Project" }]
   if (pathname.startsWith("/sessions/")) {

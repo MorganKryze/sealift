@@ -1,19 +1,19 @@
 import { useQuery } from "@tanstack/react-query"
-import { createRootRoute, Outlet, useRouterState } from "@tanstack/react-router"
+import { createRootRoute, Outlet, redirect, useRouterState } from "@tanstack/react-router"
 
 import { getProject } from "@/api/projects"
-import { EphemeralBanner } from "@/components/ephemeral"
 import { Frame } from "@/components/frame/frame"
 import { useInstance, WhenReady } from "@/components/preparing-screen"
-import { SettingsPanelProvider } from "@/components/settings/settings-panel"
 import { ONLINE_INSTANCE, ONLINE_PLACES, onlineCrumbs } from "@/lib/places"
 
 export const Route = createRootRoute({
+  // The settings sheet's old address, kept so a bookmark lands on Instance.
+  beforeLoad: ({ location }) => {
+    if (location.pathname === "/settings") throw redirect({ to: "/instance", replace: true })
+  },
   component: () => (
     <WhenReady>
-      <SettingsPanelProvider>
-        <OnlineFrame />
-      </SettingsPanelProvider>
+      <OnlineFrame />
     </WhenReady>
   ),
 })
@@ -31,7 +31,6 @@ function OnlineFrame() {
 
   return (
     <Frame side="online" places={ONLINE_PLACES} instance={ONLINE_INSTANCE} instanceWarning={instance.data?.warning} crumbs={onlineCrumbs(pathname, projectId ? project.data : undefined)}>
-      <EphemeralBanner />
       <Outlet />
     </Frame>
   )

@@ -27,7 +27,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
-// The theme control lives in the settings panel, which is not mounted until opened.
+// The theme control lives on Instance, which other pages do not mount.
 applyTheme(readStoredTheme())
 
 // A 4xx will answer the same on a retry (a deleted session stays deleted),
