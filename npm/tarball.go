@@ -36,9 +36,17 @@ func TarballURL(registry, name, version string) string {
 }
 
 // PackFileName returns the file name npm pack gives a package:
-// name-1.2.3.tgz, or scope-name-1.2.3.tgz for @scope/name.
-func PackFileName(name, version string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(name, "@"), "/", "-") + "-" + version + ".tgz"
+// name-1.2.3.tgz, or scope-name-1.2.3.tgz for @scope/name. It refuses an
+// invalid name or a version that is not exact, since the result is joined
+// to a directory.
+func PackFileName(name, version string) (string, error) {
+	if !ValidName(name) {
+		return "", fmt.Errorf("%q is not a valid package name", name)
+	}
+	if !IsExactVersion(version) {
+		return "", fmt.Errorf("%s: %q is not an exact version", name, version)
+	}
+	return strings.ReplaceAll(strings.TrimPrefix(name, "@"), "/", "-") + "-" + version + ".tgz", nil
 }
 
 // TarballInfo describes a package tarball.

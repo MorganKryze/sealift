@@ -63,8 +63,25 @@ func TestTarballURLAndPackFileName(t *testing.T) {
 		if got := TarballURL(DefaultRegistry+"/", tc.name, tc.version); got != tc.url {
 			t.Errorf("TarballURL(%s) = %s, want %s", tc.name, got, tc.url)
 		}
-		if got := PackFileName(tc.name, tc.version); got != tc.file {
-			t.Errorf("PackFileName(%s) = %s, want %s", tc.name, got, tc.file)
+		if got, err := PackFileName(tc.name, tc.version); err != nil || got != tc.file {
+			t.Errorf("PackFileName(%s) = %s, %v, want %s", tc.name, got, err, tc.file)
+		}
+	}
+}
+
+func TestPackFileNameRefusesPathParts(t *testing.T) {
+	for _, tc := range []struct{ name, version string }{
+		{"express", "1.0.0/../../x"},
+		{"express", ".."},
+		{"express", "1.0.0/x"},
+		{"express", ""},
+		{"..", "1.0.0"},
+		{"../express", "1.0.0"},
+		{"@scope/../x", "1.0.0"},
+		{"", "1.0.0"},
+	} {
+		if got, err := PackFileName(tc.name, tc.version); err == nil {
+			t.Errorf("PackFileName(%q, %q) = %q, want an error", tc.name, tc.version, got)
 		}
 	}
 }

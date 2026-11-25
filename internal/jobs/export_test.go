@@ -1254,6 +1254,30 @@ func TestExportFailsWhenATarballChangesAfterItsDownload(t *testing.T) {
 	}
 }
 
+// The tarball name joins the stripped directory, so a version that holds a
+// path part fails the strip and names the package.
+func TestExportStripRefusesAVersionThatIsNotAFileNamePart(t *testing.T) {
+	body := makeTarball(t, tarFile{"package/package.json", `{"name":"widgets","version":"1.0.0"}`})
+	cachePath := filepath.Join(t.TempDir(), "cached.tgz")
+	if err := os.WriteFile(cachePath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha512.Sum512(body)
+	for _, version := range []string{"1.0.0/../../x", ".."} {
+		d := downloadedPackage{
+			LockPackage: npm.LockPackage{Name: "widgets", Version: version, Integrity: sriOf(body)},
+			CachePath:   cachePath, SHA512: hex.EncodeToString(sum[:]),
+		}
+		s, err := (&Export{}).stripOne(context.Background(), filepath.Join(t.TempDir(), "stripped"), d)
+		if err == nil {
+			t.Fatalf("version %q: strip shipped %q, want an error", version, s.File)
+		}
+		if !strings.Contains(err.Error(), "widgets@"+version) {
+			t.Errorf("version %q: error %q does not name the package", version, err)
+		}
+	}
+}
+
 // TestReadAnalysisStatusReadsOnlyARegularFile gives the read what the
 // tools account can leave at the analysis's status.json. A FIFO would hold
 // an open that no cancel interrupts.

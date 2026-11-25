@@ -83,7 +83,10 @@ func testArchive(t *testing.T, dir string, pkgs ...[3]string) (arch, manifest st
 	for _, p := range pkgs {
 		name, version := p[0], p[1]
 		body := string(packed(t, name, version, p[2]))
-		file := npm.PackFileName(name, version)
+		file, err := npm.PackFileName(name, version)
+		if err != nil {
+			t.Fatal(err)
+		}
 		sum := sha512.Sum512([]byte(body))
 		entries = append(entries, archive.Entry{Name: file, Size: int64(len(body)), Open: opener(body)})
 		listed = append(listed, map[string]any{
