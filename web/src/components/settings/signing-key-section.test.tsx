@@ -2,12 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { getSigningKey, regenerateSigningKey, type SigningKey } from "@/api/settings"
+import { getSigningKey, type SigningKey } from "@/api/settings"
 import { SigningKeySection } from "@/components/settings/signing-key-section"
 
 vi.mock("@/api/settings", async () => {
   const actual = await vi.importActual<typeof import("@/api/settings")>("@/api/settings")
-  return { ...actual, getSigningKey: vi.fn(), regenerateSigningKey: vi.fn() }
+  return { ...actual, getSigningKey: vi.fn() }
 })
 
 const PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAd9mqJUcpQsF4bTjHGXI2m1pL0nmRBGbm8CjQy2bJXcg=\n-----END PUBLIC KEY-----\n"
@@ -27,7 +27,6 @@ const fingerprint = () => screen.findByRole("button", { name: "Public key sha256
 
 beforeEach(() => {
   vi.mocked(getSigningKey).mockReset().mockResolvedValue(key)
-  vi.mocked(regenerateSigningKey).mockReset()
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } })
 })
 
@@ -95,7 +94,6 @@ describe("SigningKeySection", () => {
     expect(screen.getAllByRole("button")).toEqual(names.map((name) => screen.getByRole("button", { name })))
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
     expect(document.querySelector("input, select, textarea, form")).toBeNull()
-    expect(regenerateSigningKey).not.toHaveBeenCalled()
   })
 
   it("names a key that cannot be loaded", async () => {
