@@ -44,7 +44,7 @@ sealift signs `manifest.json` with an Ed25519 key it generated for its volume, a
 
 The import side checks the signature with a public key you carry to it once. Do it before your first crossing:
 
-1. On the connected side, open Settings, section Signing key. Press **Download** for `sealift-public-key.pem`, or **Copy**.
+1. On the connected side, open Instance, block Signing key. Press **Download public key** for `sealift-public-key.pem`, or copy it.
 2. Carry the file to the import side over a channel you trust, not the kiosk the archives cross.
 3. Name it in the import's settings, as `publicKeyFile` below shows.
 4. Compare the Public key sha256 on both sides: sealift's Instance page shows one, the import side's Instance page shows the other under Trusted key, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
@@ -170,7 +170,7 @@ An import takes the archive through the same checks as `sealift import`, then pu
 
 In the lab, an archive whose `bytes@3.1.2` already existed in Nexus with other bytes ended `incomplete` with 100 packages `present` and that one `failed`, and both objects stayed in MinIO. After the planted component was deleted in Nexus, a retry ended `complete`, uploaded that one package and removed the archive. Restarting the service during an import ended it `interrupted`, and a retry ended `complete`.
 
-The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Archives lists the folder and starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
+The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Home lists the folder's archives and Import starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
 
 A retry reads every package from Nexus again and uploads only what Nexus no longer serves. It needs the archive to be in MinIO still and unchanged. Delete or replace nothing in the user's folder while an import is queued or running.
 

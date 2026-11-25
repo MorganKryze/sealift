@@ -16,7 +16,7 @@ The home greets you by name, such as `Good morning, alice`, and offers one card,
 | In progress | Imports queued (Queued, Waiting its turn) or running (Importing, with the packages done so far) | **Open** |
 | Done today | Imports that completed since midnight, with how many packages are in Nexus | **Open** |
 
-A group shows ten rows, then **Show all**, such as Show all 12 archives. With nothing in any group, Needs you reads `No archive in` and your two folders, or that MinIO is not configured.
+A group shows ten rows, then **Show all**, such as Show all 12 archives and imports under Needs you. With nothing in any group, Needs you reads `No archive in` and your two folders, or that MinIO is not configured.
 
 ## The trusted key
 

@@ -136,7 +136,7 @@ The file stays on the volume, so 0.7.0 still reads it after a rollback. 0.7.0 th
 
 | Section | Shows |
 | --- | --- |
-| Ready | Each item the start prepares, with its state: Trivy, CVE database, Signing key, pnpm and uv. A count above the list reads `5 items ready`, and `1 warning` when the database refresh failed and an older database serves |
+| Ready | Each item the start prepares, with its state: Trivy, CVE database, Signing key, pnpm and uv. A count above the list reads `5 items ready`. When the database refresh failed and an older database serves, it reads `4 items ready` and `1 warning` |
 | Policy | `Set at deploy`, then one row per rule: Release age, npm target, pip target, Parallelism, Proposals, Major jump, CVE without fix, and Projects, which says whether the instance keeps its projects or erases them once idle (Ephemeral mode) |
 | Appearance | Theme, with System, Light and Dark, saved in this browser only, so each person using sealift keeps their own. Accent, when the policy sets one, with its contrast ratio in each theme |
 

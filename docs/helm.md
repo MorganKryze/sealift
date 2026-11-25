@@ -94,7 +94,7 @@ The NetworkPolicy admits traffic from the ingress controller's namespace only, n
 - the address, or the annotations for a hand-written Ingress;
 - the command for the service's logs;
 - the Secret to create and its keys, `nexus-pip-password` included when `nexus.pipUser` is set;
-- the public key's sha256, to compare with the collection's Settings;
+- the public key's sha256, to compare with the one on the collection's Instance page;
 - a warning when persistence is off;
 - the command that checks the network policy, which runs the release's own image in another namespace and prints one line, or a warning when the policy is off.
 
