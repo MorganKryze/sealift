@@ -71,7 +71,7 @@ async function renderIn(element: ReactNode) {
   const root = createRootRoute({ component: () => <Outlet /> })
   const page = (path: string, component = () => <p>page {path}</p>) => createRoute({ getParentRoute: () => root, path, component })
   const router = createRouter({
-    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/sessions/$sessionId")]),
+    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/sessions/$sessionId"), page("/sessions/$sessionId/analysis")]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   })
   const view = render(
@@ -218,10 +218,15 @@ describe("ProjectPage", () => {
     expect(crossing("web-portal · 18 Nov")).toHaveTextContent("Cancelled")
   })
 
-  it("opens a crossing's own page", async () => {
+  it("opens each crossing on its own analysis", async () => {
     await renderIn(<ProjectPage project={webPortal()} />)
-    const open = within(crossing("web-portal · 18 Nov")).getByRole("link", { name: "Open web-portal · 18 Nov" })
-    expect(open).toHaveAttribute("href", "/sessions/web-portal")
+    for (const [name, at] of [
+      ["web-portal · 18 Nov", local(11, 18)],
+      ["web-portal · 20 Nov", local(11, 20, 9)],
+    ]) {
+      const open = within(crossing(name)).getByRole("link", { name: `Open ${name}` })
+      expect(open).toHaveAttribute("href", `/sessions/web-portal/analysis?analysis=${id(at)}`)
+    }
   })
 
   it("offers each To carry file for download by its full name and all three through Download all", async () => {
