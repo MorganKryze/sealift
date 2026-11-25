@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import { RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -136,6 +136,23 @@ describe("the online home", () => {
     expect(within(progress).getByText("Sealing")).toBeInTheDocument()
     expect(within(progress).getAllByRole("link", { name: /^Open / })).toHaveLength(3)
     expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
+  })
+
+  it("moves a running crossing that fails on the next poll from In progress to Needs you", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      serve([summary("billing-api", analysis("billing-api", "running", at(10, 23)))])
+      renderHome()
+      expect(rowNames(await screen.findByRole("region", { name: "In progress" }))[0]).toMatch(/^billing-api/)
+
+      serve([summary("billing-api", analysis("billing-api", "failed", at(10, 23)))])
+      await act(() => vi.advanceTimersByTimeAsync(5000))
+
+      expect(rowNames(await screen.findByRole("region", { name: "Needs you" }))[0]).toMatch(/^billing-api/)
+      expect(screen.queryByRole("region", { name: "In progress" })).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("lists a failed export in Needs you only, naming the step", async () => {
