@@ -656,3 +656,67 @@ func TestARunningStoreIsNotBlockedByAPipeAtTheKeyPath(t *testing.T) {
 		t.Fatal("SigningKey blocked on a named pipe")
 	}
 }
+
+func TestReplaceSigningKeyRefusesAPathThatIsNotARegularFile(t *testing.T) {
+	rows := []struct {
+		name  string
+		plant func(t *testing.T, path string)
+	}{
+		{"a FIFO", func(t *testing.T, path string) { plantFIFO(t, path) }},
+		{"a symlink to a key", func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "elsewhere.pem")
+			data, _ := pemOfNewKey(t)
+			write(t, target, data)
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := Open(root); err != nil {
+				t.Fatal(err)
+			}
+			row.plant(t, keyPath(root))
+			before, err := os.Lstat(keyPath(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			done := make(chan error, 1)
+			go func() { _, _, err := ReplaceSigningKey(root, os.Getuid()); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+					t.Errorf("ReplaceSigningKey = %v, want a refusal saying the key is not a regular file", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("ReplaceSigningKey blocked")
+			}
+			after, err := os.Lstat(keyPath(root))
+			if err != nil || after.Mode() != before.Mode() {
+				t.Errorf("the key path changed: %v, mode %v, was %v", err, after, before.Mode())
+			}
+		})
+	}
+}
+
+func TestReplaceSigningKeyRefusesAKeyThatDoesNotRead(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	write(t, keyPath(root), []byte("not a key"))
+
+	_, _, err := ReplaceSigningKey(root, os.Getuid())
+	if err == nil || !strings.Contains(err.Error(), "is not a PEM private key") {
+		t.Errorf("ReplaceSigningKey = %v, want a refusal naming the damaged key", err)
+	}
+	if got := snapshot(t, keyPath(root)); got != "not a key" {
+		t.Errorf("the key file changed to %q", got)
+	}
+}
