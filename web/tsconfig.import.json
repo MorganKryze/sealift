@@ -32,7 +32,6 @@
     "src/components/fingerprint/fingerprint.tsx",
     "src/components/copy-control.tsx",
     "src/components/theme-toggle.tsx",
-    "src/hooks/use-return-focus.ts",
     "src/lib/utils.ts",
     "src/test"
   ]

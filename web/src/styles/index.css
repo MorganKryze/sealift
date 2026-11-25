@@ -53,7 +53,6 @@
 
   --ease-out: var(--ease-out);
   --ease-move: var(--ease-move);
-  --ease-drawer: var(--ease-drawer);
 }
 
 @layer base {
@@ -161,22 +160,11 @@
   animation: stamp 240ms var(--ease-out) both;
 }
 
-@keyframes slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-}
-.animate-slide-in {
-  animation: slide-in 280ms var(--ease-drawer) both;
-}
-
 /* Reduced motion keeps the fades and the colour changes and drops every movement. */
 @media (prefers-reduced-motion: reduce) {
   .animate-enter,
   .animate-pop,
-  .animate-stamp,
-  .animate-slide-in {
+  .animate-stamp {
     animation-name: fade;
   }
   .animate-spin {
