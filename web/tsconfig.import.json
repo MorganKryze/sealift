@@ -27,6 +27,7 @@
     "src/components/ui",
     "src/components/brand",
     "src/components/frame/frame.tsx",
+    "src/components/home/blocks.tsx",
     "src/components/frame/brand.tsx",
     "src/components/fingerprint/fingerprint.tsx",
     "src/components/copy-control.tsx",

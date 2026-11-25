@@ -3,7 +3,7 @@ import { CircleDashed, CircleX, Clock, ListChecks, LoaderCircle, Lock, RefreshCw
 import { useState } from "react"
 
 import { getProject, listProjects, type ProjectSummary } from "@/api/projects"
-import { EmptyGroup, type HomeRow, PathCard, RowGroup } from "@/components/home/blocks"
+import { EmptyGroup, type HomeRow, PathCard, RowGroup, type Tone } from "@/components/home/blocks"
 import { Button } from "@/components/ui/button"
 import { crossingName, crossingState } from "@/lib/crossings"
 
@@ -27,7 +27,7 @@ function place(project: ProjectSummary): Placed | null {
   const exported = last && project.lastExport?.analysisId === last.id ? project.lastExport : undefined
   const state = crossingState(last, exported)
   const session = `/sessions/${encodeURIComponent(project.id)}`
-  const row = (icon: HomeRow["icon"], tone: HomeRow["state"]["tone"], action: HomeRow["action"]) => ({
+  const row = (icon: HomeRow["icon"], tone: Tone, action: HomeRow["action"]) => ({
     key: project.id,
     icon,
     detail: "Update",

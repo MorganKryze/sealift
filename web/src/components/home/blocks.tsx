@@ -34,7 +34,8 @@ export interface HomeRow {
   icon: LucideIcon
   name: string
   detail: string
-  state: { label: string; tone: Tone }
+  /** The row's state in words; a row with none, such as an archive waiting for its import, draws its icon on a neutral box. */
+  state?: { label: string; tone: Tone }
   action: { label: string; to: string; search?: Record<string, string>; primary?: boolean }
 }
 
@@ -50,18 +51,18 @@ const GROUP_ROWS = 10
 
 function Row({ row, actionRef }: { row: HomeRow; actionRef?: Ref<HTMLAnchorElement> }) {
   const { icon: Icon, state, action } = row
-  const failed = state.tone === "bad"
+  const failed = state?.tone === "bad"
   return (
     <li className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 py-3", failed ? "tinted-bad -mx-3 my-1 px-3" : "border-b border-rule")}>
-      <span className={cn("grid size-8 flex-none place-items-center rounded-lg", BOX[state.tone])}>
+      <span className={cn("grid size-8 flex-none place-items-center rounded-lg", state ? BOX[state.tone] : "bg-hover text-ink-2")}>
         <Icon aria-hidden="true" className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
         <p data-row-name="" className="font-medium text-ink [overflow-wrap:anywhere]">
           {row.name}
         </p>
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted">
-          <span className={cn("inline-flex w-fit items-center !rounded-full px-2 text-[13px] font-medium", BOX[state.tone])}>{state.label}</span>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted [overflow-wrap:anywhere]">
+          {state ? <span className={cn("inline-flex w-fit items-center !rounded-full px-2 text-[13px] font-medium", BOX[state.tone])}>{state.label}</span> : null}
           {row.detail}
         </p>
       </div>

@@ -20,11 +20,13 @@ interface ArchiveRowProps {
   latest?: Import
   /** The user's own queued or running import, which the new one would wait for. */
   ownActive?: Import
+  /** Opens the row with its confirmation showing, as when the home's Import led here. */
+  confirmOpen?: boolean
 }
 
 /** One archive of the folder: its name, whether it can be imported, what its latest import did and the one action that follows. */
-export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
-  const [confirming, setConfirming] = useState(false)
+export function ArchiveRow({ archive, latest, ownActive, confirmOpen = false }: ArchiveRowProps) {
+  const [confirming, setConfirming] = useState(confirmOpen)
   const actions = useRef<HTMLDivElement>(null)
   const { folder, file } = archiveName(archive.key)
   const known = archive.latestImport

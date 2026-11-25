@@ -1,3 +1,4 @@
+import { useSearch } from "@tanstack/react-router"
 import { RefreshCw, Inbox } from "lucide-react"
 import { useState } from "react"
 
@@ -28,8 +29,10 @@ function Folders({ bucket }: { bucket: string }) {
   )
 }
 
-/** The archives of the user's folders, with one status region that stays mounted from load to list. */
+/** The archives of the user's folders, with one status region that stays mounted from load to list. The address's `start` names an archive whose confirmation opens. */
 export function ArchivesList() {
+  const search: { start?: unknown } = useSearch({ strict: false })
+  const start = typeof search.start === "string" ? search.start : undefined
   const query = useArchives(true)
   const imports = useImports()
   const me = useMe()
@@ -120,7 +123,7 @@ export function ArchivesList() {
           ) : (
             <ul className="overflow-hidden rounded-xl border border-line">
               {shown.map((a) => (
-                <ArchiveRow key={a.key} archive={a} latest={imports.data?.imports.find((i) => i.id === a.latestImport?.id)} ownActive={ownActive} />
+                <ArchiveRow key={a.key} archive={a} latest={imports.data?.imports.find((i) => i.id === a.latestImport?.id)} ownActive={ownActive} confirmOpen={a.key === start} />
               ))}
             </ul>
           )}
