@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { ChevronDown, CircleCheck, Download, RotateCcwKey } from "lucide-react"
+import { ChevronDown, CircleCheck, CircleDashed, CircleX, Download, RotateCcwKey } from "lucide-react"
 import { useId, useState } from "react"
 
 import { getSigningKey } from "@/api/settings"
@@ -28,14 +28,16 @@ export function SigningKeySection() {
   const [howOpen, setHowOpen] = useState(false)
   const howId = useId()
   const key = keyQuery.data
+  const Icon = keyQuery.isPending ? CircleDashed : key ? CircleCheck : CircleX
+  const tone = keyQuery.isPending ? "text-muted" : key ? "text-ok" : "text-bad"
 
   return (
     <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-x-3 px-3 py-3">
-      <CircleCheck aria-hidden="true" className="mt-0.5 size-4.5 text-ok" />
+      <Icon aria-hidden="true" className={cn("mt-0.5 size-4.5", tone)} />
       <div className="flex min-w-0 flex-col gap-1">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="flex flex-wrap items-baseline gap-x-1.5">
-            <h2 className="text-sm font-semibold text-ink">Signing key</h2>
+            <h3 className="text-sm font-semibold text-ink">Signing key</h3>
             <span className="font-mono text-[12.5px] text-ink-2">Ed25519</span>
           </div>
           {key ? (

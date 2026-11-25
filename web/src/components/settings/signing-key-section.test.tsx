@@ -102,5 +102,19 @@ describe("SigningKeySection", () => {
     vi.mocked(getSigningKey).mockRejectedValue(new Error("boom"))
     renderSection()
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the signing key: boom")
+    expect(document.querySelector("svg.text-bad")).not.toBeNull()
+    expect(document.querySelector("svg.text-ok")).toBeNull()
+  })
+
+  it("draws the row neutral while loading and green once loaded", async () => {
+    let resolve: (value: typeof key) => void = () => {}
+    vi.mocked(getSigningKey).mockReturnValue(new Promise((r) => (resolve = r)))
+    renderSection()
+    expect(screen.getByRole("status")).toHaveTextContent("Loading the signing key")
+    expect(document.querySelector("svg.text-muted")).not.toBeNull()
+    expect(document.querySelector("svg.text-ok")).toBeNull()
+    resolve(key)
+    expect(await screen.findByRole("button", { name: "Download public key" })).toBeInTheDocument()
+    expect(document.querySelector("svg.text-ok")).not.toBeNull()
   })
 })
