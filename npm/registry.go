@@ -120,6 +120,16 @@ const maxPackument = 256 << 20
 // retried: the registry would send the same document again.
 var errTooLarge = fmt.Errorf("document over the %d MiB bound", maxPackument>>20)
 
+// maxTarball bounds a package tarball, which sealift writes to disk before
+// checking its integrity. The largest public tarballs run a few hundred MiB,
+// so 1 GiB admits every real package while a hostile registry cannot fill
+// the volume. A variable so a test can lower it.
+var maxTarball int64 = 1 << 30
+
+// errTarballTooLarge reports a tarball over maxTarball. It is not retried:
+// the registry would send the same tarball again.
+var errTarballTooLarge = errors.New("tarball over the bound")
+
 // Client reads an npm registry. The zero value reads DefaultRegistry.
 type Client struct {
 	Registry string                        // defaults to DefaultRegistry
@@ -179,9 +189,14 @@ func (c *Client) DownloadFile(ctx context.Context, name, version, integrity, pat
 		}
 		h := newHash()
 		sum512 := sha512.New()
-		_, copyErr := io.Copy(io.MultiWriter(f, h, sum512), body)
+		// One byte past the bound shows the tarball is larger.
+		lr := &io.LimitedReader{R: body, N: maxTarball + 1}
+		_, copyErr := io.Copy(io.MultiWriter(f, h, sum512), lr)
 		if err := errors.Join(copyErr, f.Close()); err != nil {
 			return err
+		}
+		if lr.N == 0 {
+			return fmt.Errorf("%w of %d bytes", errTarballTooLarge, maxTarball)
 		}
 		if !bytes.Equal(h.Sum(nil), want) {
 			return ErrIntegrity
@@ -211,7 +226,7 @@ func (c *Client) do(ctx context.Context, u, accept string, fn func(io.Reader) er
 			}
 		}
 		err = c.try(ctx, u, accept, fn)
-		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrIntegrity) || errors.Is(err, errTooLarge) || ctx.Err() != nil {
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrIntegrity) || errors.Is(err, errTooLarge) || errors.Is(err, errTarballTooLarge) || ctx.Err() != nil {
 			return err
 		}
 	}

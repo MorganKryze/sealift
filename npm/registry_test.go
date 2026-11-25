@@ -289,3 +289,48 @@ func TestDownloadFileWritesThroughNoLink(t *testing.T) {
 		t.Errorf("file = %q", got)
 	}
 }
+
+// TestDownloadFileRefusesATarballOverTheBound lowers the bound so the test
+// stays small: a body one byte over it fails once, names the package and
+// leaves no file behind.
+func TestDownloadFileRefusesATarballOverTheBound(t *testing.T) {
+	defer func(old int64) { maxTarball = old }(maxTarball)
+	maxTarball = 16
+	for _, c := range []struct {
+		name string
+		size int64
+		ok   bool
+	}{
+		{"at the bound", maxTarball, true},
+		{"one byte over", maxTarball + 1, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := bytes.Repeat([]byte("x"), int(c.size))
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				_, _ = w.Write(body)
+			}))
+			defer srv.Close()
+			path := filepath.Join(t.TempDir(), "demo-1.0.0.tgz")
+			_, err := testClient(srv.URL).DownloadFile(context.Background(), "demo", "1.0.0", sriOf(body), path)
+			if c.ok {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "demo@1.0.0") || !strings.Contains(err.Error(), "16 bytes") {
+				t.Fatalf("err = %v, want a refusal naming demo@1.0.0 and the bound", err)
+			}
+			if calls.Load() != 1 {
+				t.Errorf("calls = %d, want 1: the registry would send the same tarball", calls.Load())
+			}
+			for _, p := range []string{path, path + ".part"} {
+				if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+					t.Errorf("%s left behind", p)
+				}
+			}
+		})
+	}
+}
