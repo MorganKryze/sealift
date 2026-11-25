@@ -135,7 +135,10 @@ func run(addr, root string, log *slog.Logger) error {
 	handlers := api.NewHandlers(st, service, toolsManager)
 	handlers.Ephemeral = idle
 	handlers.Policy = pol
-	preparer := tools.NewPreparer(toolsManager, trivyRunner, func() string { return st.SigningKey().PublicKeySHA256 },
+	preparer := tools.NewPreparer(toolsManager, trivyRunner, func() (string, error) {
+		key := st.SigningKey()
+		return key.PublicKeySHA256, key.Err()
+	},
 		pol.Settings.Target.PnpmVer, pol.Pip.UvVer, log)
 	handlers.Ready = preparer
 

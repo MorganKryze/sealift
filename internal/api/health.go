@@ -37,8 +37,9 @@ func LiveHandler(w http.ResponseWriter, _ *http.Request) {
 
 // HealthHandler answers a readiness probe from r's state: 200 once every
 // item is ready, 503 with the names of the others until then. Causes stay
-// out of this answer. The preparer's state is in memory, so a probe never
-// blocks on the store, the job queue or a subprocess; handlers built
+// out of this answer. The preparer's state is in memory, the signing key
+// aside, which costs a stat of its file, so a probe never blocks on the
+// job queue or a subprocess; handlers built
 // without a preparer read the volume through toolsReadiness instead.
 func HealthHandler(r Readiness) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {

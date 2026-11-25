@@ -589,6 +589,71 @@ func TestServerTakesARegeneratedKeyWithNoRestart(t *testing.T) {
 	}
 }
 
+// instanceKeyItem returns the signing-key item GET /api/instance lists.
+func instanceKeyItem(t *testing.T, addr string) (state, version, reason string) {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/api/instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var in struct {
+		Preparing []struct{ Name, State, Version, Reason string }
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&in); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range in.Preparing {
+		if it.Name == "signing-key" {
+			return it.State, it.Version, it.Reason
+		}
+	}
+	t.Fatalf("GET /api/instance lists no signing-key item: %+v", in.Preparing)
+	return "", "", ""
+}
+
+func TestInstanceAnswerFollowsTheKeyFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	addr, stop := startRun(t, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer stop()
+	_, before := signingKeyGET(t, addr)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if state, version, _ := instanceKeyItem(t, addr); state == "ready" && version == before {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the signing key never showed ready")
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	printed := printedSHA256(t, stdout.String())
+	if state, version, _ := instanceKeyItem(t, addr); state != "ready" || version != printed {
+		t.Errorf("signing-key after the regenerate = %s %s, want ready %s", state, version, printed)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "private", "signing-key.pem"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, reason := instanceKeyItem(t, addr); state != "failed" || !strings.Contains(reason, "not a PEM private key") {
+		t.Errorf("signing-key with a broken file = %s %q, want failed naming the cause", state, reason)
+	}
+	resp, err := http.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var health struct{ Missing []string }
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode == http.StatusOK || !slices.Contains(health.Missing, "signing-key") {
+		t.Errorf("/healthz = %d missing %v, want 503 naming the signing key", resp.StatusCode, health.Missing)
+	}
+}
+
 // privateKeyForms lists the forms the private key in root could take in a text.
 func privateKeyForms(t *testing.T, root string) []string {
 	t.Helper()

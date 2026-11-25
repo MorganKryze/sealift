@@ -63,19 +63,23 @@ type Preparer struct {
 
 	m         *Manager
 	db        DBUpdater
-	keySHA256 func() string
+	keySHA256 func() (string, error)
 	pnpm, uv  string
 	log       *slog.Logger
 
 	mu      sync.Mutex
 	items   []Item
 	warning string
+	// keyChecked is set once the key's first check passed; from then on
+	// State reads the key at each call, so a regenerate or a damaged file
+	// shows with no restart.
+	keyChecked bool
 }
 
 // NewPreparer returns a Preparer that installs through m, downloads the
-// database through db, reads the public key's sha256 from keySHA256, and
-// prepares the pnpm and uv versions given.
-func NewPreparer(m *Manager, db DBUpdater, keySHA256 func() string, pnpm, uv string, log *slog.Logger) *Preparer {
+// database through db, reads the public key's sha256 or the key file's
+// error from keySHA256, and prepares the pnpm and uv versions given.
+func NewPreparer(m *Manager, db DBUpdater, keySHA256 func() (string, error), pnpm, uv string, log *slog.Logger) *Preparer {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -97,6 +101,9 @@ func NewPreparer(m *Manager, db DBUpdater, keySHA256 func() string, pnpm, uv str
 // ctx ends.
 func (p *Preparer) Run(ctx context.Context) {
 	if p.attempt(ctx, "signing-key", p.key) {
+		p.mu.Lock()
+		p.keyChecked = true
+		p.mu.Unlock()
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			if p.attempt(ctx, "trivy", p.m.EnsureTrivy) {
@@ -123,9 +130,17 @@ func (p *Preparer) Run(ctx context.Context) {
 // State returns a copy of every item. Safe for concurrent use.
 func (p *Preparer) State() Readiness {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	r := Readiness{Ready: true, Items: append([]Item(nil), p.items...), Warning: p.warning}
-	for _, it := range p.items {
+	live := p.keyChecked
+	p.mu.Unlock()
+	if live {
+		for i := range r.Items {
+			if r.Items[i].Name == "signing-key" {
+				r.Items[i] = p.liveKey()
+			}
+		}
+	}
+	for _, it := range r.Items {
 		if it.State != ItemReady {
 			r.Ready = false
 		}
@@ -195,10 +210,24 @@ func (p *Preparer) version(name string) string {
 }
 
 func (p *Preparer) key(context.Context) (string, error) {
-	if sum := p.keySHA256(); sum != "" {
-		return sum, nil
+	sum, err := p.keySHA256()
+	if err != nil {
+		return "", err
 	}
-	return "", errors.New("no signing key on the data volume")
+	if sum == "" {
+		return "", errors.New("no signing key on the data volume")
+	}
+	return sum, nil
+}
+
+// liveKey reads the key as it stands now. A failure here has no next try:
+// the next State reads the file again.
+func (p *Preparer) liveKey() Item {
+	sum, err := p.key(context.Background())
+	if err != nil {
+		return Item{Name: "signing-key", State: ItemFailed, Reason: p.clean(err.Error())}
+	}
+	return Item{Name: "signing-key", Version: sum, State: ItemReady}
 }
 
 // database downloads the vulnerability database. A failed download leaves
