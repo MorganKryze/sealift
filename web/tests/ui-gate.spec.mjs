@@ -674,6 +674,31 @@ for (const width of UI.widths) {
   })
 }
 
+// On a phone the tab bar is fixed to the bottom too: the Export bar sits above it, so its button can be pressed.
+test(`/sessions/worst/review keeps the Export button above the tab bar at ${PHONE.width}`, async ({ page }) => {
+  await page.setViewportSize({ width: PHONE.width, height: 800 })
+  await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
+  const button = page.getByRole("button", { name: "Confirm and build the archive" })
+  await button.waitFor({ timeout: 15_000 })
+  await page.evaluate(settle)
+  const overlap = await page.evaluate(() => {
+    const button = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Confirm and build the archive").getBoundingClientRect()
+    const tabs = document.querySelector('nav[aria-label="Places"]').getBoundingClientRect()
+    return Math.max(0, button.bottom - tabs.top)
+  })
+  expect(overlap, `${overlap} px of the Export button sit under the tab bar at ${PHONE.width}px`).toBe(0)
+  // The worst review leaves reasons unwritten, so the button is disabled; what matters is that nothing covers it.
+  const onTop = await page.evaluate(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Confirm and build the archive")
+    const r = b.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    // A disabled button lets the pointer through to its bar, so the hit must land in the Export bar itself.
+    const bar = b.closest(".fixed")
+    return r.bottom <= innerHeight && bar !== null && bar.contains(hit)
+  })
+  expect(onTop, `the Export button is off screen or covered at ${PHONE.width}px`).toBe(true)
+})
+
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.
   if (!startedCollection) return

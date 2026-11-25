@@ -56,6 +56,15 @@
 }
 
 @layer base {
+  /* The phone's tab bar is fixed to the bottom; a fixed bar of a page (the review's Export bar) sits on top of it. */
+  :root {
+    --tabbar-h: calc(72px + env(safe-area-inset-bottom));
+  }
+  @media (width >= 48rem) {
+    :root {
+      --tabbar-h: 0px;
+    }
+  }
   html {
     -webkit-font-smoothing: antialiased;
     caret-color: var(--ink);
@@ -135,8 +144,10 @@
     transform: translateY(6px);
   }
 }
+/* backwards, not both: a transform kept after the end would make the page the containing block of every
+   fixed bar inside it (the review's Export bar), which then scrolls away with the page. */
 .animate-enter {
-  animation: enter 200ms var(--ease-out) both;
+  animation: enter 200ms var(--ease-out) backwards;
 }
 
 @keyframes pop {

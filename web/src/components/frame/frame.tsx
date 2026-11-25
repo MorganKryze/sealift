@@ -56,8 +56,8 @@ export function Frame({ side, places, instance, instanceWarning, user, crumbs, c
       </a>
       {/* The column paints the sidebar down the whole page; the nav inside stays on screen. Under md the
           column becomes a tab bar fixed to the bottom, above the home indicator's safe area. */}
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-rule bg-canvas pb-[env(safe-area-inset-bottom)] md:static md:border-t-0 md:border-r md:pb-0">
-        <nav aria-label="Places" className="flex items-center gap-1 px-2 py-1.5 md:sticky md:top-0 md:h-screen md:flex-col md:px-1.5 md:py-3.5">
+      <div className="fixed inset-x-0 bottom-0 z-30 h-(--tabbar-h) border-t border-rule bg-canvas pb-[env(safe-area-inset-bottom)] md:static md:h-auto md:border-t-0 md:border-r md:pb-0">
+        <nav aria-label="Places" className="flex h-full items-center gap-1 px-2 py-1.5 md:sticky md:top-0 md:h-screen md:flex-col md:px-1.5 md:py-3.5">
           <span data-brand-mark className="mb-3 hidden size-10 place-items-center md:grid">
             <BrandMark size={28} />
           </span>
@@ -104,7 +104,7 @@ export function Frame({ side, places, instance, instanceWarning, user, crumbs, c
           </nav>
           <SideLabel side={side} />
         </header>
-        <main id="content" tabIndex={-1} className="flex min-w-0 flex-col pb-[calc(72px+env(safe-area-inset-bottom))] outline-none md:pb-0">
+        <main id="content" tabIndex={-1} className="flex min-w-0 flex-col pb-(--tabbar-h) outline-none md:pb-0">
           {children}
         </main>
       </div>

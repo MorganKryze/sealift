@@ -282,7 +282,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
 
       <ReasonsBlock needed={needed} reasons={reasons.reasons} onChange={reasons.setReason} refusal={refusal} />
 
-      <div ref={barRef} className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 backdrop-blur">
+      <div ref={barRef} style={{ bottom: "var(--tabbar-h)" }} className="fixed inset-x-0 z-10 border-t border-line bg-background/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
           <div className="text-sm">
             <span className="font-semibold text-ink">
