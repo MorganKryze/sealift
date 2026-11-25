@@ -151,7 +151,7 @@ export function OfflineHome() {
               text={list.minioConfigured ? `No archive in ${list.bucket}/${FOLDERS[0]} or ${FOLDERS[1]}` : "MinIO is not configured. The administrator sets it in the settings file."}
             />
           ) : (
-            <RowGroup title="Needs you" rows={newestFirst(groups.needs)} noun={["archive", "archives"]} />
+            <RowGroup title="Needs you" rows={newestFirst(groups.needs)} noun={["archive or import", "archives and imports"]} />
           )}
           <RowGroup title="In progress" rows={newestFirst(groups.progress)} noun={["import", "imports"]} />
           <RowGroup title="Done today" rows={newestFirst(groups.done)} noun={["import", "imports"]} />

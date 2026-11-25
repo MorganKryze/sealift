@@ -263,7 +263,7 @@ describe("the offline home", () => {
     renderHome({ archives: folderList(many) })
     const needs = await screen.findByRole("region", { name: "Needs you" })
     expect(rowNames(needs)).toEqual(Array.from({ length: 10 }, (_, i) => `app-${String(i).padStart(2, "0")}`))
-    fireEvent.click(within(needs).getByRole("button", { name: "Show all 18 archives" }))
+    fireEvent.click(within(needs).getByRole("button", { name: "Show all 18 archives and imports" }))
     expect(within(group("Needs you")).getAllByRole("listitem")).toHaveLength(18)
     expect(within(group("Needs you")).queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument()
   })
