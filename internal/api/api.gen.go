@@ -788,9 +788,6 @@ type CreateProjectMultipartBody struct {
 	Requirements *[]openapi_types.File `json:"requirements,omitempty"`
 }
 
-// RegenerateSigningKeyJSONBody defines parameters for RegenerateSigningKey.
-type RegenerateSigningKeyJSONBody = map[string]interface{}
-
 // CreateProjectMultipartRequestBody defines body for CreateProject for multipart/form-data ContentType.
 type CreateProjectMultipartRequestBody CreateProjectMultipartBody
 
@@ -799,9 +796,6 @@ type QueueExportJSONRequestBody = ExportRequest
 
 // SetProjectTargetJSONRequestBody defines body for SetProjectTarget for application/json ContentType.
 type SetProjectTargetJSONRequestBody = Target
-
-// RegenerateSigningKeyJSONRequestBody defines body for RegenerateSigningKey for application/json ContentType.
-type RegenerateSigningKeyJSONRequestBody = RegenerateSigningKeyJSONBody
 
 // AsStepData returns the union data inside the Event_Data as a StepData
 func (t Event_Data) AsStepData() (StepData, error) {
@@ -1008,9 +1002,6 @@ type ServerInterface interface {
 	// GetSigningKey The public half of the key that signs exports
 	// (GET /signing-key)
 	GetSigningKey(w http.ResponseWriter, r *http.Request)
-	// RegenerateSigningKey Replace the signing key with a new pair
-	// (POST /signing-key/regenerate)
-	RegenerateSigningKey(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1593,20 +1584,6 @@ func (siw *ServerInterfaceWrapper) GetSigningKey(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
-// RegenerateSigningKey operation middleware
-func (siw *ServerInterfaceWrapper) RegenerateSigningKey(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.RegenerateSigningKey(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1748,7 +1725,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance", wrapper.GetInstance)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/instance/logo", wrapper.GetInstanceLogo)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/signing-key", wrapper.GetSigningKey)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/signing-key/regenerate", wrapper.RegenerateSigningKey)
 
 	return m
 }
@@ -2648,75 +2624,6 @@ func (response GetSigningKeydefaultApplicationProblemPlusJSONResponse) VisitGetS
 	return err
 }
 
-type RegenerateSigningKeyRequestObject struct {
-	Body *RegenerateSigningKeyJSONRequestBody
-}
-
-type RegenerateSigningKeyResponseObject interface {
-	VisitRegenerateSigningKeyResponse(w http.ResponseWriter) error
-}
-
-type RegenerateSigningKey200JSONResponse SigningKey
-
-func (response RegenerateSigningKey200JSONResponse) VisitRegenerateSigningKeyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type RegenerateSigningKey403ApplicationProblemPlusJSONResponse struct {
-	ProblemApplicationProblemPlusJSONResponse
-}
-
-func (response RegenerateSigningKey403ApplicationProblemPlusJSONResponse) VisitRegenerateSigningKeyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type RegenerateSigningKey500ApplicationProblemPlusJSONResponse Problem
-
-func (response RegenerateSigningKey500ApplicationProblemPlusJSONResponse) VisitRegenerateSigningKeyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(500)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type RegenerateSigningKeydefaultApplicationProblemPlusJSONResponse struct {
-	Body       Problem
-	StatusCode int
-}
-
-func (response RegenerateSigningKeydefaultApplicationProblemPlusJSONResponse) VisitRegenerateSigningKeyResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(response.StatusCode)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetInstance How this instance was deployed and what it has prepared
@@ -2782,9 +2689,6 @@ type StrictServerInterface interface {
 	// GetSigningKey The public half of the key that signs exports
 	// (GET /signing-key)
 	GetSigningKey(ctx context.Context, request GetSigningKeyRequestObject) (GetSigningKeyResponseObject, error)
-	// RegenerateSigningKey Replace the signing key with a new pair
-	// (POST /signing-key/regenerate)
-	RegenerateSigningKey(ctx context.Context, request RegenerateSigningKeyRequestObject) (RegenerateSigningKeyResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3384,37 +3288,6 @@ func (sh *strictHandler) GetSigningKey(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetSigningKeyResponseObject); ok {
 		if err := validResponse.VisitGetSigningKeyResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// RegenerateSigningKey operation middleware
-func (sh *strictHandler) RegenerateSigningKey(w http.ResponseWriter, r *http.Request) {
-	var request RegenerateSigningKeyRequestObject
-
-	var body RegenerateSigningKeyJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.RegenerateSigningKey(ctx, request.(RegenerateSigningKeyRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "RegenerateSigningKey")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(RegenerateSigningKeyResponseObject); ok {
-		if err := validResponse.VisitRegenerateSigningKeyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

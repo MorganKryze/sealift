@@ -214,12 +214,3 @@ func generateSigningKey(path string) (SigningKey, error) {
 	}
 	return newSigningKey(priv), nil
 }
-
-// RegenerateSigningKey replaces the key pair with a new one and returns the
-// key the store signs with from then on.
-func (s *Store) RegenerateSigningKey() (SigningKey, error) {
-	if _, _, err := ReplaceSigningKey(s.root, os.Getuid()); err != nil {
-		return SigningKey{}, err
-	}
-	return s.SigningKey(), nil
-}

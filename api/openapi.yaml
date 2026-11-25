@@ -514,36 +514,6 @@ paths:
                 $ref: "#/components/schemas/SigningKey"
         default:
           $ref: "#/components/responses/Problem"
-  /signing-key/regenerate:
-    post:
-      operationId: regenerateSigningKey
-      tags:
-        - settings
-      summary: Replace the signing key with a new pair
-      description: >-
-        Answers 403 for a Host or an Origin that is not this server's own, for
-        Sec-Fetch-Site cross-site, and for a body that is not application/json.
-        The old key stays in use when the new one cannot be written.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              description: Empty. The body exists so that a cross-site form post cannot send this request.
-      responses:
-        "200":
-          description: The new public key and its public key sha256
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SigningKey"
-        "403":
-          $ref: "#/components/responses/Problem"
-        "500":
-          $ref: "#/components/responses/Problem"
-        default:
-          $ref: "#/components/responses/Problem"
 components:
   parameters:
     ProjectId:

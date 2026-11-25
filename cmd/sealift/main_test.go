@@ -576,6 +576,17 @@ func TestServerTakesARegeneratedKeyWithNoRestart(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("key file: %v, mode %v, want 0600", err, info)
 	}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/api/signing-key/regenerate", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	if r.StatusCode != http.StatusGone {
+		t.Errorf("POST regenerate = %d, want 410", r.StatusCode)
+	}
 }
 
 // privateKeyForms lists the forms the private key in root could take in a text.

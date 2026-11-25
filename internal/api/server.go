@@ -28,11 +28,9 @@ func NewHandlers(st *store.Store, svc *jobs.Service, tm *tools.Manager) *Handler
 // liveness checks at the root, the readiness one answered from h.Ready;
 // every other operation of api/openapi.yaml mounted at base URL /api
 // through the generated strict server; and the frontend build in static
-// for every other path. refuseCrossSite wraps all of it and
-// guards the signing key's regenerate route. WatchJob
-// (the event stream) is one of the contract's operations: Handlers embeds
-// *EventsHandler, so the generated dispatch reaches it exactly like any JSON
-// operation.
+// for every other path. WatchJob (the event stream) is one of the
+// contract's operations: Handlers embeds *EventsHandler, so the generated
+// dispatch reaches it exactly like any JSON operation.
 func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", HealthHandler(h.Ready))
@@ -64,8 +62,9 @@ func Routes(h *Handlers, static fs.FS) http.Handler {
 	mux.HandleFunc("/api/tools", toolsGone)
 	mux.HandleFunc("/api/tools/", toolsGone)
 	mux.HandleFunc("PUT /api/settings", gone("the settings write is gone: the deployment sets them in its policy file, and GET /api/instance reports them"))
+	mux.HandleFunc("/api/signing-key/regenerate", gone("the regenerate route is gone: run sealift signing-key regenerate in the container or pod; GET /api/signing-key reports the key"))
 	mux.Handle("/", SPA(static))
-	routes := refuseCrossSite(boundBodies(mux), allowedHosts(h.ListenAddr))
+	routes := boundBodies(mux)
 	if h.Ephemeral > 0 {
 		return noStore(routes)
 	}
