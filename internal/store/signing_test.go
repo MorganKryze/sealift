@@ -16,7 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/MorganKryze/sealift/archive"
 )
@@ -95,12 +97,11 @@ func TestOpenRefusesADamagedSigningKey(t *testing.T) {
 		prepare func(t *testing.T, path string)
 		problem string
 	}{
-		{"unreadable", func(t *testing.T, path string) {
-			// A directory where the file should be: reading it fails.
+		{"a directory", func(t *testing.T, path string) {
 			if err := os.Mkdir(path, 0o700); err != nil {
 				t.Fatal(err)
 			}
-		}, "cannot be read"},
+		}, "is not a regular file"},
 		{"empty", func(t *testing.T, path string) { write(t, path, nil) }, "is not a PEM private key"},
 		{"not PEM", func(t *testing.T, path string) { write(t, path, []byte("hello")) }, "is not a PEM private key"},
 		{"a public key", func(t *testing.T, path string) {
@@ -616,5 +617,42 @@ func TestARunningStoreNoticesAnInPlaceRewriteWithTheSameMtime(t *testing.T) {
 
 	if got := s.SigningKey(); got.Err() != nil || got.PublicKeySHA256 != sha {
 		t.Errorf("SigningKey() = %s (err %v), want the rewritten key %s", got.PublicKeySHA256, got.Err(), sha)
+	}
+}
+
+// plantFIFO replaces path with a named pipe, or skips the test where the
+// platform has none.
+func plantFIFO(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("no named pipes here: %v", err)
+	}
+}
+
+func TestARunningStoreIsNotBlockedByAPipeAtTheKeyPath(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SigningKey()
+	plantFIFO(t, keyPath(root))
+
+	got := make(chan SigningKey, 1)
+	go func() { got <- s.SigningKey() }()
+	select {
+	case key := <-got:
+		if err := key.Err(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("Err() = %v, want one saying the key is not a regular file", err)
+		}
+	case <-time.After(2 * time.Second):
+		// Opening the pipe for writing frees the blocked reader.
+		if f, err := os.OpenFile(keyPath(root), os.O_WRONLY, 0); err == nil {
+			f.Close()
+		}
+		t.Fatal("SigningKey blocked on a named pipe")
 	}
 }

@@ -176,11 +176,20 @@ func readSigningKey(path string) (SigningKey, keyStamp, error) {
 
 // readKeyFile returns the key file's bytes.
 func readKeyFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	// O_NONBLOCK keeps a named pipe at the path from blocking the open;
+	// the regular-file check then refuses it, a device too.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("store: signing key %s is not a regular file", path)
+	}
 	// A PEM Ed25519 key runs 119 bytes.
 	data, err := io.ReadAll(io.LimitReader(f, 64<<10))
 	if err != nil {
