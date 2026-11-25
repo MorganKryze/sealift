@@ -10,7 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as InstanceRouteImport } from './routes/instance'
+import { Route as UpdateRouteImport } from './routes/update'
+import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
+import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions.$sessionId.index'
 import { Route as SessionsSessionIdAnalysisRouteImport } from './routes/sessions.$sessionId.analysis'
@@ -23,9 +26,24 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const InstanceRoute = InstanceRouteImport.update({
+  id: '/instance',
+  path: '/instance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UpdateRoute = UpdateRouteImport.update({
+  id: '/update',
+  path: '/update',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
+  id: '/projects/',
+  path: '/projects/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
+  id: '/projects/$projectId',
+  path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
@@ -62,8 +80,11 @@ const SessionsSessionIdReviewRoute = SessionsSessionIdReviewRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/settings': typeof SettingsRoute
+  '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
+  '/projects/': typeof ProjectsIndexRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
   '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
@@ -72,7 +93,10 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/settings': typeof SettingsRoute
+  '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRoute
+  '/projects': typeof ProjectsIndexRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
   '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
@@ -82,8 +106,11 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/settings': typeof SettingsRoute
+  '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
+  '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
+  '/projects/': typeof ProjectsIndexRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
   '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
   '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
@@ -94,8 +121,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/settings'
+    | '/instance'
+    | '/update'
+    | '/projects/$projectId'
     | '/sessions/$sessionId'
+    | '/projects/'
     | '/sessions/$sessionId/analysis'
     | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/export'
@@ -104,7 +134,10 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/settings'
+    | '/instance'
+    | '/update'
+    | '/projects/$projectId'
+    | '/projects'
     | '/sessions/$sessionId/analysis'
     | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/export'
@@ -113,8 +146,11 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/settings'
+    | '/instance'
+    | '/update'
+    | '/projects/$projectId'
     | '/sessions/$sessionId'
+    | '/projects/'
     | '/sessions/$sessionId/analysis'
     | '/sessions/$sessionId/drop'
     | '/sessions/$sessionId/export'
@@ -124,8 +160,11 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  SettingsRoute: typeof SettingsRoute
+  InstanceRoute: typeof InstanceRoute
+  UpdateRoute: typeof UpdateRoute
+  ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
+  ProjectsIndexRoute: typeof ProjectsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -137,11 +176,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
+    '/instance': {
+      id: '/instance'
+      path: '/instance'
+      fullPath: '/instance'
+      preLoaderRoute: typeof InstanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/update': {
+      id: '/update'
+      path: '/update'
+      fullPath: '/update'
+      preLoaderRoute: typeof UpdateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/': {
+      id: '/projects/'
+      path: '/projects'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof ProjectsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects/$projectId': {
+      id: '/projects/$projectId'
+      path: '/projects/$projectId'
+      fullPath: '/projects/$projectId'
+      preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sessions/$sessionId': {
@@ -210,8 +270,11 @@ const SessionsSessionIdRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  SettingsRoute: SettingsRoute,
+  InstanceRoute: InstanceRoute,
+  UpdateRoute: UpdateRoute,
+  ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
+  ProjectsIndexRoute: ProjectsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

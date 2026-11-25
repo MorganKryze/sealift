@@ -28,7 +28,7 @@ const folderList = (archives: Archive[], over: Partial<ArchiveList> = {}): Archi
   minioConfigured: true, bucket: "user-alice", folder: "packages/npm/", folders: ["packages/npm/", "packages/pip/"], bucketMissing: false, truncated: false, unencrypted: [], archives, ...over,
 })
 
-function renderList(answer: () => Response | Promise<Response>, seed?: (client: QueryClient) => void) {
+function renderList(answer: () => Response | Promise<Response>, seed?: (client: QueryClient) => void, at = "/") {
   const fetchMock = vi.fn(async (url: string) => {
     if (url === "/api/me") return json(me)
     if (url === "/api/imports") return json({ imports: [] })
@@ -39,7 +39,7 @@ function renderList(answer: () => Response | Promise<Response>, seed?: (client: 
   const page = (p: string) => createRoute({ getParentRoute: () => root, path: p, component: () => <p>page {p}</p> })
   const router = createRouter({
     routeTree: root.addChildren([page("/imports/$importId")]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [at] }),
   })
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   seed?.(client)
@@ -187,6 +187,14 @@ describe("ArchivesList", () => {
     await screen.findAllByRole("listitem")
     expect(screen.getByText(/the first 1,000 in name order, so a newer archive may be missing/)).toBeInTheDocument()
     expect(screen.getByText(/Moving finished archives out of packages\/npm\/ makes room/)).toBeInTheDocument()
+  })
+
+  it("opens the confirmation of the archive named in the address", async () => {
+    const key = three[1].key
+    renderList(() => json(folderList(three)), undefined, `/?start=${encodeURIComponent(key)}`)
+    expect(await screen.findByRole("region", { name: "Start the import of 2026-11-06-new/packages_npm.tar.gz" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Start import of 2026-11-06-new/packages_npm.tar.gz" })).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getAllByRole("region")).toHaveLength(1)
   })
 
   it("filters All and Importable as a two-choice control without pagination", async () => {

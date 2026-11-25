@@ -17,16 +17,16 @@ const policy: Instance["policy"] = {
 const valueOf = (term: string) => screen.getByText(term, { selector: "dt" }).nextElementSibling?.textContent
 
 describe("PolicySection", () => {
-  it("shows both targets, the release age and the parallelism", () => {
+  it("shows both targets, the release age and the parallelism, their figures in weight 600", () => {
     render(<PolicySection policy={policy} ephemeral={false} />)
     expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument()
-    expect(screen.getByText("Set by your deployment.")).toBeInTheDocument()
-    expect(valueOf("npm target")).toBe("Linux x64 · glibc, Node 22.17.1, pnpm 10.34.5")
-    expect(valueOf("pip target")).toBe("Linux x86_64 · glibc 2.28, Python 3.11.2, uv 0.13.7")
-    expect(valueOf("Minimum release age")).toBe("14 days")
-    expect(valueOf("Resolve parallelism")).toBe("4 at once")
-    expect(valueOf("Download parallelism")).toBe("16 at once")
-    expect(valueOf("Mode")).toBe("Projects stay until someone deletes them.")
+    expect(screen.getByText("Set at deploy")).toBeInTheDocument()
+    expect(valueOf("npm target")).toBe("Node 22.17.1, Linux x64 · glibc")
+    expect(valueOf("pip target")).toBe("Python 3.11.2, Linux x86_64 · glibc 2.28")
+    expect(valueOf("Release age")).toBe("At least 14 days old")
+    expect(valueOf("Parallelism")).toBe("4 resolves, 16 downloads")
+    expect(valueOf("Projects")).toBe("Kept until someone deletes them")
+    for (const figure of ["22.17.1", "3.11.2", "2.28", "14 days", "4", "16"]) expect(screen.getByText(figure)).toHaveClass("figure")
   })
 
   it("shows the review rules at their defaults", () => {
@@ -45,12 +45,13 @@ describe("PolicySection", () => {
 
   it("names a target outside the platform list by its fields", () => {
     render(<PolicySection policy={{ ...policy, target: { ...policy.target, os: "darwin", cpu: "arm64", libc: "" } }} ephemeral={false} />)
-    expect(valueOf("npm target")).toBe("darwin arm64, Node 22.17.1, pnpm 10.34.5")
+    expect(valueOf("npm target")).toBe("Node 22.17.1, darwin arm64")
   })
 
   it("says ephemeral mode and its idle delay", () => {
     render(<PolicySection policy={policy} ephemeral idleMinutes={45} />)
-    expect(valueOf("Mode")).toBe("Ephemeral: a project is erased after 45 minutes without activity.")
+    expect(valueOf("Projects")).toBe("Erased with their caches after 45 minutes without activityEphemeral mode")
+    expect(screen.getByText("45 minutes")).toHaveClass("figure")
   })
 
   it("offers no input, select or button", () => {

@@ -6,6 +6,8 @@
 // at baseURL, and the import server with its token check on (see import-fixtures.mjs). No start
 // command, or a missing package, fails the run: it never skips. No screenshot diff, no clock, no
 // random input. Fill the blocks below; `exceptions` take a selector, the check they lift and the reason.
+// With UI_CAPTURES set to a folder, each page is saved there once checked, as
+// <role>-<route slug>-<width>-<theme>.png, for a reader to compare with the drawn screens.
 
 // GET /api/instance as the collection server answered it on an empty volume, with its stand-in upstream
 // answering 404 to everything: Trivy, pnpm and uv failed once and wait for their next try. Captured once
@@ -83,23 +85,48 @@ const PREPARING = {
   }
 }
 
+// The failed items' next try, moved 42 s past the moment the page asks, so the page shows the delay as it would live.
+const preparingNow = () => ({
+  ...PREPARING,
+  preparing: PREPARING.preparing.map((item) => (item.nextTry ? { ...item, nextTry: new Date(Date.now() + 42_000).toISOString() } : item)),
+})
+
+// Ready with a warning, as the preparer answers when a refresh fails on an existing database
+// (internal/tools/ready.go): every item ready, the database at its older date.
+const READY_WITH_WARNING = {
+  ...PREPARING,
+  ready: true,
+  warning: "could not refresh the vulnerability database: dial tcp: lookup ghcr.io: no such host; using the database from 2026-11-22",
+  preparing: PREPARING.preparing.map(({ reason, nextTry, ...item }) => ({
+    ...item,
+    state: "ready",
+    ...(item.name === "trivy-db" ? { version: "2026-11-22T06:12:00Z" } : {}),
+  })),
+}
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
   start: `data="$(mktemp -d)" && node tests/seed.mjs "$data" && exec "$SEALIFT" -addr 127.0.0.1:18080 -data "$data"`,
   routes: [
     "/",
+    "/update",
+    "/instance",
+    // The settings sheet's old address lands on Instance.
     "/settings",
     "/sessions/demo/drop",
     "/sessions/demo/analysis",
     "/sessions/demo/review",
     "/sessions/demo/export",
     "/sessions/missing/review",
+    "/projects",
+    "/projects/web-portal",
+    "/projects/pipeline",
   ],
   // A page with a control pressed first: the state is checked as a route is. `opens` names the role
   // and name the pressed control must bring up.
   states: [
-    { path: "/settings", open: { role: "button", name: "Regenerate key", opens: { role: "alertdialog", name: "Regenerate the signing key" } } },
+    { path: "/instance", open: { role: "button", name: "How to regenerate", opens: { role: "button", name: "Copy command" } } },
   ],
   // A session route with sessionStorage written before the page loads, as the review screen keeps the
   // selection and the reasons there; `ready` is the text that proves the analysis arrived.
@@ -119,9 +146,26 @@ export const UI = {
     },
   ],
   // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
-  // `ready` is the text that proves the page drew that answer.
+  // `ready` is the text that proves the page drew that answer; `body` may be a function, called per
+  // request. `focus` names a control focused next and what it must bring up.
   answers: [
-    { path: "/", api: "/api/instance", body: PREPARING, ready: "Preparing sealift" },
+    { path: "/", api: "/api/instance", body: preparingNow, ready: "Preparing this instance" },
+    {
+      path: "/",
+      api: "/api/instance",
+      name: "ready with a warning",
+      body: READY_WITH_WARNING,
+      ready: "Instance",
+      focus: { role: "link", name: "Instance", opens: { role: "tooltip" } },
+    },
+    {
+      path: "/instance",
+      api: "/api/instance",
+      name: "warning ephemeral and accent",
+      // An accent that reads on the light page and falls under 3:1 on the dark one.
+      body: { ...READY_WITH_WARNING, ephemeral: true, idleMinutes: 30, brand: { ...READY_WITH_WARNING.brand, accent: "#1d4ed8" } },
+      ready: "Dark shows the ink in its place.",
+    },
   ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
@@ -143,51 +187,7 @@ import { join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
-import { IDS, startImportFixtures } from "./import-fixtures.mjs"
-
-// The import role: the shipped import-server behind a real token check. A route names the user whose
-// token the page sends as the gateway does, an optional control to press once the page has its
-// content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
-// shows (`hold`), and the text that proves the data arrived (`ready`).
-export const IMPORT = {
-  baseURL: "http://127.0.0.1:18090",
-  routes: [
-    { path: "/", user: "alice", ready: "Not imported yet" },
-    { path: "/", user: "alice", open: { role: "button", name: "Importable", exact: false, pressed: true }, ready: "Not imported yet" },
-    { path: "/", user: "alice", open: { role: "button", name: "Start import of 2026-11-06-new-export/packages_npm.tar.gz", opens: { role: "region", name: "Start the import of 2026-11-06-new-export/packages_npm.tar.gz" } }, ready: "Not imported yet" },
-    { path: "/", user: "bob", ready: "No archive in your folder" },
-    { path: "/", user: "carol", ready: "MinIO has no bucket user-carol yet: nothing to list" },
-    { path: "/", user: "dave", ready: "The archives could not be listed" },
-    { path: "/", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
-    { path: "/imports", user: "alice", ready: "Waiting its turn" },
-    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Archive removed from MinIO" },
-    { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Archive kept in MinIO" },
-    { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking the archive's removal" },
-    { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
-    { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
-    { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
-    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
-    { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
-    { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
-    { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
-    {
-      path: `/imports/${IDS.incomplete}`, user: "alice", ready: "Archive sha256 check",
-      open: { role: "button", name: "Show full reason of package-099@1.0.0", opens: { role: "region", name: "Full reason of package-099@1.0.0" } },
-    },
-    {
-      path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101",
-      open: { role: "button", name: "Earlier attempts (1)", opens: { role: "list", name: "Earlier attempts" } },
-    },
-    { path: `/imports/${IDS.legacy}`, user: "alice", ready: "Archive sha256 check" },
-    { path: `/imports/${IDS.longKey}`, user: "alice", ready: "Archive sha256 check" },
-    { path: `/imports/${IDS.pipComplete}`, user: "alice", ready: "Python" },
-    { path: "/imports/missing-import", user: "alice", ready: "No such import" },
-    { path: "/imports", user: "bob", ready: "No import yet" },
-    { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
-    { path: "/imports", user: "alice", hold: "/api/imports", ready: "Loading your imports" },
-    { path: "/imports", user: "alice", open: { role: "button", name: "Settings" }, ready: "Waiting its turn" },
-  ],
-}
+import { IMPORT, startImportFixtures } from "./import-fixtures.mjs"
 
 // A copy button shows "Copy" and keeps its full name for assistive technology. Without the
 // stylesheet's `.sr-only` rule in the import bundle, the full name prints beside the visible word.
@@ -200,6 +200,11 @@ test.describe.configure({ mode: "default", retries: 0 })
 
 const CONTROLS = `a, button, input, select, textarea, summary, [role=button], [tabindex]:not([tabindex="-1"])`
 const POLLS = 60
+const CAPTURES = process.env.UI_CAPTURES ?? ""
+
+// A file name part from a route's path and what sets its state apart: "/" reads "root".
+const slug = (...parts) =>
+  parts.filter(Boolean).map((p) => (p === "/" ? "root" : p)).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
 
 const answers = async (url = UI.baseURL, accept = () => true) => {
   try { return accept(await fetch(url)) } catch { return false }
@@ -363,9 +368,23 @@ function measure({ controls, exceptions, target }) {
   return { overflow, targets }
 }
 
+// The sidebar's column must paint down to the page's foot, so a full-page capture of a tall page
+// shows no bare strip under it.
+function sidebarReach() {
+  const nav = document.querySelector('nav[aria-label="Places"]')
+  if (!nav) return ""
+  // On a phone the places sit in a tab bar fixed to the bottom, with no column to paint.
+  if (getComputedStyle(nav.parentElement).position === "fixed") return ""
+  let column = nav
+  while (column.parentElement && getComputedStyle(column.parentElement).display !== "grid") column = column.parentElement
+  const bottom = column.getBoundingClientRect().bottom + window.scrollY
+  const page = document.documentElement.scrollHeight
+  return bottom + 1 < page ? `sidebar column ends at ${Math.round(bottom)} px on a ${page} px page` : ""
+}
+
 // Loads one page and returns what the gate fails on: axe, overflow and small targets, plus what the
 // caller adds through `extra`. `prepare` runs before the page loads, `ready` once its data arrived.
-async function inspect(page, { where, url, width, theme, prepare, ready, extra }) {
+async function inspect(page, { where, capture, url, width, theme, prepare, ready, extra }) {
   const failures = []
   await page.setViewportSize({ width, height: 800 })
   await prepare?.(page)
@@ -387,10 +406,16 @@ async function inspect(page, { where, url, width, theme, prepare, ready, extra }
   for (const v of axe.violations.filter((x) => x.impact === "serious" || x.impact === "critical")) {
     for (const node of v.nodes) failures.push(`${where} · ${node.target.join(" ")}: axe ${v.id} (${v.impact})`)
   }
+  const sidebar = await page.evaluate(sidebarReach)
+  if (sidebar) failures.push(`${where} · nav[aria-label=Places]: ${sidebar}`)
   const found = await page.evaluate(measure, { controls: CONTROLS, exceptions: UI.exceptions, target: UI.target })
   for (const s of found.overflow) failures.push(`${where} · ${s}: overflows the page horizontally`)
   for (const t of found.targets) {
     failures.push(`${where} · ${t.selector}: target under ${UI.target} × ${UI.target} CSS px (${t.size})`)
+  }
+  if (CAPTURES) {
+    mkdirSync(CAPTURES, { recursive: true })
+    await page.screenshot({ path: join(CAPTURES, `${capture}-${width}-${theme}.png`), fullPage: true, animations: "disabled" })
   }
   failures.push(...(await extra?.(page) ?? []))
   return failures
@@ -402,6 +427,7 @@ for (const route of UI.routes) {
       test(`${route} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
           where: `${route} · ${width}px · ${theme}`,
+          capture: `collection-${slug(route)}`,
           url: new URL(route, UI.baseURL).href,
           width,
           theme,
@@ -420,6 +446,7 @@ for (const state of UI.states) {
       test(`${state.path} ${state.open.name} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
           where: `${state.path} · ${state.open.name} · ${width}px · ${theme}`,
+          capture: `collection-${slug(state.path, state.open.name)}`,
           url: new URL(state.path, UI.baseURL).href,
           width,
           theme,
@@ -440,6 +467,7 @@ for (const session of UI.sessions) {
       test(`${session.path} ${session.ready} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
           where: `${session.path} · ${session.ready} · ${width}px · ${theme}`,
+          capture: `collection-${slug(session.path, session.ready)}`,
           url: new URL(session.path, UI.baseURL).href,
           width,
           theme,
@@ -458,14 +486,29 @@ for (const session of UI.sessions) {
 for (const state of UI.answers) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
-      test(`${state.path} answered by ${state.api} ${width} ${theme}`, async ({ page }) => {
+      test(`${state.path} answered by ${state.api}${state.name ? ` ${state.name}` : ""} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
-          where: `${state.path} · ${state.api} fixed · ${width}px · ${theme}`,
+          where: `${state.path} · ${state.api} fixed${state.name ? ` · ${state.name}` : ""} · ${width}px · ${theme}`,
+          capture: `collection-${slug(state.path, state.api, "fixed", state.name)}`,
           url: new URL(state.path, UI.baseURL).href,
           width,
           theme,
-          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: state.body })),
-          ready: (p) => p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
+          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: typeof state.body === "function" ? state.body() : state.body })),
+          ready: async (p) => {
+            await p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
+            if (state.focus) {
+              await p.getByRole(state.focus.role, { name: state.focus.name, exact: true }).focus()
+              const opened = p.getByRole(state.focus.opens.role)
+              await opened.waitFor()
+              // What opens must sit above the page: a lower layer lets the content behind show through it.
+              const covered = await opened.evaluate((el) => {
+                const r = el.getBoundingClientRect()
+                const points = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 4, r.top + 4], [r.right - 4, r.bottom - 4]]
+                return points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).length
+              })
+              if (covered > 0) throw new Error(`${state.focus.opens.role} is covered by the page at ${covered} of 3 points`)
+            }
+          },
         })
         expect(failures, failures.join("\n")).toEqual([])
       })
@@ -486,6 +529,7 @@ for (const route of IMPORT.routes) {
         const released = new Promise((done) => { release = done })
         const failures = await inspect(page, {
           where,
+          capture: `import-${slug(route.user, route.path, route.hold && "loading", route.open?.name)}`,
           url: new URL(route.path, IMPORT.baseURL).href,
           width,
           theme,
@@ -545,6 +589,67 @@ for (const route of IMPORT.routes) {
   }
 }
 
+// Runs in the page: at phone width the places form a tab bar along the bottom edge, each tab a
+// 44 px target, the logo hidden, the breadcrumb still in the top bar.
+function tabBar({ target }) {
+  const nav = document.querySelector('nav[aria-label="Places"]')
+  if (!nav) return ["nav[aria-label=Places]: missing"]
+  const found = []
+  const bar = nav.getBoundingClientRect()
+  if (Math.abs(bar.bottom - window.innerHeight) > 1 || bar.width < window.innerWidth - 1) {
+    found.push(`nav[aria-label=Places]: not a tab bar along the bottom (${Math.round(bar.left)},${Math.round(bar.top)} ${Math.round(bar.width)} × ${Math.round(bar.height)})`)
+  }
+  for (const link of nav.querySelectorAll("a")) {
+    const r = link.getBoundingClientRect()
+    if (r.width < target || r.height < target) found.push(`tab "${link.textContent.trim()}": under ${target} × ${target} CSS px (${Math.round(r.width)} × ${Math.round(r.height)})`)
+  }
+  const logo = nav.querySelector("[data-brand-mark]")
+  if (logo && logo.getClientRects().length > 0) found.push("nav[aria-label=Places]: the logo shows in the tab bar")
+  if (!document.querySelector('header nav[aria-label="Breadcrumb"]')) found.push("header: no breadcrumb")
+  return found
+}
+
+// A phone's width: the pages whose longest lines broke there, opened as far as they go.
+const PHONE = {
+  width: 390,
+  target: 44,
+  collection: [
+    { path: "/", ready: "Start a crossing" },
+    { path: "/instance", ready: "Instance", open: [{ role: "button", name: /^Public key sha256/ }, { role: "button", name: "How to regenerate" }] },
+  ],
+  // `columns` names blocks that must keep a readable width: a fixed grid squeezed them to nothing, and the text then ran over its neighbours inside the row, which the overflow check cannot see.
+  import: [{ path: "/import", user: "alice", ready: "Not imported yet", columns: { selector: "#content li > div:first-child", min: 200 } }],
+}
+
+for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" })), ...PHONE.import.map((r) => ({ ...r, role: "import" }))]) {
+  for (const theme of UI.themes) {
+    test(`${route.role} ${route.path} at ${PHONE.width} ${theme}`, async ({ page }) => {
+      const base = route.role === "import" ? IMPORT.baseURL : UI.baseURL
+      const failures = await inspect(page, {
+        where: `${route.role} ${route.path} · ${PHONE.width}px · ${theme}`,
+        capture: `${route.role}-${slug(route.path, route.open && "open")}`,
+        url: new URL(route.path, base).href,
+        width: PHONE.width,
+        theme,
+        prepare: route.user ? (p) => p.setExtraHTTPHeaders({ "X-Access-Token": fixtures.token(route.user) }) : undefined,
+        ready: async (p) => {
+          await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
+          for (const control of route.open ?? []) await p.getByRole(control.role, { name: control.name }).first().click()
+        },
+        extra: async (p) => {
+          const found = await p.evaluate(tabBar, { target: PHONE.target })
+          if (route.columns) {
+            const narrow = await p.$$eval(route.columns.selector, (els, min) => els.map((el) => Math.round(el.getBoundingClientRect().width)).filter((w) => w < min), route.columns.min)
+            for (const w of narrow) found.push(`${route.columns.selector}: ${w} px wide, under ${route.columns.min}`)
+          }
+          return found.map((f) => `${route.path} · ${PHONE.width}px · ${theme} · ${f}`)
+        },
+      })
+      expect(failures, failures.join("\n")).toEqual([])
+    })
+  }
+}
+
 // Twenty reasons and the Export bar at its tallest: at the bottom of the page, the last reason field and
 // the text typed in it sit above the bar.
 for (const width of UI.widths) {
@@ -568,6 +673,31 @@ for (const width of UI.widths) {
     expect(hidden, `${hidden} px of the last reason field sit under the Export bar at ${width}px`).toBe(0)
   })
 }
+
+// On a phone the tab bar is fixed to the bottom too: the Export bar sits above it, so its button can be pressed.
+test(`/sessions/worst/review keeps the Export button above the tab bar at ${PHONE.width}`, async ({ page }) => {
+  await page.setViewportSize({ width: PHONE.width, height: 800 })
+  await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
+  const button = page.getByRole("button", { name: "Confirm and build the archive" })
+  await button.waitFor({ timeout: 15_000 })
+  await page.evaluate(settle)
+  const overlap = await page.evaluate(() => {
+    const button = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Confirm and build the archive").getBoundingClientRect()
+    const tabs = document.querySelector('nav[aria-label="Places"]').getBoundingClientRect()
+    return Math.max(0, button.bottom - tabs.top)
+  })
+  expect(overlap, `${overlap} px of the Export button sit under the tab bar at ${PHONE.width}px`).toBe(0)
+  // The worst review leaves reasons unwritten, so the button is disabled; what matters is that nothing covers it.
+  const onTop = await page.evaluate(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Confirm and build the archive")
+    const r = b.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    // A disabled button lets the pointer through to its bar, so the hit must land in the Export bar itself.
+    const bar = b.closest(".fixed")
+    return r.bottom <= innerHeight && bar !== null && bar.contains(hit)
+  })
+  expect(onTop, `the Export button is off screen or covered at ${PHONE.width}px`).toBe(true)
+})
 
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.

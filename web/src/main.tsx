@@ -1,7 +1,8 @@
 import "@fontsource/inter/400.css"
 import "@fontsource/inter/500.css"
 import "@fontsource/inter/600.css"
-import "@fontsource/inter/800.css"
+import "@fontsource/inter/700.css"
+import "@fontsource/jetbrains-mono/400.css"
 import "@fontsource/jetbrains-mono/500.css"
 import "./styles/index.css"
 
@@ -26,7 +27,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
-// The theme control lives in the settings panel, which is not mounted until opened.
+// The theme control lives on Instance, which other pages do not mount.
 applyTheme(readStoredTheme())
 
 // A 4xx will answer the same on a retry (a deleted session stays deleted),

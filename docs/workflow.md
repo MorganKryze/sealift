@@ -1,45 +1,56 @@
 # Workflow
 
-This page walks through each screen of a session, in order, with the label of every button. A session holds one `package.json`, its analysis, and the archives built from it.
+This page walks through each screen of the connected side, in order, with the label of every button: the frame around them, the home, Projects, then each step of a crossing. A crossing is one analysis of a project's `package.json` and the archives built from it.
+
+## The frame
+
+Every screen but the preparing one sits in the same frame. The sidebar on the left holds the places, **Home** and **Projects**, and **Instance** at its foot. The current place is highlighted. The top bar holds the breadcrumb, such as Home, then the crossing's name, and the side label on the right, a globe with `Online`. The deployment's brand can rename the side and replace the mark at the top of the sidebar: [Settings](settings.md#brand) lists its keys. **Skip to content**, the first stop of the keyboard, jumps past the sidebar.
+
+A crossing is named after its project and the day its analysis started, such as `sealift-demo · 25 Nov`. A second analysis of the same project on the same day reads `sealift-demo · 25 Nov · 2`.
 
 The step bar at the top of a session shows Drop, Analyse, Review and Export. A finished step shows a check mark and opens again on a click. A running step shows a spinner, a failed one a cross.
 
 ## Preparing
 
-While the instance prepares, the home shows Preparing sealift. sealift prepares each item on its own at start, and the screen has no button:
+While the instance prepares, the home shows Preparing this instance, with the count of items ready. sealift prepares each item on its own at start, and the screen has no button:
 
 | Item | Where it comes from |
 | --- | --- |
 | Trivy and its version | `github.com/aquasecurity/trivy`, the release the binary pins, checked against the sha256 built into sealift |
-| Vulnerability database | `mirror.gcr.io`, updated every six hours upstream; sealift refreshes it before each analysis |
+| CVE database | `mirror.gcr.io`, updated every six hours upstream; sealift refreshes it before each analysis |
 | Signing key | sealift: an Ed25519 key it generated for this volume, shown with its public key sha256 |
 | pnpm and its version | the npm registry, checked against the integrity it publishes. It resolves npm projects |
 | uv and its version | the package index, checked against the sha256 it publishes. It resolves pip projects |
 
-Each item reads Preparing, Ready or Failed. A failed item shows its cause and Next try at, with the time; sealift tries again every minute. The home opens once every item is ready, with no reload. [Deployment](deployment.md#readiness) explains readiness for whoever runs the instance.
+Each item reads Preparing, Ready or Failed. A failed item shows its cause and Next try in, with the time left; sealift tries again every minute. The home opens once every item is ready, with no reload. [Deployment](deployment.md#readiness) explains readiness for whoever runs the instance.
 
 ## Home
 
-The home screen is New session: a drop zone for a `package.json`, then Past sessions, newest first.
+The home opens on Start a crossing, with one card, **Update** a project. Below it, two groups list the latest crossing of each project, newest first:
 
-![New session, with the drop zone and one past session marked Archive ready](assets/home.png)
+| Group | Holds | Row's action |
+| --- | --- | --- |
+| Needs you | A crossing whose review waits (Review waits), a failed one (Failed at Analyse, Failed at Seal), and a project dropped but never analysed (Not analysed yet) | **Review** for a waiting review, **Open** otherwise |
+| In progress | A crossing queued (Queued), analysing (Analysing) or building its archive (Sealing) | **Open** |
 
-Drop a file on the zone, or press **Choose a file**. The zone repeats the rule sealift applies to every file: direct dependencies must be pinned to exact versions, such as `4.17.1`. It also names the current target.
+A sealed or cancelled crossing leaves the home: Projects keeps it. A group shows ten rows, then **Show all**, such as Show all 12 crossings. While a crossing runs, the home reads the list again every 5 seconds, so a finished one leaves In progress by itself. Before the first crossing, In progress reads No crossing in progress.
 
-Each past session shows its name, its target, its date and one status:
+![The home: Start a crossing with the Update card, and the crossing sealift-demo · 25 Nov under Needs you, marked Failed at Analyse, with Open](assets/home.png)
 
-| Status | Meaning |
-| --- | --- |
-| Not analysed yet | The file was dropped; no analysis ran |
-| Waiting for another job | The analysis or the export waits in the queue for another job to end |
-| Analysing | The analysis is running |
-| Analysis failed | The analysis stopped on an error, or was cancelled |
-| Awaiting export | The analysis finished; no archive yet |
-| Exporting | An export is running |
-| Export failed | The last export stopped on an error, or was cancelled |
-| Archive ready | The last export produced an archive |
+## Update
 
-A click opens the session on its most useful step: the export for a session with an export, finished or not, the review for a finished analysis, the analysis otherwise.
+**Update** opens Update a project, with the drop zone: Drop package.json here, and **Choose a file**. The zone repeats the rule sealift applies to every file: direct dependencies must be pinned to exact versions, such as `4.17.1`. It also names the current target.
+
+## Projects
+
+**Projects** lists every project with its latest crossing. The title counts them, such as `3 projects`. Each row shows the project, its ecosystem, its latest crossing and that crossing's state. From two projects on, **Latest** and **Name** order the list: newest crossing first, 15 rows and then **Show all**, such as Show all 16 projects, or by name under a heading per letter. With no project, the page reads No project yet, and **Update a project** opens the Update page.
+
+A project's page shows its name, its target and its crossings, newest first, such as `3 crossings`, or No crossing yet. A sealed crossing opens on two lists:
+
+- To carry: the archive, `manifest.json` and `manifest.json.sig`, each with its download, and **Download all** for the three. The archive's row shows its sha256, read from the signed manifest.
+- Reports: the other files of the export, such as the CycloneDX SBOM, each with **Open**, which shows it in a new tab, and its download.
+
+An archive signed with a key this instance has since replaced reads Signed with a key this instance has replaced, then Offline refuses this archive unless it still trusts that key, with that key's sha256.
 
 ## Drop
 
@@ -87,7 +98,7 @@ sealift runs one job at a time. An analysis started while another analysis or an
 When a step fails, the screen reads Analysis stopped, with the cause under What went wrong and the actions that fit:
 
 - **Retry** starts the analysis again from the beginning, with the same file.
-- **Open settings** opens the settings panel, which shows the target and the limits in effect. The deployment's policy file sets them. A session keeps the target it started with; a new target applies to new sessions.
+- **Open Instance** opens the Instance page, which shows the target and the limits in effect. The deployment's policy file sets them. A session keeps the target it started with; a new target applies to new sessions.
 - **Choose another file** goes back to the drop screen.
 - **Show the log** unfolds everything pnpm and Trivy wrote, with the error code the message above leaves out.
 
@@ -161,6 +172,6 @@ A finished export reads Archive ready:
 
 [The air gap](air-gap.md) covers what to do with these files.
 
-## Settings
+## Instance
 
-**Settings**, in the header, opens a side panel over the current screen. [Settings](settings.md) describes each one.
+**Instance**, at the foot of the sidebar, opens the page that shows the readiness, the policy and the signing key, read-only. [Settings](settings.md#the-instance-page) describes it.

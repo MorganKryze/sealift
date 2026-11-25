@@ -20,7 +20,7 @@ A reverse proxy buffers the event stream. Turn buffering off for sealift: [Deplo
 
 ## Start and preparation
 
-These causes show on Preparing sealift, under the item that failed, and in `GET /api/instance`. sealift tries the item again every minute, so a fix outside sealift needs no restart. The log carries the same cause.
+These causes show on the Preparing this instance page, under the item that failed, and in `GET /api/instance`. sealift tries the item again every minute, so a fix outside sealift needs no restart. The log carries the same cause.
 
 ### could not reach GitHub to look up Trivy releases
 
@@ -189,7 +189,7 @@ The reason ends with the first rule the file breaks: it is larger than 4096 byte
 
 ### the manifest is signed by another key
 
-The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 in sealift's Settings on the connected side. When they are equal, someone ran `sealift signing-key regenerate` on the connected side: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
+The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 on the connected side's Instance page. When they are equal, someone ran `sealift signing-key regenerate` on the connected side: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
 
 ### the signature does not match the manifest
 
@@ -209,7 +209,7 @@ The archive is a pip archive and the settings file has no `nexus.pip` section, s
 
 ### publicKeyFile is required, or cannot be read
 
-The import and the service start only with a trusted key. They exit with code 2 and one line naming the field when `publicKeyFile` is absent from the settings file (`publicKeyFile is required`), the file does not exist or cannot be read, is larger than 4096 bytes, or does not hold exactly one Ed25519 `PUBLIC KEY` PEM block (`publicKeyFile is not one Ed25519 PUBLIC KEY PEM block: ...`, ending with the problem). Download the key again from sealift's Settings, or take it from `GET /api/signing-key`, and save the whole block, `-----BEGIN PUBLIC KEY-----` to `-----END PUBLIC KEY-----`, in the file. LF and CRLF line endings both work.
+The import and the service start only with a trusted key. They exit with code 2 and one line naming the field when `publicKeyFile` is absent from the settings file (`publicKeyFile is required`), the file does not exist or cannot be read, is larger than 4096 bytes, or does not hold exactly one Ed25519 `PUBLIC KEY` PEM block (`publicKeyFile is not one Ed25519 PUBLIC KEY PEM block: ...`, ending with the problem). Download the key again from the connected side's Instance page, or take it from `GET /api/signing-key`, and save the whole block, `-----BEGIN PUBLIC KEY-----` to `-----END PUBLIC KEY-----`, in the file. LF and CRLF line endings both work.
 
 ### signatureKeyFile is an unknown field
 

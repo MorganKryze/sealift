@@ -20,11 +20,13 @@ interface ArchiveRowProps {
   latest?: Import
   /** The user's own queued or running import, which the new one would wait for. */
   ownActive?: Import
+  /** Opens the row with its confirmation showing, as when the home's Import led here. */
+  confirmOpen?: boolean
 }
 
 /** One archive of the folder: its name, whether it can be imported, what its latest import did and the one action that follows. */
-export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
-  const [confirming, setConfirming] = useState(false)
+export function ArchiveRow({ archive, latest, ownActive, confirmOpen = false }: ArchiveRowProps) {
+  const [confirming, setConfirming] = useState(confirmOpen)
   const actions = useRef<HTMLDivElement>(null)
   const { folder, file } = archiveName(archive.key)
   const known = archive.latestImport
@@ -35,7 +37,7 @@ export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
     </Button>
   )
   return (
-    <li className="grid min-h-18 grid-cols-[minmax(0,1fr)_288px_128px] items-center gap-5 border-t border-line px-5 py-4 first:border-t-0">
+    <li className="grid min-h-18 grid-cols-[minmax(0,1fr)] items-center gap-3 md:grid-cols-[minmax(0,1fr)_288px_128px] md:gap-5 border-t border-line px-5 py-4 first:border-t-0">
       <div className="min-w-0">
         <p title={file} className={`font-mono text-[13px] font-medium ${clamp}`}>
           {file}
@@ -56,7 +58,7 @@ export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
             <p className="mb-1 text-xs text-muted">Can be imported</p>
             {known && outcome ? <Latest outcome={outcome} latest={latest} /> : <p className="text-[13px]">Not imported yet</p>}
           </div>
-          <div ref={actions} className="justify-self-end">
+          <div ref={actions} className="md:justify-self-end">
             {known && outcome ? <Next id={known.id} outcome={outcome} label={`${folder}${file}`} start={start} /> : start}
           </div>
           {confirming ? (
@@ -71,7 +73,7 @@ export function ArchiveRow({ archive, latest, ownActive }: ArchiveRowProps) {
           ) : null}
         </>
       ) : (
-        <div className="col-span-2 min-w-0">
+        <div className="min-w-0 md:col-span-2">
           <p className="text-[13px] font-medium">Cannot be imported</p>
           <p className="mt-1 text-[13px] [overflow-wrap:anywhere]">{archive.reason || "Reason not recorded"}</p>
           <p className="mt-1 text-xs text-muted">Keep one archive with its manifest.json and manifest.json.sig side by side, in packages/npm/ for npm or packages/pip/ for pip, at the root or one folder below. sealift 0.4.0 and earlier wrote no manifest.json.sig: export such an archive again.</p>

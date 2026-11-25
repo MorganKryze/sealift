@@ -2,13 +2,43 @@
 @import "./theme.css";
 
 @theme inline {
-  --color-accent: var(--accent);
+  --color-bg: var(--bg);
+  --color-canvas: var(--canvas);
   --color-ink: var(--ink);
-  --color-background: var(--background);
+  --color-ink-2: var(--ink-2);
   --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-field: var(--field);
+  --color-hover: var(--hover);
+  --color-sel: var(--sel);
+  --color-disabled: var(--disabled);
+  --color-seg-on: var(--seg-on);
+  --color-brand: var(--brand);
+
+  --color-ok: var(--ok);
+  --color-ok-tint: var(--ok-tint);
+  --color-ok-line: var(--ok-line);
+  --color-warn: var(--warn);
+  --color-warn-tint: var(--warn-tint);
+  --color-warn-line: var(--warn-line);
+  --color-bad: var(--bad);
+  --color-bad-tint: var(--bad-tint);
+  --color-bad-line: var(--bad-line);
+  --color-info: var(--info);
+  --color-info-tint: var(--info-tint);
+  --color-info-line: var(--info-line);
+
+  --color-sev-critical: var(--sev-critical);
+  --color-sev-high: var(--sev-high);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-low: var(--sev-low);
+
+  --color-accent: var(--accent);
+  --color-background: var(--background);
   --color-line: var(--line);
   --color-card: var(--card);
-
   --color-severity-critical: var(--severity-critical);
   --color-severity-high: var(--severity-high);
   --color-severity-medium: var(--severity-medium);
@@ -20,128 +50,141 @@
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --ease-out: var(--ease-out);
+  --ease-move: var(--ease-move);
 }
 
-body {
-  background-color: var(--background);
-  color: var(--ink);
-  font-family: var(--font-sans);
-}
+@layer base {
+  /* The phone's tab bar is fixed to the bottom; a fixed bar of a page (the review's Export bar) sits on top of it. */
+  :root {
+    --tabbar-h: calc(72px + env(safe-area-inset-bottom));
+  }
+  @media (width >= 48rem) {
+    :root {
+      --tabbar-h: 0px;
+    }
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    caret-color: var(--ink);
+    scrollbar-color: var(--rule-2) transparent;
+    accent-color: var(--ink);
+  }
 
-@media (prefers-reduced-motion: no-preference) {
-  .animate-mark-lift {
-    animation: mark-lift 2.4s ease-in-out infinite;
+  body {
+    background-color: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: var(--selection);
+    color: var(--ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  a {
+    text-underline-offset: 3px;
   }
 }
 
-@keyframes mark-lift {
-  0%,
-  100% {
-    transform: translateY(0);
+@layer components {
+  /* A state row or chip: its tint, and its line closed on all four sides. */
+  .tinted-ok {
+    background-color: var(--ok-tint);
+    border: 1px solid var(--ok-line);
+    border-radius: 8px;
   }
-  50% {
-    transform: translateY(-4px);
+  .tinted-warn {
+    background-color: var(--warn-tint);
+    border: 1px solid var(--warn-line);
+    border-radius: 8px;
+  }
+  .tinted-bad {
+    background-color: var(--bad-tint);
+    border: 1px solid var(--bad-line);
+    border-radius: 8px;
+  }
+  .tinted-info {
+    background-color: var(--info-tint);
+    border: 1px solid var(--info-line);
+    border-radius: 8px;
+  }
+
+  /* A version, a count, a size, a date or a delay the user reads for. */
+  .figure {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
 }
 
-/* Plays once when an element mounts (a screen taking over, a row opening),
-   never on a re-render: React only runs a CSS animation on an element the
-   first time it appears with that class, not on later prop updates. */
-@keyframes enter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-.animate-enter {
-  animation: enter 0.35s ease both;
-}
-
+/* Each plays once when an element mounts (a screen taking over, a row opening), never on a
+   re-render: React only runs a CSS animation on an element the first time it appears with that
+   class, not on later prop updates. */
 @keyframes fade {
   from {
     opacity: 0;
   }
 }
 .animate-fade {
-  animation: fade 0.2s ease both;
+  animation: fade 200ms ease both;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+/* backwards, not both: a transform kept after the end would make the page the containing block of every
+   fixed bar inside it (the review's Export bar), which then scrolls away with the page. */
+.animate-enter {
+  animation: enter 200ms var(--ease-out) backwards;
 }
 
 @keyframes pop {
   from {
-    transform: scale(0.6);
-  }
-  to {
-    transform: scale(1);
+    opacity: 0;
+    transform: scale(0.96);
   }
 }
 .animate-pop {
-  animation: pop 0.25s ease;
+  animation: pop 240ms var(--ease-out) both;
 }
 
-/* The export screen's seal, once the archive is done. Plays on mount only,
-   the same way animate-enter and animate-pop do: a re-render of the done
-   screen (a poll tick, a theme toggle) never replays it. */
+/* The export screen's seal, once the archive is done. */
 @keyframes stamp {
-  0% {
-    transform: scale(1.35) translateY(-6px);
+  from {
     opacity: 0;
-  }
-  60% {
-    opacity: 1;
-  }
-  100% {
-    transform: none;
-    opacity: 1;
+    transform: scale(1.12);
   }
 }
 .animate-stamp {
-  animation: stamp 0.5s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+  animation: stamp 240ms var(--ease-out) both;
 }
 
+/* Reduced motion keeps the fades and the colour changes and drops every movement. */
 @media (prefers-reduced-motion: reduce) {
+  .animate-enter,
+  .animate-pop,
+  .animate-stamp {
+    animation-name: fade;
+  }
+  .animate-spin {
+    animation: none;
+  }
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-@keyframes slide-in {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .animate-slide-in {
-    animation: slide-in 0.25s ease both;
-  }
-}
-
-@keyframes indeterminate {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(300%);
-  }
-}
-
-.animate-indeterminate {
-  animation: indeterminate 1.4s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-indeterminate {
-    animation: none;
-    width: 100%;
-    opacity: 0.5;
+    transition-property: color, background-color, border-color, outline-color, opacity !important;
+    scroll-behavior: auto !important;
   }
 }

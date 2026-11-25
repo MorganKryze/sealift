@@ -1,4 +1,5 @@
-import type { ReactNode } from "react"
+import { Lock } from "lucide-react"
+import { type ReactNode, useId } from "react"
 
 import type { Instance } from "@/api/settings"
 import { PLATFORMS } from "@/lib/platforms"
@@ -19,43 +20,86 @@ function npmPlatform({ os, cpu, libc }: Instance["policy"]["target"]) {
 
 const rule = (value: Instance["policy"]["review"]["majorJump"]) => (value === "refuse" ? "Refused" : "Needs a reason")
 
-const minutes = (n: number) => `${n} ${n === 1 ? "minute" : "minutes"}`
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-/** The defaults and limits the deployment sets, shown read-only: the policy file changes them, not this panel. */
+/** A figure the user reads for, in weight 600. */
+const Figure = ({ children }: { children: ReactNode }) => <span className="figure">{children}</span>
+
+/**
+ * The defaults and limits the deployment sets, shown read-only: the policy file changes them, not
+ * this page. The pnpm and uv versions sit with the readiness items, so the targets leave them out.
+ */
 export function PolicySection({ policy, ephemeral, idleMinutes }: PolicySectionProps) {
   const { target, pipTarget } = policy
-  const rows: [string, string][] = [
-    ["npm target", `${npmPlatform(target)}, Node ${target.node}, pnpm ${target.pnpmVer}`],
-    ["pip target", `${osName(pipTarget.os)} ${pipTarget.cpu} · glibc ${pipTarget.glibc}, Python ${pipTarget.python}, uv ${pipTarget.uvVer}`],
-    ["Minimum release age", `${policy.minReleaseAgeDays} ${policy.minReleaseAgeDays === 1 ? "day" : "days"}`],
-    ["Resolve parallelism", `${policy.resolveParallelism} at once`],
-    ["Download parallelism", `${policy.downloadParallelism} at once`],
+  const rows: [string, ReactNode][] = [
+    [
+      "Release age",
+      <>
+        At least <Figure>{plural(policy.minReleaseAgeDays, "day", "days")}</Figure> old
+      </>,
+    ],
+    [
+      "npm target",
+      <>
+        Node <Figure>{target.node}</Figure>, {npmPlatform(target)}
+      </>,
+    ],
+    [
+      "pip target",
+      <>
+        Python <Figure>{pipTarget.python}</Figure>, {osName(pipTarget.os)} {pipTarget.cpu} · glibc <Figure>{pipTarget.glibc}</Figure>
+      </>,
+    ],
+    [
+      "Parallelism",
+      <>
+        <Figure>{policy.resolveParallelism}</Figure> {policy.resolveParallelism === 1 ? "resolve" : "resolves"}, <Figure>{policy.downloadParallelism}</Figure>{" "}
+        {policy.downloadParallelism === 1 ? "download" : "downloads"}
+      </>,
+    ],
     ["Proposals", policy.review.proposeOtherMajors ? "Any version" : "Inside the current line"],
     ["Major jump", rule(policy.review.majorJump)],
     ["CVE without fix", rule(policy.review.cveWithoutFix)],
     [
-      "Mode",
-      ephemeral && idleMinutes !== undefined
-        ? `Ephemeral: a project is erased after ${minutes(idleMinutes)} without activity.`
-        : ephemeral
-          ? "Ephemeral: a project is erased once idle."
-          : "Projects stay until someone deletes them.",
+      "Projects",
+      ephemeral ? (
+        <>
+          {idleMinutes !== undefined ? (
+            <>
+              Erased with their caches after <Figure>{plural(idleMinutes, "minute", "minutes")}</Figure> without activity
+            </>
+          ) : (
+            "Erased with their caches once idle"
+          )}
+          <span className="block text-[13px] text-muted">Ephemeral mode</span>
+        </>
+      ) : (
+        "Kept until someone deletes them"
+      ),
     ],
   ]
 
   return (
-    <Section title="Policy" description="Set by your deployment.">
+    <Section
+      title="Policy"
+      aside={
+        <>
+          <Lock aria-hidden="true" className="size-3.5" />
+          Set at deploy
+        </>
+      }
+    >
       <Facts rows={rows} />
     </Section>
   )
 }
 
-/** A read-only description list, one term and its value per row. */
-export function Facts({ rows }: { rows: [string, string][] }) {
+/** A read-only description list, one term and its value per ruled row. */
+export function Facts({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2.5 text-sm">
+    <dl>
       {rows.map(([term, value]) => (
-        <div key={term} className="contents">
+        <div key={term} className="grid min-h-11 grid-cols-[120px_minmax(0,1fr)] items-start gap-4 border-t border-rule py-2.75 text-sm last:border-b max-sm:grid-cols-1 max-sm:gap-0.5">
           <dt className="text-muted">{term}</dt>
           <dd className="min-w-0 text-ink [overflow-wrap:anywhere]">{value}</dd>
         </div>
@@ -64,12 +108,16 @@ export function Facts({ rows }: { rows: [string, string][] }) {
   )
 }
 
-export function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+/** A titled part of Instance, a landmark named by its title, with a note at the right of the title. */
+export function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
+  const id = useId()
   return (
-    <section className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-base font-semibold text-ink">{title}</h2>
-        {description ? <p className="mt-0.5 text-sm text-muted">{description}</p> : null}
+    <section aria-labelledby={id} className="min-w-0">
+      <div className="mb-2 flex min-h-8 flex-wrap items-center gap-2.5">
+        <h2 id={id} className="text-lg font-semibold tracking-tight text-ink">
+          {title}
+        </h2>
+        {aside ? <span className="ml-auto inline-flex items-center gap-1.5 text-[13px] whitespace-nowrap text-muted">{aside}</span> : null}
       </div>
       {children}
     </section>

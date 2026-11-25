@@ -60,7 +60,7 @@ At start, sealift downloads what an analysis needs and checks each download: Tri
 docker run -d --name sealift -p 127.0.0.1:8080:8080 -v sealift-data:/data ghcr.io/morgankryze/sealift:latest
 ```
 
-Open <http://localhost:8080>. The page shows Preparing sealift until the first downloads finish. [Getting started](docs/getting-started.md) walks through a first archive in about ten minutes.
+Open <http://localhost:8080>. The page shows Preparing this instance until the first downloads finish. [Getting started](docs/getting-started.md) walks through a first archive in about ten minutes.
 
 ## Documentation
 

@@ -222,7 +222,7 @@ describe("ImportsList", () => {
     expect(await screen.findByRole("heading", { name: "No import yet" })).toBeInTheDocument()
     expect(await screen.findByText("user-alice/packages/npm/")).toBeInTheDocument()
     expect(screen.getByText(/MinIO folder/)).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Choose an archive" })).toHaveAttribute("href", "/")
+    expect(screen.getByRole("link", { name: "Choose an archive" })).toHaveAttribute("href", "/import")
   })
 
   it("the list cannot be read gives the detail, Try again and says the archives are untouched", async () => {

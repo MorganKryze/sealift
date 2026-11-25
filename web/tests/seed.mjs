@@ -150,6 +150,54 @@ write(
 )
 write(`exports/${exported}/packages_npm.tar.gz`, "")
 
+// Projects and a project's crossings. web-portal holds two analyses started the same day, the earlier
+// one sealed with the volume's key, the later one failed at its scan, a cancelled one and an earlier
+// export signed with a key this volume no longer holds. pipeline, with a 40-character name, has that
+// earlier key on its newest archive, so its page opens on the replaced-key block. Every export
+// directory holds what the export job leaves there: the archive, manifest.json, its signature and the
+// four reports.
+const { privateKey: replacedKey, publicKey: replacedPublic } = generateKeyPairSync("ed25519")
+const replacedSha256 = createHash("sha256").update(replacedPublic.export({ type: "spki", format: "der" })).digest("hex")
+const crossing = (into, name) => {
+  const projectManifest = JSON.stringify({ name, dependencies: { express: "5.0.1" } }, null, 2)
+  write("package.json", projectManifest, into)
+  write("project.json", { id: into, name, target, createdAt: "2026-11-01T09:00:00Z", manifestSha256: createHash("sha256").update(projectManifest).digest("hex") }, into)
+}
+const analysed = (into, id, status) => write(`analyses/${id}/status.json`, { pnpmVersion: "12.3.4", trivyVersion: "0.74.0", trivyDbDate: "2026-11-20T06:12:00Z", ...status }, into)
+const sealed = (into, analysisId, id, createdAt, signer, signerSha256) => {
+  // A stand-in for the archive's bytes, hashed as the export hashes the real one.
+  const archive = `${into} ${id}`
+  const body = JSON.stringify(
+    { formatVersion: 1, toolVersion: "0.7.0", analysisId, createdAt, target, archive: { sha256: createHash("sha256").update(archive).digest("hex"), size: archive.length }, packages: [] },
+    null,
+    2,
+  )
+  write(`exports/${id}/packages_npm.tar.gz`, archive, into)
+  write(`exports/${id}/manifest.json`, body, into)
+  write(
+    `exports/${id}/manifest.json.sig`,
+    JSON.stringify({ algorithm: "ed25519", publicKeySha256: signerSha256, signature: sign(null, Buffer.from(body), signer).toString("base64") }, null, 2) + "\n",
+    into,
+  )
+  write(`exports/${id}/summary.md`, `# ${into}\n\nKnown CVEs before 2, after 0.\n`, into)
+  write(`exports/${id}/findings.csv`, "package,version,cve,severity\n", into)
+  write(`exports/${id}/report.cdx.json`, JSON.stringify({ bomFormat: "CycloneDX", specVersion: "1.6", components: [] }, null, 2), into)
+  write(`exports/${id}/report.trivy.json`, JSON.stringify({ SchemaVersion: 2, Results: [] }, null, 2), into)
+}
+crossing("web-portal", "web-portal")
+analysed("web-portal", "20261123T091500Z", { state: "done" })
+sealed("web-portal", "20261123T091500Z", "20261123T092000Z", "2026-11-23T09:20:00Z", privateKey, publicKeySha256)
+analysed("web-portal", "20261123T141500Z", {
+  state: "failed",
+  steps: [{ name: "scan", state: "failed", error: "trivy: exit status 1: database download failed: dial tcp: lookup ghcr.io: no such host" }],
+})
+analysed("web-portal", "20261118T101500Z", { state: "cancelled" })
+analysed("web-portal", "20261106T101500Z", { state: "done" })
+sealed("web-portal", "20261106T101500Z", "20261106T102000Z", "2026-11-06T10:20:00Z", replacedKey, replacedSha256)
+crossing("pipeline", "analytics-ingest-pipeline-airflow-worker")
+analysed("pipeline", "20261112T101500Z", { state: "done" })
+sealed("pipeline", "20261112T101500Z", "20261112T102000Z", "2026-11-12T10:20:00Z", replacedKey, replacedSha256)
+
 // The versions the start prepares come from the Go sources, so a moved pin or default fails here loudly.
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 const sourceValue = (file, pattern) => {

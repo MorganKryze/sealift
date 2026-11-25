@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { Check, Loader2, X } from "lucide-react"
 import { useState } from "react"
 
@@ -8,7 +8,6 @@ import { cancelAnalysis, queueAnalysis, type Analysis, type Project } from "@/ap
 import { FailureBlock } from "@/components/failure-block"
 import { ProblemNotice } from "@/components/problem-notice"
 import { StepBar, type StepId } from "@/components/step-bar"
-import { useSettingsPanel } from "@/components/settings/settings-panel"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -59,7 +58,6 @@ export function failureMessage(analysis: Pick<Analysis, "state" | "failure">): s
 }
 
 export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavigateStep }: AnalysisScreenProps) {
-  const settingsPanel = useSettingsPanel()
   const navigate = useNavigate()
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -204,7 +202,8 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
 
       {live ? (
         <div className="mt-5 flex flex-col items-start gap-2">
-          <Button variant="outline" onClick={() => void handleCancel()} disabled={cancelling}>
+          <Button variant="tinted" onClick={() => void handleCancel()} disabled={cancelling}>
+            <X aria-hidden="true" />
             Cancel
           </Button>
           {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} /> : null}
@@ -212,14 +211,14 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
       ) : null}
 
       {analysis.state === "done" ? (
-        <div className="animate-enter mt-5 flex items-center gap-3">
+        <div className="animate-enter mt-5 flex flex-wrap items-center justify-end gap-3">
+          {elapsedMs > 0 ? <span className="text-sm text-muted">Finished in {formatDuration(elapsedMs)}</span> : null}
           <Button
             size="lg"
             onClick={() => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: projectId } })}
           >
             Review the proposal
           </Button>
-          {elapsedMs > 0 ? <span className="text-sm text-muted">Finished in {formatDuration(elapsedMs)}</span> : null}
         </div>
       ) : null}
 
@@ -232,19 +231,19 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
           message={failureMessage(analysis)}
           detail="Your uploaded file is kept. Retrying starts a new analysis from the beginning."
           actions={
-            <>
+            <div className="flex w-full flex-wrap justify-end gap-3">
+              <Button variant="ghost" asChild>
+                <Link to="/update">Choose another file</Link>
+              </Button>
+              {cancelledState ? null : (
+                <Button variant="outline" asChild>
+                  <Link to="/instance">Open Instance</Link>
+                </Button>
+              )}
               <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
                 {cancelledState ? "Start it again" : "Retry"}
               </Button>
-              {cancelledState ? null : (
-                <Button variant="outline" onClick={settingsPanel.open}>
-                  Open settings
-                </Button>
-              )}
-              <Button variant="ghost" onClick={() => void navigate({ to: "/" })}>
-                Choose another file
-              </Button>
-            </>
+            </div>
           }
         />
       ) : null}

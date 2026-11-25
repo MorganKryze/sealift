@@ -13,9 +13,6 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
   Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
 }));
-vi.mock("@/components/settings/settings-panel", () => ({
-  useSettingsPanel: () => ({ open: vi.fn() }),
-}));
 vi.mock("@/hooks/use-job-events", () => ({
   useJobEvents: () => initialAnalysisEventsState,
 }));

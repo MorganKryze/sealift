@@ -52,7 +52,7 @@ Each value below is found once and used in every place the table names. The char
 | `<test-repository>` | Administrators | the probe's hosted npm repository in [the `latest` tag](#the-latest-tag) check, a repository other than the shared one, in no group | no |
 | `<probe-user>` | Administrators | the account that uploads the probe, never the import's user | no |
 | Probe password | Administrators | the prompt of `curl` in the same check | yes |
-| `<public-key-pem>` | The connected side | `publicKey.pem`, from sealift's Settings | no |
+| `<public-key-pem>` | The connected side | `publicKey.pem`, from sealift's Instance page | no |
 | `<ca-pem>` | Administrators | `ca.pem`, one file for every internal certificate authority | no |
 | `<storage-class>` | Administrators | `persistence.storageClass`, empty for the cluster default | no |
 | `<harbor-host>`, `<harbor-project>` | Administrators | `image.repository`, the Application's `repoURL`, the Argo CD repository Secret | no |
@@ -418,7 +418,7 @@ Run the steps in order. A step is done when its expected result shows. The list 
 | 6. MinIO | **Archives** says `No archive in your folder` or lists archives | `MinIO is not configured` | The values hold no `minio.url`, or the settings file has no `minio` section |
 | | | `MinIO has no bucket user-<name> yet: nothing to list` | Ask the administrators for the bucket `user-<name>` of the signed-in user |
 | | | **Archives** shows `MinIO could not list packages/pip/: ` and MinIO's reason | The MinIO policy does not cover `packages/pip/`. Ask the administrators for the policy of [the request](admin-request.md#minio) |
-| 7. The trusted key | The Settings sheet's `Public key sha256` equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
+| 7. The trusted key | The `Public key sha256` under Trusted key on the Instance page equals the fingerprint that step 3 of [the connected side](#the-connected-side) wrote down, as you received it by [another channel](#values-that-cross-by-another-channel) | A different value | The key in the values is from another volume. Download it again from the volume that exports |
 | 8. The network policy | First run the command under this table with `-n <ingress-namespace>`: it must print `reached 200`, which proves the address and the port. Then run it from a pod in another namespace: the pod starts and prints a line that begins `blocked: TimeoutError`. No other line passes, and a timeout without the first run proves nothing (a wrong port also times out) | `reached 200` | The network plugin ignores the NetworkPolicy. Ask the administrators to enable enforcement before anyone relies on the policy |
 | | | `blocked: TypeError ENOTFOUND` | The address is wrong: the name `sealift.<namespace>.svc` did not resolve. The check proved nothing. Correct `<namespace>` and run it again |
 | | | `blocked: TypeError ECONNREFUSED` | A host answered with a refusal, so no packet was dropped. Run `kubectl -n <namespace> get endpoints sealift`: with no address, the service has no ready pod and the check proved nothing. With an address, the policy does not drop the traffic: ask the administrators whether the plugin enforces NetworkPolicy and how it treats a denied connection |

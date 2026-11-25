@@ -83,21 +83,26 @@ The end-to-end test builds the image, starts it next to two Verdaccio registries
 
 ## Changing the interface
 
-The web app has no Prettier config. Match the surrounding style by hand: no semicolons, double quotes, long lines. [Web](docs/dev/web.md) covers the routes, the step bar and how to check a screen in a real browser.
+The web app has no Prettier config. Match the surrounding style by hand: no semicolons, double quotes, long lines. [Web](docs/dev/web.md) covers the routes, the frame, the tokens, the step bar and how to check a screen in a real browser.
 
 When a screen changes, re-read the pages that describe it, since they quote its labels word for word:
 
 | Screen | Pages |
 | --- | --- |
-| Preparing | `docs/getting-started.md`, `docs/workflow.md` |
-| Home and drop | `docs/workflow.md`, `docs/troubleshooting.md` |
+| The frame, both sides | `docs/workflow.md`, `docs/importing.md`, `docs/dev/web.md` |
+| Preparing | `docs/getting-started.md`, `docs/workflow.md`, `docs/deployment.md` |
+| Home | `docs/workflow.md`, `docs/getting-started.md` |
+| Update and drop | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md` |
+| Projects and a project | `docs/workflow.md` |
 | Analysis | `docs/workflow.md`, `docs/troubleshooting.md` |
 | Review | `docs/workflow.md`, `docs/how-sealift-chooses.md` |
 | Export | `docs/workflow.md`, `docs/air-gap.md` |
-| Settings | `docs/settings.md` |
-| Archives (import service) | `docs/importing.md`, `docs/air-gap.md` |
+| Instance | `docs/settings.md`, `docs/deployment.md`, `docs/getting-started.md` |
+| Home (import service) | `docs/importing.md` |
+| Choose an archive (import service) | `docs/importing.md`, `docs/air-gap.md` |
 | Imports (import service) | `docs/importing.md`, `docs/air-gap.md` |
 | Import (import service) | `docs/importing.md`, `docs/air-gap.md` |
+| Instance (import service) | `docs/importing.md`, `docs/air-gap.md` |
 
 Retake the screenshots in `docs/assets/` from a fresh volume, analysing the project in [Getting started](docs/getting-started.md), so the numbers on them match the text.
 

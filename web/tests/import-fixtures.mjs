@@ -17,8 +17,18 @@ const ARCHIVE = "packages_npm.tar.gz"
 const PIP_FOLDER = "packages/pip/"
 const PIP_ARCHIVE = "packages_pip.tar.gz"
 
+// Ten minutes before the run, or local midnight when that falls yesterday, so the home counts the
+// import that ends then as done today.
+const todayStamp = () => {
+  const midnight = new Date()
+  midnight.setHours(0, 0, 0, 0)
+  const at = new Date(Math.max(Date.now() - 10 * 60_000, midnight.getTime()))
+  return at.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")
+}
+
 // One id per state alice's records show. The gate's routes name them.
 export const IDS = {
+  completeToday: `${todayStamp()}-a100000e`,
   queued: "20261106T093000Z-a1000001",
   running: "20261106T091000Z-a1000002",
   completeRemoved: "20261105T161200Z-a1000003",
@@ -32,6 +42,58 @@ export const IDS = {
   legacy: "20261030T080000Z-a100000a",
   longKey: "20261020T170000Z-a100000b",
   pipComplete: "20261020T090000Z-a100000d",
+}
+
+// The import role: the shipped import-server behind a real token check. A route names the user whose
+// token the page sends as the gateway does, an optional control to press once the page has its
+// content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
+// shows (`hold`), and the text that proves the data arrived (`ready`).
+export const IMPORT = {
+  baseURL: "http://127.0.0.1:18090",
+  routes: [
+    // The home: alice has archives to import, refusals, failed imports, a running one and one done today.
+    { path: "/", user: "alice", ready: "Done today" },
+    { path: "/", user: "alice", open: { role: "button", name: "Show all", exact: false, opens: { role: "link", name: "Open 2026-10-31-regenerated" } }, ready: "Done today" },
+    { path: "/", user: "bob", ready: "No archive in user-bob/packages/npm/ or packages/pip/" },
+    { path: "/", user: "dave", ready: "Imports already started go on." },
+    { path: "/", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
+    { path: "/import", user: "alice", ready: "Not imported yet" },
+    { path: "/import", user: "alice", open: { role: "button", name: "Importable", exact: false, pressed: true }, ready: "Not imported yet" },
+    { path: "/import", user: "alice", open: { role: "button", name: "Start import of 2026-11-06-new-export/packages_npm.tar.gz", opens: { role: "region", name: "Start the import of 2026-11-06-new-export/packages_npm.tar.gz" } }, ready: "Not imported yet" },
+    { path: "/import?start=packages/npm/2026-11-06-new-export/packages_npm.tar.gz", user: "alice", ready: "Start the import" },
+    { path: "/import", user: "bob", ready: "No archive in your folder" },
+    { path: "/import", user: "carol", ready: "MinIO has no bucket user-carol yet: nothing to list" },
+    { path: "/import", user: "dave", ready: "The archives could not be listed" },
+    { path: "/import", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
+    { path: "/imports", user: "alice", ready: "Waiting its turn" },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Archive removed from MinIO" },
+    { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Archive kept in MinIO" },
+    { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking the archive's removal" },
+    { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
+    { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
+    { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
+    { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
+    {
+      path: `/imports/${IDS.incomplete}`, user: "alice", ready: "Archive sha256 check",
+      open: { role: "button", name: "Show full reason of package-099@1.0.0", opens: { role: "region", name: "Full reason of package-099@1.0.0" } },
+    },
+    {
+      path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101",
+      open: { role: "button", name: "Earlier attempts (1)", opens: { role: "list", name: "Earlier attempts" } },
+    },
+    { path: `/imports/${IDS.legacy}`, user: "alice", ready: "Archive sha256 check" },
+    { path: `/imports/${IDS.longKey}`, user: "alice", ready: "Archive sha256 check" },
+    { path: `/imports/${IDS.pipComplete}`, user: "alice", ready: "Python" },
+    { path: "/imports/missing-import", user: "alice", ready: "No such import" },
+    { path: "/imports", user: "bob", ready: "No import yet" },
+    { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
+    { path: "/imports", user: "alice", hold: "/api/imports", ready: "Loading your imports" },
+    { path: "/instance", user: "alice", ready: "user-alice" },
+    { path: "/instance", user: "alice", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "sha256 from the connected side" } }, ready: "user-alice" },
+  ],
 }
 
 // The trusted key's sha256, set once the run's key is generated: the reports the store writes carry it.
@@ -144,6 +206,7 @@ function aliceRecords() {
     { kind: "source", reason: "MinIO cut the read of the archive" },
   ]
   return [
+    record(IDS.completeToday, "kiosk-ui-today/", [ended(1, iso(IDS.completeToday), "complete", packages(120, 100, 20), {}, removed)]),
     record(IDS.queued, "2026-11-06-intranet-portal/", [
       { n: 1, status: "queued", queuedAt, outcome: "", report: queuedReport() },
     ]),
@@ -195,7 +258,7 @@ function minioAnswer(bucket, prefix) {
   switch (bucket) {
     case "user-alice": {
       const objects = aliceRecords()
-        .filter((r) => r.id !== IDS.completeRemoved && r.id !== IDS.pipComplete)
+        .filter((r) => r.id !== IDS.completeRemoved && r.id !== IDS.pipComplete && r.id !== IDS.completeToday)
         .flatMap((r) => [r.archive, r.manifest, r.signature].filter(Boolean).map((o) => ({ ...o, modified: `${iso(r.id).slice(0, -1)}.000Z` })))
       const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
       // Archives the service cannot import, one for each rule, and a 200-character folder.

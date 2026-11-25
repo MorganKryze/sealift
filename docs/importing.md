@@ -1,18 +1,38 @@
 # Importing
 
-This page covers the three screens of `sealift import-server`, the import service on the air-gapped side: Archives, Imports and one import. The service publishes the packages of an archive to Nexus: npm packages from `packages/npm/`, Python wheels from `packages/pip/`. Each user sees their own archives and imports and no one else's.
+This page covers the screens of `sealift import-server`, the import service on the air-gapped side: the home, Choose an archive, Imports, one import and Instance. The service publishes the packages of an archive to Nexus: npm packages from `packages/npm/`, Python wheels from `packages/pip/`. Each user sees their own archives and imports and no one else's.
 
-Sign in through your organisation's gateway and open its address. The header names the screens, `Archives` and `Imports`, your user name and `Settings`. The Settings sheet holds `Appearance` (the theme, saved in this browser only), `Your MinIO folder`, the `Bucket` and `Folder` the service reads your archives from, and `Trusted key`, described below.
+Sign in through your organisation's gateway and open its address. Every screen sits in the same frame as the connected side's. The sidebar holds **Home** and **Imports**, then **Instance** and your initials at its foot. The top bar holds the breadcrumb and the side label, an unplugged plug with `Offline`. The import service reads no brand, so its screens show sealift's mark and the default labels.
+
+## Home
+
+![The home for alice: Good afternoon, alice, the Import card, then Needs you with archives to import, failed and refused ones, In progress with a queued and a running import, and Done today](assets/offline-home.png)
+
+The home greets you by name, such as `Good morning, alice`, and offers one card, **Import** an archive, which opens Choose an archive. Three groups follow, newest first. A group with no row is left out.
+
+| Group | Holds | Row's action |
+| --- | --- | --- |
+| Needs you | Each archive in your folders with no import yet, with its ecosystem, its size and when it was uploaded, such as `uploaded 3 hours ago`; an archive that cannot be imported, or whose latest import was refused, marked Refused with its reason; and the latest import of an archive that ended incomplete or interrupted, marked Failed, with how many packages are not in Nexus | **Import** opens Choose an archive with that archive's start panel open; **Open** otherwise |
+| In progress | Imports queued (Queued, Waiting its turn) or running (Importing, with the packages done so far) | **Open** |
+| Done today | Imports that completed since midnight, with how many packages are in Nexus | **Open** |
+
+A group shows ten rows, then **Show all**, such as Show all 12 archives and imports under Needs you. With nothing in any group, Needs you reads `No archive in` and your two folders, or that MinIO is not configured.
 
 ## The trusted key
 
-The sheet's `Trusted key` section shows `Public key sha256` in full, with a copy button, and says `Archives must be signed by the key with this sha256. Compare it with the one in sealift's Settings on the connected side.` The service reads the key from the file `publicKeyFile` names in its settings and checks every archive against it. Compare the value by eye with the Public key sha256 in sealift's Settings, once, before the first crossing: [The air gap](air-gap.md#the-signature-and-the-trusted-key) explains how the key gets here. When the two differ, this service does not trust that sealift: stop and carry the public key again.
+**Instance**, at the foot of the sidebar, opens the import side's Instance page. It holds three sections:
 
-## Archives
+| Section | Shows |
+| --- | --- |
+| Trusted key | Signing key, Ed25519, and `Public key sha256`: the first and last eight characters, which a press opens to the whole value, with a copy button. `An archive signed with any other key is refused.` Then **Compare** |
+| Your folders | `Signed in as`, `Bucket`, `npm archives` and `pip archives` |
+| Appearance | Theme, saved in this browser only |
 
-![Archives, with two archives that cannot be imported, one that can, and one whose import ended incomplete](assets/import-archives.png)
+The service reads the key from the file `publicKeyFile` names in its settings and checks every archive against it. Once, before the first crossing, check that it holds the key sealift signs with. Copy the Public key sha256 on sealift's Instance page, on the connected side, press **Compare** here and paste it into the field. The browser compares the two and sends nothing: the field reads `Matches the trusted key`, or `Does not match` with the position of the first character that differs, and a shorter value shows how many of the 64 characters you pasted. The pasted value may carry a `sha256:` prefix, colons, spaces or capitals. [The air gap](air-gap.md#the-signature-and-the-trusted-key) explains how the key gets here. When the two differ, this service does not trust that sealift: stop and carry the public key again.
 
-Archives lists the archives in your MinIO folders, newest first: `packages/npm/` and `packages/pip/` in your bucket, and one folder below each. An npm export goes under `packages/npm/` and a pip export under `packages/pip/`, each with the same three files. The line under the title counts them, such as `5 archives · 2 importable`. `All` and `Importable` filter the rows, and `Refresh` reads the folders again. The list also reads again each time you open the screen.
+## Choose an archive
+
+Choose an archive lists the archives in your MinIO folders, newest first: `packages/npm/` and `packages/pip/` in your bucket, and one folder below each. An npm export goes under `packages/npm/` and a pip export under `packages/pip/`, each with the same three files. The line under the title counts them, such as `5 archives · 2 importable`. `All` and `Importable` filter the rows, and `Refresh` reads the folders again. The list also reads again each time you open the screen. The breadcrumb places it under Home.
 
 An archive can be imported when its folder holds one archive, its `manifest.json` and its `manifest.json.sig`, side by side. Any other row says `Cannot be imported` and why:
 
@@ -108,13 +128,13 @@ For a `conflict`, the card says `Nexus holds this version with other bytes, and 
 
 The gateway signs users out after a time. A screen that finds itself signed out says `Your session has ended` and `The page was signed out while you were away. Sign in again to carry on; nothing you started was changed.` with `Sign in again`. The notice replaces a list that was on screen, along with its count line and its `Refresh` button. Imports go on without the page.
 
-An error page from the gateway is not a sign-out. While the service restarts, nginx answers with its own HTML page and status 502 or 504. A screen reads that as a failed request: a list on screen stays, with `The last refresh failed. The list is as it was.` next to its count. A screen with nothing to show says `This could not be loaded` with `Try again`, and Archives says `The archives could not be listed` on a 502.
+An error page from the gateway is not a sign-out. While the service restarts, nginx answers with its own HTML page and status 502 or 504. A screen reads that as a failed request: a list on screen stays, with `The last refresh failed. The list is as it was.` next to its count. A screen with nothing to show says `This could not be loaded` with `Try again`, and Choose an archive says `The archives could not be listed` on a 502.
 
 A gateway page with a 4xx status, such as a 403, 404 or 429, is a failed request too, and its words say that the gateway refused the request with that status. Only a 401, a redirect to the sign-in page or a 2xx answer that is not the service's JSON reads as a sign-out.
 
 ## Checked in the lab
 
-The screens above were read on the lab's gateway at http://localhost:18440 (see `lab/README.md`), signed in as `alice` and `bob`, in a browser driven by script, against an image built from this branch, and the captures come from that run. The run covered:
+An earlier run read the import screens on the lab's gateway at http://localhost:18440 (see `lab/README.md`), signed in as `alice` and `bob`, in a browser driven by script. Its image predates the frame, the home and the Instance page, and showed the archive list as its own screen, Archives. The captures of one import come from that run. The browser gate covers the newer screens, and the home's capture comes from its fixtures. The run covered:
 
 - Archives with five rows: two in a folder holding two archives, one in a folder with no manifest, one not imported yet and one whose import ended incomplete. Archives while one import ran and another waited, with the `Follow` links.
 - Imports, with imports of every state the lab held, and each of these on its own page: a complete import with the archive removed, an incomplete one with a planted conflict, a refused one, a running one at 37 of 101 packages, a queued one and an interrupted one after `docker compose restart import-server`. The queued import read `The archive's checks have not run yet.` and, once the restart had interrupted it before it started, `Not recorded: this attempt did not record the archive's checks.`
