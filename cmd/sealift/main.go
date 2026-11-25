@@ -111,12 +111,15 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
 	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), asUser)
-	registry := &npm.Client{Registry: toolsManager.NPMRegistry}
+	registry := newRegistryClient(toolsManager.NPMRegistry)
 
 	queue := jobs.NewQueue(log)
 	defer queue.Close()
 	if onQueueReady != nil {
 		onQueueReady(queue)
+	}
+	if onRegistryReady != nil {
+		onRegistryReady(registry)
 	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	service.Review = pol.Review
@@ -262,6 +265,18 @@ var onQueueReady func(*jobs.Queue)
 // up. Only a test in this package sets it, to read what the service hands
 // each analysis.
 var onServiceReady func(*jobs.Service)
+
+// onRegistryReady, when non-nil, is called with the npm client run hands
+// the service. Only a test in this package sets it, to check its timeout.
+var onRegistryReady func(*npm.Client)
+
+// newRegistryClient builds the analysis's npm client. The timeout covers
+// the whole response, so it matches the tools client's: a large packument
+// or tarball needs minutes on a slow link, and a stalled registry must not
+// hold a job forever.
+func newRegistryClient(registry string) *npm.Client {
+	return &npm.Client{Registry: registry, HTTP: &http.Client{Timeout: 5 * time.Minute}}
+}
 
 // toolsCredential builds the credential pnpm and Trivy run under, from the
 // uid and gid docker-entrypoint.sh exports as SEALIFT_TOOLS_UID and

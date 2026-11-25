@@ -30,6 +30,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 // TestToolsCredential proves toolsCredential builds a credential only when
@@ -1301,5 +1302,36 @@ func TestRunStopsOnABusyAddressBeforePreparing(t *testing.T) {
 	// store.Open creates tools/ empty; the preparation is what fills it.
 	if entries, err := os.ReadDir(filepath.Join(root, "tools")); err != nil || len(entries) != 0 {
 		t.Errorf("tools/ holds %v after a failed bind (%v), want it empty", entries, err)
+	}
+}
+
+// TestRegistryClientTimesOut proves the analysis's registry client carries a
+// timeout: http.DefaultClient has none, so a registry that stops answering
+// mid-body would hold a job forever.
+func TestRegistryClientTimesOut(t *testing.T) {
+	c := newRegistryClient("https://registry.example.internal")
+	if c.Registry != "https://registry.example.internal" {
+		t.Errorf("Registry = %q", c.Registry)
+	}
+	if c.HTTP == nil || c.HTTP.Timeout <= 0 {
+		t.Fatalf("HTTP = %+v, want a client with a timeout", c.HTTP)
+	}
+}
+
+func TestRunHandsTheAnalysesARegistryClientWithATimeout(t *testing.T) {
+	clients := make(chan *npm.Client, 1)
+	onRegistryReady = func(c *npm.Client) { clients <- c }
+	defer func() { onRegistryReady = nil }()
+
+	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop()
+
+	select {
+	case c := <-clients:
+		if c == nil || c.HTTP == nil || c.HTTP.Timeout <= 0 {
+			t.Errorf("run hands the service the npm client %+v, want one with a timeout", c)
+		}
+	default:
+		t.Fatal("run never handed over its npm client")
 	}
 }
