@@ -162,7 +162,10 @@ func (f *fakeNexus) client(t *testing.T) *nexus.Client {
 // stage writes content as a checked tarball and returns its package.
 func stage(t *testing.T, dir, name, version string, content []byte) Package {
 	t.Helper()
-	file := npm.PackFileName(name, version)
+	file, err := npm.PackFileName(name, version)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, file)
 	content = packed(t, name, version, string(content))
 	if err := os.WriteFile(path, content, 0o600); err != nil {

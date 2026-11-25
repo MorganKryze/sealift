@@ -57,7 +57,11 @@ type nexusDouble struct {
 
 func newNexusDouble(t *testing.T, name, version string) *nexusDouble {
 	t.Helper()
-	n := &nexusDouble{files: map[string][]byte{}, byFile: map[string]string{npm.PackFileName(name, version): npm.TarballURL("/repository/npm-hosted", name, version)}}
+	file, err := npm.PackFileName(name, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &nexusDouble{files: map[string][]byte{}, byFile: map[string]string{file: npm.TarballURL("/repository/npm-hosted", name, version)}}
 	n.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		defer n.mu.Unlock()

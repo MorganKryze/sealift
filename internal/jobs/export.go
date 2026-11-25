@@ -410,6 +410,10 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 // below, never for a package that still made a network request even if
 // its bytes happened to already exist under another name.
 func (e *Export) downloadOne(ctx context.Context, p npm.LockPackage) (pkg downloadedPackage, hit bool, err error) {
+	// The lockfile is untrusted and its name and version end up in a path.
+	if _, err := npm.PackFileName(p.Name, p.Version); err != nil {
+		return downloadedPackage{}, false, fmt.Errorf("jobs: %w", err)
+	}
 	if key, ok := sha512CacheKey(p.Integrity); ok {
 		cachePath := filepath.Join(e.Store.Root(), "cache", "tarballs", key+".tgz")
 		// The name claims the content: a file left wrong by an earlier run
@@ -519,7 +523,10 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 		return shippedPackage{}, err
 	}
 
-	file := npm.PackFileName(d.Name, d.Version)
+	file, err := npm.PackFileName(d.Name, d.Version)
+	if err != nil {
+		return shippedPackage{}, fmt.Errorf("jobs: %w", err)
+	}
 	f, st, err := openRegular(d.CachePath, file)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: %s@%s: %w", d.Name, d.Version, err)
