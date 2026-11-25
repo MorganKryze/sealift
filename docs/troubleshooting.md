@@ -123,7 +123,7 @@ The export packed the archive but could not sign its manifest. The export fails 
 
 ### Signed with a key replaced since
 
-The done screen says an archive carries a key you regenerated after the export. The import refuses it once it trusts the new key. Press **Export another selection**, or run the same selection again, and carry the new files.
+The done screen says an archive carries a key replaced after the export, by `sealift signing-key regenerate`. The import refuses it once it trusts the new key. Press **Export another selection**, or run the same selection again, and carry the new files.
 
 ### Not signed: sealift 0.4.0 or earlier exported this archive
 
@@ -185,7 +185,7 @@ The reason ends with the first rule the file breaks: it is larger than 4096 byte
 
 ### the manifest is signed by another key
 
-The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 in sealift's Settings on the connected side. When they are equal, the connected side regenerated its key: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
+The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 in sealift's Settings on the connected side. When they are equal, someone ran `sealift signing-key regenerate` on the connected side: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
 
 ### the signature does not match the manifest
 

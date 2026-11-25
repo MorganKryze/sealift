@@ -57,7 +57,7 @@ What a valid signature shows: the manifest was made by the holder of the private
 - Freshness. An old archive with a valid signature stays importable until you regenerate the key.
 - Anything about the four reports, which are not signed.
 
-A regenerate in Settings, or a lost volume, gives sealift a new key. The import side then refuses every new archive, and every archive exported before, until it holds the new public key. [Troubleshooting](troubleshooting.md#import) gives each refusal and its fix.
+`sealift signing-key regenerate`, run in sealift's container or pod, or a lost volume, gives sealift a new key. The import side then refuses every new archive, and every archive exported before, until it holds the new public key. [Troubleshooting](troubleshooting.md#import) gives each refusal and its fix.
 
 ## The review in the manifest
 

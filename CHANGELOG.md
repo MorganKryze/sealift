@@ -28,6 +28,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The Settings panel shows the policy read-only in its Policy section, and the scanner as the Trivy version and the database date, with no control.
 - Settings that 0.7.0 saved in `private/settings.json` still apply, and a value the policy file sets wins over them. The start log names each key the file overrides. sealift reads that file and never writes it, so a new volume holds none, and 0.7.0 still reads it after a rollback.
 - Once the pinned Trivy is active, the start removes every other Trivy version from the volume. An analysis is refused while another version is active.
+- `sealift signing-key regenerate`, run in the container or pod as the image's user, replaces the signing key. It prints the new public key, its sha256 and the replaced key's sha256, and refuses a key file another user owns. The running server signs the next export with the new key, with no restart. [Deployment](docs/deployment.md#regenerate-the-key) describes it.
 - `SEALIFT_NPM_REGISTRY` now also serves the download of pnpm.
 - The brand is read, checked and served through the API. The screens keep sealift's name and colours until a later release draws it.
 - Proposals stay in each dependency's current line by default, the range npm's caret gives its current version. express 4.17.1 no longer gets 5.1.0 proposed: it stays in major 4, and 5.1.0 is its jump.
@@ -42,7 +43,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-Each removed route below answers 410 Gone, with Problem Details that name `GET /api/instance`.
+Each removed route below answers 410 Gone, with Problem Details that name what replaces it.
 
 - The setup screen and its install button: the start installs what it showed.
 - The settings form: the policy file replaces it.
@@ -52,6 +53,7 @@ Each removed route below answers 410 Gone, with Problem Details that name `GET /
 - `POST /api/tools/trivy/db/update`: the start refreshes the database, and so does each analysis.
 - `POST /api/tools/uv/install`: the start installs the default pip target's uv, and an analysis installs another target's uv.
 - `PUT /api/settings`: the policy file sets every value. `GET /api/settings` stays, read-only.
+- `POST /api/signing-key/regenerate`: `sealift signing-key regenerate` replaces the key from the container or pod. `GET /api/signing-key` stays.
 
 ### Fixed
 

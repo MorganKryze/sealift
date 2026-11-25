@@ -239,7 +239,7 @@ The logo route answers with `Content-Security-Policy: default-src 'none'; style-
 
 ### Removed routes
 
-The routes that listed or installed tools and saved settings are gone. The deployment now prepares the tools and sets the policy, so no request can. Each answers 410 Gone with Problem Details whose `detail` names `GET /api/instance`. Paths are under `/api`:
+The routes that listed or installed tools, saved settings and regenerated the signing key are gone. The deployment now prepares the tools, sets the policy and regenerates the key, so no request can. Each answers 410 Gone with Problem Details whose `detail` names what replaces it. Paths are under `/api`:
 
 | Removed | Use instead |
 | --- | --- |
@@ -249,6 +249,7 @@ The routes that listed or installed tools and saved settings are gone. The deplo
 | `POST /tools/trivy/db/update` | the refresh at start and before each analysis |
 | `POST /tools/uv/install` | the default pip target's uv, installed at start; another uv installs during the analysis that needs it |
 | `PUT /settings` | the policy file, read at start |
+| `POST /signing-key/regenerate` | `sealift signing-key regenerate`, run in the container or pod; `GET /signing-key` reports the key |
 
 ## Signing key
 
@@ -257,17 +258,8 @@ sealift generates an Ed25519 key pair on first start and keeps the private key i
 | Route | Purpose |
 | --- | --- |
 | `GET /api/signing-key` | The public key and its fingerprint: `{"publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...", "publicKeySha256": "<64 lowercase hex digits>"}`. `publicKeySha256` is the sha256 of the key's DER SubjectPublicKeyInfo encoding. |
-| `POST /api/signing-key/regenerate` | Replace the key pair with a new one and answer with the new public key, in the same shape. The body is `{}` with `Content-Type: application/json`. |
 
-A regenerate answers:
-
-| Status | When |
-| --- | --- |
-| 200 | The new pair is on disk and in use. |
-| 403 | The `Host` is not this server's own (the listen address's host, `localhost`, `127.0.0.1` or `::1`), the `Origin` is not one of those hosts, `Sec-Fetch-Site` is `cross-site`, or the body is not `application/json`. The key is unchanged. |
-| 500 | The new key cannot be written. The problem's `detail` names the file; the old key stays on disk and in use. |
-
-A request with no `Origin` and a JSON body passes the check, as curl must. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a PEM private key or is not Ed25519: it never replaces a key file by itself.
+No route changes the key. `sealift signing-key regenerate`, run in the container or pod, replaces it, and the server reads the file again when it changes. [Deployment](../deployment.md#regenerate-the-key) describes the command. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a PEM private key or is not Ed25519: it never replaces a key file by itself.
 
 ## Package index
 

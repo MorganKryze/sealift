@@ -87,7 +87,7 @@ On Kubernetes, a ConfigMap mounted as a folder presents each file through a link
 
 ## Access
 
-sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. A request to regenerate the key also passes a Host check, described under [the key the import trusts](#the-key-the-import-trusts); no other route looks at the Host. No route installs a tool or changes the policy. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
+sealift has no login. Anyone who reaches port 8080 can run sessions, download archives and have any selection signed with the signing key. No route installs a tool, changes the policy or regenerates the key. Keep it bound to `127.0.0.1`, as above, and publish it through a reverse proxy that authenticates, or through an SSH tunnel:
 
 <!-- illustrative -->
 ```sh
@@ -221,7 +221,42 @@ A lost volume means a new key. Stop sealift, restore `private/signing-key.pem` f
 
 A backup of the volume holds the private key. Keep it as you keep the volume.
 
-A regenerate in Settings replaces the key, with the same consequence for the import side. The `POST /api/signing-key/regenerate` route refuses a request whose `Host` is not the server's own host (`localhost`, `127.0.0.1`, `::1` or the host of its listen address) with 403, so a page on another site cannot reach it by DNS rebinding. Behind a reverse proxy that passes a public name as `Host`, press **Regenerate key** through `localhost` or an SSH tunnel to `127.0.0.1:8080`. No other route holds the `Host` to that list.
+### Regenerate the key
+
+Regenerating takes a command in the container or pod. No HTTP route does it: the route of earlier releases answers 410 Gone, as [the API reference](dev/api.md#removed-routes) lists. Run the command as the image's user, `app` (uid 10000). `docker compose exec` and `kubectl exec` run as that user unless you name another:
+
+```sh
+docker compose exec sealift sealift signing-key regenerate
+```
+
+<!-- illustrative -->
+```sh
+kubectl exec deploy/sealift -- sealift signing-key regenerate
+```
+
+`-data` names the data volume and defaults to `/data`. The command writes a new pair over `private/signing-key.pem` through a temporary file and a rename, exits with code 0 and prints the new key's public key sha256, the sha256 of the key it replaced, and the new public key. It never prints the private key:
+
+<!-- illustrative -->
+```text
+public key sha256 <64 lowercase hex digits>
+replaced <64 lowercase hex digits>
+-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----
+```
+
+The running server reads the key file again when it changes, so the next export signs with the new key. No restart is needed. The old key is not kept: the import side refuses every new archive until it holds the new public key, and it refuses the archives exported before, which carry the old signature. Carry the new public key before your next crossing.
+
+The command exits with code 1 and leaves the key file as it was when it refuses. Its line starts with `sealift signing-key regenerate:`, followed by:
+
+| Message | Cause |
+| --- | --- |
+| `store: no signing key at <path>: check the data volume` | The volume holds no key, or `-data` names another folder. The command never creates a first key: the server does at start. |
+| `store: signing key <path> belongs to uid <owner>: run this command as that user, not as uid <you>` | The command runs as another user, such as `root` through `exec -u root`. A key that user wrote could be unreadable by the server. |
+| `store: signing key <path> is not a regular file` | The path is a link, a folder or another special file. |
+| `store: signing key <path> cannot be read`, `is not a PEM private key` or `is not an Ed25519 key` | The current key is unreadable or damaged. [Troubleshooting](troubleshooting.md#store-signing-key-cannot-be-read) gives the fix. |
+
+Any other argument prints `usage: sealift signing-key regenerate [-data <dir>]` and exits with code 2.
 
 ## The import service
 
