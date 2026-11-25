@@ -259,7 +259,7 @@ sealift generates an Ed25519 key pair on first start and keeps the private key i
 | --- | --- |
 | `GET /api/signing-key` | The public key and its fingerprint: `{"publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...", "publicKeySha256": "<64 lowercase hex digits>"}`. `publicKeySha256` is the sha256 of the key's DER SubjectPublicKeyInfo encoding. |
 
-No route changes the key. `sealift signing-key regenerate`, run in the container or pod, replaces it, and the server reads the file again when it changes. [Deployment](../deployment.md#regenerate-the-key) describes the command. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a PEM private key or is not Ed25519: it never replaces a key file by itself.
+No route changes the key. `sealift signing-key regenerate`, run in the container or pod, replaces it, and the server reads the file again when it changes. [Deployment](../deployment.md#regenerate-the-key) describes the command. The server stops at start, naming the file, when `signing-key.pem` exists and cannot be read, is not a regular file, is not a PEM private key or is not Ed25519: it never replaces a key file by itself. A key damaged while the server runs turns `GET /healthz` to 503 with `signing-key` among the items not ready, and every export fails before its first download with a failed `prepare` step that carries the cause, so the screen shows it.
 
 ## Package index
 
