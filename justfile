@@ -18,10 +18,9 @@ vet:
 lint:
     golangci-lint run ./...
 
-# Fail when go mod tidy changes go.mod or go.sum.
+# Fail when go mod tidy would change go.mod or go.sum; writes neither.
 tidy-check:
-    go mod tidy
-    git diff --exit-code go.mod go.sum
+    go mod tidy -diff
 
 vulncheck:
     go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
