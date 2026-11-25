@@ -44,7 +44,7 @@ sealift signs `manifest.json` with an Ed25519 key it generated for its volume, a
 
 The import side checks the signature with a public key you carry to it once. Do it before your first crossing:
 
-1. On the connected side, open Settings, section Signing key. Press **Download** for `sealift-public-key.pem`, or **Copy**.
+1. On the connected side, open Instance, block Signing key. Press **Download public key** for `sealift-public-key.pem`, or copy it.
 2. Carry the file to the import side over a channel you trust, not the kiosk the archives cross.
 3. Name it in the import's settings, as `publicKeyFile` below shows.
 4. Compare the Public key sha256 on both sides: sealift's Instance page shows one, the import side's Instance page shows the other under Trusted key, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
