@@ -3,12 +3,15 @@ package store
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/MorganKryze/sealift/archive"
 )
@@ -27,7 +30,14 @@ type SigningKey struct {
 	// that holds this value makes fmt print the field again at depth 0 and
 	// dereference one pointer level; the second level stays an address.
 	private **ed25519.PrivateKey
+
+	// err names the key file when it does not read; such a key signs nothing.
+	err error
 }
+
+// Err names the key file when it changed into one that does not read; such a
+// key signs nothing.
+func (k SigningKey) Err() error { return k.err }
 
 // String names the key by its public key sha256.
 func (k SigningKey) String() string {
@@ -44,6 +54,9 @@ func (k SigningKey) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(k.String
 // Ed25519 signature naming this key's public key sha256. It signs nothing
 // else, so the key has one use.
 func (k SigningKey) SignManifest(manifest []byte) ([]byte, error) {
+	if k.err != nil {
+		return nil, k.err
+	}
 	if k.private == nil || *k.private == nil {
 		return nil, errors.New("store: this signing key has no private half")
 	}
@@ -60,29 +73,110 @@ func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 	}
 }
 
-// SigningKey returns the key in use. Safe for concurrent use.
+// keyStamp is the sha256 of the key file's bytes, which SigningKey compares
+// to notice that the file changed. A digest, so printing a Store never
+// prints the file.
+type keyStamp [sha256.Size]byte
+
+// SigningKey reads private/signing-key.pem again and parses it when its
+// bytes changed, so a key replaced while the server runs signs the next
+// export, an in-place rewrite included. A file that does not read gives a
+// key whose Err names the file. Safe for concurrent use.
 func (s *Store) SigningKey() SigningKey {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return *s.signing
-}
+	path := s.signingKeyPath()
+	data, err := readKeyFile(path)
+	stamp := keyStamp(sha256.Sum256(data))
+	if err == nil {
+		s.mu.RLock()
+		if s.keyRead && stamp == s.keyStamp {
+			key := *s.signing
+			s.mu.RUnlock()
+			return key
+		}
+		s.mu.RUnlock()
+	}
 
-// RegenerateSigningKey replaces the key pair with a new one, through a
-// temporary file and a rename. The old key stays on disk and in use when the
-// write fails.
-func (s *Store) RegenerateSigningKey() (SigningKey, error) {
-	s.regenerating.Lock()
-	defer s.regenerating.Unlock()
-
-	key, err := generateSigningKey(s.signingKeyPath())
-	if err != nil {
-		return SigningKey{}, err
+	var key SigningKey
+	if err == nil {
+		key, err = parseSigningKey(path, data)
 	}
 	s.mu.Lock()
-	s.signing = &key
-	s.mu.Unlock()
-	return key, nil
+	defer s.mu.Unlock()
+	if err != nil {
+		key = SigningKey{err: err}
+	}
+	s.signing, s.keyStamp, s.keyRead = &key, stamp, err == nil
+	return key
 }
+
+// ReplaceSigningKey writes a new Ed25519 pair over root/private/signing-key.pem
+// through a temporary file and a rename, and returns it with the replaced
+// key's public sha256. It writes nothing when the file is missing or when uid
+// does not own it.
+func ReplaceSigningKey(root string, uid int) (key SigningKey, replaced string, err error) {
+	path := filepath.Join(root, "private", signingKeyFile)
+	// Two regenerates that overlap would both read the same old key and
+	// both report it as replaced; the lock makes them take turns.
+	// A volume with no key gets no lock file either.
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return SigningKey{}, "", fmt.Errorf("store: no signing key at %s: check the data volume", path)
+	}
+	unlock, err := lockSigningKey(filepath.Join(root, "private", signingKeyLock))
+	if err != nil {
+		return SigningKey{}, "", err
+	}
+	defer unlock()
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return SigningKey{}, "", fmt.Errorf("store: no signing key at %s: check the data volume", path)
+	}
+	if err != nil {
+		return SigningKey{}, "", fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return SigningKey{}, "", fmt.Errorf("store: signing key %s is not a regular file", path)
+	}
+	// A key written by another user, root through an exec included, is one
+	// the server may not be able to read.
+	if sys, ok := info.Sys().(*syscall.Stat_t); ok && int(sys.Uid) != uid {
+		return SigningKey{}, "", fmt.Errorf("store: signing key %s belongs to uid %d: run this command as that user, not as uid %d", path, sys.Uid, uid)
+	}
+	old, _, err := readSigningKey(path)
+	if err != nil {
+		return SigningKey{}, "", err
+	}
+	if afterOldKeyRead != nil {
+		afterOldKeyRead()
+	}
+	key, err = generateSigningKey(path)
+	if err != nil {
+		return SigningKey{}, "", err
+	}
+	return key, old.PublicKeySHA256, nil
+}
+
+const signingKeyLock = "signing-key.lock"
+
+// lockSigningKey takes an exclusive flock on the lock file at path and
+// returns its release. It never follows a link at path.
+func lockSigningKey(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("store: open signing key lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("store: lock %s: %w", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// afterOldKeyRead is a test's hook between the read of the replaced key and
+// the write of the new one.
+var afterOldKeyRead func()
 
 func (s *Store) signingKeyPath() string {
 	return filepath.Join(s.root, "private", signingKeyFile)
@@ -92,14 +186,57 @@ func (s *Store) signingKeyPath() string {
 // is none. A file that exists but cannot be used stops the start and is never
 // replaced: a silent new key would break the import side's trust with no
 // notice.
-func loadSigningKey(path string) (SigningKey, error) {
-	data, err := os.ReadFile(path)
+func loadSigningKey(path string) (SigningKey, keyStamp, error) {
+	key, stamp, err := readSigningKey(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return generateSigningKey(path)
+		if _, err = generateSigningKey(path); err != nil {
+			return SigningKey{}, keyStamp{}, err
+		}
+		return readSigningKey(path)
 	}
+	return key, stamp, err
+}
+
+// readSigningKey reads and parses the key file, and returns the stamp of
+// what it read. Its errors name the file and never its content.
+func readSigningKey(path string) (SigningKey, keyStamp, error) {
+	data, err := readKeyFile(path)
 	if err != nil {
-		return SigningKey{}, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+		return SigningKey{}, keyStamp{}, err
 	}
+	key, err := parseSigningKey(path, data)
+	if err != nil {
+		return SigningKey{}, keyStamp{}, err
+	}
+	return key, keyStamp(sha256.Sum256(data)), nil
+}
+
+// readKeyFile returns the key file's bytes.
+func readKeyFile(path string) ([]byte, error) {
+	// O_NONBLOCK keeps a named pipe at the path from blocking the open;
+	// the regular-file check then refuses it, a device too.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("store: signing key %s is not a regular file", path)
+	}
+	// A PEM Ed25519 key runs 119 bytes.
+	data, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+	}
+	return data, nil
+}
+
+// parseSigningKey parses the bytes of the key file at path.
+func parseSigningKey(path string, data []byte) (SigningKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "PRIVATE KEY" {
 		return SigningKey{}, fmt.Errorf("store: signing key %s is not a PEM private key", path)

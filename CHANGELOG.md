@@ -27,6 +27,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - `deploy/connected/compose.yaml` gives the first start 10 minutes before a failed healthcheck counts, and checks every 5 seconds until the first success. `start_interval` needs Docker Engine 25 or later.
 - Settings that 0.7.0 saved in `private/settings.json` still apply, and a value the policy file sets wins over them. The start log names each key the file overrides. sealift reads that file and never writes it, so a new volume holds none, and 0.7.0 still reads it after a rollback.
 - Once the pinned Trivy is active, the start removes every other Trivy version from the volume. An analysis is refused while another version is active.
+- `sealift signing-key regenerate`, run in the container or pod as the image's user, replaces the signing key. It prints the new public key, its sha256 and the replaced key's sha256, and refuses a key file another user owns. The running server signs the next export with the new key, with no restart. [Deployment](docs/deployment.md#regenerate-the-key) describes it.
 - `SEALIFT_NPM_REGISTRY` now also serves the download of pnpm.
 - A new look, in light and dark: every colour reaches its contrast in both themes, states show as closed tinted rows, and figures read in bold.
 - Both sides open in one frame: a sidebar of places, Home and Projects on the connected side, Home and Imports on the import side, with Instance at its foot, and a top bar with the breadcrumb and the side's name. [Workflow](docs/workflow.md#the-frame) describes it.
@@ -47,7 +48,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-Each removed route below answers 410 Gone, with Problem Details that name `GET /api/instance`.
+Each removed route below answers 410 Gone, with Problem Details that name what replaces it.
 
 - The setup screen and its install button: the start installs what it showed.
 - The settings form: the policy file replaces it.
@@ -57,6 +58,7 @@ Each removed route below answers 410 Gone, with Problem Details that name `GET /
 - `POST /api/tools/trivy/db/update`: the start refreshes the database, and so does each analysis.
 - `POST /api/tools/uv/install`: the start installs the default pip target's uv, and an analysis installs another target's uv.
 - `PUT /api/settings`: the policy file sets every value. `GET /api/settings` stays, read-only.
+- `POST /api/signing-key/regenerate`: `sealift signing-key regenerate` replaces the key from the container or pod. `GET /api/signing-key` stays.
 
 ### Fixed
 

@@ -85,10 +85,10 @@ type Store struct {
 	// signing is a pointer: fmt prints a nested pointer as an address, so
 	// printing a Store never reaches the private key.
 	signing *SigningKey
-
-	// regenerating serializes key replacements, so the file and the key in
-	// use always come from the same call.
-	regenerating sync.Mutex
+	// keyStamp is the digest of the key file signing was read from; keyRead is
+	// false while the file does not read, so each call tries it again.
+	keyStamp keyStamp
+	keyRead  bool
 
 	// ephemeral draws project ids that do not derive from the name.
 	ephemeral bool
@@ -131,6 +131,8 @@ func Open(root string) (*Store, error) {
 		}
 	}
 
+	sweepTempFiles(filepath.Join(root, "private"))
+
 	projects, err := openProjectsRoot(filepath.Join(root, "projects"))
 	if err != nil {
 		return nil, err
@@ -152,11 +154,11 @@ func Open(root string) (*Store, error) {
 		s.settings, s.stored, s.hasStored = loaded, loaded, true
 	}
 
-	key, err := loadSigningKey(s.signingKeyPath())
+	key, stamp, err := loadSigningKey(s.signingKeyPath())
 	if err != nil {
 		return nil, err
 	}
-	s.signing = &key
+	s.signing, s.keyStamp, s.keyRead = &key, stamp, true
 	return s, nil
 }
 
@@ -310,6 +312,10 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err == nil {
 		written, err = f.Stat()
 	}
+	// Without it a crash after the rename can leave an empty file in place.
+	if err == nil {
+		err = f.Sync()
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
@@ -329,7 +335,42 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if !os.SameFile(written, placed) {
 		return fmt.Errorf("store: %s was replaced while it was written", path)
 	}
+	// The rename survives a power cut only once the directory is on disk.
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("store: sync %s: %w", dir, err)
+	}
 	return nil
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	if closeErr := d.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// sweepTempFiles removes the temporary files atomicWriteFile left in dir
+// when the process stopped between their create and their rename. A file
+// that cannot be removed stays; the next write picks another name.
+func sweepTempFiles(dir string) {
+	stale, err := filepath.Glob(filepath.Join(dir, ".*.tmp-*"))
+	if err != nil {
+		return
+	}
+	for _, path := range stale {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			slog.Warn("store: could not remove a stale temporary file", "path", path, "error", err)
+		}
+	}
 }
 
 // NewResolveDir reserves a fresh, group-writable directory under

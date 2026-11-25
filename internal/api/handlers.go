@@ -25,12 +25,9 @@ const manifestSizeLimit = 1 << 20
 // every operation reads or writes through Store, Service or Tools.
 type Handlers struct {
 	*EventsHandler
-	// ListenAddr is the address the server listens on; its host may send a
-	// regenerate of the signing key.
-	ListenAddr string
-	Store      *store.Store
-	Service    *jobs.Service
-	Tools      *tools.Manager
+	Store   *store.Store
+	Service *jobs.Service
+	Tools   *tools.Manager
 	// Ready answers /healthz. NewHandlers sets it to the tools manager's
 	// own check; the server sets the start's preparation.
 	Ready Readiness

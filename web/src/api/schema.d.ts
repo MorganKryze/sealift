@@ -380,26 +380,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/signing-key/regenerate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Replace the signing key with a new pair
-         * @description Answers 403 for a Host or an Origin that is not this server's own, for Sec-Fetch-Site cross-site, and for a body that is not application/json. The old key stays in use when the new one cannot be written.
-         */
-        post: operations["regenerateSigningKey"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1463,33 +1443,6 @@ export interface operations {
                     "application/json": components["schemas"]["SigningKey"];
                 };
             };
-            default: components["responses"]["Problem"];
-        };
-    };
-    regenerateSigningKey: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description The new public key and its public key sha256 */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SigningKey"];
-                };
-            };
-            403: components["responses"]["Problem"];
-            500: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };

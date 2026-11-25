@@ -63,7 +63,7 @@ It does not prove who pressed Export: anyone who reaches sealift's port can have
 
 ## What if I regenerate the key, or lose the volume?
 
-The import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before. Carry the new public key to the file `publicKeyFile` names, compare the Public key sha256 on both sides, then export again. [Deployment](deployment.md#the-key-the-import-trusts) covers a lost volume.
+The import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before. Carry the new public key to the file `publicKeyFile` names, compare the Public key sha256 on both sides, then export again. The key changes only through `sealift signing-key regenerate`, run in sealift's container or pod. [Deployment](deployment.md#regenerate-the-key) describes the command, and [the key the import trusts](deployment.md#the-key-the-import-trusts) covers a lost volume.
 
 ## Can two people use the same sealift?
 

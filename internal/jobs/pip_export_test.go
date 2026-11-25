@@ -1935,3 +1935,52 @@ func TestPipExportRefusesAManifestTheImportCannotRead(t *testing.T) {
 		t.Errorf("manifest.json was written: %v", err)
 	}
 }
+
+func TestPipExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	keyFile := filepath.Join(f.st.Root(), "private", "signing-key.pem")
+	if err := os.WriteFile(keyFile, []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := runPipExport(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), keyFile) {
+		t.Fatalf("Run = %v, want an error naming %s", err, keyFile)
+	}
+	if steps := stepNames(rec.steps); slices.Contains(steps, "download:running") {
+		t.Errorf("steps = %v, want no download with a key that does not read", steps)
+	}
+	// Without a failed step the screen would show the failure with no cause.
+	var status exportStatusFile
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "status.json")), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Steps) == 0 || status.Steps[0].Name != "prepare" || status.Steps[0].State != string(store.Failed) || !strings.Contains(status.Steps[0].Error, keyFile) {
+		t.Errorf("status.json steps = %+v, want a failed prepare step naming %s", status.Steps, keyFile)
+	}
+}
+
+// A regenerate while the export runs must not split the manifest and the
+// signature across two keys.
+func TestPipExportSignsWithTheKeyItStartedWith(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	before := f.st.SigningKey()
+	e.beforeArchive = func() {
+		if _, _, err := store.ReplaceSigningKey(f.st.Root(), os.Getuid()); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.st.SigningKey().PublicKeySHA256 == before.PublicKeySHA256 {
+		t.Fatal("the key was not regenerated during the export, the test proves nothing")
+	}
+	manifest := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+	sig := readFile(t, filepath.Join(e.Dir, archive.SignatureFile))
+	if err := archive.CheckSignature(manifest, sig, publicKey(t, before)); err != nil {
+		t.Errorf("the signature does not verify with the key the export began with: %v", err)
+	}
+}

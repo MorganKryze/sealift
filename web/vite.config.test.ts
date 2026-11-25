@@ -12,9 +12,8 @@ import { apiProxy } from "./vite.config"
 
 const portOf = (server: Server) => (server.address() as AddressInfo).port
 
-// sealift's signing key regenerate refuses a request whose Origin does not
-// name the Host it receives, so the proxy in front of it must leave the Host as
-// it came.
+// The import service refuses a request whose Origin does not name the Host it
+// receives, so the proxy in front of it must leave the Host as it came.
 test("the api proxy passes on the browser's Host, which its Origin names", async () => {
   const seen: IncomingHttpHeaders[] = []
   const api = createHttpServer((req, res) => {
