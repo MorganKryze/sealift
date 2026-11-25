@@ -1,6 +1,6 @@
 # Settings
 
-This page describes the policy file: each key, its default and its range, the brand, and how the file meets the settings an older release saved. It then covers the **Settings** panel, which shows the values in effect and the signing key.
+This page describes the policy file: each key, its default and its range, the brand, and how the file meets the settings an older release saved. It then covers the **Instance** page, which shows the readiness, the policy in effect and the signing key.
 
 The deployment sets the policy. No screen or API route changes it: edit the file and restart sealift. A new target applies to sessions created after the restart, and a session keeps the target it started with, retries included.
 
@@ -109,10 +109,10 @@ The system the projects run on, on the air-gapped side. pnpm resolves for it, so
 
 ## Brand
 
-The brand names the instance and its two sides. This release reads and checks it at start and serves it through `GET /api/instance` and `GET /api/instance/logo`. The screens keep sealift's own name and colours for now. The import service does not read the policy file.
+The brand names the instance and its two sides. This release reads and checks it at start and serves it through `GET /api/instance` and `GET /api/instance/logo`. The Online side draws it: the name titles the browser tab, the logo sits at the top of the sidebar in place of sealift's mark, the side label in the top bar reads `brand.sides.online`, and the accent outlines the home's lead card and marks the current place. The import service does not read the policy file, so its screens show the defaults: sealift's mark, `Offline` and no accent.
 
 - `brand.logo` is a path relative to the policy file's folder. It must be a regular file: a link or a FIFO is refused. sealift recognises a PNG by its signature and an SVG by its root element, refuses any other type, and reads the file once at start. The logo route serves those bytes with a `Content-Security-Policy` that blocks scripts, and `X-Content-Type-Options: nosniff`.
-- `brand.accent` is checked for its form only.
+- `brand.accent` is checked for its form only. The screens use it where it reaches a contrast of 3:1 against the page, light and dark measured apart, and draw the ink in its place where it does not. The Instance page gives both ratios.
 - `brand.contact` takes both `label` and `url`. The address starts with `https:` or `mailto:`, and an `https:` address names a host and carries no user name.
 - A text value must not be blank, and must hold no control or formatting character, such as a line break or a direction mark.
 
@@ -130,33 +130,35 @@ The start log names each key the policy file changes from a saved value, with th
 
 The file stays on the volume, so 0.7.0 still reads it after a rollback. 0.7.0 then uses the values saved there, whatever the policy file set.
 
-## The Settings panel
+## The Instance page
 
-**Settings**, in the header, opens the panel over the current screen. Nothing in it edits the policy. It holds four sections:
+**Instance**, at the bottom of the sidebar, opens the page. `/settings`, the old address, leads there. Nothing on it edits the policy. It holds three sections:
 
 | Section | Shows |
 | --- | --- |
-| Appearance | System, Light or Dark. The choice is saved in this browser only, so each person using sealift keeps their own |
-| Policy | Set by your deployment. The npm target, the pip target, Minimum release age, Resolve parallelism, Download parallelism, the three review rules (Proposals, Major jump, CVE without fix), and Mode, which says whether the instance is ephemeral |
-| Signing key | The public key and its sha256, described below |
-| Scanner | The Trivy version and the date of the vulnerability database. sealift refreshes the database before each analysis |
+| Ready | Each item the start prepares, with its state: Trivy, CVE database, Signing key, pnpm and uv. A count above the list reads `5 items ready`, and `1 warning` when the database refresh failed and an older database serves |
+| Policy | `Set at deploy`, then one row per rule: Release age, npm target, pip target, Parallelism, Proposals, Major jump, CVE without fix, and Projects, which says whether the instance keeps its projects or erases them once idle (Ephemeral mode) |
+| Appearance | Theme, with System, Light and Dark, saved in this browser only, so each person using sealift keeps their own. Accent, when the policy sets one, with its contrast ratio in each theme |
 
-## Signing key
+![Instance: five items ready with the signing key's fingerprint and How to regenerate, the policy set at deploy, and the theme](assets/instance.png)
+
+While a database refresh fails, **Instance** in the sidebar carries a warning mark, and its tooltip gives the cause and the date of the database in use.
+
+### Signing key
 
 sealift signs the manifest of every archive with an Ed25519 key. It generates the key pair on its first start and keeps the private key in its data volume, in `private/signing-key.pem`. No screen, API answer, log line or exported file shows the private key. The import side checks each signature with the public key and refuses an archive signed by any other.
 
-The section shows two values:
+The key's row sits in the Ready list, between the CVE database and pnpm:
 
-- **Public key** is the PEM block, with **Copy** and **Download**. The download is a file named `sealift-public-key.pem`. Carry it once to the import side, over a channel you trust, and name it in the import's `publicKeyFile` setting. [Deployment](deployment.md#the-key-the-import-trusts) shows where it goes.
-- **Public key sha256** is the sha256 of the key, in full, with **Copy**. The import side shows the same value in its own Settings. Compare the two by eye before your first crossing: equal values mean the import side holds the key you carry from.
-
-**Regenerate key** asks Regenerate the signing key? first. Confirming replaces the key pair. **Keep the current key**, or Escape, leaves it. After a regenerate, the import side refuses every new archive until it holds the new public key, and it refuses the archives you exported before, which carry the old signature. Carry the new public key before your next crossing.
+- The download button, **Download public key**, saves the PEM block as `sealift-public-key.pem`. Carry it once to the import side, over a channel you trust, and name it in the import's `publicKeyFile` setting. [Deployment](deployment.md#the-key-the-import-trusts) shows where it goes.
+- **Public key sha256** shows the first and last eight characters of the key's sha256. A press opens the whole value in groups of eight, and the copy button beside it copies all 64 characters. The import side's Instance page shows the value it trusts, with **Compare**: paste this one there before your first crossing. [Importing](importing.md#the-trusted-key) describes the comparison.
+- **How to regenerate** opens one line, In the container or pod, and the command `sealift signing-key regenerate` with a copy button. The page itself has no control that changes the key. [The key the import trusts](deployment.md#the-key-the-import-trusts) says what a new key means for the import side.
 
 The key lives in the volume. Delete the volume, or `private/signing-key.pem`, and the next start generates another key, which the import side must receive. A key file that exists and cannot be read, is not a PEM private key or is not Ed25519 stops sealift at start with the file's name: it never replaces a key by itself.
 
 ## Review rules
 
-Three rules decide what an export needs before it crosses. The deployment sets them under `review` in the policy file that `SEALIFT_POLICY` names, and no control in the panel changes them:
+Three rules decide what an export needs before it crosses. The deployment sets them under `review` in the policy file that `SEALIFT_POLICY` names, and no control on the Instance page changes them:
 
 ```yaml
 review:
