@@ -3,6 +3,7 @@ package store
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -72,37 +73,33 @@ func newSigningKey(priv ed25519.PrivateKey) SigningKey {
 	}
 }
 
-// keyStamp is what SigningKey compares to notice that the key file changed.
-type keyStamp struct {
-	size  int64
-	mtime int64
-	inode uint64
-}
+// keyStamp is the sha256 of the key file's bytes, which SigningKey compares
+// to notice that the file changed. A digest, so printing a Store never
+// prints the file.
+type keyStamp [sha256.Size]byte
 
-func stampOf(info os.FileInfo) keyStamp {
-	st := keyStamp{size: info.Size(), mtime: info.ModTime().UnixNano()}
-	if sys, ok := info.Sys().(*syscall.Stat_t); ok {
-		st.inode = uint64(sys.Ino) //nolint:unconvert // Ino is uint32 on some platforms
-	}
-	return st
-}
-
-// SigningKey reads private/signing-key.pem again when its size, modification
-// time or inode changed, so a key replaced while the server runs signs the
-// next export. A file that does not read gives a key whose Err names the
-// file. Safe for concurrent use.
+// SigningKey reads private/signing-key.pem again and parses it when its
+// bytes changed, so a key replaced while the server runs signs the next
+// export, an in-place rewrite included. A file that does not read gives a
+// key whose Err names the file. Safe for concurrent use.
 func (s *Store) SigningKey() SigningKey {
 	path := s.signingKeyPath()
-	info, statErr := os.Stat(path)
-	s.mu.RLock()
-	if statErr == nil && s.keyRead && stampOf(info) == s.keyStamp {
-		key := *s.signing
+	data, err := readKeyFile(path)
+	stamp := keyStamp(sha256.Sum256(data))
+	if err == nil {
+		s.mu.RLock()
+		if s.keyRead && stamp == s.keyStamp {
+			key := *s.signing
+			s.mu.RUnlock()
+			return key
+		}
 		s.mu.RUnlock()
-		return key
 	}
-	s.mu.RUnlock()
 
-	key, stamp, err := readSigningKey(path)
+	var key SigningKey
+	if err == nil {
+		key, err = parseSigningKey(path, data)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -155,48 +152,58 @@ func (s *Store) signingKeyPath() string {
 func loadSigningKey(path string) (SigningKey, keyStamp, error) {
 	key, stamp, err := readSigningKey(path)
 	if errors.Is(err, os.ErrNotExist) {
-		if key, err = generateSigningKey(path); err != nil {
+		if _, err = generateSigningKey(path); err != nil {
 			return SigningKey{}, keyStamp{}, err
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
-		}
-		return key, stampOf(info), nil
+		return readSigningKey(path)
 	}
 	return key, stamp, err
 }
 
-// readSigningKey reads the key file and the stamp of what it read. Its errors
-// name the file and never its content.
+// readSigningKey reads and parses the key file, and returns the stamp of
+// what it read. Its errors name the file and never its content.
 func readSigningKey(path string) (SigningKey, keyStamp, error) {
+	data, err := readKeyFile(path)
+	if err != nil {
+		return SigningKey{}, keyStamp{}, err
+	}
+	key, err := parseSigningKey(path, data)
+	if err != nil {
+		return SigningKey{}, keyStamp{}, err
+	}
+	return key, keyStamp(sha256.Sum256(data)), nil
+}
+
+// readKeyFile returns the key file's bytes.
+func readKeyFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	var data []byte
-	if err == nil {
-		// A PEM Ed25519 key runs 119 bytes.
-		data, err = io.ReadAll(io.LimitReader(f, 64<<10))
-	}
+	// A PEM Ed25519 key runs 119 bytes.
+	data, err := io.ReadAll(io.LimitReader(f, 64<<10))
 	if err != nil {
-		return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
+		return nil, fmt.Errorf("store: signing key %s cannot be read: %w", path, err)
 	}
+	return data, nil
+}
+
+// parseSigningKey parses the bytes of the key file at path.
+func parseSigningKey(path string, data []byte) (SigningKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil || block.Type != "PRIVATE KEY" {
-		return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s is not a PEM private key", path)
+		return SigningKey{}, fmt.Errorf("store: signing key %s is not a PEM private key", path)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s is not a PEM private key", path)
+		return SigningKey{}, fmt.Errorf("store: signing key %s is not a PEM private key", path)
 	}
 	priv, ok := parsed.(ed25519.PrivateKey)
 	if !ok {
-		return SigningKey{}, keyStamp{}, fmt.Errorf("store: signing key %s is not an Ed25519 key", path)
+		return SigningKey{}, fmt.Errorf("store: signing key %s is not an Ed25519 key", path)
 	}
-	return newSigningKey(priv), stampOf(info), nil
+	return newSigningKey(priv), nil
 }
 
 func generateSigningKey(path string) (SigningKey, error) {

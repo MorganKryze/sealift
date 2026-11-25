@@ -570,3 +570,51 @@ func TestWriteFile(t *testing.T) {
 		t.Errorf("directory holds %d entries after the writes, want only the file", len(entries))
 	}
 }
+
+// pemOfNewKey returns a fresh Ed25519 key's PEM and its public sha256.
+func pemOfNewKey(t *testing.T) ([]byte, string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), archive.PublicKeySHA256(pub)
+}
+
+func TestARunningStoreNoticesAnInPlaceRewriteWithTheSameMtime(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SigningKey()
+	info, err := os.Stat(keyPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, sha := pemOfNewKey(t)
+	if int64(len(data)) != info.Size() {
+		t.Fatalf("the new key runs %d bytes, the old %d: the test needs the same size", len(data), info.Size())
+	}
+	f, err := os.OpenFile(keyPath(root), os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(keyPath(root), info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.SigningKey(); got.Err() != nil || got.PublicKeySHA256 != sha {
+		t.Errorf("SigningKey() = %s (err %v), want the rewritten key %s", got.PublicKeySHA256, got.Err(), sha)
+	}
+}

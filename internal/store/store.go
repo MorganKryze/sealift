@@ -85,7 +85,7 @@ type Store struct {
 	// signing is a pointer: fmt prints a nested pointer as an address, so
 	// printing a Store never reaches the private key.
 	signing *SigningKey
-	// keyStamp is the key file as signing was read from it; keyRead is
+	// keyStamp is the digest of the key file signing was read from; keyRead is
 	// false while the file does not read, so each call tries it again.
 	keyStamp keyStamp
 	keyRead  bool
