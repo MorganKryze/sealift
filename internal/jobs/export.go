@@ -525,7 +525,7 @@ func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedP
 
 	file, err := npm.PackFileName(d.Name, d.Version)
 	if err != nil {
-		return shippedPackage{}, fmt.Errorf("jobs: %s@%s: %w", d.Name, d.Version, err)
+		return shippedPackage{}, fmt.Errorf("jobs: %w", err)
 	}
 	f, st, err := openRegular(d.CachePath, file)
 	if err != nil {

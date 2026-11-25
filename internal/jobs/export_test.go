@@ -1273,8 +1273,8 @@ func TestExportStripRefusesAVersionThatIsNotAFileNamePart(t *testing.T) {
 		if err == nil {
 			t.Fatalf("version %q: strip shipped %q, want an error", version, s.File)
 		}
-		if !strings.Contains(err.Error(), "widgets@"+version) {
-			t.Errorf("version %q: error %q does not name the package", version, err)
+		if n := strings.Count(err.Error(), "widgets"); n != 1 {
+			t.Errorf("version %q: error %q names the package %d times, want once", version, err, n)
 		}
 	}
 }
