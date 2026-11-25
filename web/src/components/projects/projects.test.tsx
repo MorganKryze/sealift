@@ -177,7 +177,7 @@ describe("ProjectsList", () => {
     await renderIn(<ProjectsList projects={[]} />)
     expect(screen.getByRole("heading", { level: 1, name: "No project yet" })).toBeInTheDocument()
     expect(screen.getByText("A project appears here after its first Update")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Update a project" })).toHaveAttribute("href", "/")
+    expect(screen.getByRole("link", { name: "Update a project" })).toHaveAttribute("href", "/update")
     expect(screen.queryByRole("list", { name: "Projects" })).not.toBeInTheDocument()
   })
 
@@ -266,7 +266,7 @@ describe("ProjectPage", () => {
     expect(controls.map((c) => c.getAttribute("aria-label"))).toEqual(["Open summary.md", "Download summary.md"])
     expect(within(reports).queryByText("manifest.json")).not.toBeInTheDocument()
     fireEvent.click(controls[0])
-    await waitFor(() => expect(opened).toHaveBeenCalledWith("blob:summary", "_blank"))
+    await waitFor(() => expect(opened).toHaveBeenCalledWith("blob:summary", "_blank", "noopener"))
     expect(blobs[0].type).toBe("text/plain;charset=utf-8")
     expect(await blobs[0].text()).toBe("# Summary\n")
   })

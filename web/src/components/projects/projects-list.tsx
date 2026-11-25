@@ -145,7 +145,7 @@ function Empty() {
       </div>
       <div className="mt-7 flex justify-end">
         <Button size="page" asChild>
-          <Link to="/">
+          <Link to="/update">
             <RefreshCw aria-hidden="true" />
             Update a project
           </Link>

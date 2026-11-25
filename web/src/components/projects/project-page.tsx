@@ -218,7 +218,7 @@ function SealedFiles({ project, exported }: { project: Project; exported: Export
     try {
       const response = await send(href(name), undefined, (status, problem) => new ApiError(status, problem))
       const url = URL.createObjectURL(new Blob([await response.text()], { type: "text/plain;charset=utf-8" }))
-      window.open(url, "_blank")
+      window.open(url, "_blank", "noopener")
       // The new tab has read the blob long before this.
       setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (error) {
