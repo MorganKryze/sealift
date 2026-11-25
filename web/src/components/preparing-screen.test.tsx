@@ -95,6 +95,13 @@ describe("PreparingScreen", () => {
     expect(document.querySelector("img")).toHaveAttribute("src", "/api/instance/logo")
   })
 
+  it("renders a brand name holding markup as text", () => {
+    const name = "<img src=x onerror=alert(1)>"
+    renderScreen(preparing, { ...DEFAULT_BRAND, name })
+    expect(screen.getByText(name)).toBeInTheDocument()
+    expect(document.querySelector("img[onerror]")).toBeNull()
+  })
+
   it("shows each item's state and a failed item's cause", () => {
     renderScreen()
     expect(screen.getByText("2 of 5 ready")).toBeInTheDocument()
@@ -143,6 +150,13 @@ describe("PreparingScreen", () => {
     const key = item(/^Signing key$/)
     expect(within(key).getByRole("button", { name: "Signing key sha256 3f1c9a5e to b9d1f3c5" })).toHaveAttribute("aria-expanded", "false")
     expect(within(key).queryByText(SHA)).not.toBeInTheDocument()
+  })
+
+  it("shows no fingerprint for a signing key version that is not a sha256", () => {
+    renderScreen([{ name: "signing-key", version: "not-a-sha256", state: "ready" }])
+    const key = item(/^Signing key$/)
+    expect(within(key).queryByRole("button")).not.toBeInTheDocument()
+    expect(within(key).queryByText(/not-a-sha256/)).not.toBeInTheDocument()
   })
 
   it("shows a sha256 inside a cause as a fingerprint and the rest as text", () => {

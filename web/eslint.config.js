@@ -17,10 +17,18 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Text from an archive, a manifest, the API, MinIO or Nexus renders as a text node, on every screen.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message: "Text from an archive, a manifest, the API, MinIO or Nexus renders as a text node.",
+        },
+      ],
     },
   },
   {
-    // The import role's screens reach nothing of the collection and render no markup from the API's text.
+    // The import role's screens reach nothing of the collection.
     files: ["src/import/**/*.{ts,tsx}", "src/components/import/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
@@ -46,13 +54,6 @@ export default tseslint.config(
               message: "The import screens share only the ui, brand, copy control, theme toggle, return-focus and utils modules with the collection.",
             },
           ],
-        },
-      ],
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
-          message: "Text from an archive, a manifest, MinIO or Nexus renders as a text node.",
         },
       ],
     },
