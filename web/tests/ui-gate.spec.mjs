@@ -617,7 +617,8 @@ const PHONE = {
     { path: "/", ready: "Start a crossing" },
     { path: "/instance", ready: "Instance", open: [{ role: "button", name: /^Public key sha256/ }, { role: "button", name: "How to regenerate" }] },
   ],
-  import: [{ path: "/import", user: "alice", ready: "Not imported yet" }],
+  // `columns` names blocks that must keep a readable width: a fixed grid squeezed them to nothing, and the text then ran over its neighbours inside the row, which the overflow check cannot see.
+  import: [{ path: "/import", user: "alice", ready: "Not imported yet", columns: { selector: "#content li > div:first-child", min: 200 } }],
 }
 
 for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" })), ...PHONE.import.map((r) => ({ ...r, role: "import" }))]) {
@@ -635,7 +636,14 @@ for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" 
           await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
           for (const control of route.open ?? []) await p.getByRole(control.role, { name: control.name }).first().click()
         },
-        extra: (p) => p.evaluate(tabBar, { target: PHONE.target }).then((found) => found.map((f) => `${route.path} · ${PHONE.width}px · ${theme} · ${f}`)),
+        extra: async (p) => {
+          const found = await p.evaluate(tabBar, { target: PHONE.target })
+          if (route.columns) {
+            const narrow = await p.$$eval(route.columns.selector, (els, min) => els.map((el) => Math.round(el.getBoundingClientRect().width)).filter((w) => w < min), route.columns.min)
+            for (const w of narrow) found.push(`${route.columns.selector}: ${w} px wide, under ${route.columns.min}`)
+          }
+          return found.map((f) => `${route.path} · ${PHONE.width}px · ${theme} · ${f}`)
+        },
       })
       expect(failures, failures.join("\n")).toEqual([])
     })
