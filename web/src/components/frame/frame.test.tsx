@@ -2,7 +2,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { type Brand, BrandMark, BrandProvider, contrastRatio, DEFAULT_BRAND, SideLabel, usableAccent } from "@/components/frame/brand"
+import { type Brand, BrandMark, BrandProvider, contrastRatio, DEFAULT_BRAND, PAGE, SideLabel, usableAccent } from "@/components/frame/brand"
 import { Frame } from "@/components/frame/frame"
 import { StepBar, stepBarStep } from "@/components/step-bar"
 import { ONLINE_INSTANCE, ONLINE_PLACES, onlineCrumbs } from "@/lib/places"
@@ -11,6 +11,16 @@ import { ONLINE_INSTANCE, ONLINE_PLACES, onlineCrumbs } from "@/lib/places"
 type Node = { process: { getBuiltinModule(id: "node:fs"): { readFileSync(path: string, encoding: "utf8"): string } } }
 const { readFileSync } = (globalThis as unknown as Node).process.getBuiltinModule("node:fs")
 const theme = readFileSync(`${(import.meta as ImportMeta & { dirname: string }).dirname}/../../styles/theme.css`, "utf8")
+
+// The --bg of each theme, comments dropped: the light one in :root, the dark one in .dark and in the system dark block.
+function pageColours(css: string) {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "")
+  const values = (selector: RegExp) => [...bare.matchAll(selector)].map((m) => /--bg:\s*([^;]+);/.exec(m[1])?.[1].trim())
+  return {
+    light: values(/(?:^|\})\s*:root\s*\{([^}]*)\}/g),
+    dark: [...values(/\.dark\s*\{([^}]*)\}/g), ...values(/:root:not\(\.light\):not\(\.dark\)\s*\{([^}]*)\}/g)],
+  }
+}
 
 const WARNING = "CVE database refresh failed: dial tcp: lookup ghcr.io: no such host. The database of 22 Nov stays in use."
 
@@ -46,6 +56,14 @@ afterEach(() => {
   document.documentElement.style.removeProperty("--brand-light")
   document.documentElement.style.removeProperty("--brand-dark")
   document.title = ""
+})
+
+describe("PAGE", () => {
+  it("holds the page colours the theme paints, so the accent check measures against the real page", () => {
+    const { light, dark } = pageColours(theme)
+    expect(light).toEqual([PAGE.light])
+    expect(dark).toEqual([PAGE.dark, PAGE.dark])
+  })
 })
 
 describe("Frame", () => {
