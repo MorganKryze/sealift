@@ -1,48 +1,144 @@
+/* Every colour the screens use, in light and dark. theme.test.ts measures each text pair at 4.5:1
+   and each line, field border and severity mark at 3:1 in both themes. A state's line is mixed
+   from its tint toward its word until it reaches 3:1 on the page. */
 :root {
-  --accent: #0f766e;
-  --ink: #0f172a;
-  --background: #ffffff;
-  --muted: #64748b;
-  --line: #e2e8f0;
-  --card: #f8fafc;
+  color-scheme: light;
 
-  --severity-critical: #b91c1c;
-  --severity-high: #ea580c;
-  --severity-medium: #ca8a04;
-  --severity-low: #64748b;
-  --severity-unknown: #94a3b8;
-  --severity-resolved: #15803d;
+  --bg: #ffffff;
+  --canvas: #fafafa;
+  --ink: #18181b;
+  --ink-2: #3f3f46;
+  --muted: #5f5f67;
+  --faint: #63636b;
+  --rule: #e6e6e9;
+  --rule-2: #d1d1d6;
+  --field: #8a8c93;
+  --hover: #f4f4f5;
+  --sel: #ececef;
+  --selection: #d9d9de;
+  --disabled: #55555d;
+  --seg-on: #ffffff;
+  --shadow: 24, 24, 27;
 
-  /* Text-only shades: a severity dot's fill stays the base color above at
-     every size, but that same color set as text fails AA against the dark
-     background below, so dark mode points these at a lighter shade instead. */
-  --severity-critical-fg: var(--severity-critical);
-  --severity-resolved-fg: var(--severity-resolved);
+  --ok: #147b3b;
+  --ok-tint: #f0fdf4;
+  --ok-line: #409560;
+  --warn: #ad5009;
+  --warn-tint: #fffbeb;
+  --warn-line: #be7438;
+  --bad: #b91c1c;
+  --bad-tint: #fef2f2;
+  --bad-line: #d06565;
+  --info: #1d4ed8;
+  --info-tint: #eff6ff;
+  --info-line: #5c80e4;
+
+  --sev-critical: #b91c1c;
+  --sev-high: #be400c;
+  --sev-medium: #995d07;
+  --sev-low: #52525b;
+
+  /* The deployment's accent, which the brand sets per theme once it reaches 3:1; the ink until then. */
+  --brand: var(--brand-light, var(--ink));
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* Today's names, kept on the new values until the flows that use them are redrawn. */
+  --accent: var(--ink);
+  --background: var(--bg);
+  --line: var(--rule);
+  --card: var(--canvas);
+  --severity-critical: var(--sev-critical);
+  --severity-high: var(--sev-high);
+  --severity-medium: var(--sev-medium);
+  --severity-low: var(--sev-low);
+  --severity-unknown: var(--faint);
+  --severity-resolved: var(--ok);
+  --severity-critical-fg: var(--sev-critical);
+  --severity-resolved-fg: var(--ok);
 }
 
 .dark {
-  --accent: #2dd4bf;
-  --ink: #e2e8f0;
-  --background: #0b1220;
-  --muted: #94a3b8;
-  --line: #1e293b;
-  --card: #111a2e;
+  color-scheme: dark;
 
-  --severity-critical-fg: #f87171;
-  --severity-resolved-fg: #4ade80;
+  --bg: #111113;
+  --canvas: #18181b;
+  --ink: #f4f4f5;
+  --ink-2: #d4d4d8;
+  --muted: #a1a1aa;
+  --faint: #9d9da6;
+  --rule: #26262b;
+  --rule-2: #3a3a41;
+  --field: #75757e;
+  --hover: #202024;
+  --sel: #2a2a2f;
+  --selection: #3f3f46;
+  --disabled: #a1a1aa;
+  --seg-on: #303036;
+  --shadow: 0, 0, 0;
+
+  --ok: #4ade80;
+  --ok-tint: #0d2618;
+  --ok-line: #277545;
+  --warn: #fbbf24;
+  --warn-tint: #2a1f08;
+  --warn-line: #826214;
+  --bad: #f87171;
+  --bad-tint: #2d1313;
+  --bad-line: #b04040;
+  --info: #60a5fa;
+  --info-tint: #0f1d36;
+  --info-line: #3c68a2;
+
+  --sev-critical: #f87171;
+  --sev-high: #fb923c;
+  --sev-medium: #facc15;
+  --sev-low: #a1a1aa;
+
+  --brand: var(--brand-dark, var(--ink));
 }
 
-/* Follows the system when no .dark/.light class overrides it. */
+/* Follows the system when no .dark/.light class overrides it, with the values of .dark. */
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.dark) {
-    --accent: #2dd4bf;
-    --ink: #e2e8f0;
-    --background: #0b1220;
-    --muted: #94a3b8;
-    --line: #1e293b;
-    --card: #111a2e;
+    color-scheme: dark;
 
-    --severity-critical-fg: #f87171;
-    --severity-resolved-fg: #4ade80;
+    --bg: #111113;
+    --canvas: #18181b;
+    --ink: #f4f4f5;
+    --ink-2: #d4d4d8;
+    --muted: #a1a1aa;
+    --faint: #9d9da6;
+    --rule: #26262b;
+    --rule-2: #3a3a41;
+    --field: #75757e;
+    --hover: #202024;
+    --sel: #2a2a2f;
+    --selection: #3f3f46;
+    --disabled: #a1a1aa;
+    --seg-on: #303036;
+    --shadow: 0, 0, 0;
+
+    --ok: #4ade80;
+    --ok-tint: #0d2618;
+    --ok-line: #277545;
+    --warn: #fbbf24;
+    --warn-tint: #2a1f08;
+    --warn-line: #826214;
+    --bad: #f87171;
+    --bad-tint: #2d1313;
+    --bad-line: #b04040;
+    --info: #60a5fa;
+    --info-tint: #0f1d36;
+    --info-line: #3c68a2;
+
+    --sev-critical: #f87171;
+    --sev-high: #fb923c;
+    --sev-medium: #facc15;
+    --sev-low: #a1a1aa;
+
+    --brand: var(--brand-dark, var(--ink));
   }
 }

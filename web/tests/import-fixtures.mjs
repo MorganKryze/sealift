@@ -34,6 +34,50 @@ export const IDS = {
   pipComplete: "20261020T090000Z-a100000d",
 }
 
+// The import role: the shipped import-server behind a real token check. A route names the user whose
+// token the page sends as the gateway does, an optional control to press once the page has its
+// content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
+// shows (`hold`), and the text that proves the data arrived (`ready`).
+export const IMPORT = {
+  baseURL: "http://127.0.0.1:18090",
+  routes: [
+    { path: "/", user: "alice", ready: "Not imported yet" },
+    { path: "/", user: "alice", open: { role: "button", name: "Importable", exact: false, pressed: true }, ready: "Not imported yet" },
+    { path: "/", user: "alice", open: { role: "button", name: "Start import of 2026-11-06-new-export/packages_npm.tar.gz", opens: { role: "region", name: "Start the import of 2026-11-06-new-export/packages_npm.tar.gz" } }, ready: "Not imported yet" },
+    { path: "/", user: "bob", ready: "No archive in your folder" },
+    { path: "/", user: "carol", ready: "MinIO has no bucket user-carol yet: nothing to list" },
+    { path: "/", user: "dave", ready: "The archives could not be listed" },
+    { path: "/", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
+    { path: "/imports", user: "alice", ready: "Waiting its turn" },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Archive removed from MinIO" },
+    { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Archive kept in MinIO" },
+    { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking the archive's removal" },
+    { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
+    { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
+    { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
+    { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
+    {
+      path: `/imports/${IDS.incomplete}`, user: "alice", ready: "Archive sha256 check",
+      open: { role: "button", name: "Show full reason of package-099@1.0.0", opens: { role: "region", name: "Full reason of package-099@1.0.0" } },
+    },
+    {
+      path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101",
+      open: { role: "button", name: "Earlier attempts (1)", opens: { role: "list", name: "Earlier attempts" } },
+    },
+    { path: `/imports/${IDS.legacy}`, user: "alice", ready: "Archive sha256 check" },
+    { path: `/imports/${IDS.longKey}`, user: "alice", ready: "Archive sha256 check" },
+    { path: `/imports/${IDS.pipComplete}`, user: "alice", ready: "Python" },
+    { path: "/imports/missing-import", user: "alice", ready: "No such import" },
+    { path: "/imports", user: "bob", ready: "No import yet" },
+    { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
+    { path: "/imports", user: "alice", hold: "/api/imports", ready: "Loading your imports" },
+    { path: "/imports", user: "alice", open: { role: "button", name: "Settings" }, ready: "Waiting its turn" },
+  ],
+}
+
 // The trusted key's sha256, set once the run's key is generated: the reports the store writes carry it.
 let trustedKeySha = ""
 const sha = (text) => createHash("sha256").update(text).digest("hex")
