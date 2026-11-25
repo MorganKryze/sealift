@@ -138,6 +138,20 @@ func newPreparation(t *testing.T, uvUploaded time.Time) *preparation {
 	return pr
 }
 
+// inBubble runs f in a synctest bubble under a guard on the real clock.
+// The fakes answer over real sockets, which a bubble does not count as
+// blocked, so a stuck read would stall the bubble's clock for good; the
+// guard panics with every goroutine's stack after thirty real seconds
+// instead of waiting for the package's -timeout.
+func inBubble(t *testing.T, f func(*testing.T)) {
+	t.Helper()
+	guard := time.AfterFunc(30*time.Second, func() {
+		panic(t.Name() + ": the bubble is still running after 30s of real time")
+	})
+	defer guard.Stop()
+	synctest.Test(t, f)
+}
+
 // run starts the preparer and stops it when the test ends.
 func (pr *preparation) run(t *testing.T) {
 	t.Helper()
@@ -188,7 +202,7 @@ func isReady(r Readiness) bool { return r.Ready }
 
 func TestPreparerBecomesReadyWhenEveryItemIs(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		if r := pr.p.State(); r.Ready {
 			t.Fatalf("State before Run = %+v, want not ready", r)
 		}
@@ -226,7 +240,7 @@ func TestPreparerBecomesReadyWhenEveryItemIs(t *testing.T) {
 
 func TestPreparerKeepsTheCauseAndRetries(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.db.fail = func(call int) error {
 			if call == 1 {
 				return errors.New("database download failed: 429 Too Many Requests")
@@ -238,7 +252,21 @@ func TestPreparerKeepsTheCauseAndRetries(t *testing.T) {
 
 		start := time.Now()
 		r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+		seen := time.Now()
 		db := item(r, "trivy-db")
+		if wait := db.NextTry.Sub(seen); wait <= 0 || wait > pr.p.RetryEvery {
+			t.Errorf("next try is %v after the failure was seen, want at most %v", wait, pr.p.RetryEvery)
+		}
+		time.Sleep(time.Until(db.NextTry) - time.Nanosecond)
+		synctest.Wait()
+		if n := pr.db.callCount(); n != 1 {
+			t.Errorf("database tried %d times just before the retry wait ended, want 1", n)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if n := pr.db.callCount(); n != 2 {
+			t.Errorf("database tried %d times once the retry wait ended, want 2", n)
+		}
 		if !strings.Contains(db.Reason, "429 Too Many Requests") {
 			t.Errorf("reason = %q, want the download's cause", db.Reason)
 		}
@@ -272,7 +300,7 @@ func TestPreparerKeepsTheCauseAndRetries(t *testing.T) {
 
 func TestPreparerReadyWithAWarningWhenARefreshFailsOnAnExistingDatabase(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
 		pr.db.fail = func(int) error { return errors.New("connection reset by peer") }
 		pr.run(t)
@@ -297,7 +325,7 @@ func TestPreparerStaysNotReadyWithoutADatabase(t *testing.T) {
 	for name, fail := range cases {
 		t.Run(name, func(t *testing.T) {
 			pr := newPreparation(t, monthOldInBubble)
-			synctest.Test(t, func(t *testing.T) {
+			inBubble(t, func(t *testing.T) {
 				db := &noDatabase{fail: fail}
 				pr.p.db = db
 				pr.run(t)
@@ -342,7 +370,7 @@ func (d *noDatabase) callCount() int {
 func TestPreparerCutsAndStripsACause(t *testing.T) {
 	const token = "ghp_plantedTokenValue0123456789"
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.m.GitHubToken = token
 		cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
 		pr.db.fail = func(int) error { return errors.New(cause) }
@@ -372,7 +400,7 @@ func TestPreparerCutsAndStripsACause(t *testing.T) {
 
 func TestPreparerNamesAYoungUvAsTheCause(t *testing.T) {
 	pr := newPreparation(t, bubbleStart.Add(-24*time.Hour))
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.run(t)
 
 		r := waitState(t, pr.p, "a failed uv", func(r Readiness) bool { return item(r, "uv").State == ItemFailed })
@@ -393,10 +421,11 @@ func TestPreparerNamesAYoungUvAsTheCause(t *testing.T) {
 
 func TestPreparerStopsWithItsContext(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.db.fail = func(int) error { return errors.New("unreachable") }
 		pr.p.RetryEvery = time.Hour
 		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
 		done := make(chan struct{})
 		go func() { defer close(done); pr.p.Run(ctx) }()
 		waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
@@ -434,6 +463,20 @@ func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 
 			r := waitStateLive(t, pr.p, "a failed pnpm", func(r Readiness) bool { return item(r, "pnpm").State == ItemFailed })
 			reason := item(r, "pnpm").Reason
+			logged := func() bool {
+				for line := range strings.Lines(pr.logs.String()) {
+					var entry struct{ Msg, Item string }
+					if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "preparation failed, retrying" && entry.Item == "pnpm" {
+						return true
+					}
+				}
+				return false
+			}
+			for deadline := time.Now().Add(5 * time.Second); !logged(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("no log line reports the failed pnpm:\n%s", pr.logs.String())
+				}
+			}
 			if !strings.Contains(reason, "500 Internal Server Error") || !strings.Contains(reason, "[redacted]@127.0.0.1") {
 				t.Errorf("reason = %q, want the registry's answer with its credentials redacted", reason)
 			}
@@ -453,7 +496,7 @@ func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 func TestPreparerCutsAndStripsARefreshWarning(t *testing.T) {
 	const token = "ghp_plantedTokenValue0123456789"
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.m.GitHubToken = token
 		plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
 		cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
@@ -495,7 +538,7 @@ func TestPreparerCutsAndStripsARefreshWarning(t *testing.T) {
 
 func TestPreparerWaitsForTheSigningKey(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		var mu sync.Mutex
 		asked := 0
 		present := false
@@ -546,7 +589,7 @@ func TestPreparerWaitsForTheSigningKey(t *testing.T) {
 // the failure, read from its state without waiting for it.
 func TestPreparerRetriesAFailedItemAMinuteLater(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.p.RetryEvery = 0
 		pr.db.fail = func(int) error { return errors.New("database download failed: 429 Too Many Requests") }
 		before := time.Now()
@@ -569,7 +612,7 @@ type keyAnswer struct {
 
 func TestPreparerReadsTheSigningKeyLive(t *testing.T) {
 	pr := newPreparation(t, monthOldInBubble)
-	synctest.Test(t, func(t *testing.T) {
+	inBubble(t, func(t *testing.T) {
 		pr.run(t)
 		waitState(t, pr.p, "ready", isReady)
 
