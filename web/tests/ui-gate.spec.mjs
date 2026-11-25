@@ -110,6 +110,7 @@ export const UI = {
   start: `data="$(mktemp -d)" && node tests/seed.mjs "$data" && exec "$SEALIFT" -addr 127.0.0.1:18080 -data "$data"`,
   routes: [
     "/",
+    "/update",
     "/instance",
     // The settings sheet's old address lands on Instance.
     "/settings",

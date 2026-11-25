@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
@@ -7,9 +7,9 @@ import { getSettings } from "@/api/settings"
 import { DropZone } from "@/components/projects/drop-zone"
 import { DropPreview } from "@/components/session/drop-preview"
 import { DuplicateDialog } from "@/components/session/duplicate-dialog"
-import { Badge } from "@/components/ui/badge"
+import { StepBar, stepBarStep } from "@/components/step-bar"
 import { ManifestPreviewError, parseManifestPreview, type ManifestPreview } from "@/lib/manifestPreview"
-import { cn, formatWhen, isJobActive, sha256Hex } from "@/lib/utils"
+import { sha256Hex } from "@/lib/utils"
 
 interface PendingFile {
   file: File
@@ -17,17 +17,18 @@ interface PendingFile {
   manifest: ManifestPreview
 }
 
+const STEPS = [stepBarStep("drop", "available", true), stepBarStep("analysis", "upcoming", false), stepBarStep("review", "upcoming", false), stepBarStep("export", "upcoming", false)]
+
 /**
- * The landing screen: drop a manifest, or resume a past session. A file is
- * only ever uploaded once the drop preview's Analyse button is pressed;
- * selecting a file just parses and hashes it locally, to check for a
- * byte-for-byte duplicate before anything reaches the server.
+ * Update's first step: drop a manifest. A file is only ever uploaded once the
+ * drop preview's Analyse button is pressed; selecting a file just parses and
+ * hashes it locally, to check for a byte-for-byte duplicate before anything
+ * reaches the server.
  */
-export function HomeScreen() {
+export function UpdateScreen() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
-  const historyQuery = useQuery({ queryKey: ["projects"], queryFn: () => listProjects() })
 
   const [pending, setPending] = useState<PendingFile | null>(null)
   const [duplicate, setDuplicate] = useState<{ pending: PendingFile; match: ProjectSummary } | null>(null)
@@ -81,8 +82,9 @@ export function HomeScreen() {
 
   return (
     <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
+      <StepBar steps={STEPS} />
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-ink">New session</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-ink">Update a project</h1>
         <p className="mt-1.5 max-w-[62ch] text-muted">
           Drop a project&rsquo;s package.json. sealift finds the versions that fix its CVEs and packs them for the
           Nexus import.
@@ -107,11 +109,6 @@ export function HomeScreen() {
         </p>
       ) : null}
 
-      <HistoryList
-        query={historyQuery}
-        onOpen={(id) => void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } })}
-      />
-
       {duplicate ? (
         <DuplicateDialog
           match={duplicate.match}
@@ -135,104 +132,4 @@ export function HomeScreen() {
       ) : null}
     </div>
   )
-}
-
-interface HistoryListProps {
-  query: UseQueryResult<ProjectSummary[]>
-  onOpen: (id: string) => void
-}
-
-function HistoryList({ query, onOpen }: HistoryListProps) {
-  if (query.isPending) {
-    return <p className="mt-9 text-sm text-muted">Loading past sessions…</p>
-  }
-
-  if (query.isError) {
-    return (
-      <p role="alert" className="mt-9 text-sm text-severity-critical-fg">
-        Could not load past sessions.
-      </p>
-    )
-  }
-
-  const sessions = query.data
-  if (sessions.length === 0) {
-    return null
-  }
-
-  return (
-    <div className="mt-9">
-      <div className="mb-2.5 flex items-baseline gap-2.5">
-        <h2 className="text-lg font-semibold text-ink">Past sessions</h2>
-        <span className="text-sm text-muted">{sessions.length}</span>
-      </div>
-      <div className="rounded-xl border border-line">
-        {sessions.map((session, index) => {
-          const badge = sessionStatus(session)
-          const when = session.lastExport?.createdAt ?? session.lastAnalysis?.createdAt
-          if (!session.target) {
-            return (
-              <div
-                key={session.id}
-                className={cn("px-4.5 py-3.5", index > 0 && "border-t border-line")}
-              >
-                <span className="font-semibold text-ink">{session.name}</span>
-                <br />
-                <span className="text-sm text-muted">pip project. This release cannot open it yet.</span>
-              </div>
-            )
-          }
-          const { target } = session
-          return (
-            <button
-              key={session.id}
-              type="button"
-              onClick={() => onOpen(session.id)}
-              className={cn(
-                "grid w-full grid-cols-[1fr_auto_auto] items-center gap-4 px-4.5 py-3.5 text-left hover:bg-card",
-                index > 0 && "border-t border-line",
-              )}
-            >
-              <span>
-                <span className="font-semibold text-ink">{session.name}</span>
-                <br />
-                <span className="text-sm text-muted">
-                  {target.os}/{target.cpu} · {target.libc}
-                </span>
-              </span>
-              <span className="text-sm text-muted">{when ? formatWhen(when) : ""}</span>
-              <Badge variant={badge.variant} className="whitespace-normal">{badge.label}</Badge>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function sessionStatus(session: ProjectSummary): { label: string; variant: "accent" | "critical" | "default" } {
-  const { lastAnalysis, lastExport } = session
-  const failedStates = new Set(["failed", "cancelled", "interrupted"])
-  // The session screens' words for a job the queue has not started.
-  const waiting = "Waiting for another job"
-
-  if (lastExport?.state === "done") {
-    return { label: "Archive ready", variant: "accent" }
-  }
-  if (lastExport && failedStates.has(lastExport.state)) {
-    return { label: "Export failed", variant: "critical" }
-  }
-  if (isJobActive(lastExport)) {
-    return { label: lastExport?.state === "queued" ? waiting : "Exporting", variant: "default" }
-  }
-  if (lastAnalysis?.state === "done") {
-    return { label: "Awaiting export", variant: "default" }
-  }
-  if (lastAnalysis && failedStates.has(lastAnalysis.state)) {
-    return { label: "Analysis failed", variant: "critical" }
-  }
-  if (isJobActive(lastAnalysis)) {
-    return { label: lastAnalysis?.state === "queued" ? waiting : "Analysing", variant: "default" }
-  }
-  return { label: "Not analysed yet", variant: "default" }
 }

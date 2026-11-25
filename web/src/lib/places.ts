@@ -19,6 +19,7 @@ export const ONLINE_INSTANCE: Place = { to: "/instance", label: "Instance", icon
 export function onlineCrumbs(pathname: string, project?: string | Pick<Project, "name" | "analyses">): Crumb[] {
   const name = typeof project === "string" ? project : project?.name
   if (pathname === "/instance") return [{ label: ONLINE_INSTANCE.label }]
+  if (pathname === "/update") return [{ label: "Home", to: "/" }, { label: "Update" }]
   if (pathname === "/projects") return [{ label: "Projects" }]
   if (pathname.startsWith("/projects/")) return [{ label: "Projects", to: "/projects" }, { label: name ?? "Project" }]
   if (pathname.startsWith("/sessions/")) {

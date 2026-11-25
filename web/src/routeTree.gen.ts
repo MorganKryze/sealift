@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InstanceRouteImport } from './routes/instance'
+import { Route as UpdateRouteImport } from './routes/update'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
@@ -28,6 +29,11 @@ const IndexRoute = IndexRouteImport.update({
 const InstanceRoute = InstanceRouteImport.update({
   id: '/instance',
   path: '/instance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UpdateRoute = UpdateRouteImport.update({
+  id: '/update',
+  path: '/update',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -75,6 +81,7 @@ const SessionsSessionIdReviewRoute = SessionsSessionIdReviewRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects': typeof ProjectsIndexRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
@@ -99,6 +107,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
+  '/update': typeof UpdateRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
@@ -113,6 +122,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/instance'
+    | '/update'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/projects/'
@@ -125,6 +135,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/instance'
+    | '/update'
     | '/projects/$projectId'
     | '/projects'
     | '/sessions/$sessionId/analysis'
@@ -136,6 +147,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/instance'
+    | '/update'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/projects/'
@@ -149,6 +161,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   InstanceRoute: typeof InstanceRoute
+  UpdateRoute: typeof UpdateRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
   ProjectsIndexRoute: typeof ProjectsIndexRoute
@@ -168,6 +181,13 @@ declare module '@tanstack/react-router' {
       path: '/instance'
       fullPath: '/instance'
       preLoaderRoute: typeof InstanceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/update': {
+      id: '/update'
+      path: '/update'
+      fullPath: '/update'
+      preLoaderRoute: typeof UpdateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
@@ -251,6 +271,7 @@ const SessionsSessionIdRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   InstanceRoute: InstanceRoute,
+  UpdateRoute: UpdateRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
   ProjectsIndexRoute: ProjectsIndexRoute,

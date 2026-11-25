@@ -1,16 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { HomeScreen } from "@/components/session/home-screen"
-import { WhenReady } from "@/components/preparing-screen"
+import { OnlineHome } from "@/components/home/online-home"
 
 export const Route = createFileRoute("/")({
-  component: IndexRoute,
+  component: OnlineHome,
 })
-
-function IndexRoute() {
-  return (
-    <WhenReady>
-      <HomeScreen />
-    </WhenReady>
-  )
-}
