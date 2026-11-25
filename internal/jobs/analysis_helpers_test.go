@@ -170,3 +170,27 @@ func TestMergeTrivyReports(t *testing.T) {
 		t.Errorf("len(Results) = %d, want 3 (1 from a.json, 2 from b.json)", len(report.Results))
 	}
 }
+
+func TestFactsOfReadsNodeBesideAnEngineThatIsNotAString(t *testing.T) {
+	target := store.Target{Node: "22.17.1"}
+	for _, tc := range []struct {
+		name           string
+		engines        string
+		wantRange      string
+		wantCompatible bool
+	}{
+		{name: "node range beside a number", engines: `{"node": ">=99", "npm": 7}`, wantRange: ">=99", wantCompatible: false},
+		{name: "only value is not a string", engines: `{"node": 18}`, wantRange: "", wantCompatible: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var meta npm.VersionMeta
+			if err := json.Unmarshal([]byte(`{"version": "1.0.0", "engines": `+tc.engines+`}`), &meta); err != nil {
+				t.Fatal(err)
+			}
+			f := factsOf("1.0.0", meta, npm.Packument{}, target)
+			if f.NodeRange != tc.wantRange || f.NodeCompatible != tc.wantCompatible {
+				t.Errorf("NodeRange = %q, NodeCompatible = %v; want %q, %v", f.NodeRange, f.NodeCompatible, tc.wantRange, tc.wantCompatible)
+			}
+		})
+	}
+}

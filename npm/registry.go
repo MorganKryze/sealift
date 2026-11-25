@@ -77,15 +77,24 @@ func (v VersionMeta) HasProvenance() bool {
 }
 
 // Engines maps an engine name to its version range. Old packages publish an
-// array instead; it decodes to an empty map.
+// array instead; it decodes to no ranges. A value that is neither a string nor
+// null is dropped and the other ranges are kept; a null value reads as "".
 type Engines map[string]string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (e *Engines) UnmarshalJSON(b []byte) error {
-	var m map[string]string
-	if json.Unmarshal(b, &m) == nil {
-		*e = m
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) != nil || raw == nil {
+		return nil
 	}
+	m := make(Engines, len(raw))
+	for name, value := range raw {
+		var r string
+		if json.Unmarshal(value, &r) == nil {
+			m[name] = r
+		}
+	}
+	*e = m
 	return nil
 }
 
