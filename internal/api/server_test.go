@@ -164,3 +164,102 @@ func TestRoutesEventStream(t *testing.T) {
 		t.Fatal("no event reached the client while the job was still running")
 	}
 }
+
+// apiProblem sends method to path on srv without following a redirect, and
+// returns the response with its Problem Details body decoded.
+func apiProblem(t *testing.T, srv *httptest.Server, method, path string) (*http.Response, Problem) {
+	t.Helper()
+	req, err := http.NewRequest(method, srv.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("%s %s: Content-Type = %q, want application/problem+json", method, path, ct)
+	}
+	var p Problem
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatalf("%s %s: decode problem: %v", method, path, err)
+	}
+	return resp, p
+}
+
+func TestWrongMethodOnKnownRouteAnswers405WithAllow(t *testing.T) {
+	srv, _ := newTestServer(t)
+	cases := []struct {
+		method, path, allow string
+	}{
+		{http.MethodDelete, "/api/instance", "GET, HEAD"},
+		{http.MethodPost, "/api/settings", "GET, HEAD"},
+		{http.MethodPatch, "/api/projects", "GET, HEAD, POST"},
+		{http.MethodPost, "/api/projects/abc", "DELETE, GET, HEAD"},
+		{http.MethodGet, "/api/projects/abc/analyses", "POST"},
+		{http.MethodGet, "/api/projects/abc/target", "PUT"},
+		{http.MethodPut, "/api/projects/abc/exports/x/files/a.tgz", "GET, HEAD"},
+	}
+	for _, c := range cases {
+		t.Run(c.method+" "+c.path, func(t *testing.T) {
+			resp, p := apiProblem(t, srv, c.method, c.path)
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want 405", resp.StatusCode)
+			}
+			if got := resp.Header.Get("Allow"); got != c.allow {
+				t.Errorf("Allow = %q, want %q", got, c.allow)
+			}
+			if p.Status != http.StatusMethodNotAllowed || p.Detail == nil {
+				t.Errorf("problem = %+v, want status 405 with a detail", p)
+			}
+		})
+	}
+}
+
+func TestUnknownAPIPathAnswers404Problem(t *testing.T) {
+	srv, _ := newTestServer(t)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/api/does-not-exist"},
+		{http.MethodPost, "/api/does-not-exist"},
+		{http.MethodGet, "/api/"},
+		{http.MethodGet, "/api/projects/abc/nothing"},
+	} {
+		resp, p := apiProblem(t, srv, c.method, c.path)
+		if resp.StatusCode != http.StatusNotFound || p.Status != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, problem status = %d, want 404", c.method, c.path, resp.StatusCode, p.Status)
+		}
+		if resp.Header.Get("Allow") != "" {
+			t.Errorf("%s %s: Allow = %q, want none on a 404", c.method, c.path, resp.Header.Get("Allow"))
+		}
+	}
+}
+
+func TestAPIWithoutTrailingSlashAnswersLikeAPISlash(t *testing.T) {
+	srv, _ := newTestServer(t)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		resp, p := apiProblem(t, srv, method, "/api")
+		if resp.StatusCode != http.StatusNotFound || p.Status != http.StatusNotFound {
+			t.Errorf("%s /api: status = %d, problem status = %d, want 404 as for /api/", method, resp.StatusCode, p.Status)
+		}
+	}
+}
+
+// A wrong method on a removed route still learns the route is gone, and
+// a removed method never shows in the Allow header of the route that
+// kept its read.
+func TestRemovedRoutesStayGoneWhateverTheMethod(t *testing.T) {
+	srv, _ := newTestServer(t)
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPut, "/api/settings"},
+		{http.MethodDelete, "/api/tools"},
+		{http.MethodGet, "/api/tools/trivy/update"},
+		{http.MethodPost, "/api/signing-key/regenerate"},
+		{http.MethodGet, "/api/signing-key/regenerate"},
+	} {
+		resp, p := apiProblem(t, srv, c.method, c.path)
+		if resp.StatusCode != http.StatusGone || p.Status != http.StatusGone {
+			t.Errorf("%s %s: status = %d, want 410", c.method, c.path, resp.StatusCode)
+		}
+	}
+}
