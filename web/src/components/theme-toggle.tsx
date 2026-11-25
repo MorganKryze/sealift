@@ -85,7 +85,7 @@ export function ThemeToggle() {
           tabIndex={theme === value ? 0 : -1}
           onClick={() => pick(index)}
           className={cn(
-            "relative flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-colors duration-160",
+            "relative flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm whitespace-nowrap transition-colors duration-160",
             theme === value ? "font-semibold text-ink" : "font-medium text-ink-2 hover:text-ink",
           )}
         >

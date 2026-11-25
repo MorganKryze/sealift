@@ -51,6 +51,11 @@ describe("Fingerprint", () => {
     expect(button).toHaveAccessibleName("Public key sha256 3f9a1c7e to 0b1d3f5a")
   })
 
+  it("copies with an icon button beside it, so the open value keeps the width", () => {
+    render(<Fingerprint value={HASH} label="Public key sha256" />)
+    expect(screen.getByRole("button", { name: "Copy Public key sha256" })).toHaveTextContent(/^Copy Public key sha256$/)
+  })
+
   it("copies all 64 characters open or closed", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })

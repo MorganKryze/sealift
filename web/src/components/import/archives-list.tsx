@@ -64,7 +64,7 @@ export function ArchivesList() {
           ) : null}
         </span>
         {list && list.archives.length > 0 && !ended ? (
-          <span className="flex items-center gap-3">
+          <span className="flex flex-wrap items-center gap-3">
             <ListFilter value={filter} onChange={setFilter} counts={{ all: all.length, importable: importable.length }} />
             <Button variant="outline" size="sm" onClick={refresh}>
               <RefreshCw aria-hidden />

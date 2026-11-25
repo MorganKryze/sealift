@@ -50,7 +50,7 @@ export function Fingerprint({ value, label }: { value: string; label: string }) 
         )}
         <ChevronDown aria-hidden="true" className={cn("mt-0.5 size-3.5 flex-none text-muted", open && "rotate-180")} />
       </button>
-      <CopyControl text={value} label={label} />
+      <CopyControl text={value} label={label} compact />
     </span>
   )
 }

@@ -84,7 +84,7 @@ export function SigningKeySection() {
                     <p className="text-[13px] text-muted">In the container or pod</p>
                     <span className="inline-flex max-w-full min-w-0 flex-wrap items-start gap-1">
                       <code className="inline-flex min-h-8 items-center rounded-md bg-hover px-2.5 font-mono text-xs text-ink [overflow-wrap:anywhere]">{REGENERATE}</code>
-                      <CopyControl text={REGENERATE} label="command" />
+                      <CopyControl text={REGENERATE} label="command" compact />
                     </span>
                   </>
                 ) : null}
