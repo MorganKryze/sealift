@@ -90,7 +90,10 @@ func buildBundle(t *testing.T, pkgs ...testPkg) testBundle {
 	var listed []map[string]any
 	for _, p := range pkgs {
 		body := tarballOf(t, p.name, p.version)
-		file := npm.PackFileName(p.name, p.version)
+		file, err := npm.PackFileName(p.name, p.version)
+		if err != nil {
+			t.Fatal(err)
+		}
 		sum := sha512.Sum512(body)
 		entries = append(entries, archive.Entry{Name: file, Size: int64(len(body)), Open: opener(body)})
 		listed = append(listed, map[string]any{
@@ -145,7 +148,11 @@ func newFakeNexus(t *testing.T, pkgs ...testPkg) (*fakeNexus, string) {
 	t.Helper()
 	f := &fakeNexus{byFile: map[string]string{}, tarballs: map[string][]byte{}, reads: map[string]int{}}
 	for _, p := range pkgs {
-		f.byFile[npm.PackFileName(p.name, p.version)] = npm.TarballURL("/repository/"+testRepo, p.name, p.version)
+		file, err := npm.PackFileName(p.name, p.version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.byFile[file] = npm.TarballURL("/repository/"+testRepo, p.name, p.version)
 	}
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
