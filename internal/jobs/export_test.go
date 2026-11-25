@@ -1580,3 +1580,25 @@ func TestExportRefusesBeforeSigningAShippedCVEWithoutFixALeftOutDependencyLists(
 		t.Errorf("manifest.json was written: %v", err)
 	}
 }
+
+func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	keyFile := filepath.Join(h.root, "private", "signing-key.pem")
+	if err := os.WriteFile(keyFile, []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fetched := 0
+	h.onFetch = func() { fetched++ }
+
+	err := exp.Run(context.Background(), noopEmit)
+	if err == nil || !strings.Contains(err.Error(), keyFile) {
+		t.Fatalf("Run = %v, want an error naming %s", err, keyFile)
+	}
+	if fetched != 0 {
+		t.Errorf("%d tarballs fetched before the key was checked, want none", fetched)
+	}
+}

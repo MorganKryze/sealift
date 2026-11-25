@@ -137,6 +137,11 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	// One key signs the whole export: a regenerate while it runs must not
 	// split the archive's manifest and the signature across two keys.
 	key := e.Store.SigningKey()
+	// A key that does not read would fail the signature at the end, after
+	// every download; fail before the first one instead.
+	if err := key.Err(); err != nil {
+		return err
+	}
 
 	pkgs, err := e.packageList(record)
 	if err != nil {
