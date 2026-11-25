@@ -133,7 +133,7 @@ describe("EndState", () => {
     expect(cause).toHaveTextContent(expected)
     expect(screen.getByText("This attempt published nothing and read no package.")).toBeInTheDocument()
     expect(screen.queryByText(/Nothing was published/)).toBeNull()
-    expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/")
+    expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/import")
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
   })
 
@@ -146,7 +146,7 @@ describe("EndState", () => {
     expect(await screen.findByRole("heading", { name: "Refused before the first package" })).toBeInTheDocument()
     expect(screen.getByText(reason)).toBeInTheDocument()
     expect(screen.getByText("This attempt published nothing and read no package.")).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/")
+    expect(screen.getByRole("link", { name: "Go to archives" })).toHaveAttribute("href", "/import")
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
   })
 
