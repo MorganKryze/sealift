@@ -242,6 +242,7 @@ function ExportProgress({ projectId, analysisId, result, exportRecord, onChanged
 
 // internal/jobs/export.go names its steps; these are the words the user reads.
 const EXPORT_STEP_LABELS: Record<string, string> = {
+  prepare: "Read the signing key",
   "package-list": "List the packages to export",
   download: "Download and verify each package",
   strip: "Strip publishConfig",

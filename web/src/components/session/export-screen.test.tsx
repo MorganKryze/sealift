@@ -141,6 +141,15 @@ describe("the progress screen", () => {
     expect(within(list).getByText("Sign the manifest and write the reports")).toBeInTheDocument()
   })
 
+  it("labels a failed prepare step in words", () => {
+    vi.mocked(useJobEvents).mockReturnValue({
+      ...initialAnalysisEventsState,
+      steps: [{ name: "prepare", state: "failed" }],
+    })
+    renderScreen(exportRecord({ state: "running", files: undefined }))
+    expect(within(screen.getByRole("list")).getByText("Read the signing key")).toBeInTheDocument()
+  })
+
   it("lists no file and reads no manifest for a failed export", () => {
     renderScreen(exportRecord({ state: "failed", files: undefined, failure: { step: "reports", message: "jobs: sign manifest.json: no key" } as Export["failure"] }))
     expect(screen.getByRole("heading", { name: "Export failed" })).toBeInTheDocument()
