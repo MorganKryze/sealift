@@ -85,6 +85,25 @@ const PREPARING = {
   }
 }
 
+// The failed items' next try, moved 42 s past the moment the page asks, so the page shows the delay as it would live.
+const preparingNow = () => ({
+  ...PREPARING,
+  preparing: PREPARING.preparing.map((item) => (item.nextTry ? { ...item, nextTry: new Date(Date.now() + 42_000).toISOString() } : item)),
+})
+
+// Ready with a warning, as the preparer answers when a refresh fails on an existing database
+// (internal/tools/ready.go): every item ready, the database at its older date.
+const READY_WITH_WARNING = {
+  ...PREPARING,
+  ready: true,
+  warning: "could not refresh the vulnerability database: dial tcp: lookup ghcr.io: no such host; using the database from 2026-11-22",
+  preparing: PREPARING.preparing.map(({ reason, nextTry, ...item }) => ({
+    ...item,
+    state: "ready",
+    ...(item.name === "trivy-db" ? { version: "2026-11-22T06:12:00Z" } : {}),
+  })),
+}
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -121,9 +140,18 @@ export const UI = {
     },
   ],
   // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
-  // `ready` is the text that proves the page drew that answer.
+  // `ready` is the text that proves the page drew that answer; `body` may be a function, called per
+  // request. `focus` names a control focused next and what it must bring up.
   answers: [
-    { path: "/", api: "/api/instance", body: PREPARING, ready: "Preparing sealift" },
+    { path: "/", api: "/api/instance", body: preparingNow, ready: "Preparing this instance" },
+    {
+      path: "/",
+      api: "/api/instance",
+      name: "ready with a warning",
+      body: READY_WITH_WARNING,
+      ready: "Instance",
+      focus: { role: "link", name: "Instance", opens: { role: "tooltip" } },
+    },
   ],
   widths: [1024, 1280],
   themes: ["light", "dark"],
@@ -428,15 +456,21 @@ for (const session of UI.sessions) {
 for (const state of UI.answers) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
-      test(`${state.path} answered by ${state.api} ${width} ${theme}`, async ({ page }) => {
+      test(`${state.path} answered by ${state.api}${state.name ? ` ${state.name}` : ""} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
-          where: `${state.path} · ${state.api} fixed · ${width}px · ${theme}`,
-          capture: `collection-${slug(state.path, state.api, "fixed")}`,
+          where: `${state.path} · ${state.api} fixed${state.name ? ` · ${state.name}` : ""} · ${width}px · ${theme}`,
+          capture: `collection-${slug(state.path, state.api, "fixed", state.name)}`,
           url: new URL(state.path, UI.baseURL).href,
           width,
           theme,
-          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: state.body })),
-          ready: (p) => p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 }),
+          prepare: (p) => p.route(`**${state.api}`, (r) => r.fulfill({ json: typeof state.body === "function" ? state.body() : state.body })),
+          ready: async (p) => {
+            await p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
+            if (state.focus) {
+              await p.getByRole(state.focus.role, { name: state.focus.name, exact: true }).focus()
+              await p.getByRole(state.focus.opens.role).waitFor()
+            }
+          },
         })
         expect(failures, failures.join("\n")).toEqual([])
       })
