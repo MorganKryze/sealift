@@ -6,8 +6,8 @@ default:
 hooks:
     ln -sf ../../githooks/pre-commit .git/hooks/pre-commit
 
-# Run what CI runs: formatting, vet, lint, race tests.
-check: fmt-check vet lint test vulncheck
+# Run what CI runs: formatting, vet, lint, go mod tidy, race tests.
+check: fmt-check vet lint tidy-check test vulncheck
 
 fmt-check:
     test -z "$(gofmt -l .)"
@@ -17,6 +17,11 @@ vet:
 
 lint:
     golangci-lint run ./...
+
+# Fail when go mod tidy changes go.mod or go.sum.
+tidy-check:
+    go mod tidy
+    git diff --exit-code go.mod go.sum
 
 vulncheck:
     go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
