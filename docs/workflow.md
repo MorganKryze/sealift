@@ -43,7 +43,7 @@ A sealed or cancelled crossing leaves the home: Projects keeps it. A group shows
 
 ## Projects
 
-**Projects** lists every project with its latest crossing. The title counts them, such as `3 projects`. Each row shows the project, its ecosystem, its latest crossing and that crossing's state. From two projects on, **Latest** and **Name** order the list: newest crossing first, 15 rows and then **Show all**, such as Show all 16 projects, or by name under a heading per letter. With no project, the page reads No project yet, and **Update a project** leads to the home.
+**Projects** lists every project with its latest crossing. The title counts them, such as `3 projects`. Each row shows the project, its ecosystem, its latest crossing and that crossing's state. From two projects on, **Latest** and **Name** order the list: newest crossing first, 15 rows and then **Show all**, such as Show all 16 projects, or by name under a heading per letter. With no project, the page reads No project yet, and **Update a project** opens the Update page.
 
 A project's page shows its name, its target and its crossings, newest first, such as `3 crossings`, or No crossing yet. A sealed crossing opens on two lists:
 
