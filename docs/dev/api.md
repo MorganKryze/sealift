@@ -17,8 +17,10 @@ A failure answers with a problem body ([RFC 9457](https://www.rfc-editor.org/rfc
 | Status | When |
 | --- | --- |
 | 400 | An invalid body: a manifest or a requirements file sealift refuses, a selection it did not resolve, an empty export, an export whose reasons fall short, a target or limit out of range |
-| 404 | An unknown project, analysis or export |
+| 404 | An unknown project, analysis or export; a path under `/api` that no route serves (`/api` redirects to `/api/`, which answers 404) |
+| 405 | A method the route does not serve; the `Allow` header lists the methods it serves |
 | 409 | A tool the job needs is still being prepared or missing (`tools-missing`); the analysis is not done; the project has a job queued or running |
+| 410 | A route a past release served; [Removed routes](#removed-routes) names what replaces it |
 | 500 | Anything else; the server log has the cause |
 
 ## Health
