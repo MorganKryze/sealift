@@ -74,7 +74,8 @@ export const IMPORT = {
     { path: "/imports", user: "bob", ready: "No import yet" },
     { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
     { path: "/imports", user: "alice", hold: "/api/imports", ready: "Loading your imports" },
-    { path: "/imports", user: "alice", open: { role: "button", name: "Settings" }, ready: "Waiting its turn" },
+    { path: "/instance", user: "alice", ready: "user-alice" },
+    { path: "/instance", user: "alice", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "sha256 from the connected side" } }, ready: "user-alice" },
   ],
 }
 

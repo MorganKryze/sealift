@@ -6,4 +6,6 @@
 @source "../components/copy-control.tsx";
 @source "../components/ui";
 @source "../components/brand";
+@source "../components/frame";
+@source "../components/fingerprint";
 @source "../components/theme-toggle.tsx";

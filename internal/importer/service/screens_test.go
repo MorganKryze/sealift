@@ -37,6 +37,8 @@ func TestScreensServeOnlyTheirRoutes(t *testing.T) {
 		{"/", 200, testShell, "text/html"},
 		{"/imports", 200, testShell, "text/html"},
 		{"/imports/20261106T101500Z-3f9a0c1d", 200, testShell, "text/html"},
+		{"/instance", 200, testShell, "text/html"},
+		{"/import", 200, testShell, "text/html"},
 		{"/assets/app.js", 200, "console.log(1)", "javascript"},
 		{"/favicon.svg", 200, "<svg/>", "svg"},
 		{"/settings", 404, "", ""},
