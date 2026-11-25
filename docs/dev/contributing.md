@@ -134,10 +134,11 @@ sealift installs its own pnpm, 10.34.5 by default, into the data volume to resol
 | Recipe | What it does |
 | --- | --- |
 | `just hooks` | Links `githooks/pre-commit` into `.git/hooks`. The hook runs gofmt, `go vet`, golangci-lint and `go test -race ./...` before each commit |
-| `just check` | `fmt-check`, `vet`, `lint` and `test`: the Go checks CI runs |
+| `just check` | `fmt-check`, `vet`, `lint`, `tidy-check`, `test` and `vulncheck`: the Go checks CI runs |
 | `just fmt-check` | Fails when `gofmt -l .` lists a file |
 | `just vet` | `go vet ./...` |
 | `just lint` | `golangci-lint run ./...` |
+| `just tidy-check` | Fails when `go mod tidy -diff` shows a change to `go.mod` or `go.sum`; writes neither |
 | `just test` | `go test -race ./...` |
 | `just bench` | The benchmarks, without the tests |
 | `just generate` | Regenerates the Go servers and the web types from the two contracts |
@@ -246,7 +247,7 @@ The repository has no mutation-testing setup. A new test should still fail for t
 
 | Job | Runs | Local equivalent |
 | --- | --- | --- |
-| `go`, on amd64 and arm64 | gofmt, `go vet`, golangci-lint v2.15.0, `go test -race ./...` | `just check` |
+| `go`, on amd64 and arm64 | gofmt, `go vet`, `go mod tidy` with no diff to `go.mod` or `go.sum`, golangci-lint v2.15.0, `go test -race ./...` | `just check` |
 | `integration`, on amd64 and arm64 | `go test -tags integration -race ./...` with Node 22 and Trivy installed | `just integration` |
 | `web` | `pnpm install --frozen-lockfile`, typecheck, lint, tests, the docs check, the production build | `just web-check`, `just docs`, `just web-build` |
 | `e2e`, on amd64 and arm64 | The Compose end-to-end test | `just e2e` |

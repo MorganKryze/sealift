@@ -67,7 +67,7 @@ docker run --rm -p 127.0.0.1:8080:8080 -v sealift-dev:/data sealift:dev
 
 | Recipe | Runs |
 | --- | --- |
-| `just check` | gofmt, go vet, golangci-lint, `go test -race ./...` |
+| `just check` | gofmt, go vet, golangci-lint, the `go mod tidy` check, `go test -race ./...`, govulncheck |
 | `just web-check` | typecheck, ESLint and Vitest on the web app |
 | `just docs` | the link and anchor check on every Markdown file |
 | `just integration` | the tests behind the `integration` tag, with real pnpm and Trivy; they skip when either is missing |
