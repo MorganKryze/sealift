@@ -818,3 +818,35 @@ func TestStoreReadsRefuseAFIFOOrALink(t *testing.T) {
 		}
 	}
 }
+
+// A crash between the create and the rename leaves a temporary file in
+// private/; the next start removes it and keeps everything else.
+func TestOpenSweepsStaleTemporaryFilesInPrivate(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	private := filepath.Join(root, "private")
+	stale := []string{".signing-key.pem.tmp-0a1b2c3d", ".settings.json.tmp-deadbeef"}
+	for _, name := range stale {
+		if err := os.WriteFile(filepath.Join(private, name), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept := filepath.Join(private, "notes.tmp")
+	if err := os.WriteFile(kept, []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range stale {
+		if _, err := os.Lstat(filepath.Join(private, name)); !os.IsNotExist(err) {
+			t.Errorf("%s survived the start: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Errorf("the sweep removed %s: %v", kept, err)
+	}
+}

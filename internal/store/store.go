@@ -131,6 +131,8 @@ func Open(root string) (*Store, error) {
 		}
 	}
 
+	sweepTempFiles(filepath.Join(root, "private"))
+
 	projects, err := openProjectsRoot(filepath.Join(root, "projects"))
 	if err != nil {
 		return nil, err
@@ -310,6 +312,10 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err == nil {
 		written, err = f.Stat()
 	}
+	// Without it a crash after the rename can leave an empty file in place.
+	if err == nil {
+		err = f.Sync()
+	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
@@ -329,7 +335,42 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if !os.SameFile(written, placed) {
 		return fmt.Errorf("store: %s was replaced while it was written", path)
 	}
+	// The rename survives a power cut only once the directory is on disk.
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("store: sync %s: %w", dir, err)
+	}
 	return nil
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	if closeErr := d.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// sweepTempFiles removes the temporary files atomicWriteFile left in dir
+// when the process stopped between their create and their rename. A file
+// that cannot be removed stays; the next write picks another name.
+func sweepTempFiles(dir string) {
+	stale, err := filepath.Glob(filepath.Join(dir, ".*.tmp-*"))
+	if err != nil {
+		return
+	}
+	for _, path := range stale {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			slog.Warn("store: could not remove a stale temporary file", "path", path, "error", err)
+		}
+	}
 }
 
 // NewResolveDir reserves a fresh, group-writable directory under
