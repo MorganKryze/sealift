@@ -81,6 +81,19 @@ describe("InstancePage", () => {
     expect(within(ready).getByText("5 items ready")).toBeInTheDocument()
   })
 
+  it("says under each ready tool the check it passed before it was installed", async () => {
+    await renderPage()
+    const ready = region("Ready")
+    for (const [title, proof] of [
+      ["Trivy", "sha256 matches the pinned release"],
+      ["pnpm", "Integrity matches the npm registry"],
+      ["uv", "sha256 matches the package index"],
+    ]) {
+      const item = within(ready).getByRole("heading", { name: title }).closest("li") as HTMLElement
+      expect(within(item).getByText(proof)).toBeInTheDocument()
+    }
+  })
+
   it("shows a database warning as a closed amber row", async () => {
     await renderPage({ ...INSTANCE, warning: WARNING })
     const row = screen.getByText(WARNING).closest("li")

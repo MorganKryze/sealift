@@ -144,8 +144,18 @@ export function ReadinessList({ items, warning }: { items: Instance["preparing"]
   )
 }
 
+// The check each tool passes before the server installs it, so a ready tool has passed it:
+// the pinned digest for Trivy, the packument's integrity for pnpm, the index's sha256 for uv.
+const PROOFS: Partial<Record<Item["name"], string>> = {
+  trivy: "sha256 matches the pinned release",
+  pnpm: "Integrity matches the npm registry",
+  uv: "sha256 matches the package index",
+}
+
 // What a ready item proves, under its title.
 function Proof({ item }: { item: Item }) {
+  const proof = PROOFS[item.name]
+  if (proof) return <p className="text-sm text-muted">{proof}</p>
   if (item.name === "trivy-db" && item.version) {
     const title = dbDateTitle(item.version)
     if (!title) return <p className="text-sm text-muted">Never downloaded</p>
