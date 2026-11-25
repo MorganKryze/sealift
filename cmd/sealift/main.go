@@ -270,6 +270,14 @@ var onServiceReady func(*jobs.Service)
 // the service. Only a test in this package sets it, to check its timeout.
 var onRegistryReady func(*npm.Client)
 
+// newRegistryClient builds the analysis's npm client. The timeout covers
+// the whole response, so it matches the tools client's: a large packument
+// or tarball needs minutes on a slow link, and a stalled registry must not
+// hold a job forever.
+func newRegistryClient(registry string) *npm.Client {
+	return &npm.Client{Registry: registry, HTTP: &http.Client{Timeout: 5 * time.Minute}}
+}
+
 // toolsCredential builds the credential pnpm and Trivy run under, from the
 // uid and gid docker-entrypoint.sh exports as SEALIFT_TOOLS_UID and
 // SEALIFT_TOOLS_GID. It returns nil, leaving children under the caller's
@@ -291,14 +299,6 @@ var onRegistryReady func(*npm.Client)
 // public registry through an uplink, so it can publish a package sealift's
 // own analysis and export need to resolve that the public registry never
 // carries.
-// newRegistryClient builds the analysis's npm client. The timeout covers
-// the whole response, so it matches the tools client's: a large packument
-// or tarball needs minutes on a slow link, and a stalled registry must not
-// hold a job forever.
-func newRegistryClient(registry string) *npm.Client {
-	return &npm.Client{Registry: registry, HTTP: &http.Client{Timeout: 5 * time.Minute}}
-}
-
 func newToolsManager(vol tools.Volume, client *http.Client, log *slog.Logger) (*tools.Manager, error) {
 	m := tools.NewManager(vol, client, log)
 	m.GitHubToken = os.Getenv("SEALIFT_GITHUB_TOKEN")
