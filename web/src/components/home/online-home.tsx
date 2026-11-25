@@ -3,12 +3,10 @@ import { CircleDashed, CircleX, Clock, ListChecks, LoaderCircle, Lock, RefreshCw
 import { useState } from "react"
 
 import { getProject, listProjects, type ProjectSummary } from "@/api/projects"
-import { EmptyGroup, type HomeRow, PathCard, RowGroup, type Tone } from "@/components/home/blocks"
+import { EmptyGroup, GROUP_ROWS, type HomeRow, PathCard, RowGroup, type Tone } from "@/components/home/blocks"
 import { Button } from "@/components/ui/button"
 import { crossingName, crossingState } from "@/lib/crossings"
 
-// A group shows this many rows before its Show all; the home reads the history of those rows only.
-const GROUP_ROWS = 10
 // While a crossing runs, the home asks again so a finished or failed one leaves In progress.
 const POLL_MS = 5000
 
@@ -70,7 +68,7 @@ export function OnlineHome() {
     progress: placed.filter((entry) => entry.group === "progress"),
   }
   const shown = (Object.keys(groups) as Group[]).flatMap((group) => (expanded[group] ? groups[group] : groups[group].slice(0, GROUP_ROWS)))
-  // A crossing's " · 2" needs the project's other analyses of that day, which the list does not carry.
+  // The home reads the history of the shown rows only. A crossing's " · 2" needs the project's other analyses of that day, which the list does not carry.
   const histories = useQueries({
     queries: shown
       .filter(({ project }) => project.lastAnalysis)

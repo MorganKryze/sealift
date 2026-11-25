@@ -47,7 +47,8 @@ const BOX: Record<Tone, string> = {
   info: "tinted-info text-info",
 }
 
-const GROUP_ROWS = 10
+/** A group shows this many rows before its Show all. */
+export const GROUP_ROWS = 10
 
 function Row({ row, actionRef }: { row: HomeRow; actionRef?: Ref<HTMLAnchorElement> }) {
   const { icon: Icon, state, action } = row
