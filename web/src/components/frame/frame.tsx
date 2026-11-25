@@ -41,36 +41,37 @@ export function initials(user: string): string {
   return letters.toUpperCase()
 }
 
-/** Every screen but the preparing page: a sidebar of places, a top bar with the breadcrumb and the side label, the page. */
+/** Every screen but the preparing page: a sidebar of places (a tab bar along the bottom on a phone), a top bar with the breadcrumb and the side label, the page. */
 export function Frame({ side, places, instance, instanceWarning, user, crumbs, children }: FrameProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const current = currentPlace(pathname, [...places, instance])
 
   return (
-    <div className="grid min-h-screen grid-cols-[76px_minmax(0,1fr)] bg-bg text-ink">
+    <div className="grid min-h-screen grid-cols-[minmax(0,1fr)] bg-bg text-ink md:grid-cols-[76px_minmax(0,1fr)]">
       <a
         href="#content"
         className="fixed top-2 left-2 z-50 inline-flex h-9 -translate-y-16 items-center rounded-lg bg-ink px-3 text-sm font-semibold text-bg transition-transform duration-200 ease-out focus-visible:translate-y-0 motion-reduce:transition-none"
       >
         Skip to content
       </a>
-      {/* The column paints the sidebar down the whole page; the nav inside stays on screen. */}
-      <div className="border-r border-rule bg-canvas">
-        <nav aria-label="Places" className="sticky top-0 z-30 flex h-screen flex-col items-center gap-1 px-1.5 py-3.5">
-          <span className="mb-3 grid size-10 place-items-center">
+      {/* The column paints the sidebar down the whole page; the nav inside stays on screen. Under md the
+          column becomes a tab bar fixed to the bottom, above the home indicator's safe area. */}
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-rule bg-canvas pb-[env(safe-area-inset-bottom)] md:static md:border-t-0 md:border-r md:pb-0">
+        <nav aria-label="Places" className="flex items-center gap-1 px-2 py-1.5 md:sticky md:top-0 md:h-screen md:flex-col md:px-1.5 md:py-3.5">
+          <span data-brand-mark className="mb-3 hidden size-10 place-items-center md:grid">
             <BrandMark size={28} />
           </span>
-          <ul className="flex flex-col items-center gap-1">
+          <ul className="flex items-center gap-1 md:flex-none md:flex-col" style={{ flexGrow: places.length }}>
             {places.map((place) => (
-              <li key={place.to}>
+              <li key={place.to} className="flex-1 md:flex-none">
                 <PlaceLink place={place} current={place.to === current} />
               </li>
             ))}
           </ul>
-          <div className="mt-auto flex flex-col items-center gap-2.5">
+          <div className="flex flex-1 items-center gap-2.5 md:mt-auto md:flex-none md:flex-col">
             <PlaceLink place={instance} current={instance.to === current} warning={instanceWarning} />
             {user ? (
-              <span title={user} className="grid size-8 place-items-center rounded-full bg-sel text-[11.5px] font-semibold text-ink">
+              <span title={user} className="grid size-8 flex-none place-items-center rounded-full bg-sel text-[11.5px] font-semibold text-ink">
                 <span aria-hidden="true">{initials(user)}</span>
                 <span className="sr-only">Signed in as {user}</span>
               </span>
@@ -103,7 +104,7 @@ export function Frame({ side, places, instance, instanceWarning, user, crumbs, c
           </nav>
           <SideLabel side={side} />
         </header>
-        <main id="content" tabIndex={-1} className="flex min-w-0 flex-col outline-none">
+        <main id="content" tabIndex={-1} className="flex min-w-0 flex-col pb-[calc(72px+env(safe-area-inset-bottom))] outline-none md:pb-0">
           {children}
         </main>
       </div>
@@ -116,7 +117,7 @@ function PlaceLink({ place, current, warning }: { place: Place; current: boolean
   const tipId = useId()
   const Icon = place.icon
   return (
-    <span className="relative block">
+    <span className="relative block flex-1 md:flex-none">
       <Link
         to={place.to}
         activeOptions={{ exact: true }}
@@ -128,14 +129,14 @@ function PlaceLink({ place, current, warning }: { place: Place; current: boolean
         onBlur={warning ? () => setTip(false) : undefined}
         onKeyDown={warning ? (e) => e.key === "Escape" && setTip(false) : undefined}
         className={cn(
-          "relative flex min-h-14 w-[62px] flex-col items-center justify-center gap-1 rounded-lg text-xs text-muted transition-colors duration-150 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-hover [@media(hover:hover)_and_(pointer:fine)]:hover:text-ink",
+          "relative flex min-h-14 w-full flex-col md:w-[62px] items-center justify-center gap-1 rounded-lg text-xs text-muted transition-colors duration-150 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-hover [@media(hover:hover)_and_(pointer:fine)]:hover:text-ink",
           current && "bg-sel font-semibold text-ink",
         )}
       >
         <Icon aria-hidden="true" strokeWidth={1.75} className={cn("size-5", current && "text-brand")} />
         {place.label}
         {warning ? (
-          <span className="tinted-warn absolute top-1 left-[35px] grid size-5 place-items-center !rounded-full text-warn">
+          <span className="tinted-warn absolute top-1 left-[calc(50%+4px)] grid size-5 place-items-center !rounded-full text-warn">
             <TriangleAlert aria-hidden="true" className="size-3" />
           </span>
         ) : null}
@@ -145,7 +146,7 @@ function PlaceLink({ place, current, warning }: { place: Place; current: boolean
           id={tipId}
           role="tooltip"
           hidden={!tip}
-          className="tinted-warn absolute bottom-0 left-full z-30 ml-2.5 w-65 px-3 py-2.5 text-left text-[13px] text-ink-2 shadow-lg"
+          className="tinted-warn absolute right-0 bottom-full z-30 mb-2.5 w-65 md:right-auto md:bottom-0 md:left-full md:mb-0 md:ml-2.5 px-3 py-2.5 text-left text-[13px] text-ink-2 shadow-lg"
         >
           {warning}
         </span>

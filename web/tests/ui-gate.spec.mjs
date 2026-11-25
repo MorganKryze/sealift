@@ -373,6 +373,8 @@ function measure({ controls, exceptions, target }) {
 function sidebarReach() {
   const nav = document.querySelector('nav[aria-label="Places"]')
   if (!nav) return ""
+  // On a phone the places sit in a tab bar fixed to the bottom, with no column to paint.
+  if (getComputedStyle(nav.parentElement).position === "fixed") return ""
   let column = nav
   while (column.parentElement && getComputedStyle(column.parentElement).display !== "grid") column = column.parentElement
   const bottom = column.getBoundingClientRect().bottom + window.scrollY
@@ -584,6 +586,59 @@ for (const route of IMPORT.routes) {
         expect(failures, failures.join("\n")).toEqual([])
       })
     }
+  }
+}
+
+// Runs in the page: at phone width the places form a tab bar along the bottom edge, each tab a
+// 44 px target, the logo hidden, the breadcrumb still in the top bar.
+function tabBar({ target }) {
+  const nav = document.querySelector('nav[aria-label="Places"]')
+  if (!nav) return ["nav[aria-label=Places]: missing"]
+  const found = []
+  const bar = nav.getBoundingClientRect()
+  if (Math.abs(bar.bottom - window.innerHeight) > 1 || bar.width < window.innerWidth - 1) {
+    found.push(`nav[aria-label=Places]: not a tab bar along the bottom (${Math.round(bar.left)},${Math.round(bar.top)} ${Math.round(bar.width)} × ${Math.round(bar.height)})`)
+  }
+  for (const link of nav.querySelectorAll("a")) {
+    const r = link.getBoundingClientRect()
+    if (r.width < target || r.height < target) found.push(`tab "${link.textContent.trim()}": under ${target} × ${target} CSS px (${Math.round(r.width)} × ${Math.round(r.height)})`)
+  }
+  const logo = nav.querySelector("[data-brand-mark]")
+  if (logo && logo.getClientRects().length > 0) found.push("nav[aria-label=Places]: the logo shows in the tab bar")
+  if (!document.querySelector('header nav[aria-label="Breadcrumb"]')) found.push("header: no breadcrumb")
+  return found
+}
+
+// A phone's width: the pages whose longest lines broke there, opened as far as they go.
+const PHONE = {
+  width: 390,
+  target: 44,
+  collection: [
+    { path: "/", ready: "Start a crossing" },
+    { path: "/instance", ready: "Instance", open: [{ role: "button", name: /^Public key sha256/ }, { role: "button", name: "How to regenerate" }] },
+  ],
+  import: [{ path: "/import", user: "alice", ready: "Not imported yet" }],
+}
+
+for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" })), ...PHONE.import.map((r) => ({ ...r, role: "import" }))]) {
+  for (const theme of UI.themes) {
+    test(`${route.role} ${route.path} at ${PHONE.width} ${theme}`, async ({ page }) => {
+      const base = route.role === "import" ? IMPORT.baseURL : UI.baseURL
+      const failures = await inspect(page, {
+        where: `${route.role} ${route.path} · ${PHONE.width}px · ${theme}`,
+        capture: `${route.role}-${slug(route.path, route.open && "open")}`,
+        url: new URL(route.path, base).href,
+        width: PHONE.width,
+        theme,
+        prepare: route.user ? (p) => p.setExtraHTTPHeaders({ "X-Access-Token": fixtures.token(route.user) }) : undefined,
+        ready: async (p) => {
+          await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
+          for (const control of route.open ?? []) await p.getByRole(control.role, { name: control.name }).first().click()
+        },
+        extra: (p) => p.evaluate(tabBar, { target: PHONE.target }).then((found) => found.map((f) => `${route.path} · ${PHONE.width}px · ${theme} · ${f}`)),
+      })
+      expect(failures, failures.join("\n")).toEqual([])
+    })
   }
 }
 
