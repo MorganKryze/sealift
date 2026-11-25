@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +32,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "signing-key" {
+		os.Exit(runSigningKey(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	// The subcommand is chosen before flag.Parse, so `sealift -addr ...` is unchanged.
 	switch name, rest := subcommand(os.Args[1:]); name {
 	case "import":
@@ -191,6 +195,35 @@ func run(addr, root string, log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+// signingKeyUsage is the line printed for a usage error.
+const signingKeyUsage = "usage: sealift signing-key regenerate [-data <dir>]"
+
+// runSigningKey runs `sealift signing-key regenerate [-data dir]` and returns
+// the exit status: 0 replaced, 1 refused or failed, 2 usage. It prints the
+// new public key and the replaced key's sha256, never the private key.
+func runSigningKey(args []string, stdout, stderr io.Writer) int {
+	usage := func() int {
+		fmt.Fprintln(stderr, signingKeyUsage)
+		return 2
+	}
+	if len(args) == 0 || args[0] != "regenerate" {
+		return usage()
+	}
+	fs := flag.NewFlagSet("signing-key regenerate", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	root := fs.String("data", "/data", "data volume")
+	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+		return usage()
+	}
+	key, replaced, err := store.ReplaceSigningKey(*root, os.Getuid())
+	if err != nil {
+		fmt.Fprintf(stderr, "sealift signing-key regenerate: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "public key sha256 %s\nreplaced %s\n%s", key.PublicKeySHA256, replaced, key.PublicPEM)
+	return 0
 }
 
 // applyPolicy reads the policy file at path, "" meaning none, over the
