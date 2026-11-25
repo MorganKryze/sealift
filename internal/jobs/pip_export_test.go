@@ -1951,6 +1951,14 @@ func TestPipExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	if steps := stepNames(rec.steps); slices.Contains(steps, "download:running") {
 		t.Errorf("steps = %v, want no download with a key that does not read", steps)
 	}
+	// Without a failed step the screen would show the failure with no cause.
+	var status exportStatusFile
+	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "status.json")), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Steps) == 0 || status.Steps[0].Name != "prepare" || status.Steps[0].State != string(store.Failed) || !strings.Contains(status.Steps[0].Error, keyFile) {
+		t.Errorf("status.json steps = %+v, want a failed prepare step naming %s", status.Steps, keyFile)
+	}
 }
 
 // A regenerate while the export runs must not split the manifest and the

@@ -1601,4 +1601,6 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	if fetched != 0 {
 		t.Errorf("%d tarballs fetched before the key was checked, want none", fetched)
 	}
+	// Without a failed step the screen would show the failure with no cause.
+	assertExportFailedStatus(t, exportDir, "prepare", keyFile)
 }
