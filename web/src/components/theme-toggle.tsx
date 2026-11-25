@@ -28,7 +28,7 @@ export function applyTheme(theme: ThemeChoice) {
   }
 }
 
-const options: { value: ThemeChoice; label: string; icon: ComponentType<{ className?: string }> }[] = [
+const options: { value: ThemeChoice; label: string; icon: ComponentType<{ className?: string; "aria-hidden"?: "true" }> }[] = [
   { value: "system", label: "System", icon: Monitor },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
@@ -89,7 +89,7 @@ export function ThemeToggle() {
             theme === value ? "font-semibold text-ink" : "font-medium text-ink-2 hover:text-ink",
           )}
         >
-          <Icon className="size-3.5" />
+          <Icon aria-hidden="true" className="size-3.5" />
           {label}
         </button>
       ))}
