@@ -118,6 +118,9 @@ func run(addr, root string, log *slog.Logger) error {
 	if onQueueReady != nil {
 		onQueueReady(queue)
 	}
+	if onRegistryReady != nil {
+		onRegistryReady(registry)
+	}
 	service := jobs.NewService(st, queue, toolsManager, pnpmRunner, trivyRunner, registry)
 	service.Review = pol.Review
 	// uv needs an interpreter to start, and builds and runs nothing with it.
@@ -262,6 +265,10 @@ var onQueueReady func(*jobs.Queue)
 // up. Only a test in this package sets it, to read what the service hands
 // each analysis.
 var onServiceReady func(*jobs.Service)
+
+// onRegistryReady, when non-nil, is called with the npm client run hands
+// the service. Only a test in this package sets it, to check its timeout.
+var onRegistryReady func(*npm.Client)
 
 // toolsCredential builds the credential pnpm and Trivy run under, from the
 // uid and gid docker-entrypoint.sh exports as SEALIFT_TOOLS_UID and

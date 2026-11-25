@@ -30,6 +30,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 // TestToolsCredential proves toolsCredential builds a credential only when
@@ -1314,5 +1315,23 @@ func TestRegistryClientTimesOut(t *testing.T) {
 	}
 	if c.HTTP == nil || c.HTTP.Timeout <= 0 {
 		t.Fatalf("HTTP = %+v, want a client with a timeout", c.HTTP)
+	}
+}
+
+func TestRunHandsTheAnalysesARegistryClientWithATimeout(t *testing.T) {
+	clients := make(chan *npm.Client, 1)
+	onRegistryReady = func(c *npm.Client) { clients <- c }
+	defer func() { onRegistryReady = nil }()
+
+	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop()
+
+	select {
+	case c := <-clients:
+		if c == nil || c.HTTP == nil || c.HTTP.Timeout <= 0 {
+			t.Errorf("run hands the service the npm client %+v, want one with a timeout", c)
+		}
+	default:
+		t.Fatal("run never handed over its npm client")
 	}
 }
