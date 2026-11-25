@@ -111,6 +111,15 @@ func (d *Deprecation) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// maxPackument bounds a packument, which sealift decodes in memory. The full
+// document carries every version: renovate's ran 73 MiB on registry.npmjs.org
+// in November 2026, the largest one measured.
+const maxPackument = 256 << 20
+
+// errTooLarge reports a registry document over maxPackument. It is not
+// retried: the registry would send the same document again.
+var errTooLarge = fmt.Errorf("document over the %d MiB bound", maxPackument>>20)
+
 // Client reads an npm registry. The zero value reads DefaultRegistry.
 type Client struct {
 	Registry string                        // defaults to DefaultRegistry
@@ -124,7 +133,17 @@ func (c *Client) Packument(ctx context.Context, name string) (Packument, error) 
 	var p Packument
 	err := c.do(ctx, c.registry()+"/"+url.PathEscape(name), "application/json", func(body io.Reader) error {
 		p = Packument{}
-		return json.NewDecoder(body).Decode(&p)
+		// One byte past the bound shows the document is larger: it is
+		// refused whole, never decoded from a cut-short read.
+		lr := &io.LimitedReader{R: body, N: maxPackument + 1}
+		err := json.NewDecoder(lr).Decode(&p)
+		if err == nil {
+			_, err = io.Copy(io.Discard, lr)
+		}
+		if lr.N == 0 {
+			return errTooLarge
+		}
+		return err
 	})
 	if err != nil {
 		return Packument{}, fmt.Errorf("packument %s: %w", name, err)
@@ -192,7 +211,7 @@ func (c *Client) do(ctx context.Context, u, accept string, fn func(io.Reader) er
 			}
 		}
 		err = c.try(ctx, u, accept, fn)
-		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrIntegrity) || ctx.Err() != nil {
+		if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrIntegrity) || errors.Is(err, errTooLarge) || ctx.Err() != nil {
 			return err
 		}
 	}

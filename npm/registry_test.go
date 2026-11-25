@@ -1,6 +1,7 @@
 package npm
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha512"
 	"encoding/base64"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,6 +68,57 @@ func TestPackument(t *testing.T) {
 
 	if _, err := testClient(srv.URL).Packument(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing package: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestPackumentRefusesADocumentOverTheBound serves a valid packument padded
+// with whitespace: at the bound it decodes, one byte over it is refused, with
+// the package and the bound named and no retry, so the analysis never works
+// from a document cut short.
+func TestPackumentRefusesADocumentOverTheBound(t *testing.T) {
+	const doc = `{"name": "big", "versions": {"1.0.0": {"version": "1.0.0"}}}`
+	for _, c := range []struct {
+		name string
+		size int
+		ok   bool
+	}{
+		{"at the bound", maxPackument, true},
+		{"one byte over", maxPackument + 1, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				_, _ = w.Write([]byte(doc))
+				pad := bytes.Repeat([]byte(" "), 1<<20)
+				for left := c.size - len(doc); left > 0; left -= len(pad) {
+					if _, err := w.Write(pad[:min(left, len(pad))]); err != nil {
+						return
+					}
+				}
+			}))
+			defer srv.Close()
+
+			p, err := testClient(srv.URL).Packument(context.Background(), "big")
+			if c.ok {
+				if err != nil || p.Versions["1.0.0"].Version != "1.0.0" {
+					t.Fatalf("Packument = %+v, %v", p, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Packument read a %d-byte document, over the %d-byte bound", c.size, maxPackument)
+			}
+			if !strings.Contains(err.Error(), "big") || !strings.Contains(err.Error(), "256 MiB") {
+				t.Errorf("err = %v, want the package and the bound named", err)
+			}
+			if p.Name != "" || p.Versions != nil {
+				t.Errorf("Packument returned %+v beside its error", p)
+			}
+			if n := calls.Load(); n != 1 {
+				t.Errorf("registry asked %d times, want 1: an oversized document does not shrink on retry", n)
+			}
+		})
 	}
 }
 

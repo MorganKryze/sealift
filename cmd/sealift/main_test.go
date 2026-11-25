@@ -1303,3 +1303,16 @@ func TestRunStopsOnABusyAddressBeforePreparing(t *testing.T) {
 		t.Errorf("tools/ holds %v after a failed bind (%v), want it empty", entries, err)
 	}
 }
+
+// TestRegistryClientTimesOut proves the analysis's registry client carries a
+// timeout: http.DefaultClient has none, so a registry that stops answering
+// mid-body would hold a job forever.
+func TestRegistryClientTimesOut(t *testing.T) {
+	c := newRegistryClient("https://registry.example.internal")
+	if c.Registry != "https://registry.example.internal" {
+		t.Errorf("Registry = %q", c.Registry)
+	}
+	if c.HTTP == nil || c.HTTP.Timeout <= 0 {
+		t.Fatalf("HTTP = %+v, want a client with a timeout", c.HTTP)
+	}
+}
