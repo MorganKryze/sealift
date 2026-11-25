@@ -165,8 +165,8 @@ func TestRoutesEventStream(t *testing.T) {
 	}
 }
 
-// apiProblem sends method to path on srv without following a redirect, and
-// returns the response with its Problem Details body decoded.
+// apiProblem sends method to path on srv, following redirects as a browser
+// would, and returns the final response with its Problem Details body decoded.
 func apiProblem(t *testing.T, srv *httptest.Server, method, path string) (*http.Response, Problem) {
 	t.Helper()
 	req, err := http.NewRequest(method, srv.URL+path, nil)
