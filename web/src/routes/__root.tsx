@@ -21,16 +21,16 @@ export const Route = createRootRoute({
 function OnlineFrame() {
   const instance = useInstance()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const sessionId = /^\/sessions\/([^/]+)/.exec(pathname)?.[1]
-  // The session's own route asks for the same cache entry, so the crumb costs no extra request.
+  const projectId = /^\/(?:sessions|projects)\/([^/]+)/.exec(pathname)?.[1]
+  // The page's own route asks for the same cache entry, so the crumb costs no extra request.
   const project = useQuery({
-    queryKey: ["project", sessionId],
-    queryFn: () => getProject(sessionId ?? ""),
-    enabled: sessionId !== undefined,
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId ?? ""),
+    enabled: projectId !== undefined,
   })
 
   return (
-    <Frame side="online" places={ONLINE_PLACES} instance={ONLINE_INSTANCE} instanceWarning={instance.data?.warning} crumbs={onlineCrumbs(pathname, sessionId ? project.data?.name : undefined)}>
+    <Frame side="online" places={ONLINE_PLACES} instance={ONLINE_INSTANCE} instanceWarning={instance.data?.warning} crumbs={onlineCrumbs(pathname, projectId ? project.data : undefined)}>
       <EphemeralBanner />
       <Outlet />
     </Frame>
