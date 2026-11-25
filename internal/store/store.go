@@ -85,10 +85,10 @@ type Store struct {
 	// signing is a pointer: fmt prints a nested pointer as an address, so
 	// printing a Store never reaches the private key.
 	signing *SigningKey
-
-	// regenerating serializes key replacements, so the file and the key in
-	// use always come from the same call.
-	regenerating sync.Mutex
+	// keyStamp is the key file as signing was read from it; keyRead is
+	// false while the file does not read, so each call tries it again.
+	keyStamp keyStamp
+	keyRead  bool
 
 	// ephemeral draws project ids that do not derive from the name.
 	ephemeral bool
@@ -152,11 +152,11 @@ func Open(root string) (*Store, error) {
 		s.settings, s.stored, s.hasStored = loaded, loaded, true
 	}
 
-	key, err := loadSigningKey(s.signingKeyPath())
+	key, stamp, err := loadSigningKey(s.signingKeyPath())
 	if err != nil {
 		return nil, err
 	}
-	s.signing = &key
+	s.signing, s.keyStamp, s.keyRead = &key, stamp, true
 	return s, nil
 }
 

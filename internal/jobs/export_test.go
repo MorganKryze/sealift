@@ -438,7 +438,7 @@ func TestExportRun(t *testing.T) {
 	exportDir2 := filepath.Join(t.TempDir(), "exports", "20260917T101503Z.tmp")
 	exp2 := h.newExport(t, analysisDir, exportDir2, true)
 	keyOfFirst := h.store.SigningKey()
-	if _, err := h.store.RegenerateSigningKey(); err != nil {
+	if _, _, err := store.ReplaceSigningKey(h.root, os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	if err := exp2.Run(context.Background(), noopEmit); err != nil {
@@ -848,7 +848,7 @@ func publicKey(t *testing.T, key store.SigningKey) ed25519.PublicKey {
 	return pub.(ed25519.PublicKey)
 }
 
-// TestExportSignsWithTheKeyItStartedWith regenerates the key while the
+// TestExportSignsWithTheKeyItStartedWith replaces the key while the
 // downloads run: the export must still sign with the key it began with.
 func TestExportSignsWithTheKeyItStartedWith(t *testing.T) {
 	h := newTestHarness(t)
@@ -861,7 +861,7 @@ func TestExportSignsWithTheKeyItStartedWith(t *testing.T) {
 	var once sync.Once
 	h.onFetch = func() {
 		once.Do(func() {
-			if _, err := h.store.RegenerateSigningKey(); err != nil {
+			if _, _, err := store.ReplaceSigningKey(h.root, os.Getuid()); err != nil {
 				t.Error(err)
 			}
 		})
