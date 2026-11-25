@@ -158,7 +158,7 @@ describe("Frame", () => {
     await renderAt("/")
     expect(document.title).toBe("sealift")
     expect(places().querySelector("img")).toBeNull()
-    expect(places().querySelector("svg[viewBox='0 0 40 40']")).not.toBeNull()
+    expect(places().querySelector("svg[viewBox='0 0 16 16']")).not.toBeNull()
     expect(screen.getByRole("banner").querySelector("svg.lucide-globe")).not.toBeNull()
 
     render(<SideLabel side="offline" />)
@@ -166,13 +166,11 @@ describe("Frame", () => {
     expect(offline.querySelector("svg.lucide-unplug")).not.toBeNull()
   })
 
-  it("draws today's mark in the ink", () => {
+  it("draws today's mark in the text colour and the crate's teal", () => {
     const { container } = render(<BrandMark size={28} />)
     const paints = [...container.querySelectorAll("svg *")].flatMap((el) => [el.getAttribute("fill"), el.getAttribute("stroke")]).filter((p) => p && p !== "none")
     expect(paints.length).toBeGreaterThan(0)
-    expect(new Set(paints)).toEqual(new Set(["var(--ink)", "var(--accent)", "var(--background)"]))
-    expect(theme).toMatch(/--accent:\s*var\(--ink\);/)
-    expect(theme).toMatch(/--background:\s*var\(--bg\);/)
+    expect(new Set(paints)).toEqual(new Set(["currentColor", "var(--sealift-teal,#0e7490)"]))
     // Still: nothing on the mark or its wrapper moves.
     expect(container.innerHTML).not.toMatch(/animate-/)
     expect(container.firstElementChild).toHaveAttribute("aria-hidden", "true")
