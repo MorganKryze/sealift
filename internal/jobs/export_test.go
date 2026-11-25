@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -1627,4 +1628,57 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	}
 	// Without a failed step the screen would show the failure with no cause.
 	assertExportFailedStatus(t, exportDir, "prepare", keyFile)
+}
+
+// TestExportDownloadRefusesAPathInTheVersion proves a lockfile version
+// holding path parts never reaches the file system: a planted file beside
+// the export stays, nothing new appears there, and the error names the
+// package.
+func TestExportDownloadRefusesAPathInTheVersion(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	// A registry that answers every path lets the download reach the disk.
+	anything := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("bytes"))
+	}))
+	t.Cleanup(anything.Close)
+	exp.Registry = &npm.Client{Registry: anything.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }}
+	if err := os.MkdirAll(filepath.Join(exportDir, "downloads"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Dir(exportDir)
+	planted := filepath.Join(outside, "escaped.tgz.part")
+	if err := os.WriteFile(planted, []byte("keep"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha1.Sum([]byte("bytes"))
+	integrity := "sha1-" + base64.StdEncoding.EncodeToString(sum[:])
+	for _, p := range []npm.LockPackage{
+		{Name: "express", Version: "1.0.0/../../../escaped", Integrity: integrity},
+		{Name: "../escaped", Version: "1.0.0", Integrity: integrity},
+	} {
+		_, _, err := exp.downloadOne(context.Background(), p)
+		if err == nil {
+			t.Fatalf("downloadOne(%q, %q): want an error", p.Name, p.Version)
+		}
+		if !strings.Contains(err.Error(), p.Name) {
+			t.Errorf("error %q does not name %s", err, p.Name)
+		}
+	}
+	if data, err := os.ReadFile(planted); err != nil || string(data) != "keep" {
+		t.Errorf("planted file = %q, %v; want it untouched", data, err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "escaped.tgz.part" && e.Name() != filepath.Base(exportDir) {
+			t.Errorf("unexpected %s beside the export", e.Name())
+		}
+	}
 }
