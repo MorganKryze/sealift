@@ -45,6 +45,8 @@ func TestScreensServeOnlyTheirRoutes(t *testing.T) {
 		{"/sessions/x", 404, "", ""},
 		{"/sessions/x/review", 404, "", ""},
 		{"/imports/x/y", 404, "", ""},
+		{"/import/x", 404, "", ""},
+		{"/instance/x", 404, "", ""},
 		{"/imports/", 404, "", ""},
 		{"/index.html", 404, "", ""},
 		{"/secret.txt", 404, "", ""},
