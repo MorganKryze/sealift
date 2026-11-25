@@ -98,6 +98,16 @@ const group = (name: string) => screen.getByRole("region", { name })
 const rowNames = (region: HTMLElement) => within(region).getAllByRole("listitem").map((li) => li.querySelector("[data-row-name]")?.textContent)
 const rowOf = (name: string) => screen.getByText(name, { selector: "[data-row-name]" }).closest("li") as HTMLElement
 
+describe("rows", () => {
+  it("names each crossing in weight 600", async () => {
+    const { container } = renderHome({ archives: folderList([archive("web-portal-2026-11-20", at(25, 12))]) })
+    await screen.findByText("web-portal-2026-11-20", { selector: "[data-row-name]" })
+    const names = [...container.querySelectorAll("[data-row-name]")]
+    expect(names.length).toBeGreaterThan(0)
+    for (const name of names) expect(name).toHaveClass("font-semibold")
+  })
+})
+
 describe("greeting", () => {
   it("greets the user by the part of the day", async () => {
     expect(greeting(new Date(2026, 10, 25, 6, 30), "alice")).toBe("Good morning, alice")

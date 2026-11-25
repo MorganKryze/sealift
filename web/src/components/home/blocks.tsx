@@ -59,7 +59,7 @@ function Row({ row, actionRef }: { row: HomeRow; actionRef?: Ref<HTMLAnchorEleme
         <Icon aria-hidden="true" className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p data-row-name="" className="font-medium text-ink [overflow-wrap:anywhere]">
+        <p data-row-name="" className="font-semibold text-ink [overflow-wrap:anywhere]">
           {row.name}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted [overflow-wrap:anywhere]">
