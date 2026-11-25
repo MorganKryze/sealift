@@ -368,6 +368,18 @@ function measure({ controls, exceptions, target }) {
   return { overflow, targets }
 }
 
+// The sidebar's column must paint down to the page's foot, so a full-page capture of a tall page
+// shows no bare strip under it.
+function sidebarReach() {
+  const nav = document.querySelector('nav[aria-label="Places"]')
+  if (!nav) return ""
+  let column = nav
+  while (column.parentElement && getComputedStyle(column.parentElement).display !== "grid") column = column.parentElement
+  const bottom = column.getBoundingClientRect().bottom + window.scrollY
+  const page = document.documentElement.scrollHeight
+  return bottom + 1 < page ? `sidebar column ends at ${Math.round(bottom)} px on a ${page} px page` : ""
+}
+
 // Loads one page and returns what the gate fails on: axe, overflow and small targets, plus what the
 // caller adds through `extra`. `prepare` runs before the page loads, `ready` once its data arrived.
 async function inspect(page, { where, capture, url, width, theme, prepare, ready, extra }) {
@@ -392,6 +404,8 @@ async function inspect(page, { where, capture, url, width, theme, prepare, ready
   for (const v of axe.violations.filter((x) => x.impact === "serious" || x.impact === "critical")) {
     for (const node of v.nodes) failures.push(`${where} · ${node.target.join(" ")}: axe ${v.id} (${v.impact})`)
   }
+  const sidebar = await page.evaluate(sidebarReach)
+  if (sidebar) failures.push(`${where} · nav[aria-label=Places]: ${sidebar}`)
   const found = await page.evaluate(measure, { controls: CONTROLS, exceptions: UI.exceptions, target: UI.target })
   for (const s of found.overflow) failures.push(`${where} · ${s}: overflows the page horizontally`)
   for (const t of found.targets) {

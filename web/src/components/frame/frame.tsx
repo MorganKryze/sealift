@@ -54,27 +54,30 @@ export function Frame({ side, places, instance, instanceWarning, user, crumbs, c
       >
         Skip to content
       </a>
-      <nav aria-label="Places" className="sticky top-0 z-30 flex h-screen flex-col items-center gap-1 border-r border-rule bg-canvas px-1.5 py-3.5">
-        <span className="mb-3 grid size-10 place-items-center">
-          <BrandMark size={28} />
-        </span>
-        <ul className="flex flex-col items-center gap-1">
-          {places.map((place) => (
-            <li key={place.to}>
-              <PlaceLink place={place} current={place.to === current} />
-            </li>
-          ))}
-        </ul>
-        <div className="mt-auto flex flex-col items-center gap-2.5">
-          <PlaceLink place={instance} current={instance.to === current} warning={instanceWarning} />
-          {user ? (
-            <span title={user} className="grid size-8 place-items-center rounded-full bg-sel text-[11.5px] font-semibold text-ink">
-              <span aria-hidden="true">{initials(user)}</span>
-              <span className="sr-only">Signed in as {user}</span>
-            </span>
-          ) : null}
-        </div>
-      </nav>
+      {/* The column paints the sidebar down the whole page; the nav inside stays on screen. */}
+      <div className="border-r border-rule bg-canvas">
+        <nav aria-label="Places" className="sticky top-0 z-30 flex h-screen flex-col items-center gap-1 px-1.5 py-3.5">
+          <span className="mb-3 grid size-10 place-items-center">
+            <BrandMark size={28} />
+          </span>
+          <ul className="flex flex-col items-center gap-1">
+            {places.map((place) => (
+              <li key={place.to}>
+                <PlaceLink place={place} current={place.to === current} />
+              </li>
+            ))}
+          </ul>
+          <div className="mt-auto flex flex-col items-center gap-2.5">
+            <PlaceLink place={instance} current={instance.to === current} warning={instanceWarning} />
+            {user ? (
+              <span title={user} className="grid size-8 place-items-center rounded-full bg-sel text-[11.5px] font-semibold text-ink">
+                <span aria-hidden="true">{initials(user)}</span>
+                <span className="sr-only">Signed in as {user}</span>
+              </span>
+            ) : null}
+          </div>
+        </nav>
+      </div>
       <div className="grid min-w-0 grid-rows-[52px_minmax(0,1fr)]">
         <header className="sticky top-0 z-20 flex min-w-0 items-center justify-between gap-3 border-b border-rule bg-bg px-5">
           <nav aria-label="Breadcrumb" className="min-w-0">
