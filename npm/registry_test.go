@@ -5,11 +5,13 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,6 +66,31 @@ func TestPackument(t *testing.T) {
 
 	if _, err := testClient(srv.URL).Packument(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing package: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestEnginesKeepsTheStringValues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want Engines
+	}{
+		{name: "all strings", doc: `{"node": ">=18", "npm": ">=9"}`, want: Engines{"node": ">=18", "npm": ">=9"}},
+		{name: "one value is a number", doc: `{"node": ">=18", "npm": 7}`, want: Engines{"node": ">=18"}},
+		{name: "node is not a string", doc: `{"node": 18, "npm": ">=9"}`, want: Engines{"npm": ">=9"}},
+		{name: "only value is not a string", doc: `{"node": {"min": 18}}`, want: Engines{}},
+		{name: "array", doc: `["node >= 0.4"]`, want: nil},
+		{name: "null", doc: `null`, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var e Engines
+			if err := json.Unmarshal([]byte(tc.doc), &e); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if len(e) != len(tc.want) || (len(e) > 0 && !reflect.DeepEqual(e, tc.want)) {
+				t.Errorf("Engines = %#v, want %#v", e, tc.want)
+			}
+		})
 	}
 }
 
