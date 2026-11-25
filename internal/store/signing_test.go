@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -718,5 +719,55 @@ func TestReplaceSigningKeyRefusesAKeyThatDoesNotRead(t *testing.T) {
 	}
 	if got := snapshot(t, keyPath(root)); got != "not a key" {
 		t.Errorf("the key file changed to %q", got)
+	}
+}
+
+// Two regenerates that overlap must each report the key they replaced, so
+// the replaced keys form one chain with no key reported twice.
+func TestReplaceSigningKeySerialisesOverlappingCalls(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := s.SigningKey().PublicKeySHA256
+	afterOldKeyRead = func() { time.Sleep(20 * time.Millisecond) }
+	t.Cleanup(func() { afterOldKeyRead = nil })
+
+	const calls = 4
+	var wg sync.WaitGroup
+	news := make([]string, calls)
+	olds := make([]string, calls)
+	for i := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			key, replaced, err := ReplaceSigningKey(root, os.Getuid())
+			if err != nil {
+				t.Errorf("ReplaceSigningKey: %v", err)
+				return
+			}
+			news[i], olds[i] = key.PublicKeySHA256, replaced
+		}()
+	}
+	wg.Wait()
+
+	next := map[string]string{}
+	for i := range calls {
+		if _, dup := next[olds[i]]; dup {
+			t.Fatalf("two calls report replacing %s", olds[i])
+		}
+		next[olds[i]] = news[i]
+	}
+	at := first
+	for range calls {
+		n, ok := next[at]
+		if !ok {
+			t.Fatalf("no call replaced %s; replaced %v", at, olds)
+		}
+		at = n
+	}
+	if got := s.SigningKey().PublicKeySHA256; got != at {
+		t.Errorf("the key file holds %s, want the last in the chain %s", got, at)
 	}
 }

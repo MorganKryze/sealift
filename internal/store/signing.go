@@ -115,6 +115,17 @@ func (s *Store) SigningKey() SigningKey {
 // does not own it.
 func ReplaceSigningKey(root string, uid int) (key SigningKey, replaced string, err error) {
 	path := filepath.Join(root, "private", signingKeyFile)
+	// Two regenerates that overlap would both read the same old key and
+	// both report it as replaced; the lock makes them take turns.
+	// A volume with no key gets no lock file either.
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return SigningKey{}, "", fmt.Errorf("store: no signing key at %s: check the data volume", path)
+	}
+	unlock, err := lockSigningKey(filepath.Join(root, "private", signingKeyLock))
+	if err != nil {
+		return SigningKey{}, "", err
+	}
+	defer unlock()
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return SigningKey{}, "", fmt.Errorf("store: no signing key at %s: check the data volume", path)
@@ -134,12 +145,38 @@ func ReplaceSigningKey(root string, uid int) (key SigningKey, replaced string, e
 	if err != nil {
 		return SigningKey{}, "", err
 	}
+	if afterOldKeyRead != nil {
+		afterOldKeyRead()
+	}
 	key, err = generateSigningKey(path)
 	if err != nil {
 		return SigningKey{}, "", err
 	}
 	return key, old.PublicKeySHA256, nil
 }
+
+const signingKeyLock = "signing-key.lock"
+
+// lockSigningKey takes an exclusive flock on the lock file at path and
+// returns its release. It never follows a link at path.
+func lockSigningKey(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("store: open signing key lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("store: lock %s: %w", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// afterOldKeyRead is a test's hook between the read of the replaced key and
+// the write of the new one.
+var afterOldKeyRead func()
 
 func (s *Store) signingKeyPath() string {
 	return filepath.Join(s.root, "private", signingKeyFile)
