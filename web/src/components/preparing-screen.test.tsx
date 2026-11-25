@@ -82,7 +82,7 @@ describe("PreparingScreen", () => {
     )
     expect(screen.getByText("sealift")).toBeInTheDocument()
     expect(screen.getByText("Online")).toBeInTheDocument()
-    expect(container.querySelector("svg[viewBox='0 0 40 40']")).not.toBeNull()
+    expect(container.querySelector("svg[viewBox='0 0 16 16']")).not.toBeNull()
     expect(container.innerHTML).not.toMatch(/animate-(enter|pop|stamp|fade)|mark-lift/)
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument()
     expect(screen.getByRole("heading", { level: 1, name: "Preparing this instance" })).toBeInTheDocument()
