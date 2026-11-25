@@ -18,7 +18,8 @@ export function InstancePage({ instance }: { instance: Instance }) {
   const keyAt = items.findIndex((item) => item.name === "signing-key")
   const before = keyAt < 0 ? items : items.slice(0, keyAt)
   const after = keyAt < 0 ? [] : items.slice(keyAt + 1)
-  const warnings = instance.warning ? 1 : 0
+  // The warning marks the database row once it is ready; that row counts as a warning, not as ready.
+  const warnings = instance.warning && items.some((item) => item.name === "trivy-db" && item.state === "ready") ? 1 : 0
   const ready = items.filter((item) => item.state === "ready").length - warnings
   const appearance: [string, ReactNode][] = [
     [

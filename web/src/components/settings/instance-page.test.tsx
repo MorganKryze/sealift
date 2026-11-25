@@ -72,7 +72,8 @@ describe("InstancePage", () => {
       const item = within(ready).getByRole("heading", { name: title }).closest("li") as HTMLElement
       expect(within(item).getByText(figure)).toHaveClass("figure")
     }
-    expect(within(ready).getByRole("heading", { name: "Signing key" })).toBeInTheDocument()
+    expect(within(ready).getByRole("heading", { level: 2, name: "Ready" })).toBeInTheDocument()
+    expect(within(ready).getByRole("heading", { level: 3, name: "Signing key" })).toBeInTheDocument()
     expect(within(ready).getByText("5 items ready")).toBeInTheDocument()
   })
 
@@ -83,6 +84,13 @@ describe("InstancePage", () => {
     expect(row).toHaveTextContent("CVE database")
     expect(within(region("Ready")).getByText("4 items ready")).toBeInTheDocument()
     expect(within(region("Ready")).getByText("1 warning")).toHaveClass("tinted-warn")
+  })
+
+  it("counts a warning only on the database row it marks", async () => {
+    const preparing = INSTANCE.preparing.map((item) => (item.name === "trivy-db" ? { name: "trivy-db" as const, state: "preparing" as const } : item))
+    await renderPage({ ...INSTANCE, preparing, warning: WARNING })
+    expect(within(region("Ready")).getByText("4 items ready")).toBeInTheDocument()
+    expect(within(region("Ready")).queryByText("1 warning")).toBeNull()
   })
 
   it("shows ephemeral mode and its idle delay", async () => {
