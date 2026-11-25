@@ -116,6 +116,9 @@ export const UI = {
     "/sessions/demo/review",
     "/sessions/demo/export",
     "/sessions/missing/review",
+    "/projects",
+    "/projects/web-portal",
+    "/projects/pipeline",
   ],
   // A page with a control pressed first: the state is checked as a route is. `opens` names the role
   // and name the pressed control must bring up.

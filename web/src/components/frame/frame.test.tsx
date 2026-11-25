@@ -63,7 +63,7 @@ describe("Frame", () => {
     expect(placeLink("Home")).toHaveAttribute("aria-current", "page")
     expect(placeLink("Instance")).not.toHaveAttribute("aria-current")
     const links = within(places()).getAllByRole("link")
-    expect(links.map((l) => l.textContent)).toEqual(["Home", "Instance"])
+    expect(links.map((l) => l.textContent)).toEqual(["Home", "Projects", "Instance"])
     expect(placeLink("Instance")).toHaveAttribute("href", "/settings")
   })
 
