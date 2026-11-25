@@ -333,6 +333,17 @@ describe("places and crumbs", () => {
     expect(onlineCrumbs("/projects/web-portal", project)).toEqual([{ label: "Projects", to: "/projects" }, { label: "web-portal" }])
   })
 
+  it("names an older crossing opened by its id, not the latest", () => {
+    const project = webPortal()
+    const older = project.analyses?.find((a) => a.createdAt === local(11, 6))
+    expect(onlineCrumbs("/sessions/web-portal/analysis", project, older?.id)).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 6 Nov" }])
+    expect(onlineCrumbs("/sessions/web-portal/analysis", project, "gone")).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 20 Nov · 2" }])
+  })
+
+  it("puts Update under Home", () => {
+    expect(onlineCrumbs("/update")).toEqual([{ label: "Home", to: "/" }, { label: "Update" }])
+  })
+
   it("lists Home and Projects, both in the route tree", () => {
     expect(ONLINE_PLACES.map((p) => p.label)).toEqual(["Home", "Projects"])
     const paths = new Set(Object.keys(createRouter({ routeTree }).routesByPath))
