@@ -35,7 +35,7 @@ function currentPlace(pathname: string, places: Place[]): string | undefined {
 }
 
 /** Up to two letters for the signed-in user: the first of each of two parts split on a dot, an underscore, a hyphen or a space, else the first two. */
-function initials(user: string): string {
+export function initials(user: string): string {
   const parts = user.split(/[._\-\s]+/).filter(Boolean)
   const letters = parts.length >= 2 ? parts[0][0] + parts[1][0] : user.slice(0, 2)
   return letters.toUpperCase()
