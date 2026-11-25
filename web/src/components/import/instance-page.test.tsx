@@ -163,6 +163,19 @@ describe("OfflineInstancePage", () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps a pasted key out of storage and out of the address", async () => {
+    await renderInstance()
+    const stored = { ...localStorage }
+    const { search, hash } = window.location
+    fireEvent.click(compare())
+    fireEvent.change(field()!, { target: { value: TRUSTED } })
+    expect({ ...localStorage }).toEqual(stored)
+    expect(sessionStorage.length).toBe(0)
+    expect(window.location.search).toBe(search)
+    expect(window.location.hash).toBe(hash)
+    expect(JSON.stringify({ ...localStorage })).not.toContain(TRUSTED)
+  })
+
   it("shows the user, the bucket and both folders", async () => {
     await renderInstance()
     const folders = screen.getByRole("heading", { level: 2, name: "Your folders" }).closest("section")!
