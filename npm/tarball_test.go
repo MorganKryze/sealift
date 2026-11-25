@@ -79,9 +79,26 @@ func TestPackFileNameRefusesPathParts(t *testing.T) {
 		{"../express", "1.0.0"},
 		{"@scope/../x", "1.0.0"},
 		{"", "1.0.0"},
+		{"express", `1.0.0\..\x`},
+		{"express", "1.0.0\x00"},
+		{"express", "/etc/passwd"},
+		{"express", "."},
+		{`a\b`, "1.0.0"},
+		{"@scope/..", "1.0.0"},
 	} {
 		if got, err := PackFileName(tc.name, tc.version); err == nil {
 			t.Errorf("PackFileName(%q, %q) = %q, want an error", tc.name, tc.version, got)
+		}
+	}
+}
+
+func TestPackFileNameKeepsPrereleaseAndBuild(t *testing.T) {
+	for version, want := range map[string]string{
+		"1.0.0-rc.1":    "express-1.0.0-rc.1.tgz",
+		"1.0.0+build.5": "express-1.0.0+build.5.tgz",
+	} {
+		if got, err := PackFileName("express", version); err != nil || got != want {
+			t.Errorf("PackFileName(express, %q) = %q, %v, want %q", version, got, err, want)
 		}
 	}
 }
