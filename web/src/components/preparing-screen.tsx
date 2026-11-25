@@ -6,7 +6,7 @@ import { getInstance, type Instance } from "@/api/settings"
 import { Fingerprint } from "@/components/fingerprint/fingerprint"
 import { BrandMark, BrandProvider, ContactCard, DEFAULT_BRAND, SideLabel, useBrand } from "@/components/frame/brand"
 import { Button } from "@/components/ui/button"
-import { formatDbDate } from "@/lib/format-tools"
+import { dbDateTitle, formatDbDate } from "@/lib/format-tools"
 import { cn } from "@/lib/utils"
 
 type Item = Instance["preparing"][number]
@@ -130,6 +130,7 @@ export function ReadinessList({ items, warning }: { items: Instance["preparing"]
                   <h2 className="text-sm font-semibold text-ink">{TITLES[item.name]}</h2>
                   <ItemState item={item} />
                 </div>
+                {item.state === "ready" ? <Proof item={item} /> : null}
                 {item.state === "failed" && item.reason ? <Cause text={item.reason} /> : null}
                 {warned ? <p className="text-sm text-ink-2 [overflow-wrap:anywhere]">{warning}</p> : null}
               </div>
@@ -143,6 +144,23 @@ export function ReadinessList({ items, warning }: { items: Instance["preparing"]
   )
 }
 
+// What a ready item proves, under its title.
+function Proof({ item }: { item: Item }) {
+  if (item.name === "trivy-db" && item.version) {
+    const title = dbDateTitle(item.version)
+    if (!title) return <p className="text-sm text-muted">Never downloaded</p>
+    return (
+      <p className="text-sm text-muted">
+        Updated{" "}
+        <span title={title} className="font-semibold text-ink">
+          {formatDbDate(item.version)}
+        </span>
+      </p>
+    )
+  }
+  return null
+}
+
 function StateIcon({ state }: { state: Item["state"] }) {
   if (state === "ready") return <CircleCheck aria-hidden="true" className="mt-0.5 size-4.5 text-ok" />
   if (state === "failed") return <CircleX aria-hidden="true" className="mt-0.5 size-4.5 text-bad" />
@@ -151,7 +169,7 @@ function StateIcon({ state }: { state: Item["state"] }) {
 
 function ItemState({ item }: { item: Item }) {
   if (item.state === "ready") {
-    const figure = item.name === "trivy-db" ? (item.version ? formatDbDate(item.version) : null) : item.name === "signing-key" ? null : item.version
+    const figure = item.name === "trivy-db" || item.name === "signing-key" ? null : item.version
     return (
       <span className="inline-flex items-center gap-2 text-sm">
         {figure ? <span className="figure font-mono text-[12.5px] text-ink">{figure}</span> : null}

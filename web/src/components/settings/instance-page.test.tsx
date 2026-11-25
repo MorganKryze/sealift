@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getInstance, getSigningKey, type Instance } from "@/api/settings"
 import { InstancePage } from "@/components/settings/instance-page"
-import { formatDbDate } from "@/lib/format-tools"
+import { dbDateTitle, formatDbDate } from "@/lib/format-tools"
 import { routeTree } from "@/routeTree.gen"
 
 vi.mock("@/api/settings", async () => {
@@ -65,13 +65,17 @@ describe("InstancePage", () => {
     const ready = region("Ready")
     for (const [title, figure] of [
       ["Trivy", "0.76.2"],
-      ["CVE database", formatDbDate(DB_DATE)],
       ["pnpm", "10.34.5"],
       ["uv", "0.13.7"],
     ]) {
       const item = within(ready).getByRole("heading", { name: title }).closest("li") as HTMLElement
       expect(within(item).getByText(figure)).toHaveClass("figure")
     }
+    const db = within(ready).getByRole("heading", { name: "CVE database" }).closest("li") as HTMLElement
+    const age = within(db).getByText(formatDbDate(DB_DATE))
+    expect(age.closest("p")).toHaveTextContent(`Updated ${formatDbDate(DB_DATE)}`)
+    expect(age).toHaveAttribute("title", dbDateTitle(DB_DATE))
+    expect(age).toHaveClass("font-semibold")
     expect(within(ready).getByRole("heading", { level: 2, name: "Ready" })).toBeInTheDocument()
     expect(within(ready).getByRole("heading", { level: 3, name: "Signing key" })).toBeInTheDocument()
     expect(within(ready).getByText("5 items ready")).toBeInTheDocument()
