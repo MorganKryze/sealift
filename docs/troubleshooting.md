@@ -123,7 +123,7 @@ The export packed the archive but could not sign its manifest. The export fails 
 
 ### Signed with a key replaced since
 
-The done screen says an archive carries a key you regenerated after the export. The import refuses it once it trusts the new key. Press **Export another selection**, or run the same selection again, and carry the new files.
+The done screen says an archive carries a key replaced after the export, by `sealift signing-key regenerate`. The import refuses it once it trusts the new key. Press **Export another selection**, or run the same selection again, and carry the new files.
 
 ### Not signed: sealift 0.4.0 or earlier exported this archive
 
@@ -165,9 +165,13 @@ sealift exits at start because `projects/` in its data directory is a symbolic l
 
 ### store: signing key cannot be read
 
-sealift stops at start, naming the file, when `private/signing-key.pem` exists in the data volume and cannot be read, is not a PEM private key or is not an Ed25519 key. The messages read `store: signing key <path> cannot be read`, `store: signing key <path> is not a PEM private key` and `store: signing key <path> is not an Ed25519 key`. sealift never replaces the file by itself, because a silent new key would make the import side refuse every archive.
+sealift stops at start, naming the file, when `private/signing-key.pem` exists in the data volume and cannot be read, is not a regular file, is not a PEM private key or is not an Ed25519 key. The messages read `store: signing key <path> cannot be read`, `store: signing key <path> is not a regular file`, `store: signing key <path> is not a PEM private key` and `store: signing key <path> is not an Ed25519 key`. sealift never replaces the file by itself, because a silent new key would make the import side refuse every archive.
 
 For `cannot be read`, the key is usually intact and the file's owner or mode is wrong, as after a volume restored or copied by another user. Stop sealift, then give `private/signing-key.pem` to the user the image runs as, `app` (uid 10000), with mode 0600 inside `private/` at mode 0700 (`chown 10000:10000` and `chmod 0600`), and start again. Do not remove the file: it is the only copy of the private key.
+
+For `is not a regular file`, a link, a directory or a device sits at the key's name. Put the key file itself there.
+
+A key damaged while sealift runs does not stop it. `/healthz` answers 503 with `signing-key` among the items not ready, and every export fails before its first download, with the same message on screen. Fix the file as below; sealift reads it again when it changes.
 
 For `is not a PEM private key` or `is not an Ed25519 key`, the file is damaged or foreign. Restore it from a backup of the volume. When there is none, remove `private/signing-key.pem` by hand and start again: sealift generates a new key, and you carry its public key to the import side before the next crossing. [Deployment](deployment.md#the-key-the-import-trusts) covers a lost volume.
 
@@ -185,7 +189,7 @@ The reason ends with the first rule the file breaks: it is larger than 4096 byte
 
 ### the manifest is signed by another key
 
-The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 on the connected side's Instance page. When they are equal, the connected side regenerated its key: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
+The full reason reads `the manifest is signed by another key, public key sha256 <named>; this import trusts <trusted>. If the connected side regenerated its key, carry its new public key here; otherwise export the archive again`. The two values are the sha256 of the key that signed and of the key the import trusts. Compare the first with the Public key sha256 on the connected side's Instance page. When they are equal, someone ran `sealift signing-key regenerate` on the connected side: carry its new public key to the file `publicKeyFile` names, and start the import again. When they differ, this archive came from another sealift: do not import it.
 
 ### the signature does not match the manifest
 

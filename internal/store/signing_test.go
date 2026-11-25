@@ -16,7 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/MorganKryze/sealift/archive"
 )
@@ -95,12 +98,11 @@ func TestOpenRefusesADamagedSigningKey(t *testing.T) {
 		prepare func(t *testing.T, path string)
 		problem string
 	}{
-		{"unreadable", func(t *testing.T, path string) {
-			// A directory where the file should be: reading it fails.
+		{"a directory", func(t *testing.T, path string) {
 			if err := os.Mkdir(path, 0o700); err != nil {
 				t.Fatal(err)
 			}
-		}, "cannot be read"},
+		}, "is not a regular file"},
 		{"empty", func(t *testing.T, path string) { write(t, path, nil) }, "is not a PEM private key"},
 		{"not PEM", func(t *testing.T, path string) { write(t, path, []byte("hello")) }, "is not a PEM private key"},
 		{"a public key", func(t *testing.T, path string) {
@@ -233,7 +235,7 @@ func TestSigningKeyNeverPrints(t *testing.T) {
 	}
 }
 
-func TestRegenerateSigningKey(t *testing.T) {
+func TestReplaceSigningKeyWritesANewPairAndReturnsTheReplacedSha(t *testing.T) {
 	root := t.TempDir()
 	s, err := Open(root)
 	if err != nil {
@@ -242,15 +244,15 @@ func TestRegenerateSigningKey(t *testing.T) {
 	old := s.SigningKey()
 	oldBytes := snapshot(t, keyPath(root))
 
-	got, err := s.RegenerateSigningKey()
+	got, replaced, err := ReplaceSigningKey(root, os.Getuid())
 	if err != nil {
-		t.Fatalf("RegenerateSigningKey: %v", err)
+		t.Fatalf("ReplaceSigningKey: %v", err)
 	}
 	if got.PublicKeySHA256 == old.PublicKeySHA256 || got.PublicPEM == old.PublicPEM {
-		t.Error("regenerate gave the same public key")
+		t.Error("the replacement gave the same public key")
 	}
-	if now := s.SigningKey(); now.PublicKeySHA256 != got.PublicKeySHA256 {
-		t.Errorf("SigningKey() = %s, want the regenerated %s", now.PublicKeySHA256, got.PublicKeySHA256)
+	if replaced != old.PublicKeySHA256 {
+		t.Errorf("replaced = %s, want the old key's %s", replaced, old.PublicKeySHA256)
 	}
 	if snapshot(t, keyPath(root)) == oldBytes {
 		t.Error("the key file still holds the old key")
@@ -262,25 +264,68 @@ func TestRegenerateSigningKey(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("key file mode = %o, want 600", info.Mode().Perm())
 	}
+	leftovers, _ := filepath.Glob(filepath.Join(root, "private", ".signing-key.pem.tmp-*"))
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left behind: %v", leftovers)
+	}
 	reopened, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reopened.SigningKey().PublicKeySHA256 != got.PublicKeySHA256 {
-		t.Error("a restart after a regenerate loaded another key")
+		t.Error("a restart after a replacement loaded another key")
 	}
 }
 
-func TestRegenerateKeepsTheKeyOnAWriteFailure(t *testing.T) {
+func TestReplaceSigningKeyRefusesAVolumeWithNoKey(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "private"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := ReplaceSigningKey(root, os.Getuid())
+	if err == nil {
+		t.Fatal("ReplaceSigningKey wrote a key on a volume that held none")
+	}
+	if !strings.Contains(err.Error(), keyPath(root)) || !strings.Contains(err.Error(), "no signing key") {
+		t.Errorf("error %q does not say no signing key is at %s", err, keyPath(root))
+	}
+	if _, err := os.Stat(keyPath(root)); !os.IsNotExist(err) {
+		t.Errorf("a key file appeared: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "private"))
+	if err != nil || len(entries) != 0 {
+		t.Errorf("private/ holds %v, %v, want nothing", entries, err)
+	}
+}
+
+func TestReplaceSigningKeyRefusesAnotherOwner(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, keyPath(root))
+
+	_, _, err := ReplaceSigningKey(root, os.Getuid()+1)
+	if err == nil {
+		t.Fatal("ReplaceSigningKey replaced a key another user owns")
+	}
+	owner := fmt.Sprintf("belongs to uid %d", os.Getuid())
+	if !strings.Contains(err.Error(), keyPath(root)) || !strings.Contains(err.Error(), owner) {
+		t.Errorf("error %q does not name the file and say it %s", err, owner)
+	}
+	if snapshot(t, keyPath(root)) != before {
+		t.Error("the key file changed")
+	}
+}
+
+func TestReplaceSigningKeyLeavesTheOldKeyWholeOnAWriteFailure(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes through a read-only directory")
 	}
 	root := t.TempDir()
-	s, err := Open(root)
-	if err != nil {
+	if _, err := Open(root); err != nil {
 		t.Fatal(err)
 	}
-	old := s.SigningKey()
 	oldBytes := snapshot(t, keyPath(root))
 	private := filepath.Join(root, "private")
 	if err := os.Chmod(private, 0o500); err != nil {
@@ -288,21 +333,96 @@ func TestRegenerateKeepsTheKeyOnAWriteFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(private, 0o700) })
 
-	if _, err := s.RegenerateSigningKey(); err == nil {
-		t.Fatal("RegenerateSigningKey succeeded in a read-only directory")
+	if _, _, err := ReplaceSigningKey(root, os.Getuid()); err == nil {
+		t.Fatal("ReplaceSigningKey succeeded in a read-only directory")
 	} else if !strings.Contains(err.Error(), "private") {
 		t.Errorf("error %q does not name the directory", err)
-	}
-	if now := s.SigningKey(); now.PublicKeySHA256 != old.PublicKeySHA256 {
-		t.Errorf("the key in use changed to %s after a failed write", now.PublicKeySHA256)
 	}
 	if snapshot(t, keyPath(root)) != oldBytes {
 		t.Error("the key file changed after a failed write")
 	}
 }
 
+func TestARunningStoreTakesTheReplacedKey(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := s.SigningKey()
+	replacement, _, err := ReplaceSigningKey(root, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := s.SigningKey()
+	if now.PublicKeySHA256 != replacement.PublicKeySHA256 || now.PublicPEM != replacement.PublicPEM {
+		t.Fatalf("SigningKey() = %s, want the replacement %s (was %s)", now.PublicKeySHA256, replacement.PublicKeySHA256, old.PublicKeySHA256)
+	}
+	if err := now.Err(); err != nil {
+		t.Fatalf("Err() = %v on a key that reads", err)
+	}
+	manifest := []byte("{}")
+	file, err := now.SignManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.CheckSignature(manifest, file, publicKeyOf(t, replacement)); err != nil {
+		t.Errorf("the signature does not verify with the replacement: %v", err)
+	}
+}
+
+func TestARunningStoreSignsNothingWithAKeyFileThatDoesNotRead(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SigningKey()
+	write(t, keyPath(root), []byte("not a key"))
+
+	key := s.SigningKey()
+	if err := key.Err(); err == nil || !strings.Contains(err.Error(), keyPath(root)) {
+		t.Errorf("Err() = %v, want an error naming %s", err, keyPath(root))
+	}
+	if _, err := key.SignManifest([]byte("{}")); err == nil {
+		t.Error("a key file that does not read signed a manifest")
+	} else if !strings.Contains(err.Error(), keyPath(root)) {
+		t.Errorf("SignManifest error %q does not name the file", err)
+	}
+	if key.PublicKeySHA256 != "" || key.PublicPEM != "" {
+		t.Errorf("public fields = %q, %q, want empty", key.PublicKeySHA256, key.PublicPEM)
+	}
+}
+
+func TestARunningStoreTakesTheKeyBackWhenTheFileReadsAgain(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := snapshot(t, keyPath(root))
+	want := s.SigningKey()
+	write(t, keyPath(root), []byte("not a key"))
+	if s.SigningKey().Err() == nil {
+		t.Fatal("the damaged file was not noticed")
+	}
+	write(t, keyPath(root), []byte(good))
+
+	got := s.SigningKey()
+	if err := got.Err(); err != nil {
+		t.Fatalf("Err() = %v after the file read again", err)
+	}
+	if got.PublicKeySHA256 != want.PublicKeySHA256 {
+		t.Errorf("SigningKey() = %s, want %s", got.PublicKeySHA256, want.PublicKeySHA256)
+	}
+	if _, err := got.SignManifest([]byte("{}")); err != nil {
+		t.Errorf("SignManifest: %v", err)
+	}
+}
+
 func TestSigningKeyIsSafeForConcurrentUse(t *testing.T) {
-	s, err := Open(t.TempDir())
+	root := t.TempDir()
+	s, err := Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,15 +430,15 @@ func TestSigningKeyIsSafeForConcurrentUse(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 20 {
-			if _, err := s.RegenerateSigningKey(); err != nil {
+			if _, _, err := ReplaceSigningKey(root, os.Getuid()); err != nil {
 				t.Error(err)
 				return
 			}
 		}
 	}()
 	for range 200 {
-		if k := s.SigningKey(); len(k.PublicKeySHA256) != 64 {
-			t.Fatalf("a torn read: %q", k.PublicKeySHA256)
+		if k := s.SigningKey(); len(k.PublicKeySHA256) != 64 || k.Err() != nil {
+			t.Fatalf("a torn read: %q, %v", k.PublicKeySHA256, k.Err())
 		}
 	}
 	<-done
@@ -450,5 +570,204 @@ func TestWriteFile(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Errorf("directory holds %d entries after the writes, want only the file", len(entries))
+	}
+}
+
+// pemOfNewKey returns a fresh Ed25519 key's PEM and its public sha256.
+func pemOfNewKey(t *testing.T) ([]byte, string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), archive.PublicKeySHA256(pub)
+}
+
+func TestARunningStoreNoticesAnInPlaceRewriteWithTheSameMtime(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SigningKey()
+	info, err := os.Stat(keyPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, sha := pemOfNewKey(t)
+	if int64(len(data)) != info.Size() {
+		t.Fatalf("the new key runs %d bytes, the old %d: the test needs the same size", len(data), info.Size())
+	}
+	f, err := os.OpenFile(keyPath(root), os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(keyPath(root), info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.SigningKey(); got.Err() != nil || got.PublicKeySHA256 != sha {
+		t.Errorf("SigningKey() = %s (err %v), want the rewritten key %s", got.PublicKeySHA256, got.Err(), sha)
+	}
+}
+
+// plantFIFO replaces path with a named pipe, or skips the test where the
+// platform has none.
+func plantFIFO(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("no named pipes here: %v", err)
+	}
+}
+
+func TestARunningStoreIsNotBlockedByAPipeAtTheKeyPath(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SigningKey()
+	plantFIFO(t, keyPath(root))
+
+	got := make(chan SigningKey, 1)
+	go func() { got <- s.SigningKey() }()
+	select {
+	case key := <-got:
+		if err := key.Err(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("Err() = %v, want one saying the key is not a regular file", err)
+		}
+	case <-time.After(2 * time.Second):
+		// Opening the pipe for writing frees the blocked reader.
+		if f, err := os.OpenFile(keyPath(root), os.O_WRONLY, 0); err == nil {
+			f.Close()
+		}
+		t.Fatal("SigningKey blocked on a named pipe")
+	}
+}
+
+func TestReplaceSigningKeyRefusesAPathThatIsNotARegularFile(t *testing.T) {
+	rows := []struct {
+		name  string
+		plant func(t *testing.T, path string)
+	}{
+		{"a FIFO", func(t *testing.T, path string) { plantFIFO(t, path) }},
+		{"a symlink to a key", func(t *testing.T, path string) {
+			target := filepath.Join(t.TempDir(), "elsewhere.pem")
+			data, _ := pemOfNewKey(t)
+			write(t, target, data)
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := Open(root); err != nil {
+				t.Fatal(err)
+			}
+			row.plant(t, keyPath(root))
+			before, err := os.Lstat(keyPath(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			done := make(chan error, 1)
+			go func() { _, _, err := ReplaceSigningKey(root, os.Getuid()); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+					t.Errorf("ReplaceSigningKey = %v, want a refusal saying the key is not a regular file", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("ReplaceSigningKey blocked")
+			}
+			after, err := os.Lstat(keyPath(root))
+			if err != nil || after.Mode() != before.Mode() {
+				t.Errorf("the key path changed: %v, mode %v, was %v", err, after, before.Mode())
+			}
+		})
+	}
+}
+
+func TestReplaceSigningKeyRefusesAKeyThatDoesNotRead(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	write(t, keyPath(root), []byte("not a key"))
+
+	_, _, err := ReplaceSigningKey(root, os.Getuid())
+	if err == nil || !strings.Contains(err.Error(), "is not a PEM private key") {
+		t.Errorf("ReplaceSigningKey = %v, want a refusal naming the damaged key", err)
+	}
+	if got := snapshot(t, keyPath(root)); got != "not a key" {
+		t.Errorf("the key file changed to %q", got)
+	}
+}
+
+// Two regenerates that overlap must each report the key they replaced, so
+// the replaced keys form one chain with no key reported twice.
+func TestReplaceSigningKeySerialisesOverlappingCalls(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := s.SigningKey().PublicKeySHA256
+	afterOldKeyRead = func() { time.Sleep(20 * time.Millisecond) }
+	t.Cleanup(func() { afterOldKeyRead = nil })
+
+	const calls = 4
+	var wg sync.WaitGroup
+	news := make([]string, calls)
+	olds := make([]string, calls)
+	for i := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			key, replaced, err := ReplaceSigningKey(root, os.Getuid())
+			if err != nil {
+				t.Errorf("ReplaceSigningKey: %v", err)
+				return
+			}
+			news[i], olds[i] = key.PublicKeySHA256, replaced
+		}()
+	}
+	wg.Wait()
+
+	next := map[string]string{}
+	for i := range calls {
+		if _, dup := next[olds[i]]; dup {
+			t.Fatalf("two calls report replacing %s", olds[i])
+		}
+		next[olds[i]] = news[i]
+	}
+	at := first
+	for range calls {
+		n, ok := next[at]
+		if !ok {
+			t.Fatalf("no call replaced %s; replaced %v", at, olds)
+		}
+		at = n
+	}
+	if got := s.SigningKey().PublicKeySHA256; got != at {
+		t.Errorf("the key file holds %s, want the last in the chain %s", got, at)
 	}
 }

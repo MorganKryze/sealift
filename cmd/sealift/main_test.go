@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -521,69 +526,259 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-func TestServerServesItsSigningKey(t *testing.T) {
-	localUpstreams(t)
-	addr := freeAddr(t)
-	root := filepath.Join(t.TempDir(), "data")
-	done := make(chan error, 1)
-	go func() { done <- run(addr, root, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
-
-	var resp *http.Response
-	var err error
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if resp, err = http.Get("http://" + addr + "/api/signing-key"); err == nil {
-			break
-		}
-	}
+// signingKeyGET answers the running server's GET /api/signing-key.
+func signingKeyGET(t *testing.T, addr string) (status int, sha string) {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/api/signing-key")
 	if err != nil {
-		t.Fatalf("the signing key was never served: %v", err)
+		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	var key struct{ PublicKeyPem, PublicKeySha256 string }
 	if err := json.NewDecoder(resp.Body).Decode(&key); err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(key.PublicKeyPem, "-----BEGIN PUBLIC KEY-----") || len(key.PublicKeySha256) != 64 {
-		t.Errorf("status %d, key %+v: want 200 and a public key with its sha256", resp.StatusCode, key)
+	return resp.StatusCode, key.PublicKeySha256
+}
+
+// printedSHA256 returns the sha256 a successful regenerate printed first.
+func printedSHA256(t *testing.T, stdout string) string {
+	t.Helper()
+	first, _, _ := strings.Cut(stdout, "\n")
+	sha, ok := strings.CutPrefix(first, "public key sha256 ")
+	if !ok || len(sha) != 64 {
+		t.Fatalf("first line %q does not give the public key sha256", first)
+	}
+	return sha
+}
+
+func TestServerTakesARegeneratedKeyWithNoRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	addr, stop := startRun(t, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer stop()
+
+	status, before := signingKeyGET(t, addr)
+	if status != http.StatusOK || len(before) != 64 {
+		t.Fatalf("GET = %d %q, want 200 and a public key sha256", status, before)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	printed := printedSHA256(t, stdout.String())
+	if printed == before {
+		t.Fatal("the command printed the key it replaced")
+	}
+	if status, now := signingKeyGET(t, addr); status != http.StatusOK || now != printed {
+		t.Errorf("GET after the command = %d %s, want 200 %s", status, now, printed)
 	}
 	info, err := os.Stat(filepath.Join(root, "private", "signing-key.pem"))
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("key file: %v, mode %v, want 0600", err, info)
 	}
 
-	// The listen address's own host may regenerate, a foreign Host may not.
-	post := func(host string) int {
-		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/api/signing-key/regenerate", strings.NewReader("{}"))
-		req.Header.Set("Content-Type", "application/json")
-		req.Host = host
-		r, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		r.Body.Close()
-		return r.StatusCode
-	}
-	if got := post("evil.example:1"); got != http.StatusForbidden {
-		t.Errorf("a foreign Host got status %d, want 403", got)
-	}
-	if got := post(addr); got != http.StatusOK {
-		t.Errorf("the listen address got status %d, want 200", got)
-	}
-
-	p, err := os.FindProcess(os.Getpid())
+	req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/api/signing-key/regenerate", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	r, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Signal(syscall.SIGTERM); err != nil {
+	r.Body.Close()
+	if r.StatusCode != http.StatusGone {
+		t.Errorf("POST regenerate = %d, want 410", r.StatusCode)
+	}
+}
+
+// instanceKeyItem returns the signing-key item GET /api/instance lists.
+func instanceKeyItem(t *testing.T, addr string) (state, version, reason string) {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/api/instance")
+	if err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("run returned %v", err)
+	defer resp.Body.Close()
+	var in struct {
+		Preparing []struct{ Name, State, Version, Reason string }
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&in); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range in.Preparing {
+		if it.Name == "signing-key" {
+			return it.State, it.Version, it.Reason
 		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("run did not return after SIGTERM")
+	}
+	t.Fatalf("GET /api/instance lists no signing-key item: %+v", in.Preparing)
+	return "", "", ""
+}
+
+func TestInstanceAnswerFollowsTheKeyFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	addr, stop := startRun(t, root, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer stop()
+	_, before := signingKeyGET(t, addr)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if state, version, _ := instanceKeyItem(t, addr); state == "ready" && version == before {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the signing key never showed ready")
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	printed := printedSHA256(t, stdout.String())
+	if state, version, _ := instanceKeyItem(t, addr); state != "ready" || version != printed {
+		t.Errorf("signing-key after the regenerate = %s %s, want ready %s", state, version, printed)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "private", "signing-key.pem"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, reason := instanceKeyItem(t, addr); state != "failed" || !strings.Contains(reason, "not a PEM private key") {
+		t.Errorf("signing-key with a broken file = %s %q, want failed naming the cause", state, reason)
+	}
+	resp, err := http.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var health struct{ Missing []string }
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode == http.StatusOK || !slices.Contains(health.Missing, "signing-key") {
+		t.Errorf("/healthz = %d missing %v, want 503 naming the signing key", resp.StatusCode, health.Missing)
+	}
+}
+
+// privateKeyForms lists the forms the private key in root could take in a text.
+func privateKeyForms(t *testing.T, root string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "private", "signing-key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		t.Fatal("no PEM block in the key file")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := parsed.(ed25519.PrivateKey).Seed()
+	body := base64.StdEncoding.EncodeToString(block.Bytes)
+	return []string{
+		string(seed),
+		hex.EncodeToString(seed),
+		base64.StdEncoding.EncodeToString(seed),
+		base64.URLEncoding.EncodeToString(seed),
+		body[24:56],
+	}
+}
+
+func TestSigningKeyRegeneratePrintsTheNewPublicKeyAndTheReplacedSha(t *testing.T) {
+	root := t.TempDir()
+	st, err := store.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := st.SigningKey().PublicKeySHA256
+
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	now := st.SigningKey()
+	if now.PublicKeySHA256 == old {
+		t.Fatal("the key did not change")
+	}
+	want := "public key sha256 " + now.PublicKeySHA256 + "\nreplaced " + old + "\n" + now.PublicPEM
+	if stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if !strings.HasPrefix(now.PublicPEM, "-----BEGIN PUBLIC KEY-----") {
+		t.Errorf("PublicPEM = %q, want a PUBLIC KEY block", now.PublicPEM)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing", stderr.String())
+	}
+}
+
+func TestSigningKeyRegeneratePrintsNoPrivateKey(t *testing.T) {
+	root := t.TempDir()
+	if _, err := store.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	forms := privateKeyForms(t, root)
+
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	forms = append(forms, privateKeyForms(t, root)...)
+	forms = append(forms, "PRIVATE KEY")
+	for name, out := range map[string]string{"stdout": stdout.String(), "stderr": stderr.String()} {
+		for _, bad := range forms {
+			if strings.Contains(out, bad) {
+				t.Errorf("%s holds a form of a private key (%d bytes matched)", name, len(bad))
+			}
+		}
+	}
+}
+
+func TestSigningKeyRegenerateRefusesAVolumeWithNoKey(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	var stdout, stderr bytes.Buffer
+	if code := runSigningKey([]string{"regenerate", "-data", root}, &stdout, &stderr); code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	path := filepath.Join(root, "private", "signing-key.pem")
+	if !strings.Contains(stderr.String(), path) || !strings.Contains(stderr.String(), "no signing key") {
+		t.Errorf("stderr %q does not say no signing key is at %s", stderr.String(), path)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", stdout.String())
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Errorf("the command created %s: %v", root, err)
+	}
+}
+
+func TestSigningKeyUsage(t *testing.T) {
+	root := t.TempDir()
+	if _, err := store.Open(root); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, "private", "signing-key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][]string{
+		"no verb":       nil,
+		"unknown verb":  {"rotate", "-data", root},
+		"unknown flag":  {"regenerate", "-force", "-data", root},
+		"extra word":    {"regenerate", "-data", root, "now"},
+		"flag for verb": {"-data", root},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := runSigningKey(args, &stdout, &stderr); code != 2 {
+				t.Errorf("exit %d, want 2", code)
+			}
+			if !strings.Contains(stderr.String(), "usage: sealift signing-key regenerate [-data <dir>]") {
+				t.Errorf("stderr %q does not give the usage", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want nothing", stdout.String())
+			}
+		})
+	}
+	if after, _ := os.ReadFile(filepath.Join(root, "private", "signing-key.pem")); !bytes.Equal(after, before) {
+		t.Error("a usage error changed the key")
 	}
 }
 

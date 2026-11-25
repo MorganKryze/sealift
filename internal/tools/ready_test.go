@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode"
@@ -78,6 +79,7 @@ type preparation struct {
 	db   *fakeDB
 	root string
 	logs *syncBuffer
+	key  atomic.Pointer[keyAnswer]
 }
 
 type syncBuffer struct {
@@ -116,9 +118,12 @@ func newPreparation(t *testing.T, uvUploaded time.Time) *preparation {
 	m.Arch = "amd64"
 	m.Trivy = gh.pin
 	db := &fakeDB{root: root, at: time.Date(2026, 11, 23, 6, 0, 0, 0, time.UTC)}
-	p := NewPreparer(m, db, func() string { return prepareKey }, preparePnpm, uvTestVersion, slog.New(slog.NewJSONHandler(logs, nil)))
+	pr := &preparation{m: m, db: db, root: root, logs: logs}
+	pr.key.Store(&keyAnswer{sha: prepareKey})
+	p := NewPreparer(m, db, func() (string, error) { a := pr.key.Load(); return a.sha, a.err }, preparePnpm, uvTestVersion, slog.New(slog.NewJSONHandler(logs, nil)))
 	p.RetryEvery = 10 * time.Millisecond
-	return &preparation{p: p, m: m, db: db, root: root, logs: logs}
+	pr.p = p
+	return pr
 }
 
 // run starts the preparer and stops it when the test ends.
@@ -448,14 +453,14 @@ func TestPreparerWaitsForTheSigningKey(t *testing.T) {
 	var mu sync.Mutex
 	asked := 0
 	present := false
-	pr.p.keySHA256 = func() string {
+	pr.p.keySHA256 = func() (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		asked++
 		if present {
-			return prepareKey
+			return prepareKey, nil
 		}
-		return ""
+		return "", nil
 	}
 	pr.run(t)
 
@@ -504,5 +509,30 @@ func TestPreparerRetriesAFailedItemAMinuteLater(t *testing.T) {
 	next := item(r, "trivy-db").NextTry
 	if next.Before(before.Add(time.Minute)) || next.After(after.Add(time.Minute)) {
 		t.Errorf("next try is %v after the start, want one minute after the failure", next.Sub(before).Round(time.Second))
+	}
+}
+
+// keyAnswer is what the fake store's SigningKey gives at one moment.
+type keyAnswer struct {
+	sha string
+	err error
+}
+
+func TestPreparerReadsTheSigningKeyLive(t *testing.T) {
+	pr := newPreparation(t, monthOld)
+	pr.run(t)
+	waitState(t, pr.p, "ready", isReady)
+
+	pr.key.Store(&keyAnswer{sha: "b2" + prepareKey[2:]})
+	if it := item(pr.p.State(), "signing-key"); it.State != ItemReady || it.Version != "b2"+prepareKey[2:] {
+		t.Errorf("signing-key after a regenerate = %+v, want ready with the new sha", it)
+	}
+	pr.key.Store(&keyAnswer{err: errors.New("store: signing key /data/private/signing-key.pem is not a PEM private key")})
+	r := pr.p.State()
+	if it := item(r, "signing-key"); it.State != ItemFailed || !strings.Contains(it.Reason, "not a PEM private key") || it.Version != "" {
+		t.Errorf("signing-key with a broken file = %+v, want failed naming the cause", it)
+	}
+	if r.Ready {
+		t.Error("the instance stays ready with a key file that does not read")
 	}
 }

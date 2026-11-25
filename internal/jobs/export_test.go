@@ -438,7 +438,7 @@ func TestExportRun(t *testing.T) {
 	exportDir2 := filepath.Join(t.TempDir(), "exports", "20260917T101503Z.tmp")
 	exp2 := h.newExport(t, analysisDir, exportDir2, true)
 	keyOfFirst := h.store.SigningKey()
-	if _, err := h.store.RegenerateSigningKey(); err != nil {
+	if _, _, err := store.ReplaceSigningKey(h.root, os.Getuid()); err != nil {
 		t.Fatal(err)
 	}
 	if err := exp2.Run(context.Background(), noopEmit); err != nil {
@@ -848,7 +848,7 @@ func publicKey(t *testing.T, key store.SigningKey) ed25519.PublicKey {
 	return pub.(ed25519.PublicKey)
 }
 
-// TestExportSignsWithTheKeyItStartedWith regenerates the key while the
+// TestExportSignsWithTheKeyItStartedWith replaces the key while the
 // downloads run: the export must still sign with the key it began with.
 func TestExportSignsWithTheKeyItStartedWith(t *testing.T) {
 	h := newTestHarness(t)
@@ -861,7 +861,7 @@ func TestExportSignsWithTheKeyItStartedWith(t *testing.T) {
 	var once sync.Once
 	h.onFetch = func() {
 		once.Do(func() {
-			if _, err := h.store.RegenerateSigningKey(); err != nil {
+			if _, _, err := store.ReplaceSigningKey(h.root, os.Getuid()); err != nil {
 				t.Error(err)
 			}
 		})
@@ -1579,4 +1579,28 @@ func TestExportRefusesBeforeSigningAShippedCVEWithoutFixALeftOutDependencyLists(
 	if _, err := os.Stat(filepath.Join(exportDir, "manifest.json")); !os.IsNotExist(err) {
 		t.Errorf("manifest.json was written: %v", err)
 	}
+}
+
+func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	keyFile := filepath.Join(h.root, "private", "signing-key.pem")
+	if err := os.WriteFile(keyFile, []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fetched := 0
+	h.onFetch = func() { fetched++ }
+
+	err := exp.Run(context.Background(), noopEmit)
+	if err == nil || !strings.Contains(err.Error(), keyFile) {
+		t.Fatalf("Run = %v, want an error naming %s", err, keyFile)
+	}
+	if fetched != 0 {
+		t.Errorf("%d tarballs fetched before the key was checked, want none", fetched)
+	}
+	// Without a failed step the screen would show the failure with no cause.
+	assertExportFailedStatus(t, exportDir, "prepare", keyFile)
 }

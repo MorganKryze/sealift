@@ -137,6 +137,13 @@ func (e *PipExport) Run(ctx context.Context, emit func(Event)) (err error) {
 
 	// One key signs the whole export, whatever a regenerate does meanwhile.
 	key := e.Store.SigningKey()
+	// A key that does not read would fail the signature at the end, after
+	// every download; fail before the first one instead, as a failed
+	// step so the screen shows the cause.
+	if err := key.Err(); err != nil {
+		emitFailedStep(record, "prepare", 0, err)
+		return err
+	}
 
 	pkgs, err := e.packageList(record)
 	if err != nil {
