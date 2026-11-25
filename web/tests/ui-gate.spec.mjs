@@ -468,7 +468,15 @@ for (const state of UI.answers) {
             await p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
             if (state.focus) {
               await p.getByRole(state.focus.role, { name: state.focus.name, exact: true }).focus()
-              await p.getByRole(state.focus.opens.role).waitFor()
+              const opened = p.getByRole(state.focus.opens.role)
+              await opened.waitFor()
+              // What opens must sit above the page: a lower layer lets the content behind show through it.
+              const covered = await opened.evaluate((el) => {
+                const r = el.getBoundingClientRect()
+                const points = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 4, r.top + 4], [r.right - 4, r.bottom - 4]]
+                return points.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).length
+              })
+              if (covered > 0) throw new Error(`${state.focus.opens.role} is covered by the page at ${covered} of 3 points`)
             }
           },
         })

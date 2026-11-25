@@ -54,7 +54,7 @@ export function Frame({ side, places, instance, instanceWarning, user, crumbs, c
       >
         Skip to content
       </a>
-      <nav aria-label="Places" className="sticky top-0 flex h-screen flex-col items-center gap-1 border-r border-rule bg-canvas px-1.5 py-3.5">
+      <nav aria-label="Places" className="sticky top-0 z-30 flex h-screen flex-col items-center gap-1 border-r border-rule bg-canvas px-1.5 py-3.5">
         <span className="mb-3 grid size-10 place-items-center">
           <BrandMark size={28} />
         </span>
