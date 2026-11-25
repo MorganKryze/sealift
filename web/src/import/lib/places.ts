@@ -2,6 +2,9 @@ import { HardDriveDownload, House, ServerCog } from "lucide-react"
 
 import type { Crumb, Place } from "@/components/frame/frame"
 
+// The frame draws the initials for both roles and the app build cannot reach this folder, so the definition lives there.
+export { initials } from "@/components/frame/frame"
+
 export const OFFLINE_PLACES: Place[] = [
   { to: "/", label: "Home", icon: House },
   { to: "/imports", label: "Imports", icon: HardDriveDownload },

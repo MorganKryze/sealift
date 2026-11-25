@@ -71,7 +71,7 @@ async function renderIn(element: ReactNode) {
   const root = createRootRoute({ component: () => <Outlet /> })
   const page = (path: string, component = () => <p>page {path}</p>) => createRoute({ getParentRoute: () => root, path, component })
   const router = createRouter({
-    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/sessions/$sessionId")]),
+    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/sessions/$sessionId"), page("/sessions/$sessionId/analysis")]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   })
   const view = render(
@@ -218,10 +218,15 @@ describe("ProjectPage", () => {
     expect(crossing("web-portal · 18 Nov")).toHaveTextContent("Cancelled")
   })
 
-  it("opens a crossing's own page", async () => {
+  it("opens each crossing on its own analysis", async () => {
     await renderIn(<ProjectPage project={webPortal()} />)
-    const open = within(crossing("web-portal · 18 Nov")).getByRole("link", { name: "Open web-portal · 18 Nov" })
-    expect(open).toHaveAttribute("href", "/sessions/web-portal")
+    for (const [name, at] of [
+      ["web-portal · 18 Nov", local(11, 18)],
+      ["web-portal · 20 Nov", local(11, 20, 9)],
+    ]) {
+      const open = within(crossing(name)).getByRole("link", { name: `Open ${name}` })
+      expect(open).toHaveAttribute("href", `/sessions/web-portal/analysis?analysis=${id(at)}`)
+    }
   })
 
   it("offers each To carry file for download by its full name and all three through Download all", async () => {
@@ -268,7 +273,7 @@ describe("ProjectPage", () => {
 
   it("shows the archive's sha256 as a fingerprint", async () => {
     await renderIn(<ProjectPage project={webPortal()} />)
-    const button = await screen.findByRole("button", { name: "sha256 of packages_npm.tar.gz 9c1e4b7a…3d6f1a3b" })
+    const button = await screen.findByRole("button", { name: "sha256 of packages_npm.tar.gz 9c1e4b7a to 3d6f1a3b" })
     expect(button).toHaveAttribute("aria-expanded", "false")
     expect(screen.getByRole("button", { name: "Copy sha256 of packages_npm.tar.gz" })).toBeInTheDocument()
   })
@@ -309,7 +314,7 @@ describe("ProjectPage", () => {
     const block = title.closest(".tinted-warn") as HTMLElement
     expect(block).not.toBeNull()
     expect(block).toHaveTextContent("Offline refuses this archive unless it still trusts that key.")
-    expect(within(block).getByRole("button", { name: "Key sha256 b7e3d1a9…36f4c218" })).toBeInTheDocument()
+    expect(within(block).getByRole("button", { name: "Key sha256 b7e3d1a9 to 36f4c218" })).toBeInTheDocument()
   })
 
   it("offers no Update or Add on a project", async () => {

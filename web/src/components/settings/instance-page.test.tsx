@@ -47,7 +47,7 @@ async function renderPage(instance: Instance = INSTANCE) {
       <InstancePage instance={instance} />
     </QueryClientProvider>,
   )
-  await screen.findByRole("button", { name: "Public key sha256 3f9a1c7e…0b1d3f5a" })
+  await screen.findByRole("button", { name: "Public key sha256 3f9a1c7e to 0b1d3f5a" })
   return view
 }
 

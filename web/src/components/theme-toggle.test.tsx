@@ -20,6 +20,15 @@ describe("theme toggle", () => {
     expect(radios.filter((r) => r.tabIndex === 0)).toHaveLength(1)
   })
 
+  it("hides each option's icon from assistive technology", () => {
+    render(<ThemeToggle />)
+    for (const radio of screen.getAllByRole("radio")) {
+      const icon = radio.querySelector("svg")
+      expect(icon).not.toBeNull()
+      expect(icon).toHaveAttribute("aria-hidden", "true")
+    }
+  })
+
   it("moves the pick with the arrow keys", () => {
     render(<ThemeToggle />)
     const group = screen.getByRole("radiogroup", { name: "Theme" })

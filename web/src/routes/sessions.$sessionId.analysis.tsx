@@ -5,21 +5,24 @@ import { SessionLoadError } from "@/components/route-error"
 import { getProject } from "@/api/projects"
 import { AnalysisScreen } from "@/components/session/analysis-screen"
 import type { StepId } from "@/components/step-bar"
-import { isJobActive, JOB_POLL_INTERVAL_MS, latestByDate } from "@/lib/utils"
+import { analysisSearch, shownAnalysis } from "@/lib/session-analysis"
+import { isJobActive, JOB_POLL_INTERVAL_MS } from "@/lib/utils"
 
 export const Route = createFileRoute("/sessions/$sessionId/analysis")({
+  validateSearch: analysisSearch,
   component: AnalysisRoute,
 })
 
 function AnalysisRoute() {
   const { sessionId } = Route.useParams()
+  const { analysis: analysisId } = Route.useSearch()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
   const query = useQuery({
     queryKey: ["project", sessionId],
     queryFn: () => getProject(sessionId),
-    refetchInterval: (q) => (isJobActive(latestByDate(q.state.data?.analyses)) ? JOB_POLL_INTERVAL_MS : false),
+    refetchInterval: (q) => (isJobActive(shownAnalysis(q.state.data?.analyses, analysisId)) ? JOB_POLL_INTERVAL_MS : false),
   })
 
   if (query.isPending) {
@@ -34,7 +37,7 @@ function AnalysisRoute() {
     return <SessionLoadError error={query.error} onRetry={() => void query.refetch()} />
   }
 
-  const analysis = latestByDate(query.data.analyses)
+  const analysis = shownAnalysis(query.data.analyses, analysisId)
   if (!analysis) {
     return <p className="p-8 text-muted">No analysis yet.</p>
   }

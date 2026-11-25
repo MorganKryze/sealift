@@ -141,14 +141,14 @@ describe("PreparingScreen", () => {
   it("shows the signing key's sha256 as a fingerprint", () => {
     renderScreen()
     const key = item(/^Signing key$/)
-    expect(within(key).getByRole("button", { name: "Signing key sha256 3f1c9a5e…b9d1f3c5" })).toHaveAttribute("aria-expanded", "false")
+    expect(within(key).getByRole("button", { name: "Signing key sha256 3f1c9a5e to b9d1f3c5" })).toHaveAttribute("aria-expanded", "false")
     expect(within(key).queryByText(SHA)).not.toBeInTheDocument()
   })
 
   it("shows a sha256 inside a cause as a fingerprint and the rest as text", () => {
     renderScreen([{ name: "trivy", version: "0.76.2", state: "failed", reason: `trivy archive: sha256 ${SHA} does not match the pinned one` }])
     const row = item(/^Trivy$/)
-    expect(within(row).getByRole("button", { name: /^sha256 3f1c9a5e…b9d1f3c5$/ })).toBeInTheDocument()
+    expect(within(row).getByRole("button", { name: /^sha256 3f1c9a5e to b9d1f3c5$/ })).toBeInTheDocument()
     expect(row).toHaveTextContent("trivy archive: sha256")
     expect(row).toHaveTextContent("does not match the pinned one")
   })
