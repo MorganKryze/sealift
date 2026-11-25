@@ -12,11 +12,11 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 
 - [Overview](docs/overview.md): the two roles, context and crossing diagrams, the collection and import pipelines, what each check proves, the /data layout, a glossary
 - [Getting started](docs/getting-started.md): docker run, the preparation at start, a first archive from a five-dependency project
-- [Workflow](docs/workflow.md): each screen of a session with every button label
+- [Workflow](docs/workflow.md): the frame and its places, the home with Needs you and In progress, Projects, and each screen of a crossing with every button label
 - [How sealift chooses](docs/how-sealift-chooses.md): CVE vectors by severity, tie-breaks, the current line, jumps, families, reasons, the eight signals, the minimum release age, the review groups
-- [Settings](docs/settings.md): the policy file with every key, default and range, the review rules, the brand, settings saved by 0.7.0, the read-only panel, the signing key
+- [Settings](docs/settings.md): the policy file with every key, default and range, the review rules, the brand, settings saved by 0.7.0, the read-only Instance page, the signing key's fingerprint and How to regenerate
 - [The air gap](docs/air-gap.md): the archive, the signature and the trusted key, the review in the manifest, the reports, sha256 checks, the import, lockfile drift
-- [Importing](docs/importing.md): the import service screens: Archives, Imports and one import, the trusted key, every state and the retry card
+- [Importing](docs/importing.md): the import service screens: the home with Needs you, In progress and Done today, Choose an archive, Imports, one import, Instance with the trusted key and Compare, every state and the retry card
 - [Python projects](docs/python.md): a pip project through the API: requirements files, the target, analysis, export, import and the install from Nexus
 - [Deployment](docs/deployment.md): hardened Compose, capabilities, readiness with /healthz and /livez, the policy overlay, reverse proxy with SSE, outbound hosts, the /data volume, the key the import trusts, upgrades from 0.7.0 and the rollback, backups
 - [Runbook](docs/runbook.md): both sides from nothing to a first import: the drop-in values, Harbor, the Secret, the ingress and oauth2-proxy values, a checklist, upgrades, backups, the worst cases on a shared Nexus repository and the rollback list
@@ -33,5 +33,5 @@ Defaults: minimum release age 14 days (range 1 to 90), resolve parallelism 4 (1 
 - [Ranking](docs/dev/ranking.md): rank.Signals, rank.Best, rank.Propose, rank.Families, rank.KeyVersions, where the analysis calls them, tests
 - [API](docs/dev/api.md): every route, error statuses, the instance answer, the removed routes, export reasons and their refusals, the server-sent event stream
 - [Archive format](docs/dev/archive-format.md): packages_npm.tar.gz, manifest.json fields, manifest.json.sig, what `sealift import` checks
-- [Web](docs/dev/web.md): routes, step bar, job events, checking a screen in a browser
+- [Web](docs/dev/web.md): routes, the frame, places and crumbs, the brand, the fingerprint, the home blocks, the tokens, step bar, job events, the browser gate and its captures
 - [api/openapi.yaml](api/openapi.yaml): the API contract

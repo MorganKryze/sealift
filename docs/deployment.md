@@ -54,7 +54,7 @@ At start, sealift prepares five items, in this order: it checks the signing key,
 {"status":"preparing","missing":["trivy-db","pnpm"]}
 ```
 
-Once all five are ready, it answers 200 with `{"status":"ok"}`. Meanwhile the interface and the API answer: the home shows Preparing sealift, with each item, its state and, for a failed one, its cause and the time of its next try. The home opens by itself once the instance is ready. The API refuses to create a session or start an analysis until Trivy and its database are in place. `GET /api/instance` gives each item's state and cause, as [the API reference](dev/api.md#instance) shows.
+Once all five are ready, it answers 200 with `{"status":"ok"}`. Meanwhile the interface and the API answer: the home shows Preparing this instance, with each item, its state and, for a failed one, its cause and the time of its next try. The home opens by itself once the instance is ready. The API refuses to create a session or start an analysis until Trivy and its database are in place. `GET /api/instance` gives each item's state and cause, as [the API reference](dev/api.md#instance) shows.
 
 A failed item keeps its cause and tries again every minute, with no restart. A failed database refresh leaves the instance ready when an older database is on the volume: `GET /api/instance` then carries a `warning` with the cause and that database's date. Without a database, the instance stays not ready.
 
@@ -215,7 +215,7 @@ The import side holds no key of its own. Carry the public key once, over a chann
 publicKeyFile: public-key.pem
 ```
 
-Take the key from **Download**, or **Copy**, in sealift's Settings, or from `GET /api/signing-key`. The file holds one `PUBLIC KEY` PEM block, at most 4 KiB, with LF or CRLF line endings. `sealift import` and `sealift import-server` exit with code 2 and name `publicKeyFile` when it is absent or unreadable. A relative path resolves from the settings file's directory. Then compare the Public key sha256: sealift's Settings shows it, and the import's Settings sheet and every report show the one the import trusts. Carrying the key through the kiosk with the archive weakens the check, because whoever can forge the archive there can forge the key.
+Take the key from **Download public key** under Signing key on sealift's Instance page, or from `GET /api/signing-key`. The file holds one `PUBLIC KEY` PEM block, at most 4 KiB, with LF or CRLF line endings. `sealift import` and `sealift import-server` exit with code 2 and name `publicKeyFile` when it is absent or unreadable. A relative path resolves from the settings file's directory. Then compare the Public key sha256: sealift's Instance page shows it, and the import side's Instance page, under Trusted key, and every report show the one the import trusts. Carrying the key through the kiosk with the archive weakens the check, because whoever can forge the archive there can forge the key.
 
 A lost volume means a new key. Stop sealift, restore `private/signing-key.pem` from a backup to keep the old one, give the file to the user the image runs as (`app`, uid 10000) with mode 0600 inside `private/` at mode 0700, and start again. A file left with the wrong owner or mode stops sealift with `cannot be read`; fix the owner or mode, and keep the file. Without a backup, sealift generates another key on the next start, and the import side refuses every archive until it receives the new public key, the archives exported before included. The key has no import: a key pair made elsewhere cannot be loaded.
 

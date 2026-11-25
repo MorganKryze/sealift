@@ -8,6 +8,13 @@ afterEach(() => {
 })
 
 describe("copy control", () => {
+  it("compact: an icon button whose only text is its accessible name", () => {
+    render(<CopyControl text={"b".repeat(64)} label="manifest sha256" compact />)
+    const button = screen.getByRole("button", { name: "Copy manifest sha256" })
+    expect(button).toHaveTextContent(/^Copy manifest sha256$/)
+    expect(button.querySelector(":scope > .sr-only")).not.toBeNull()
+  })
+
   it("copies with the clipboard", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })

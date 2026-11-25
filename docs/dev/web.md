@@ -1,6 +1,6 @@
 # Web
 
-This page covers the React interface in `web/`: its routes, the step bar, how screens follow a running job, and how to check a screen in a real browser. [Contributing](../../CONTRIBUTING.md#run-it-locally) shows how to run it.
+This page covers the React interface in `web/`: its routes, the frame and its places, the brand, the shared components, the tokens, the step bar, how screens follow a running job, and how to check a screen in a real browser. [Contributing](../../CONTRIBUTING.md#run-it-locally) shows how to run it.
 
 ## Stack
 
@@ -16,25 +16,60 @@ The collection's routes are file-based, in `web/src/routes/`:
 
 | Route | Screen |
 | --- | --- |
-| `/` | Preparing sealift until the instance is ready, then home: the drop zone, the drop preview, past sessions |
-| `/settings` | Opens the settings panel over home |
+| `/` | Home: Start a crossing, Needs you and In progress |
+| `/update` | Update a project: the drop zone and the drop preview |
+| `/projects` | Projects, newest crossing first or by name |
+| `/projects/$projectId` | A project and its crossings, To carry and Reports |
+| `/instance` | Instance: readiness, policy, signing key, appearance |
+| `/settings` | Redirects to `/instance`, so an old bookmark lands there |
 | `/sessions/$sessionId` | Redirects to the session's most useful step: export when the latest analysis has an export, finished or not, review after a finished analysis, analysis otherwise |
 | `/sessions/$sessionId/drop` | The manifest the session started from |
 | `/sessions/$sessionId/analysis` | The nine steps, the counter, the failure block |
 | `/sessions/$sessionId/review` | The proposal and the selection |
 | `/sessions/$sessionId/export` | The export progress and the archive |
 
+`WhenReady` wraps the root, so every route shows Preparing this instance until the instance is ready.
+
 The import entry has its own tree in `web/src/import/routes/`, with its generated `routeTree.gen.ts` beside it. The server answers these paths with the shell, without a token, and 404 for any other path outside `/api` and `/healthz`:
 
 | Route | Screen |
 | --- | --- |
-| `/` | Archives |
+| `/` | Home: the greeting, Needs you, In progress and Done today |
+| `/import` | Choose an archive; `?start=<key>` opens that archive's start panel |
 | `/imports` | Imports |
 | `/imports/$importId` | One import |
+| `/instance` | Instance: the trusted key with Compare, your folders, appearance |
 
-The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and the settings sheet is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
+The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and a dialog of the import entry is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
 
-A dropped file has no route until the session exists: the drop preview is state on the home screen, and **Analyse** creates the project.
+A dropped file has no route until the session exists: the drop preview is state on the Update screen, and **Analyse** creates the project.
+
+## The frame
+
+`components/frame/frame.tsx` draws every screen but the preparing one, for both roles: a sidebar of places, a top bar with the breadcrumb and the side label, then the page in `<main id="content">`, which **Skip to content** reaches first. A role passes its places, its Instance place and its crumbs:
+
+| Role | Places | Crumbs |
+| --- | --- | --- |
+| Online | `ONLINE_PLACES` in `web/src/lib/places.ts`: Home, Projects; `ONLINE_INSTANCE` | `onlineCrumbs`: a session sits under Home and reads its crossing's name, a project under Projects with its name, Update under Home |
+| Offline | `OFFLINE_PLACES` in `web/src/import/lib/places.ts`: Home, Imports; `OFFLINE_INSTANCE` | `offlineCrumbs`: Choose an archive (`Import`) under Home, an import under Imports |
+
+The current place is the one whose address is the longest start of the path, so a session page lights Home. The Online root passes the instance's `warning`, which draws a mark and a tooltip on Instance. The Offline root passes the signed-in user, drawn as initials (`initials`). The crumb for a project or session reads the same query cache entry as the page, so it costs no request.
+
+## The brand
+
+`components/frame/brand.tsx` holds the brand. `DEFAULT_BRAND` is the only place the defaults are written: `sealift`, `Online`, `Offline`, `PR`, no logo. `BrandProvider` gives a brand to the screens, sets the document title and sets `--brand-light` and `--brand-dark` from the accent. `usableAccent` keeps the accent for a theme only where `contrastRatio` measures 3:1 or more against that theme's page (`PAGE`), and the ink takes its place otherwise. `BrandMark` draws the deployment's logo from `/api/instance/logo`, or sealift's mark. `SideLabel` draws the globe or the plug with the side's name, and `ContactCard` names who to see after a failure. On the Online side `WhenReady` passes the brand from `GET /api/instance`. The import root passes `DEFAULT_BRAND`, because the import service serves no brand.
+
+## The fingerprint
+
+`components/fingerprint/fingerprint.tsx` shows a sha256 as one button with its first and last eight characters; a press opens the whole value in groups of eight, and a copy control beside it copies all 64. Its accessible name stays the same open and closed. `FingerprintCompare` is the field beside a trusted value: `normalizeFingerprint` drops a `sha256:` prefix, colons and spaces and lowers the case, and `compareFingerprint` compares character by character in the browser, which sends nothing. The Online Instance page, the Ready list, a project's archive and the Offline Instance page use it.
+
+## The home blocks
+
+`components/home/blocks.tsx` holds what both homes share. `PathCard` is a path the home starts; the lead one takes the brand's colour as its outline. `RowGroup` is a titled group of rows, newest first as given, showing ten rows, then Show all, which moves focus to the first row it showed; an empty group renders nothing, and `EmptyGroup` names an empty one in words. A `HomeRow` holds a name, a detail, an optional state with its tone (`ok`, `warn`, `bad`, `info`) and one action. `components/home/online-home.tsx` places each project's latest crossing in Needs you or In progress and polls every 5 seconds while one runs. `components/import/offline-home.tsx` places archives and imports in Needs you, In progress and Done today.
+
+## The tokens
+
+`web/src/styles/theme.css` sets every colour in light and dark: the page (`--bg`, `--canvas`), the inks (`--ink`, `--ink-2`, `--muted`, `--faint`), the lines (`--rule`, `--rule-2`, `--field`), the states (`--ok`, `--warn`, `--bad`, `--info`, each with a `-tint` and a `-line`), the severities (`--sev-*`), and `--brand`, which falls back to the ink. `.dark` holds the dark values, and the system's preference applies them when no class is set. `theme.test.ts` measures each text pair at 4.5:1 and each line, field border and severity mark at 3:1, in both themes. The older names (`--accent`, `--background`, `--line`, `--card`, `--severity-*`) remain as aliases of the new values, for the screens not yet redrawn: a new screen uses the new names. `web/src/styles/index.css` adds `.tinted-ok`, `.tinted-warn`, `.tinted-bad` and `.tinted-info`, a tint closed by its line on four sides, and `.figure` for a number the user reads for, in weight 600 with tabular digits.
 
 ## The step bar
 
@@ -55,15 +90,15 @@ Two rules keep the screens steady while events arrive several times a second:
 
 ## The preparing screen
 
-`components/preparing-screen.tsx` holds `WhenReady`, which wraps home at `/`. It reads `GET /api/instance` every 3 seconds until `ready` is true, then shows home and stops asking. Until then it shows Preparing sealift: one row per item the start prepares (Trivy, the vulnerability database, the signing key, pnpm and uv), with its version and its state, Ready, Preparing or Failed. A failed row shows the server's cause and the time of the next try. The screen has no button: the server installs and retries on its own. Each row's state is a polite status that stays mounted across polls, so a screen reader announces each change once.
+`components/preparing-screen.tsx` holds `WhenReady`, which wraps the Online root. It reads `GET /api/instance` every 3 seconds until `ready` is true, then shows the page and stops asking. Until then it shows Preparing this instance: the count ready, then one row per item the start prepares (Trivy, the CVE database, the signing key, pnpm and uv), with its version and its state, Ready, Preparing or Failed. A failed row shows the server's cause and a countdown to the next try, and the page adds `ContactCard`. `ReadinessList` draws the rows, and the Instance page reuses it. The screen has no button: the server installs and retries on its own. Each row's state is a polite status that stays mounted across polls, so a screen reader announces each change once.
 
 ## The reasons block
 
 The server refuses an export that takes a dependency out of its line, or keeps a CVE that no version fixes, unless a reason covers it. `web/src/lib/requiredReasons.ts` reads the same answer the server checks: each selected candidate's `leavesLine`, each dependency's `family`, and each CVE's `fixedIn`. It asks one reason per family or lone jump, and one per dependency whose held version keeps a CVE with an empty or missing `fixedIn`. The export sends `includeProject: false`, so a dependency the selection leaves out holds its current version, and that version's CVEs count. `web/src/components/session/reasons-block.tsx` shows one field per reason above Export. Export stays disabled while a field is empty or breaks the archive's rule (one line, printable characters, 300 characters once trimmed), and the text before it names the missing ones: `2 reasons missing: react 19, html-minifier`. When the server still refuses, its words show above Export. `useReasons` in `use-selection.ts` keeps the reasons in `sessionStorage` under `sealift:reasons:<analysisId>`, beside the selection's `sealift:selection:<analysisId>`, so a retried export sends the same reasons. They reach the server only with an export request.
 
-## The settings panel
+## The Instance page
 
-`components/settings/settings-panel.tsx` renders a side sheet over the current screen, from anywhere, and returns focus to what opened it. It holds Appearance, saved in the browser, then three sections from `GET /api/instance` and `GET /api/signing-key`. `policy-section.tsx` shows the policy as a description list under the line "Set by your deployment.": the npm and pip targets, the minimum release age, both parallelism limits, and whether the instance is ephemeral, with its idle delay. `signing-key-section.tsx` shows the public key with its download and Regenerate key. `tools-panel.tsx` shows the pinned Trivy and the database's date under Scanner. Beside the theme, only the signing key has a control: the deployment sets the rest.
+`components/settings/instance-page.tsx` renders `/instance` from `GET /api/instance`, read-only. Ready reuses `ReadinessList` and puts `signing-key-section.tsx` in the signing key's place: the key's fingerprint from `GET /api/signing-key`, **Download public key**, which builds `sealift-public-key.pem` in the browser, and How to regenerate, which shows the command with a copy control. `policy-section.tsx` shows the policy as a description list under Set at deploy. Appearance holds the theme and, when the brand sets one, the accent with its ratio per theme. The page has no control that changes the instance. The import side's page is `components/import/instance-page.tsx`, from `GET /api/me`.
 
 ## Checks
 
@@ -75,7 +110,7 @@ pnpm -C web run test
 
 `just web-check` runs all three. Tests sit next to the code they cover, as `*.test.ts` and `*.test.tsx`.
 
-ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may import only each other and `@/components/ui/*`, `@/components/brand/*`, `@/components/theme-toggle`, `@/hooks/use-return-focus` and `@/lib/utils`. An import of the collection's API client, routes, session, settings or project components, or of `use-job-events`, fails the lint. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
+ESLint enforces a boundary on the import entry. Files under `web/src/import/` and `web/src/components/import/` may not import the collection's API client, routes, session, settings or project components, its failure, problem, route error, preparing, step bar and severity components, or `use-job-events`: such an import fails the lint. The frame, the brand, the fingerprint and the home blocks are shared. So does `dangerouslySetInnerHTML`: text from an archive, a manifest, MinIO or Nexus renders as a text node. The import client calls only `/api/me`, `/api/archives`, `/api/imports`, `/api/imports/{id}` and `/api/imports/{id}/retry`, and refuses any other path before it sends a request.
 
 `web/tests/ui-gate.spec.mjs` loads each route in Chromium at 1024 and 1280 px, in light and dark, including a finished session and a session that does not exist. It fails on a serious axe finding, on horizontal overflow and on a control under 32 px. It builds the web and one `sealift` binary, then starts both roles from that binary. The collection listens on port 18080, with a data directory `web/tests/seed.mjs` writes. Change the seed when the files under `/data` change. The seed also lays out the pinned Trivy (a script that exits 0), its database's `metadata.json`, and the default pnpm and uv, in the folders `internal/tools` installs to. It reads their versions from the Go sources. The server is then ready without a download, and its stand-in for GitHub, the npm registry and the package index receives no request. The gate checks both. The preparing screen comes from `UI.answers`, which replaces `/api/instance` with a body captured once from the server started on an empty volume. The seed's second session, `reasons`, holds an analysis whose `candidates.json` and `ranking.json` are the bytes the rank step wrote: a React family, an express jump and an html-minifier CVE with no fix. `UI.sessions` loads its review screen with a selection written to `sessionStorage` first, once with every reason missing and once with a reason that holds a line break. CI does not run the gate. Install the browser once, then run it:
 
@@ -90,13 +125,19 @@ Each user stands for one state of the screens:
 
 | User | MinIO | Import records |
 | --- | --- | --- |
-| `alice` | a listing of her archives | one of every state: queued, running (attempt 2, 37 of 101 done, with an earlier attempt), complete with the archive removed, kept and with no removal recorded, incomplete with three failures of three kinds, refused with both digests, interrupted with 45 packages not finished, a refusal with a 1,000-character reason, a record written by v0.4.0 and an archive with a 1,024-byte key |
+| `alice` | a listing of her archives | one of every state: queued, complete today so the home's Done today holds a row, running (attempt 2, 37 of 101 done, with an earlier attempt), complete with the archive removed, kept and with no removal recorded, incomplete with three failures of three kinds, refused with both digests, interrupted with 45 packages not finished, a refusal with a 1,000-character reason, a record written by v0.4.0 and an archive with a 1,024-byte key |
 | `bob` | an empty folder | none |
 | `carol` | no bucket | none |
 | `dave` | answers 500 | none |
 | `frank` | an empty folder | a folder that cannot be read, so the list answers 500 |
 
-`IMPORT.routes` in the spec names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
+`IMPORT.routes`, in `web/tests/import-fixtures.mjs` beside the records it reads, names the route, the user, the text that shows the data arrived (`ready`), an optional control to press once it has (`open`) and an optional API path to hold until the checks are done (`hold`), so that the loading state shows. A test is titled `import <user> <path> <width> <theme>`. On every import route the gate also fails when the page requests `/api/projects`, `/api/settings` or `/api/jobs`, and when the browser reports a `securitypolicyviolation`. "MinIO not configured" needs a second server and stays in a Vitest test.
+
+With `UI_CAPTURES` set to a folder, the gate saves each page there once its checks pass, as `<role>-<route slug>-<width>-<theme>.png`, full page and with animations off, for a reader to compare with the drawn screens:
+
+```sh
+UI_CAPTURES=/tmp/captures pnpm -C web exec playwright test tests/ui-gate.spec.mjs
+```
 
 Playwright's `-g` filter matches the file name before the title, so `-g "import "` selects the import role and `-g "^import "` selects nothing.
 

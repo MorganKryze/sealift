@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
+import { X } from "lucide-react"
 import { useState } from "react"
 
 import { apiFetch, ApiError } from "@/api/client"
@@ -52,7 +53,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
           exportId={relatedExport.id}
           files={relatedExport.files ?? []}
           onExportAnother={() => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: project.id } })}
-          onNewSession={() => void navigate({ to: "/" })}
+          onNewSession={() => void navigate({ to: "/update" })}
         />
       ) : (
         <ExportProgress
@@ -212,7 +213,8 @@ function ExportProgress({ projectId, analysisId, result, exportRecord, onChanged
 
       {!failed && active ? (
         <div className="mt-5 flex flex-col items-start gap-2">
-          <Button variant="outline" onClick={() => void handleCancel()} disabled={cancelling}>
+          <Button variant="tinted" onClick={() => void handleCancel()} disabled={cancelling}>
+            <X aria-hidden="true" />
             Cancel
           </Button>
           {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} /> : null}
@@ -221,14 +223,14 @@ function ExportProgress({ projectId, analysisId, result, exportRecord, onChanged
 
       {failed ? (
         <div className="mt-5 flex flex-col items-start gap-2">
-          <div className="flex flex-wrap gap-3">
-            <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
-              {retryMutation.isPending ? "Starting…" : cancelled ? "Start the export again" : "Retry"}
-            </Button>
+          <div className="flex w-full flex-wrap justify-end gap-3">
             <Button variant="ghost" asChild>
               <Link to="/sessions/$sessionId/review" params={{ sessionId: projectId }}>
                 Choose different versions
               </Link>
+            </Button>
+            <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
+              {retryMutation.isPending ? "Starting…" : cancelled ? "Start the export again" : "Retry"}
             </Button>
           </div>
           {retryError ? <ProblemNotice status={retryError.status} problem={retryError.problem} /> : null}

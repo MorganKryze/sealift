@@ -27,7 +27,7 @@ export function ListFilter({ value, onChange, counts }: ListFilterProps) {
           className={cn(choice, value === o.id ? "bg-background font-medium text-ink shadow-sm" : "text-muted hover:text-ink")}
         >
           {o.label}{" "}
-          <span className="font-mono text-xs">{counts[o.id]}</span>
+          <span className="font-mono text-xs font-semibold">{counts[o.id]}</span>
         </button>
       ))}
     </div>

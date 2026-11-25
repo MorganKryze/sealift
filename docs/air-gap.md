@@ -44,10 +44,10 @@ sealift signs `manifest.json` with an Ed25519 key it generated for its volume, a
 
 The import side checks the signature with a public key you carry to it once. Do it before your first crossing:
 
-1. On the connected side, open Settings, section Signing key. Press **Download** for `sealift-public-key.pem`, or **Copy**.
+1. On the connected side, open Instance, block Signing key. Press **Download public key** for `sealift-public-key.pem`, or copy it.
 2. Carry the file to the import side over a channel you trust, not the kiosk the archives cross.
 3. Name it in the import's settings, as `publicKeyFile` below shows.
-4. Compare the Public key sha256 on both sides: sealift's Settings shows one, the import's Settings sheet shows the other, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
+4. Compare the Public key sha256 on both sides: sealift's Instance page shows one, the import side's Instance page shows the other under Trusted key, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
 
 The import trusts that one key and no other. It ignores any key an archive, a manifest or the signature file names, and uses the name only to word a refusal. A key carried with the archive would give nothing: whoever forges the archive forges the key.
 
@@ -144,7 +144,7 @@ publicKeyFile: public-key.pem
 
 `nexus.pip` names the pypi hosted repository that pip archives publish into. Without it, the import refuses a pip archive and imports npm archives as before. `user` and `passwordFile` go together: set both to publish pip archives as a second Nexus user, or leave both out to publish them as `nexus.user` with its password.
 
-`publicKeyFile` holds the public key from sealift's Settings on the connected side: one `PUBLIC KEY` PEM block of at most 4 KiB. The import and the service refuse to start without it, with exit code 2. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
+`publicKeyFile` holds the public key from sealift's Instance page on the connected side: one `PUBLIC KEY` PEM block of at most 4 KiB. The import and the service refuse to start without it, with exit code 2. The URL carries no user name, password or query, and no setting turns off certificate checks. An `http` URL works and the report marks it `unencrypted`.
 
 Give the import its own Nexus user, with these privileges on the npm hosted repository and no others: `nx-repository-view-npm-<repository>-browse`, `-read`, `-add` and `-edit`, and `nx-component-upload`. Nexus refuses an upload without the edit privilege, so the user's rights do not stop an overwrite. The repository's deployment policy does: set it to **Disable redeploy** when the import alone writes to the repository. The import checks each version before it uploads and fails one that holds other bytes, and the policy makes Nexus refuse the overwrite itself. A repository that another tool also publishes to, such as Package Pusher's, keeps its policy: the import's read before the upload and its read-back after it are the guard there, and [the runbook](runbook.md#worst-cases-on-the-shared-repository) names the rule that closes the window between them.
 
@@ -170,7 +170,7 @@ An import takes the archive through the same checks as `sealift import`, then pu
 
 In the lab, an archive whose `bytes@3.1.2` already existed in Nexus with other bytes ended `incomplete` with 100 packages `present` and that one `failed`, and both objects stayed in MinIO. After the planted component was deleted in Nexus, a retry ended `complete`, uploaded that one package and removed the archive. Restarting the service during an import ended it `interrupted`, and a retry ended `complete`.
 
-The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Archives lists the folder and starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
+The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Home lists the folder's archives and Import starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
 
 A retry reads every package from Nexus again and uploads only what Nexus no longer serves. It needs the archive to be in MinIO still and unchanged. Delete or replace nothing in the user's folder while an import is queued or running.
 

@@ -13,7 +13,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - `deploy/connected/compose.policy.yaml` mounts a policy folder read-only, and `deploy/connected/policy/policy.yaml` is an example with every key commented out.
 - `GET /api/instance` reports readiness, item by item with each cause, the policy in effect, the brand and the tool versions. `GET /api/instance/logo` serves the policy's logo.
 - `GET /livez` answers 200 while the server runs, for a liveness probe.
-- The home shows Preparing sealift, with each item and its state, until the instance is ready, then opens by itself.
+- The home shows Preparing this instance, with each item and its state, until the instance is ready, then opens by itself.
 - Each dependency names its jump: the best version outside its current line, which sealift does not propose. [How sealift chooses](docs/how-sealift-chooses.md#the-jump) describes it.
 - Families: dependencies whose jumps must move together, read from the jump's peer dependencies and from `@types` packages, such as `react 19` for react, react-dom and `@types/react`.
 - An export that takes a version outside its line, or keeps a CVE that no version fixes, needs a reason for each family, lone jump or dependency. The review screen asks for them above **Confirm and build the archive**, which stays disabled until each is written, and the server refuses an export without them.
@@ -25,11 +25,16 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 - `/healthz` is a readiness check: it answers 503 with the names of the missing items until every one is ready, then 200. Use `/livez` for liveness, or an orchestrator restarts an instance that is still downloading.
 - `deploy/connected/compose.yaml` gives the first start 10 minutes before a failed healthcheck counts, and checks every 5 seconds until the first success. `start_interval` needs Docker Engine 25 or later.
-- The Settings panel shows the policy read-only in its Policy section, and the scanner as the Trivy version and the database date, with no control.
 - Settings that 0.7.0 saved in `private/settings.json` still apply, and a value the policy file sets wins over them. The start log names each key the file overrides. sealift reads that file and never writes it, so a new volume holds none, and 0.7.0 still reads it after a rollback.
 - Once the pinned Trivy is active, the start removes every other Trivy version from the volume. An analysis is refused while another version is active.
 - `SEALIFT_NPM_REGISTRY` now also serves the download of pnpm.
-- The brand is read, checked and served through the API. The screens keep sealift's name and colours until a later release draws it.
+- A new look, in light and dark: every colour reaches its contrast in both themes, states show as closed tinted rows, and figures read in bold.
+- Both sides open in one frame: a sidebar of places, Home and Projects on the connected side, Home and Imports on the import side, with Instance at its foot, and a top bar with the breadcrumb and the side's name. [Workflow](docs/workflow.md#the-frame) describes it.
+- The connected home opens on Start a crossing, with Update, then Needs you, for a review that waits or a crossing that failed, and In progress. A crossing is named after its project and its day. Past sessions and New session are gone.
+- The import home greets the user and lists Needs you, In progress and Done today. The archive list becomes Choose an archive, reached from Import. [Importing](docs/importing.md#home) describes it.
+- Projects lists every project with its latest crossing, by date or by name. A project's page lists its crossings, with To carry and Download all for the three files to carry, and Reports with Open.
+- Instance replaces the Settings panel on both sides, read-only: readiness, the policy and the signing key's sha256 on the connected side, the trusted key with Compare on the import side. The connected page has no Regenerate key button: How to regenerate shows the command to run in the container. [Settings](docs/settings.md#the-instance-page) describes it.
+- The connected side draws the brand: its name, logo, side label and accent, where the accent reaches 3:1 against the page. The import side keeps the defaults.
 - Proposals stay in each dependency's current line by default, the range npm's caret gives its current version. express 4.17.1 no longer gets 5.1.0 proposed: it stays in major 4, and 5.1.0 is its jump.
 - The `major-jump` signal follows the line below 1.0.0: 0.18.0 to 0.19.0 carries it, with the evidence `leaves 0.18.x`.
 - A reason may hold the no-break spaces of French and CJK typography (U+00A0, U+202F, U+3000), on the review screen and in the signed review.

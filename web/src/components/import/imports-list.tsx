@@ -81,7 +81,7 @@ export function ImportsList() {
             An import starts from an archive in your MinIO folder <code className={code}>{`${bucket}${FOLDERS[0]}`}</code> or{" "}
             <code className={code}>{`${bucket}${FOLDERS[1]}`}</code>. Once you start one, it appears here with its progress and its report.
           </p>
-          <Link to="/" className={choose}>
+          <Link to="/import" className={choose}>
             Choose an archive
           </Link>
         </div>

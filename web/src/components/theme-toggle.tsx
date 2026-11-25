@@ -1,5 +1,5 @@
 import { Monitor, Moon, Sun } from "lucide-react"
-import { useEffect, useState, type ComponentType } from "react"
+import { useRef, useState, type ComponentType, type KeyboardEvent } from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -28,40 +28,68 @@ export function applyTheme(theme: ThemeChoice) {
   }
 }
 
-const options: { value: ThemeChoice; label: string; icon: ComponentType<{ className?: string }> }[] = [
+const options: { value: ThemeChoice; label: string; icon: ComponentType<{ className?: string; "aria-hidden"?: "true" }> }[] = [
   { value: "system", label: "System", icon: Monitor },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
 ]
 
+// The radio group pattern: Tab reaches the pick, the arrow keys move it.
 export function ThemeToggle() {
   const [theme, setTheme] = useState<ThemeChoice>(readStoredTheme)
+  const picked = options.findIndex((o) => o.value === theme)
+  const radios = useRef<(HTMLButtonElement | null)[]>([])
 
-  useEffect(() => {
-    applyTheme(theme)
+  const pick = (index: number) => {
+    const { value } = options[index]
+    setTheme(value)
+    applyTheme(value)
     try {
-      localStorage.setItem(STORAGE_KEY, theme)
+      localStorage.setItem(STORAGE_KEY, value)
     } catch {
       // Ignored: the theme still applies for this page load.
     }
-  }, [theme])
+  }
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key]
+    if (!step) return
+    event.preventDefault()
+    const next = (picked + step + options.length) % options.length
+    pick(next)
+    radios.current[next]?.focus()
+  }
 
   return (
-    <div role="radiogroup" aria-label="Theme" className="grid grid-cols-3 gap-1 rounded-lg border border-line p-1">
-      {options.map(({ value, label, icon: Icon }) => (
+    <div
+      role="radiogroup"
+      aria-label="Theme"
+      onKeyDown={onKeyDown}
+      className="relative inline-grid grid-cols-3 rounded-lg border border-rule-2 bg-hover p-[3px]"
+    >
+      <span
+        data-thumb
+        aria-hidden="true"
+        className="absolute top-[3px] bottom-[3px] left-[3px] w-[calc((100%-6px)/3)] rounded-md bg-seg-on shadow-[0_1px_2px_rgba(var(--shadow),.14),0_0_0_1px_rgba(var(--shadow),.06)] transition-transform duration-200 ease-move"
+        style={{ transform: `translateX(${picked * 100}%)` }}
+      />
+      {options.map(({ value, label, icon: Icon }, index) => (
         <button
           key={value}
+          ref={(node) => {
+            radios.current[index] = node
+          }}
           type="button"
           role="radio"
           aria-checked={theme === value}
-          onClick={() => setTheme(value)}
+          tabIndex={theme === value ? 0 : -1}
+          onClick={() => pick(index)}
           className={cn(
-            "flex h-9 items-center justify-center gap-2 rounded-md text-sm font-medium outline-none",
-            "focus-visible:ring-2 focus-visible:ring-accent",
-            theme === value ? "bg-accent text-background" : "text-muted hover:bg-card hover:text-ink",
+            "relative flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm whitespace-nowrap transition-colors duration-160",
+            theme === value ? "font-semibold text-ink" : "font-medium text-ink-2 hover:text-ink",
           )}
         >
-          <Icon className="size-4" />
+          <Icon aria-hidden="true" className="size-3.5" />
           {label}
         </button>
       ))}

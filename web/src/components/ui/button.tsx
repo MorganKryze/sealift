@@ -5,19 +5,23 @@ import type { ButtonHTMLAttributes } from "react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border text-sm font-medium transition-[transform,background-color,border-color,color] duration-160 ease-out motion-safe:active:scale-[0.97] disabled:pointer-events-none disabled:border-rule-2 disabled:bg-hover disabled:text-disabled aria-disabled:border-rule-2 aria-disabled:bg-hover aria-disabled:text-disabled [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
-        default: "bg-accent text-background hover:brightness-90",
-        outline: "border border-line bg-background text-ink hover:bg-card",
-        ghost: "text-ink hover:bg-card",
+        default: "border-ink bg-ink text-bg hover:border-ink-2 hover:bg-ink-2",
+        outline: "border-rule-2 bg-bg text-ink hover:bg-hover",
+        ghost: "border-transparent text-ink-2 hover:bg-hover hover:text-ink",
+        // A lone Cancel or Stop: it must read as a button beside no other.
+        tinted: "border-rule-2 bg-hover text-ink hover:bg-sel",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-6",
-        icon: "size-9",
+        page: "h-10 px-4",
+        default: "h-9 px-3.5",
+        sm: "h-8 px-2.5 text-[13px]",
+        icon: "size-8",
+        // Today's name for the page size, until its callers move to it.
+        lg: "h-10 px-4",
       },
     },
     defaultVariants: {

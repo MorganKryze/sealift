@@ -39,7 +39,8 @@ func serveScreens(mux *http.ServeMux, screens fs.FS) {
 	mux.HandleFunc("GET /{$}", shell)
 	mux.HandleFunc("GET /imports", shell)
 	mux.HandleFunc("GET /imports/{id}", shell)
-
+	mux.HandleFunc("GET /instance", shell)
+	mux.HandleFunc("GET /import", shell)
 	files := http.FileServerFS(screens)
 	mux.HandleFunc("GET /assets/{file...}", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
