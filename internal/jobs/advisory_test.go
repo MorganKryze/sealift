@@ -239,4 +239,15 @@ func TestAdvisoryEdgesOfTheLimitsAndHeadings(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
 		}
 	}
+
+	// A full stop at the 200th code point ends the summary there; one at the
+	// 199th is under the floor, so the summary is cut at a word instead.
+	atFloor := strings.Repeat("a", 199) + ". " + strings.Repeat("b", 400)
+	if got := advisorySummary("", atFloor); got != strings.Repeat("a", 199)+"." {
+		t.Errorf("a sentence end at the floor: got %q", got)
+	}
+	underFloor := strings.Repeat("a", 198) + ". " + strings.Repeat("b", 400)
+	if got := advisorySummary("", underFloor); !strings.HasSuffix(got, "...") {
+		t.Errorf("a sentence end under the floor: got %q, want a cut at a word", got)
+	}
 }
