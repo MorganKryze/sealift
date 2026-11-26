@@ -211,4 +211,11 @@ func TestTrivyScansPyPIComponents(t *testing.T) {
 			}
 		})
 	}
+	// The database's words change between downloads, so only their
+	// presence is checked.
+	for _, f := range findings {
+		if f.ID == "CVE-2024-22195" && (f.Title == "" || f.Description == "" || f.Published.IsZero()) {
+			t.Errorf("CVE-2024-22195 has title %q, description %q, published %v, want all three", f.Title, f.Description, f.Published)
+		}
+	}
 }

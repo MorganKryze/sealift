@@ -179,9 +179,38 @@ func TestDecodeA070ResultHasNoJumpOrFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"families"`, `"jump"`, `"family"`, `"package"`, `"fixedIn"`} {
+	for _, key := range []string{`"families"`, `"jump"`, `"family"`, `"package"`, `"fixedIn"`, `"advisories"`} {
 		if strings.Contains(string(encoded), key) {
 			t.Errorf("the answer for a 0.7.0 analysis carries %s: %s", key, encoded)
+		}
+	}
+}
+
+func TestDecodeKeepsAdvisories(t *testing.T) {
+	raw := json.RawMessage(`{
+		"target": {"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},
+		"before": [0,1,0,0,0],
+		"dependencies": [],
+		"warnings": [],
+		"advisories": {
+			"CVE-2025-58754": {"title":"axios: Axios DoS via lack of data size check","summary":"Axios decodes a data: URI into memory.","published":"2025-09-12T02:15:46Z"},
+			"CVE-2025-27152": {"title":"axios: Possible SSRF and Credential Leakage via Absolute URL in axios Requests"}
+		}
+	}`)
+	result, ok := decodeAnalysisResult(raw)
+	if !ok {
+		t.Fatal("decodeAnalysisResult rejected an analysis with advisories")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"CVE-2025-58754":{"published":"2025-09-12T02:15:46Z","summary":"Axios decodes a data: URI into memory.","title":"axios: Axios DoS via lack of data size check"}`,
+		`"CVE-2025-27152":{"title":"axios: Possible SSRF and Credential Leakage via Absolute URL in axios Requests"}`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("the answer = %s, want it to hold %s", encoded, want)
 		}
 	}
 }

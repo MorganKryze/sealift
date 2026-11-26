@@ -701,6 +701,25 @@ export interface components {
             warnings: string[];
             /** @description The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed. */
             families?: components["schemas"]["Family"][];
+            /** @description What each CVE id that the result's cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date. */
+            advisories?: {
+                [key: string]: components["schemas"]["Advisory"];
+            };
+        };
+        /** @description What one CVE does, as the Trivy report words it, cleaned and bounded. Each field is absent when the report does not give it. */
+        Advisory: {
+            /**
+             * @description Trivy's title, at most 200 code points. Plain text: a client renders it as text, never as HTML or Markdown.
+             * @example axios: Axios DoS via lack of data size check
+             */
+            title?: string;
+            /** @description The first paragraph of Trivy's description, at most 500 code points, cut after its last whole sentence. Plain text: a client renders it as text, never as HTML or Markdown. */
+            summary?: string;
+            /**
+             * Format: date-time
+             * @description When the advisory was published, in UTC, to the second
+             */
+            published?: string;
         };
         /** @description Dependencies whose jumps must move together */
         Family: {

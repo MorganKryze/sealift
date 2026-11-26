@@ -83,8 +83,39 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 			r.result.Dependencies = append(r.result.Dependencies, dr)
 		}
 		r.setFamilies(deps)
+		r.setAdvisories(combinedIndex)
 		return r.a.Store.WriteJSON(filepath.Join(r.a.Dir, "candidates.json"), r.result)
 	})
+}
+
+// setAdvisories fills r.result's advisory table from index, once per id
+// that a cves list of the result names. It walks the lists in result order,
+// each dependency's current version before its candidates, so the first
+// wording of an id wins and the same report always gives the same table.
+func (r *run) setAdvisories(index rank.Index) {
+	table := map[string]Advisory{}
+	add := func(cves []CVE) {
+		for _, c := range cves {
+			if _, ok := table[c.ID]; ok {
+				continue
+			}
+			for _, f := range index[c.Package] {
+				if f.ID == c.ID {
+					addAdvisory(table, r.root, f)
+					break
+				}
+			}
+		}
+	}
+	for _, dr := range r.result.Dependencies {
+		add(dr.CVEs)
+		for _, cand := range dr.Candidates {
+			add(cand.CVEs)
+		}
+	}
+	if len(table) > 0 {
+		r.result.Advisories = table
+	}
 }
 
 // setFamilies groups the jumps of r.result's dependencies, each at the same

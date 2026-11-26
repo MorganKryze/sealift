@@ -39,12 +39,20 @@ type Analysis struct {
 // Result is what an analysis writes to candidates.json and ranking.json, and
 // what the API returns. Field names match the contract's schemas.
 type Result struct {
-	Target       store.Target       `json:"target"`
-	Before       Vector             `json:"before"`
-	After        *Vector            `json:"after"` // nil when step 9 (check-combined) never measured it
-	Dependencies []DependencyResult `json:"dependencies"`
-	Warnings     []string           `json:"warnings"`
-	Families     []Family           `json:"families"` // sorted by name; a result without the key predates families
+	Target       store.Target        `json:"target"`
+	Before       Vector              `json:"before"`
+	After        *Vector             `json:"after"` // nil when step 9 (check-combined) never measured it
+	Dependencies []DependencyResult  `json:"dependencies"`
+	Warnings     []string            `json:"warnings"`
+	Families     []Family            `json:"families"`             // sorted by name; a result without the key predates families
+	Advisories   map[string]Advisory `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
+}
+
+// Advisory is what one CVE does, from the Trivy report, cleaned and bounded.
+type Advisory struct {
+	Title     string `json:"title,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Published string `json:"published,omitempty"` // RFC 3339, UTC, to the second
 }
 
 // Family is a group of dependencies whose jumps must move together, named
