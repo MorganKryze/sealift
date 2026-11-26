@@ -201,3 +201,15 @@ func TestAdvisorySummaryBoundsAOneMebibyteDescription(t *testing.T) {
 		t.Errorf("advisorySummary allocates %.0f times on 1 MiB, want at most %d", allocs, allocBound)
 	}
 }
+
+func TestAdvisorySummaryReadsLinesAsTheCleaningLeavesThem(t *testing.T) {
+	for _, c := range []struct{ description, want string }{
+		{"\u2060\n\nReal text.", "Real text."},
+		{"\x1b\n\nReal text.", "Real text."},
+		{"\u200B### Impact\n\nThe parser.", "The parser."},
+	} {
+		if got := advisorySummary("", c.description); got != c.want {
+			t.Errorf("advisorySummary(%q) = %q, want %q", c.description, got, c.want)
+		}
+	}
+}

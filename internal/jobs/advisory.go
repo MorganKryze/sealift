@@ -115,6 +115,9 @@ func runePrefix(s string, n int) (string, bool) {
 
 // firstParagraph returns the first run of non-blank lines in s that is not
 // a Markdown heading. A heading line also ends the paragraph before it.
+// Each line is judged as the cleaning will leave it, so a line that holds
+// only control or format characters is blank, and a format character
+// cannot hide a heading.
 func firstParagraph(s string) string {
 	start := -1
 	for off := 0; off <= len(s); {
@@ -124,7 +127,7 @@ func firstParagraph(s string) string {
 		} else {
 			end += off
 		}
-		line := s[off:end]
+		line := dropControl(s[off:end])
 		if strings.TrimSpace(line) == "" || isHeading(line) {
 			if start >= 0 {
 				return s[start:off]
