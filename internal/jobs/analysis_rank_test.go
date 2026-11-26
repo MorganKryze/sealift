@@ -523,6 +523,42 @@ func TestAdvisoriesKeepTheFirstWordingInResultOrder(t *testing.T) {
 	}
 }
 
+func TestRankWritesAnAdvisoryForAnIdOnlyACandidateNames(t *testing.T) {
+	// A newer version often pulls in a transitive package the current one
+	// lacks, and with it a CVE id that only the candidate's list names.
+	index := rank.NewIndex([]rank.Finding{{
+		ID: "CVE-2026-00002", Package: "body-parser", Version: "1.20.0", Severity: rank.Medium,
+		Title:       "body-parser: only the candidate holds it",
+		Description: "The parser reads past the end.",
+		Published:   time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
+	}})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("express", "4.17.1", fakeVersion{version: "4.18.0", published: longAgo})
+	outcomes[1].pkgs = append(outcomes[1].pkgs, npm.LockPackage{Name: "body-parser", Version: "1.20.0"})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	express := dependencyNamed(t, r, "express")
+	if len(express.CVEs) != 0 {
+		t.Fatalf("current version CVEs = %+v, want none", express.CVEs)
+	}
+	candidate := slices.IndexFunc(express.Candidates, func(c Candidate) bool {
+		return slices.ContainsFunc(c.CVEs, func(cve CVE) bool { return cve.ID == "CVE-2026-00002" })
+	})
+	if candidate < 0 {
+		t.Fatalf("no candidate names CVE-2026-00002: %+v", express.Candidates)
+	}
+	want := Advisory{
+		Title:     "body-parser: only the candidate holds it",
+		Summary:   "The parser reads past the end.",
+		Published: "2026-03-04T05:06:07Z",
+	}
+	if got, ok := r.result.Advisories["CVE-2026-00002"]; !ok || got != want {
+		t.Errorf("advisory = %+v (present %v), want %+v", got, ok, want)
+	}
+}
+
 func TestRankResultMarshalsAdvisoriesAsTheContractNamesThem(t *testing.T) {
 	index := rank.NewIndex([]rank.Finding{{
 		ID: "CVE-2025-58754", Package: "axios", Version: "1.7.9", Severity: rank.High,
