@@ -15,7 +15,7 @@ A gzip-compressed tar with one top-level directory, `out/`:
 
 `archive.WriteTarGz` writes the entries sorted by name, with the Unix epoch as every timestamp and 0 as owner and group. The same entries give the same bytes, so the same selection exported twice by the same build of sealift has the same sha256.
 
-A tarball's file name comes from the package name and version, with a scope folded into the name: `@babel/code-frame` 7.29.7 ships as `babel-code-frame-7.29.7.tgz`. Read the name and version from `manifest.json`, never from the file name.
+A tarball's file name comes from the package name and version, with a scope folded into the name: `@babel/code-frame` 7.29.7 ships as `babel-code-frame-7.29.7.tgz`. Two packages of one export can fold to one name, as `@a/b` and `a-b` at 1.0.0 do. Each scoped package among them then ships with a `~` in place of the slash, as `a~b-1.0.0.tgz`, and any unscoped one keeps its name. npm refuses `~` in a new package name, so the `~` form keeps the files apart. An older package name may hold `~`, so a file name can still be taken twice: the export then fails and names both packages. Without such a pair, every file keeps the folded name. Read the name and version from `manifest.json`, never from the file name.
 
 ## manifest.json
 

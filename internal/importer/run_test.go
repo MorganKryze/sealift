@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/MorganKryze/sealift/archive"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 // runFixture is one archive, one fake Nexus and the settings that point at it.
@@ -349,5 +351,55 @@ func TestPublishCheckInterrupted(t *testing.T) {
 	}
 	if len(f.requests) != 0 {
 		t.Errorf("%d requests", len(f.requests))
+	}
+}
+
+// npm pack names @a/b@1.0.0 and a-b@1.0.0 alike, so an export names the
+// scoped one a~b-1.0.0.tgz. The import reads each file from the manifest
+// and publishes both.
+func TestRunPublishesAScopedPackageNamedApart(t *testing.T) {
+	f := newFakeNexus(t)
+	u, _ := url.Parse(f.srv.URL)
+	dir := t.TempDir()
+	arch, manifest := testArchiveNamed(t, dir,
+		[4]string{"a-b", "1.0.0", "plain body", "a-b-1.0.0.tgz"},
+		[4]string{"@a/b", "1.0.0", "scoped body", "a~b-1.0.0.tgz"})
+	// Nexus files an upload under the name and version of its package.json.
+	f.onUpload = func(f *fakeNexus, u upload) {
+		if info, err := npm.InspectTarball(bytes.NewReader(u.Body)); err == nil {
+			f.put(info.Name, info.Version, u.Body)
+		}
+	}
+	rep := Run(context.Background(), Options{
+		Settings: Settings{NexusURL: u, Repository: testRepo, User: "sealift-import", Password: Secret(testPassword), PublicKey: testPub, PublicKeySHA256: testPubSHA},
+		Archive:  arch, Manifest: manifest, ImportVersion: "0.3.0",
+	}, func(Settings) (Publisher, error) { return f.client(t), nil })
+
+	if rep.Outcome != OutcomeComplete || rep.Counts.Published != 2 {
+		t.Fatalf("outcome %q (%s), %d published, want complete with 2", rep.Outcome, rep.Reason, rep.Counts.Published)
+	}
+	got := map[string]string{}
+	for _, p := range rep.Packages {
+		if p.State != Published {
+			t.Errorf("%s@%s is %s, want published", p.Name, p.Version, p.State)
+		}
+		got[p.Name] = p.File
+	}
+	if got["a-b"] != "a-b-1.0.0.tgz" || got["@a/b"] != "a~b-1.0.0.tgz" {
+		t.Errorf("files by package = %v", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var uploaded []string
+	for _, up := range f.uploads {
+		uploaded = append(uploaded, up.File)
+	}
+	if len(uploaded) != 2 || !strings.Contains(strings.Join(uploaded, " "), "a~b-1.0.0.tgz") {
+		t.Errorf("uploads %v, want a-b-1.0.0.tgz and a~b-1.0.0.tgz", uploaded)
+	}
+	for _, path := range []string{tarballPath("a-b", "1.0.0"), tarballPath("@a/b", "1.0.0")} {
+		if _, ok := f.tarballs[path]; !ok {
+			t.Errorf("nexus holds nothing at %s", path)
+		}
 	}
 }
