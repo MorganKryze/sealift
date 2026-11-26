@@ -144,7 +144,8 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         .flatMap((key) => groups[key].map((d) => ({ key, d })))
         .find(({ key, d }) => total(rowVectors(key, d, picked(d)).flat()) > 0)
 
-  const title = ready ? "Ready to seal" : waiting.length === 1 ? "One thing needs you" : `${plural(waiting.length, "thing", "things")} need you`
+  // The server refuses an export that selects no version, so a recorded reason alone leaves nothing to seal.
+  const title = ready ? (changed === 0 ? "Nothing to seal" : "Ready to seal") : waiting.length === 1 ? "One thing needs you" : `${plural(waiting.length, "thing", "things")} need you`
   const names = waiting.map((n) => n.label)
   const cause =
     names.length > 0
