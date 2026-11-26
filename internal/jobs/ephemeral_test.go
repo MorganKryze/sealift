@@ -83,33 +83,55 @@ func TestSweepEphemeralKeepsAProjectWhileItsJobIsQueued(t *testing.T) {
 	}
 }
 
+// blockingTrivy holds the export's scan until release closes, after
+// telling started that the export runs.
+type blockingTrivy struct {
+	noopTrivy
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b blockingTrivy) ScanSBOM(ctx context.Context, _, _ string) (string, error) {
+	close(b.started)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return "", nil
+}
+
 func TestSweepEphemeralKeepsAProjectWhileItsJobRuns(t *testing.T) {
 	svc, st := newTestService(t)
 	project := mustCreateProject(t, st)
-	pending, err := st.NewDir("exports", project.ID)
+	analysisID := writeDoneAnalysis(t, st, project)
+	// An empty project lockfile takes the export to its scan with nothing
+	// to download.
+	lock := filepath.Join(st.Root(), "projects", project.ID, "analyses", analysisID, "project", "pnpm-lock.yaml")
+	if err := os.MkdirAll(filepath.Dir(lock), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, []byte("lockfileVersion: '9.0'\npackages: {}\n"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	trivy := blockingTrivy{started: make(chan struct{}), release: make(chan struct{})}
+	svc.trivy = trivy
+	info, err := svc.QueueExport(project.ID, analysisID, ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
 	if err != nil {
-		t.Fatalf("NewDir: %v", err)
+		t.Fatalf("QueueExport: %v", err)
 	}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	job := &fakeJob{kind: "export", started: started, run: func(ctx context.Context, _ func(Event)) error {
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		return nil
-	}}
-	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
-		svc.track(queueID, "export", project.ID, "", pending)
-	}); err != nil {
-		t.Fatalf("SubmitWith: %v", err)
+	select {
+	case <-trivy.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the export never reached its scan")
 	}
-	<-started
 	cached := writeCache(t, st)
 
 	if r := sweepLater(svc); r != (store.Sweep{}) {
 		t.Errorf("sweep with a running export = %+v, want nothing done", r)
+	}
+	if purged, err := svc.PurgeIfIdle(); err != nil || purged {
+		t.Errorf("PurgeIfIdle with a running export = %v, %v; want false, nil", purged, err)
 	}
 	if _, err := st.Project(project.ID); err != nil {
 		t.Errorf("project with a running export: %v", err)
@@ -118,8 +140,8 @@ func TestSweepEphemeralKeepsAProjectWhileItsJobRuns(t *testing.T) {
 		t.Errorf("the caches went while an export ran: %v", err)
 	}
 
-	close(release)
-	waitForTerminal(t, svc, project.ID, "export", pending.ID())
+	close(trivy.release)
+	waitForTerminal(t, svc, project.ID, "export", info.ID)
 	if r := sweepLater(svc); r.Deleted != 1 || !r.Purged {
 		t.Errorf("sweep once the export ended = %+v, want the project deleted and the caches purged", r)
 	}
