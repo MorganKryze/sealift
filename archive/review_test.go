@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -237,5 +239,152 @@ func TestParseManifestReadsTheReviewExample(t *testing.T) {
 	}
 	if len(m.Review.Jumps) != 1 || len(m.Review.Jumps[0].Packages) != 2 || len(m.Review.Left) != 2 || m.Review.Unchanged != 12 {
 		t.Errorf("Review = %+v", m.Review)
+	}
+}
+
+// yankedDoc is a pip review that carries two yanked releases, one with the
+// index's reason and one without.
+func yankedDoc() map[string]any {
+	review := reviewDoc("jinja2", "3.1.4", "3.1.6")
+	review["yanked"] = []any{
+		map[string]any{"dependency": "redis", "version": "5.0.8", "indexReason": "broken connection pool", "reason": "The pool is unused; 5.0.9 drops Python 3.11."},
+		map[string]any{"dependency": "urllib3", "version": "2.2.0", "reason": "Pinned by the vendor until 2027."},
+	}
+	doc := pipManifestDoc()
+	doc["review"] = review
+	return doc
+}
+
+var wantYanked = []ReviewYanked{
+	{Dependency: "redis", Version: "5.0.8", IndexReason: "broken connection pool", Reason: "The pool is unused; 5.0.9 drops Python 3.11."},
+	{Dependency: "urllib3", Version: "2.2.0", Reason: "Pinned by the vendor until 2027."},
+}
+
+func TestReadReviewKeepsYankedReleases(t *testing.T) {
+	m, err := ParsePipManifest(encode(t, yankedDoc()))
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	if m.Review == nil {
+		t.Fatalf("the review was kept out: %s", m.ReviewProblem)
+	}
+	if !reflect.DeepEqual(m.Review.Yanked, wantYanked) {
+		t.Errorf("yanked = %+v, want %+v", m.Review.Yanked, wantYanked)
+	}
+	if err := CheckReview(*m.Review, Pip); err != nil {
+		t.Errorf("CheckReview refused the review the import kept: %v", err)
+	}
+}
+
+func TestAnUnreadableYankedListKeepsTheReviewOut(t *testing.T) {
+	tests := []struct {
+		name    string
+		edit    func(review map[string]any)
+		problem string
+	}{
+		{"a list of the wrong type", func(r map[string]any) { r["yanked"] = "owned" }, "review.yanked has the wrong type"},
+		{"a bad pip name", func(r map[string]any) { entryOf(r, "yanked", 0)["dependency"] = "../owned" }, "review.yanked[0].dependency is not a valid package name"},
+		{"no name", func(r map[string]any) { delete(entryOf(r, "yanked", 1), "dependency") }, "review.yanked[1].dependency is missing"},
+		{"an inexact version", func(r map[string]any) { entryOf(r, "yanked", 1)["version"] = ">=5.0-owned" }, "review.yanked[1].version is not an exact version"},
+		{"a reason with a line separator", func(r map[string]any) { entryOf(r, "yanked", 0)["reason"] = "owned second line" },
+			"review.yanked[0].reason holds a control, line-separating, bidirectional or format character"},
+		{"no reason", func(r map[string]any) { delete(entryOf(r, "yanked", 1), "reason") }, "review.yanked[1].reason is empty"},
+		{"an index reason of 201 characters", func(r map[string]any) { entryOf(r, "yanked", 0)["indexReason"] = "owned" + strings.Repeat("a", 196) },
+			"review.yanked[0].indexReason is longer than 200 characters"},
+		{"an index reason with a control character", func(r map[string]any) { entryOf(r, "yanked", 0)["indexReason"] = "owned\x1b[31m" },
+			"review.yanked[0].indexReason holds a control, line-separating, bidirectional or format character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := yankedDoc()
+			tt.edit(reviewOf(doc))
+			m, err := ParsePipManifest(encode(t, doc))
+			if err != nil {
+				t.Fatalf("ParsePipManifest refused the manifest: %v", err)
+			}
+			if m.Review != nil || m.ReviewProblem != tt.problem {
+				t.Errorf("review = %+v, problem = %q, want it kept out with %q", m.Review, m.ReviewProblem, tt.problem)
+			}
+			if strings.Contains(m.ReviewProblem, "owned") {
+				t.Errorf("problem %q repeats the value", m.ReviewProblem)
+			}
+		})
+	}
+}
+
+// The list's bound holds within the manifest's own cap, and the reader
+// stops on it in bounded time.
+func TestAYankedListPastTheBoundKeepsTheReviewOut(t *testing.T) {
+	doc := yankedDoc()
+	review := reviewOf(doc)
+	review["yanked"] = repeated(map[string]any{"dependency": "a", "version": "1", "reason": "r"}, maxReviewEntries+1)
+	data := encode(t, doc)
+	if len(data) > MaxManifestSize {
+		t.Fatalf("the manifest holds %d bytes, past the cap of %d", len(data), MaxManifestSize)
+	}
+	start := time.Now()
+	m, err := ParsePipManifest(data)
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("reading 100,001 yanked releases took %v, want under 10s", took)
+	}
+	if err != nil {
+		t.Fatalf("ParsePipManifest refused the manifest: %v", err)
+	}
+	if want := "review.yanked holds more than 100000 entries"; m.Review != nil || m.ReviewProblem != want {
+		t.Errorf("review kept = %v, problem = %q, want it kept out with %q", m.Review != nil, m.ReviewProblem, want)
+	}
+}
+
+// A review with no yanked release, npm's included, keeps the bytes it had
+// before the list existed.
+func TestAReviewWithoutYankedKeepsItsBytes(t *testing.T) {
+	for _, r := range []*Review{wantReview("express", "4.17.1", "5.1.0"), {Yanked: []ReviewYanked{}}} {
+		data, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"yanked"`) {
+			t.Errorf("review = %s, holds a yanked key", data)
+		}
+	}
+	data, err := json.Marshal(wantReview("express", "4.17.1", "5.1.0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"cves":{"before":[1,2,3,0,1],"after":[0,1,2,0,1]},"updates":[{"name":"express","from":"4.17.1","to":"5.1.0","fixed":[1,1,1,0,0],"left":[0,1,2,0,1]}],"kept":[{"name":"express","version":"4.17.1","jump":"5.1.0"}],"jumps":[{"family":"react 19","packages":[{"name":"express","from":"4.17.1","to":"5.1.0"}],"reason":"The team moved to the next line on 2026-11-20, tests pass."},{"packages":[{"name":"express","from":"4.17.1","to":"5.1.0"}],"reason":"東京 needs this line; é and ü are fine."}],"left":[{"dependency":"express","version":"5.1.0","id":"CVE-2024-0001","severity":"HIGH","package":"express","fixedIn":"","reason":"No release fixes it; the route is disabled."},{"dependency":"express","version":"5.1.0","id":"GHSA-abcd-efgh-ijkl","severity":"LOW","package":"express","fixedIn":"4.17.3, 5.0.0"}],"unchanged":4}`
+	if string(data) != want {
+		t.Errorf("review = %s\nwant      %s", data, want)
+	}
+}
+
+func TestCheckReviewReadsTheYankedList(t *testing.T) {
+	base := func() Review {
+		r := *wantReview("jinja2", "3.1.4", "3.1.6")
+		r.Yanked = slices.Clone(wantYanked)
+		return r
+	}
+	if err := CheckReview(base(), Pip); err != nil {
+		t.Fatalf("CheckReview refused a review with yanked releases: %v", err)
+	}
+	tests := []struct {
+		name, problem string
+		edit          func(r *Review)
+	}{
+		{"a bad pip name", "review.yanked[0].dependency is not a valid package name", func(r *Review) { r.Yanked[0].Dependency = "../owned" }},
+		{"an inexact version", "review.yanked[1].version is not an exact version", func(r *Review) { r.Yanked[1].Version = "^2.2.0-owned" }},
+		{"an empty reason", "review.yanked[1].reason is empty", func(r *Review) { r.Yanked[1].Reason = " " }},
+		{"an index reason over two lines", "review.yanked[0].indexReason holds a control, line-separating, bidirectional or format character",
+			func(r *Review) { r.Yanked[0].IndexReason = "owned second line" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := base()
+			tt.edit(&r)
+			err := CheckReview(r, Pip)
+			if err == nil || err.Error() != tt.problem {
+				t.Errorf("CheckReview = %v, want %q", err, tt.problem)
+			}
+			assertRepeatsNoValue(t, err)
+		})
 	}
 }
