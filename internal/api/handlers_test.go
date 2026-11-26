@@ -581,12 +581,57 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 // unroutable address, so the download step fails deterministically
 // without touching the network.
 func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
-	q := jobs.NewQueue(nil)
-	defer q.Close()
+	srv, h, projectID := newUnroutableExportServer(t)
+
+	final := queueExportToItsEnd(t, srv, h, projectID)
+	if final.State != Failed {
+		t.Fatalf("export state = %q, want %q: the registry is unroutable", final.State, Failed)
+	}
+
+	listed := listedExport(t, srv, projectID)
+	if listed.State != Failed {
+		t.Fatalf("listed export state = %q, want %q: it must still be listed after it ended, not vanished", listed.State, Failed)
+	}
+	if listed.AnalysisId != "20260917T101502Z" {
+		t.Errorf("listed export analysisId = %q, want %q", listed.AnalysisId, "20260917T101502Z")
+	}
+	if listed.Failure == nil || listed.Failure.Message == "" {
+		t.Fatalf("listed export failure = %v, want a non-empty cause", listed.Failure)
+	}
+}
+
+// TestExportFailureCauseNamesNoDataDirectory proves the cause a client
+// reads names a file under the data directory relative to it.
+func TestExportFailureCauseNamesNoDataDirectory(t *testing.T) {
+	srv, h, projectID := newUnroutableExportServer(t)
+	root := h.Store.Root()
+	if err := os.WriteFile(filepath.Join(root, "private", "signing-key.pem"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if final := queueExportToItsEnd(t, srv, h, projectID); final.State != Failed {
+		t.Fatalf("export state = %q, want %q: the signing key does not read", final.State, Failed)
+	}
+
+	listed := listedExport(t, srv, projectID)
+	const cause = "store: signing key private/signing-key.pem is not"
+	if listed.Failure == nil || !strings.HasPrefix(listed.Failure.Message, cause) || strings.Contains(listed.Failure.Message, root) {
+		t.Errorf("listed export failure = %+v, want a cause starting %q without %s", listed.Failure, cause, root)
+	}
+}
+
+// newUnroutableExportServer serves a project holding a done analysis,
+// 20260917T101502Z, whose one candidate an export would fetch from an
+// unroutable registry.
+func newUnroutableExportServer(t *testing.T) (*httptest.Server, *Handlers, string) {
+	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
+	// Registered after the store's temporary directory, so it runs first.
+	q := jobs.NewQueue(nil)
+	t.Cleanup(q.Close)
 	seedToolsReady(t, st)
 	tm := tools.NewManager(st, &http.Client{Timeout: time.Second}, nil)
 	tm.GitHubAPI = unroutable
@@ -595,7 +640,7 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	svc := jobs.NewService(st, q, tm, fakePnpm{}, exportTrivyFake{}, reg)
 	h := NewHandlers(st, svc, tm)
 	srv := httptest.NewServer(Routes(h, testStatic()))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp.StatusCode != http.StatusCreated {
@@ -625,52 +670,49 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(analysisDir, "candidates.trivy.json"), []byte(`{"SchemaVersion":2,"Results":[]}`), 0o664); err != nil {
 		t.Fatalf("write candidates.trivy.json: %v", err)
 	}
+	return srv, h, project.Id
+}
 
+// queueExportToItsEnd queues an export of left-pad 1.3.1 from analysis
+// 20260917T101502Z and returns it once it is done or failed.
+func queueExportToItsEnd(t *testing.T, srv *httptest.Server, h *Handlers, projectID string) Export {
+	t.Helper()
 	body, _ := json.Marshal(ExportRequest{Selection: map[string][]string{"left-pad": {"1.3.1"}}})
-	resp2, err := http.Post(
-		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, project.Id),
+	resp, err := http.Post(
+		fmt.Sprintf("%s/api/projects/%s/analyses/20260917T101502Z/exports", srv.URL, projectID),
 		"application/json", bytes.NewReader(body),
 	)
 	if err != nil {
 		t.Fatalf("POST queueExport: %v", err)
 	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusAccepted {
-		data, _ := io.ReadAll(resp2.Body)
-		t.Fatalf("status = %d, want 202, body: %s", resp2.StatusCode, data)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 202, body: %s", resp.StatusCode, data)
 	}
 	var queued Export
-	if err := json.NewDecoder(resp2.Body).Decode(&queued); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&queued); err != nil {
 		t.Fatalf("decode queued export: %v", err)
 	}
+	return waitForExportState(t, h, srv, projectID, queued.Id, Done, Failed)
+}
 
-	final := waitForExportState(t, h, srv, project.Id, queued.Id, Done, Failed)
-	if final.State != Failed {
-		t.Fatalf("export state = %q, want %q: the registry is unroutable", final.State, Failed)
-	}
-
-	getResp, err := http.Get(fmt.Sprintf("%s/api/projects/%s", srv.URL, project.Id))
+// listedExport returns the first export GET /projects/{id} lists.
+func listedExport(t *testing.T, srv *httptest.Server, projectID string) Export {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("%s/api/projects/%s", srv.URL, projectID))
 	if err != nil {
 		t.Fatalf("GET project: %v", err)
 	}
-	defer getResp.Body.Close()
+	defer resp.Body.Close()
 	var got Project
-	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("decode project: %v", err)
 	}
 	if got.Exports == nil || len(*got.Exports) == 0 {
 		t.Fatalf("GetProject exports = %v, want the failed export still listed", got.Exports)
 	}
-	listed := (*got.Exports)[0]
-	if listed.State != Failed {
-		t.Fatalf("listed export state = %q, want %q: it must still be listed after it ended, not vanished", listed.State, Failed)
-	}
-	if listed.AnalysisId != "20260917T101502Z" {
-		t.Errorf("listed export analysisId = %q, want %q", listed.AnalysisId, "20260917T101502Z")
-	}
-	if listed.Failure == nil || listed.Failure.Message == "" {
-		t.Fatalf("listed export failure = %v, want a non-empty cause", listed.Failure)
-	}
+	return (*got.Exports)[0]
 }
 
 // testBlockingJob is a jobs.Job a test controls through run, used to hold

@@ -1618,8 +1618,9 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	}
 	fetched := 0
 	h.onFetch = func() { fetched++ }
+	rec := &stepRecorder{}
 
-	err := exp.Run(context.Background(), noopEmit)
+	err := exp.Run(context.Background(), rec.emit)
 	if err == nil || !strings.Contains(err.Error(), keyFile) {
 		t.Fatalf("Run = %v, want an error naming %s", err, keyFile)
 	}
@@ -1627,7 +1628,10 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 		t.Errorf("%d tarballs fetched before the key was checked, want none", fetched)
 	}
 	// Without a failed step the screen would show the failure with no cause.
-	assertExportFailedStatus(t, exportDir, "prepare", keyFile)
+	assertExportFailedStatus(t, exportDir, "prepare", "store: signing key private/signing-key.pem is not")
+	if len(rec.steps) == 0 || strings.Contains(rec.steps[0].Error, h.root) {
+		t.Errorf("step events = %+v, want a prepare cause without %s", rec.steps, h.root)
+	}
 }
 
 // TestExportDownloadRefusesAPathInTheVersion proves a lockfile version
@@ -1679,6 +1683,41 @@ func TestExportDownloadRefusesAPathInTheVersion(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "escaped.tgz.part" && e.Name() != filepath.Base(exportDir) {
 			t.Errorf("unexpected %s beside the export", e.Name())
+		}
+	}
+}
+
+// A step past prepare fails with an error naming a path under the data
+// root; its cause, in the step event and in status.json, names none.
+func TestExportDownloadCauseNamesNoDataDirectory(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	if err := os.MkdirAll(filepath.Join(h.root, "cache"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.root, "cache", "tarballs"), nil, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	exp := h.newExport(t, analysisDir, exportDir, false)
+	rec := &stepRecorder{}
+
+	err := exp.Run(context.Background(), rec.emit)
+	if err == nil || !strings.Contains(err.Error(), h.root) {
+		t.Fatalf("Run = %v, want an error naming %s", err, h.root)
+	}
+	last := rec.steps[len(rec.steps)-1]
+	if last.Name != "download" || last.Error == "" || strings.Contains(last.Error, h.root) {
+		t.Errorf("last step = %+v, want a download cause without %s", last, h.root)
+	}
+	var status exportStatusFile
+	if err := json.Unmarshal(readFile(t, filepath.Join(exportDir, "status.json")), &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range status.Steps {
+		if strings.Contains(s.Error, h.root) {
+			t.Errorf("status.json step %+v names %s", s, h.root)
 		}
 	}
 }

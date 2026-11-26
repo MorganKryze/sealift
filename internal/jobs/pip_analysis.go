@@ -41,6 +41,9 @@ func (a *PipAnalysis) Kind() string { return "analysis" }
 // StoreID names the job by its store directory id, which the client uses.
 func (a *PipAnalysis) StoreID() string { return a.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (a *PipAnalysis) ProjectID() string { return a.Project.ID }
+
 // PipResult is what a pip analysis writes to pip-result.json, and what the
 // API returns as pipResult. Field names match the contract's schemas.
 type PipResult struct {
@@ -134,7 +137,7 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
-	r := &pipRun{stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
+	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
 	uvVersion, trivyVersion, trivyDBDate := "", "", time.Time{}
 	defer func() {
 		state := store.Done

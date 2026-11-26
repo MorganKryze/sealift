@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -106,6 +107,9 @@ func (a *Analysis) Kind() string { return "analysis" }
 // StoreID names the job by its store directory id, which the client uses.
 func (a *Analysis) StoreID() string { return a.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (a *Analysis) ProjectID() string { return a.Project.ID }
+
 // statusFile is the on-disk shape of status.json: state, step timings, tool
 // versions, the vulnerability database's date and the target. The queue,
 // not this job, has the last word on the final state of a job (it tells
@@ -144,6 +148,48 @@ type stepData struct {
 	State      store.State `json:"state"`
 	DurationMs int64       `json:"durationMs"`
 	Error      string      `json:"error,omitempty"`
+}
+
+// cause is err's message as a job records it for a client, in status.json
+// and in a step event: a path under the data directory root reads relative
+// to it, whatever kind of error named the path, and a URL carries no
+// credentials. The server log keeps the paths.
+func cause(root string, err error) string {
+	return causeText(root, err.Error())
+}
+
+// causeText is cause for an error's message.
+func causeText(root, msg string) string {
+	msg = runner.StripURLCredentials(msg)
+	if root == "" {
+		return msg
+	}
+	return relativeToRoot(msg, filepath.Clean(root))
+}
+
+// relativeToRoot rewrites each path in msg that starts at root: root/x
+// reads x and root alone reads ".". A path starts at the text's start or
+// after whitespace, a quote, "(", "=" or ":", and root must end at a
+// separator or where the path ends, so /srv/data/x, a URL's /data/ or a
+// sibling such as /data2 stay as they are.
+func relativeToRoot(msg, root string) string {
+	re := regexp.MustCompile(`(?:^|[\s"'(=:])(` + regexp.QuoteMeta(root) + `)`)
+	sep := string(filepath.Separator)
+	var b strings.Builder
+	last := 0
+	for _, m := range re.FindAllStringSubmatchIndex(msg, -1) {
+		start, end := m[2], m[3]
+		switch {
+		case strings.HasPrefix(msg[end:], sep):
+			b.WriteString(msg[last:start])
+			last = end + len(sep)
+		case end == len(msg) || strings.ContainsRune(" \t\n\"'),:;", rune(msg[end])):
+			b.WriteString(msg[last:start] + ".")
+			last = end
+		}
+	}
+	b.WriteString(msg[last:])
+	return b.String()
 }
 
 // progressData is the payload of a "progress" event. Step names the step
@@ -192,6 +238,7 @@ func mustJSON(v any) json.RawMessage {
 // The npm and pip analyses share it.
 type stepLog struct {
 	ctx     context.Context
+	root    string
 	emit    func(Event)
 	logFile *os.File
 	steps   []stepRecord
@@ -223,7 +270,7 @@ func (l *stepLog) runStep(name string, fn func() error) error {
 	duration := time.Since(start).Milliseconds()
 	message := ""
 	if state == store.Failed {
-		message = err.Error()
+		message = cause(l.root, err)
 	}
 	l.steps = append(l.steps, stepRecord{Name: name, State: string(state), DurationMs: duration, Error: message})
 	l.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration, Error: message})})
@@ -315,7 +362,7 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	}
 
 	r := &run{
-		stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile},
+		stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile},
 		a:       a,
 		// Dependencies and Warnings start as empty slices, not nil: the
 		// contract marks both required arrays, and a client that trusts it
