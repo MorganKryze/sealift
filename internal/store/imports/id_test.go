@@ -3,6 +3,7 @@ package imports
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,9 +46,7 @@ func TestCreateInOneSecondListsInCreationOrder(t *testing.T) {
 	for _, imp := range list {
 		listed = append(listed, imp.ID)
 	}
-	for i, j := 0, len(want)-1; i < j; i, j = i+1, j-1 {
-		want[i], want[j] = want[j], want[i]
-	}
+	slices.Reverse(want)
 	if strings.Join(listed, " ") != strings.Join(want, " ") {
 		t.Errorf("list %v, want newest first %v", listed, want)
 	}
@@ -107,5 +106,28 @@ func TestCreateRefusesPastTheLastSuffix(t *testing.T) {
 	}
 	if imp, err := s.Create("alice", testArchiveObject, testManifestObject, &testSignatureObject, ""); err == nil {
 		t.Fatalf("Create past ffffffff gave %s, want an error", imp.ID)
+	}
+}
+
+func TestCreateStartsAgainInTheNextSecond(t *testing.T) {
+	s := openStoreInOneSecond(t, testRoot(t))
+	createFor(t, s, "alice")
+	createFor(t, s, "alice")
+	s.now = func() time.Time { return time.Date(2026, 11, 6, 10, 15, 1, 0, time.UTC) }
+	if got := createFor(t, s, "alice").ID; got != "20261106T101501Z-00000000" {
+		t.Errorf("id %s, want the next second with suffix 00000000", got)
+	}
+}
+
+func TestCreateIgnoresFoldersOfAnotherShape(t *testing.T) {
+	root := testRoot(t)
+	s := openStoreInOneSecond(t, root)
+	for _, name := range []string{testSecond + "-zz", testSecond + "-fffffffff"} {
+		if err := os.MkdirAll(filepath.Join(root, "alice", name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := createFor(t, s, "alice").ID; got != testSecond+"-00000000" {
+		t.Errorf("id %s, want suffix 00000000 past folders that are no id", got)
 	}
 }

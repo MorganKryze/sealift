@@ -129,14 +129,15 @@ type Store struct {
 	root string
 	log  *slog.Logger
 	now  func() time.Time
-	// given holds, per user, the last id Create handed out, so a removed
-	// import's id never comes back while the clock moves forward.
-	given map[string]idMark
+	// given holds the last suffix Create handed out per user and second,
+	// so a removed import's id never comes back, even when the clock steps
+	// back into a second it already used.
+	given map[idKey]int64
 }
 
-type idMark struct {
+type idKey struct {
+	user   string
 	second string
-	suffix int64
 }
 
 // Open creates root (mode 0700) when it is missing.
@@ -151,7 +152,7 @@ func Open(root string, log *slog.Logger) (*Store, error) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		return nil, fmt.Errorf("imports: %w", err)
 	}
-	return &Store{root: root, log: log, now: func() time.Time { return time.Now().UTC() }, given: map[string]idMark{}}, nil
+	return &Store{root: root, log: log, now: func() time.Time { return time.Now().UTC() }, given: map[idKey]int64{}}, nil
 }
 
 func (s *Store) clock() time.Time { return s.now().UTC().Truncate(time.Second) }
@@ -168,8 +169,16 @@ func (s *Store) Create(user string, archive, manifest Object, signature *Object,
 	if err := mkdirPrivate(filepath.Join(s.root, user)); err != nil {
 		return Import{}, err
 	}
+	// The second is read under the lock, so calls take it in time order and
+	// pruning earlier seconds never drops a later second's mark.
 	now := s.clock()
 	second := now.Format(idLayout)
+	// The fixed layout sorts by time.
+	for k := range s.given {
+		if k.second < second {
+			delete(s.given, k)
+		}
+	}
 	for range idAttempts {
 		id, suffix, err := s.nextID(user, second)
 		if err != nil {
@@ -181,7 +190,7 @@ func (s *Store) Create(user string, archive, manifest Object, signature *Object,
 			}
 			return Import{}, fmt.Errorf("imports: %w", err)
 		}
-		s.given[user] = idMark{second, suffix}
+		s.given[idKey{user, second}] = suffix
 		imp := Import{
 			FormatVersion: FormatVersion, ID: id, User: user, CreatedAt: now,
 			Archive: archive, Manifest: manifest, Signature: signature, ExpectedSHA256: expectedSHA256,
@@ -198,16 +207,17 @@ func (s *Store) Create(user string, archive, manifest Object, signature *Object,
 
 // nextID returns the id Create tries next for user in second, and its
 // suffix: one past the highest suffix of that second in the user's folder or
-// already given by this store, 00000000 for the first. Ids of sealift 0.7.0,
-// with a random suffix, keep their place: a new import counts past them.
+// already given by this store, 00000000 for the first. Ids of sealift 0.7.0
+// and earlier carry a random suffix and keep their place: a new import
+// counts past them.
 func (s *Store) nextID(user, second string) (string, int64, error) {
 	entries, err := os.ReadDir(filepath.Join(s.root, user))
 	if err != nil {
 		return "", 0, fmt.Errorf("imports: %w", err)
 	}
 	highest := int64(-1)
-	if m, ok := s.given[user]; ok && m.second == second {
-		highest = m.suffix
+	if n, ok := s.given[idKey{user, second}]; ok {
+		highest = n
 	}
 	for _, e := range entries {
 		suffix, ok := strings.CutPrefix(e.Name(), second+"-")
