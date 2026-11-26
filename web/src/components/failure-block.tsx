@@ -28,6 +28,8 @@ interface FailureBlockProps {
   tone: "failure" | "neutral"
   /** The one action that clears the cause, at the cause's right; with no cause, the page's action row. */
   actions: ReactNode
+  /** The job's own log lines, for a job whose log is not the analysis' file; none shown when empty. */
+  log?: LogLine[]
 }
 
 // The log file holds what the job wrote, line by line, with no receipt time.
@@ -46,10 +48,11 @@ function fileLines(text: string): LogLine[] {
  * is a defect, so the block always reads from the job's own failure record; the raw text a tool wrote
  * stays in the log.
  */
-export function FailureBlock({ projectId, analysisId, heading, sub, cause, tone, actions }: FailureBlockProps) {
+export function FailureBlock({ projectId, analysisId, heading, sub, cause, tone, actions, log }: FailureBlockProps) {
   const logQuery = useQuery({
     queryKey: ["analysis-log", projectId, analysisId],
     queryFn: () => getAnalysisLog(projectId, analysisId),
+    enabled: log === undefined,
   })
   const failure = tone === "failure"
 
@@ -85,12 +88,16 @@ export function FailureBlock({ projectId, analysisId, heading, sub, cause, tone,
           <div className="col-start-2 flex flex-wrap gap-3 self-end sm:col-start-3">{actions}</div>
         </div>
       ) : null}
-      <LogBlock
-        className="mt-3"
-        lines={logQuery.data === undefined ? [] : fileLines(logQuery.data)}
-        status={logQuery.isError ? "The log did not load." : logQuery.data === undefined ? "Loading" : undefined}
-        copyText={logQuery.data || undefined}
-      />
+      {log === undefined ? (
+        <LogBlock
+          className="mt-3"
+          lines={logQuery.data === undefined ? [] : fileLines(logQuery.data)}
+          status={logQuery.isError ? "The log did not load." : logQuery.data === undefined ? "Loading" : undefined}
+          copyText={logQuery.data || undefined}
+        />
+      ) : log.length > 0 ? (
+        <LogBlock className="mt-3" lines={log} copyText={log.map((line) => line.text).join("\n")} />
+      ) : null}
       {cause ? null : <div className="mt-7 flex flex-wrap items-center justify-end gap-3">{actions}</div>}
       {failure ? <ContactCard /> : null}
     </div>

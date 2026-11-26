@@ -10,7 +10,7 @@ import { FailureBlock } from "@/components/failure-block"
 import { CancelRow, JobProgress, type CancelWords } from "@/components/job-progress"
 import { ProblemNotice } from "@/components/problem-notice"
 import { CrossingFiles } from "@/components/projects/crossing-files"
-import { analysisCause } from "@/components/session/analysis-screen"
+import { hostIn, NO_ANSWER } from "@/components/session/analysis-screen"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
@@ -175,8 +175,9 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
 
   let body: ReactNode
   if (stopped && failure) {
-    // The cause's words are the analysis' own: the same registries fail the same way.
-    const { title } = analysisCause({ state: "failed", failure })
+    const message = failure.message?.trim() ?? ""
+    // A fetch that got no answer reads by its host; any other cause is the export's own first line.
+    const title = NO_ANSWER.test(message) ? `No answer from ${hostIn(message) ?? "the registry"}` : message.split("\n")[0] || "The cause was not recorded"
     body = (
       <FailureBlock
         projectId={project.id}
@@ -185,6 +186,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         sub={KEPT}
         cause={{ title, diagnosis: `It stopped while ${lower(doing(failure.step))}.` }}
         tone="failure"
+        log={events.log}
         actions={
           <>
             {back}
@@ -203,6 +205,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         heading={interrupted ? "Sealing interrupted" : "Sealing stopped"}
         sub={interrupted ? `The server restarted while it ran. ${KEPT}` : `The version that ran it did not record why. ${KEPT}`}
         tone={interrupted ? "neutral" : "failure"}
+        log={events.log}
         actions={
           <>
             {back}

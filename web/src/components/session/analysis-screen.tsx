@@ -67,10 +67,10 @@ export function failureMessage(analysis: Pick<Analysis, "state" | "failure">): s
   return "The server restarted while it ran."
 }
 
-const NO_ANSWER = /ETIMEDOUT|ESOCKETTIMEDOUT|ERR_SOCKET_TIMEOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ERR_PNPM_META_FETCH_FAIL|timed out|timeout|connection refused|no such host|deadline exceeded/i
+export const NO_ANSWER = /ETIMEDOUT|ESOCKETTIMEDOUT|ERR_SOCKET_TIMEOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ERR_PNPM_META_FETCH_FAIL|timed out|timeout|connection refused|no such host|deadline exceeded/i
 
 // The host a failed fetch names: the first URL's, else the one a name lookup failed on.
-function hostIn(message: string): string | undefined {
+export function hostIn(message: string): string | undefined {
   return message.match(/https?:\/\/([^/\s:@]+)/)?.[1] ?? message.match(/lookup ([^\s:]+)/)?.[1]
 }
 
