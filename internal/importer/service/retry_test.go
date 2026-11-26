@@ -850,6 +850,25 @@ func TestRetryOfOneCause(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps the new cause of a listed package that fails again", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{
+			leftPad: importer.KindNexus, zeta: importer.KindConflict,
+		})
+		// Since the first attempt, Nexus took other bytes under left-pad's version.
+		r.nexus.mu.Lock()
+		r.nexus.tarballs[npm.TarballURL("/repository/"+testRepo, leftPad.name, leftPad.version)] = []byte("other bytes")
+		r.nexus.mu.Unlock()
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad))), http.StatusAccepted)
+		got := resultsByName(waitEnded(t, r.store, id).Attempts[1].Report)
+		if l := got["left-pad"]; l.State != importer.Failed || l.Kind != importer.KindConflict || !strings.HasPrefix(l.Reason, "nexus holds this version with other bytes") {
+			t.Errorf("left-pad = %+v, want failed as conflict with this attempt's reason", l)
+		}
+		if z := got["zeta"]; z.Kind != importer.KindConflict || z.Reason != "earlier conflict" {
+			t.Errorf("zeta = %+v, want its earlier cause", z)
+		}
+	})
+
 	t.Run("fails an unlisted package Nexus lost since the earlier attempt", func(t *testing.T) {
 		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
 		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{leftPad: importer.KindNexus})
