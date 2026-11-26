@@ -156,7 +156,7 @@ func TestSweepEphemeral(t *testing.T) {
 	age(fresh, 10*time.Minute)
 	writeCaches(t, s)
 
-	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProject); r != (Sweep{Deleted: 1}) {
+	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProjectUnguarded); r != (Sweep{Deleted: 1}) {
 		t.Errorf("first sweep = %+v, want 1 deleted and no purge (a job is in flight)", r)
 	}
 	if _, err := os.Stat(old.Dir); !os.IsNotExist(err) {
@@ -175,7 +175,7 @@ func TestSweepEphemeral(t *testing.T) {
 	}
 	age(busy, 2*time.Hour)
 	age(fresh, 2*time.Hour)
-	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProject); r != (Sweep{Deleted: 2, Purged: true}) {
+	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProjectUnguarded); r != (Sweep{Deleted: 2, Purged: true}) {
 		t.Errorf("second sweep = %+v, want 2 deleted and the caches purged", r)
 	}
 	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")); !os.IsNotExist(err) {
@@ -184,7 +184,7 @@ func TestSweepEphemeral(t *testing.T) {
 
 	// Nothing left to erase: the next sweep reports nothing, so the log
 	// stays quiet on an idle instance.
-	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProject); r != (Sweep{}) {
+	if r := s.SweepEphemeral(time.Hour, now, s.DeleteProjectUnguarded); r != (Sweep{}) {
 		t.Errorf("idle sweep = %+v, want nothing done", r)
 	}
 }
@@ -253,7 +253,7 @@ func TestSweepEphemeralSkipsAnUnreadableProject(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o770) })
 
-	r := s.SweepEphemeral(time.Hour, now, s.DeleteProject)
+	r := s.SweepEphemeral(time.Hour, now, s.DeleteProjectUnguarded)
 	if r.Deleted != 1 || r.Failed != 1 {
 		t.Errorf("sweep = %+v, want 1 deleted and 1 failed", r)
 	}
@@ -285,14 +285,14 @@ func TestPurgeIfIdlePutsOffAPurgeWhileAJobRuns(t *testing.T) {
 		t.Fatalf("the caches went while a job ran: %v", err)
 	}
 	// Still busy: the sweep keeps the caches.
-	if r := s.SweepEphemeral(time.Hour, time.Now(), s.DeleteProject); r.Purged {
+	if r := s.SweepEphemeral(time.Hour, time.Now(), s.DeleteProjectUnguarded); r.Purged {
 		t.Errorf("sweep purged while a job ran")
 	}
 	if err := os.RemoveAll(job); err != nil {
 		t.Fatal(err)
 	}
 	// The project is fresh, so it stays; the put-off purge runs anyway.
-	if r := s.SweepEphemeral(time.Hour, time.Now(), s.DeleteProject); !r.Purged || r.Deleted != 0 {
+	if r := s.SweepEphemeral(time.Hour, time.Now(), s.DeleteProjectUnguarded); !r.Purged || r.Deleted != 0 {
 		t.Errorf("sweep after the job = %+v, want the put-off purge and no deletion", r)
 	}
 	if _, err := os.Stat(tarball); !os.IsNotExist(err) {
@@ -330,7 +330,7 @@ func TestEphemeralPipProjectLeavesNoFile(t *testing.T) {
 	}
 
 	// The API's delete in ephemeral mode: the project, then the caches.
-	if err := s.DeleteProject(p.ID); err != nil {
+	if err := s.DeleteProjectUnguarded(p.ID); err != nil {
 		t.Fatal(err)
 	}
 	if purged, err := s.PurgeIfIdle(); err != nil || !purged {

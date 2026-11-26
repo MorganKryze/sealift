@@ -104,7 +104,7 @@ func TestProjectCRUD(t *testing.T) {
 		t.Fatalf("Target.Node = %q, want %q", updated.Target.Node, "20.0.0")
 	}
 
-	if err := s.DeleteProject(p.ID); err != nil {
+	if err := s.DeleteProjectUnguarded(p.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	if _, err := s.Project(p.ID); !errors.Is(err, ErrNotFound) {
@@ -170,7 +170,7 @@ func TestProjectNotFound(t *testing.T) {
 	if err := s.SetProjectTarget("missing", Target{OS: "linux", CPU: "x64", Node: "22.17.1", PnpmVer: "10.34.5"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetProjectTarget(\"missing\", ...): err = %v, want ErrNotFound", err)
 	}
-	if err := s.DeleteProject("missing"); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteProjectUnguarded("missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"missing\"): err = %v, want ErrNotFound", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestProjectMethodsRefuseIDsThatEscapeTheDataVolume(t *testing.T) {
 		if err := s.SetProjectTarget(id, target); !errors.Is(err, ErrNotFound) {
 			t.Errorf("SetProjectTarget(%q, ...): err = %v, want ErrNotFound", id, err)
 		}
-		if err := s.DeleteProject(id); !errors.Is(err, ErrNotFound) {
+		if err := s.DeleteProjectUnguarded(id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("DeleteProject(%q): err = %v, want ErrNotFound", id, err)
 		}
 	}
@@ -196,7 +196,7 @@ func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	s := openTestStore(t)
 	settingsPath := writeSettings070(t, s.Root())
 
-	if err := s.DeleteProject("../private"); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteProjectUnguarded("../private"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"../private\"): err = %v, want ErrNotFound", err)
 	}
 	if _, err := os.Stat(settingsPath); err != nil {
@@ -217,7 +217,7 @@ func TestDeleteProjectRemovesALeftoverJobDirectory(t *testing.T) {
 			if _, err := s.NewDir(kind, project.ID); err != nil {
 				t.Fatalf("NewDir: %v", err)
 			}
-			if err := s.DeleteProject(project.ID); err != nil {
+			if err := s.DeleteProjectUnguarded(project.ID); err != nil {
 				t.Fatalf("DeleteProject with a leftover directory: %v", err)
 			}
 			if _, err := os.Stat(project.Dir); !os.IsNotExist(err) {

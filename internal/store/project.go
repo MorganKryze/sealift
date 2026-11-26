@@ -347,10 +347,11 @@ func (s *Store) SetProjectTarget(id string, t Target) error {
 	return writeJSONFile(path, record, fileMode)
 }
 
-// DeleteProject removes a project directory and everything under it. It
-// does not know whether a job still writes there: jobs.Service.DeleteProject
-// asks the queue first, and a directory a crashed job left goes too.
-func (s *Store) DeleteProject(id string) error {
+// DeleteProjectUnguarded removes a project directory and everything under
+// it, without asking whether a job still writes there. Callers go through
+// jobs.Service.DeleteProject, which refuses while a job is queued or
+// running; a directory a crashed job left goes too.
+func (s *Store) DeleteProjectUnguarded(id string) error {
 	if err := validID(id); err != nil {
 		return err
 	}

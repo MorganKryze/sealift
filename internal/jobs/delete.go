@@ -51,7 +51,7 @@ func (s *Service) DeleteProject(projectID string) error {
 	if s.tracksJobOf(projectID) {
 		return store.ErrBusy
 	}
-	return s.store.DeleteProject(projectID)
+	return s.store.DeleteProjectUnguarded(projectID)
 }
 
 // tracksJobOf reports whether Service tracks a queued or running job of
