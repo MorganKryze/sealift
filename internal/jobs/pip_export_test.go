@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -1154,7 +1155,7 @@ func TestPipExportIgnoresTheAnalysisAdvisories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var archives, manifests [2][]byte
+	var archives, manifests, summaries, csvs [2][]byte
 	for i, keep := range []bool{false, true} {
 		delete(doc, "advisories")
 		if keep {
@@ -1193,6 +1194,8 @@ func TestPipExportIgnoresTheAnalysisAdvisories(t *testing.T) {
 			t.Fatalf("export %d: manifest.json has no createdAt line:\n%s", i, manifest)
 		}
 		manifests[i] = createdAtLine.ReplaceAll(manifest, nil)
+		summaries[i] = summaryDateLines.ReplaceAll(readFile(t, filepath.Join(e.Dir, "summary.md")), nil)
+		csvs[i] = readFile(t, filepath.Join(e.Dir, "findings.csv"))
 	}
 	if !bytes.Equal(archives[0], archives[1]) {
 		t.Error("the archive's bytes changed with the analysis' advisories")
@@ -1200,7 +1203,17 @@ func TestPipExportIgnoresTheAnalysisAdvisories(t *testing.T) {
 	if !bytes.Equal(manifests[0], manifests[1]) {
 		t.Errorf("manifest.json changed with the analysis' advisories:\n%s\nthen\n%s", manifests[0], manifests[1])
 	}
+	if !bytes.Equal(summaries[0], summaries[1]) {
+		t.Errorf("summary.md changed with the analysis' advisories:\n%s\nthen\n%s", summaries[0], summaries[1])
+	}
+	if !bytes.Equal(csvs[0], csvs[1]) {
+		t.Errorf("findings.csv changed with the analysis' advisories:\n%s\nthen\n%s", csvs[0], csvs[1])
+	}
 }
+
+// summaryDateLines matches the lines of summary.md that date the analysis
+// and its database, which two exports of one analysis may not share.
+var summaryDateLines = regexp.MustCompile(`(?m)^- (Analysis|Trivy DB) date: .*\n`)
 
 func TestPipExportNeverReadsAWheelsContent(t *testing.T) {
 	ix := piptest.NewIndex(t)
