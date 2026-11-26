@@ -130,8 +130,11 @@ func TestEnginesKeepsTheStringValues(t *testing.T) {
 	}{
 		{name: "all strings", doc: `{"node": ">=18", "npm": ">=9"}`, want: Engines{"node": ">=18", "npm": ">=9"}},
 		{name: "one value is a number", doc: `{"node": ">=18", "npm": 7}`, want: Engines{"node": ">=18"}},
-		{name: "node is not a string", doc: `{"node": 18, "npm": ">=9"}`, want: Engines{"npm": ">=9"}},
-		{name: "only value is not a string", doc: `{"node": {"min": 18}}`, want: Engines{}},
+		{name: "node is a number", doc: `{"node": 18, "npm": ">=9"}`, want: Engines{"node": "not a string: 18", "npm": ">=9"}},
+		{name: "node is an object", doc: `{"node": {"min": 18}}`, want: Engines{"node": `not a string: {"min":18}`}},
+		{name: "node is an array", doc: `{"node": [">=18"]}`, want: Engines{"node": `not a string: [">=18"]`}},
+		{name: "node is null", doc: `{"node": null, "npm": ">=9"}`, want: Engines{"node": "", "npm": ">=9"}},
+		{name: "only value is not a string", doc: `{"npm": {"min": 9}}`, want: Engines{}},
 		{name: "array", doc: `["node >= 0.4"]`, want: nil},
 		{name: "null", doc: `null`, want: nil},
 	} {
@@ -144,6 +147,23 @@ func TestEnginesKeepsTheStringValues(t *testing.T) {
 				t.Errorf("Engines = %#v, want %#v", e, tc.want)
 			}
 		})
+	}
+}
+
+// pnpm reads an engines.node that is not a string as a range no Node
+// satisfies, so the decoded value must fail SatisfiesNode for any target,
+// including the number it was written as.
+func TestEnginesNodeThatIsNotAStringSatisfiesNoNode(t *testing.T) {
+	for _, doc := range []string{`{"node": 18}`, `{"node": 18.1}`, `{"node": {"x": 1}}`, `{"node": [">=18"]}`, `{"node": true}`} {
+		var e Engines
+		if err := json.Unmarshal([]byte(doc), &e); err != nil {
+			t.Fatalf("%s: Unmarshal: %v", doc, err)
+		}
+		for _, node := range []string{"18.0.0", "18.1.0", "22.17.1"} {
+			if ok, _ := SatisfiesNode(e["node"], node); ok {
+				t.Errorf("%s: engines.node %q satisfies Node %s", doc, e["node"], node)
+			}
+		}
 	}
 }
 
