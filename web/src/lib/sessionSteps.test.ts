@@ -27,7 +27,19 @@ describe("sessionSteps", () => {
     expect(view(project(analysis("done"), exp("done")), "export")).toEqual({ drop: "done", analysis: "done", review: "done", export: "done*" })
   })
 
-  it("marks a cancelled export failed and keeps it reachable", () => {
-    expect(view(project(analysis("done"), exp("cancelled")), "review").export).toBe("failed")
+  it("marks a cancelled analysis cancelled, never failed or done", () => {
+    expect(view(project(analysis("cancelled")), "analysis")).toEqual({ drop: "done", analysis: "cancelled*", review: "upcoming", export: "upcoming" })
+    expect(view(project(analysis("cancelled")), "drop").analysis).toBe("cancelled")
+  })
+
+  it("leaves Seal to do after a cancelled export", () => {
+    expect(view(project(analysis("done"), exp("cancelled")), "review")).toEqual({ drop: "done", analysis: "done", review: "available*", export: "upcoming" })
+  })
+
+  it("keeps a failed export failed and reachable", () => {
+    const steps = sessionSteps({ project: project(analysis("done"), exp("failed")), current: "review", onNavigate: () => {} })
+    const seal = steps.find((s) => s.id === "export")
+    expect(seal?.status).toBe("failed")
+    expect(seal?.onNavigate).toBeDefined()
   })
 })

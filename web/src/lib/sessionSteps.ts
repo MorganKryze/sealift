@@ -28,19 +28,24 @@ export function sessionSteps({ project, current, onNavigate }: SessionStepsOptio
 
   const isCurrent = (step: StepId) => step === current
 
+  // A cancel is the developer's own stop, never a failure. A cancelled export leaves nothing sealed, so
+  // Seal is still to do and Review is where the developer goes back to.
   const analysisStatus: StepStatus = !analysis
     ? "upcoming"
-    : TERMINAL_FAILED_STATES.has(analysis.state)
-      ? "failed"
-      : analysis.state === "done"
-        ? "done"
-        : "running"
-  const reviewStatus: StepStatus = analysis?.state !== "done" ? "upcoming" : relatedExport ? "done" : "available"
-  const exportStatus: StepStatus = !relatedExport
+    : analysis.state === "cancelled"
+      ? "cancelled"
+      : TERMINAL_FAILED_STATES.has(analysis.state)
+        ? "failed"
+        : analysis.state === "done"
+          ? "done"
+          : "running"
+  const exported = relatedExport && relatedExport.state !== "cancelled" ? relatedExport : undefined
+  const reviewStatus: StepStatus = analysis?.state !== "done" ? "upcoming" : exported ? "done" : "available"
+  const exportStatus: StepStatus = !exported
     ? "upcoming"
-    : TERMINAL_FAILED_STATES.has(relatedExport.state)
+    : TERMINAL_FAILED_STATES.has(exported.state)
       ? "failed"
-      : relatedExport.state === "done"
+      : exported.state === "done"
         ? "done"
         : "running"
 

@@ -8,6 +8,8 @@
 // random input. Fill the blocks below; `exceptions` take a selector, the check they lift and the reason.
 // With UI_CAPTURES set to a folder, each page is saved there once checked, as
 // <role>-<route slug>-<width>-<theme>.png, for a reader to compare with the drawn screens.
+// Each module of tests/gate/ may export `routes`, `states`, `sessions` and `answers`, appended to UI's
+// lists below, so the states of one screen live in their own file.
 
 // GET /api/instance as the collection server answered it on an empty volume, with its stand-in upstream
 // answering 404 to everything: Trivy, pnpm and uv failed once and wait for their next try. Captured once
@@ -104,6 +106,84 @@ const READY_WITH_WARNING = {
   })),
 }
 
+// The package.json files the Check step's states drop, written under test-results/ before the run. Real
+// names where the design rules' worst cases name them; the rest numbered, since only their count matters.
+const FILES = resolve("test-results", "gate", "files")
+const fileAt = (name) => join(FILES, name)
+const pinned = (count, prefix, from = 0) =>
+  Object.fromEntries(Array.from({ length: count }, (_, i) => [`${prefix}-${String(i + from).padStart(3, "0")}`, `${1 + (i % 9)}.${i % 23}.${i % 7}`]))
+const WORST_PACKAGES = {
+  "@babel/plugin-transform-async-generator-functions": "1.0.0-beta.12+build.345",
+  "@typescript-eslint/eslint-plugin": "8.18.0",
+  "@typescript-eslint/parser": "8.18.0",
+  "@storybook/addon-interactions": "8.4.7",
+  "@testing-library/react-hooks": "8.0.1",
+  typescript: "0.0.0-insiders.20251101",
+}
+const CHECK_FILES = {
+  "web-portal/package.json": { name: "web-portal", version: "2.4.0", dependencies: pinned(139, "portal-lib"), devDependencies: pinned(11, "portal-tool") },
+  "billing-api/package.json": {
+    name: "billing-api",
+    dependencies: {
+      ...pinned(76, "billing-lib"),
+      express: "^4.18.2",
+      lodash: "~4.17.21",
+      pino: ">=9.0.0",
+      "@billing/shared-schemas": "git+ssh://git@gitlab.example.com/billing/shared-schemas.git#v3.2.0",
+      "pdf-templates": "file:../pdf-templates",
+    },
+    devDependencies: pinned(3, "billing-tool"),
+    pnpm: { overrides: { semver: "7.5.4", "tough-cookie": "4.1.3", ws: "8.17.1" } },
+  },
+  "kiosk-ui/package.json": { name: "kiosk-ui", dependencies: Object.fromEntries(Object.entries(pinned(150, "kiosk-lib")).map(([name, version]) => [name, `^${version}`])) },
+  "long-name/package.json": {
+    name: "customer-onboarding-portal-frontend-next",
+    dependencies: { ...WORST_PACKAGES, ...pinned(134, "onboarding-lib") },
+    devDependencies: pinned(10, "onboarding-tool"),
+  },
+}
+const writeCheckFiles = () => {
+  for (const [name, body] of Object.entries(CHECK_FILES)) {
+    mkdirSync(dirname(fileAt(name)), { recursive: true })
+    writeFileSync(fileAt(name), `${JSON.stringify(body, null, 2)}\n`)
+  }
+  writeFileSync(fileAt("kiosk-ui-export.zip"), "PK\u0003\u0004")
+}
+
+// POST /api/projects held until the page closes, so the page stays on Starting.
+const holdStart = (page) =>
+  page.route((url) => url.pathname === "/api/projects", (route) =>
+    route.request().method() === "POST" ? new Promise((done) => page.once("close", done)).then(() => route.abort().catch(() => {})) : route.fallback())
+// POST /api/projects answered 503 with the contract's Problem body, as a proxy in front of a stopped server would.
+const refuseStart = (page) =>
+  page.route((url) => url.pathname === "/api/projects", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({ status: 503, contentType: "application/problem+json", body: JSON.stringify({ type: "about:blank", title: "Service Unavailable", status: 503 }) })
+      : route.fallback())
+
+const CHECK_STATES = [
+  { path: "/update", name: "a wrong file", file: fileAt("kiosk-ui-export.zip"), ready: "Drop the package.json at your project's root; nothing was sent." },
+  { path: "/update", name: "compliant", file: fileAt("web-portal/package.json"), ready: "Compliant" },
+  {
+    path: "/update",
+    name: "compliant open",
+    file: fileAt("web-portal/package.json"),
+    click: [{ role: "button", name: "Compliant" }, { role: "button", name: /^150 packages/ }],
+    ready: "3 checks passed",
+  },
+  { path: "/update", name: "issues", file: fileAt("billing-api/package.json"), ready: "3 checks to fix first" },
+  { path: "/update", name: "150 ranges", file: fileAt("kiosk-ui/package.json"), click: [{ role: "button", name: "Show all 150 packages" }], ready: "1 check to fix first" },
+  {
+    path: "/update",
+    name: "a 40-character name with 150 packages",
+    file: fileAt("long-name/package.json"),
+    click: [{ role: "button", name: "Compliant" }, { role: "button", name: /^150 packages/ }, { role: "button", name: "Show all 150 packages" }],
+    ready: "3 checks passed",
+  },
+  { path: "/update", name: "starting", before: holdStart, file: fileAt("web-portal/package.json"), click: [{ role: "button", name: "Analyse" }], ready: "Starting" },
+  { path: "/update", name: "a failed start", before: refuseStart, file: fileAt("web-portal/package.json"), click: [{ role: "button", name: "Analyse" }], ready: "Analysis did not start" },
+]
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -123,10 +203,13 @@ export const UI = {
     "/projects/web-portal",
     "/projects/pipeline",
   ],
-  // A page with a control pressed first: the state is checked as a route is. `opens` names the role
-  // and name the pressed control must bring up.
+  // A page brought to a state before it is checked as a route is. In order: `before(page)` runs before
+  // the page loads (for page.route fakes), `file` is set on the page's file input, each `click` step
+  // ({ role, name }) is pressed, `open` is pressed and must bring up its `opens`, and `ready` is the
+  // text that proves the state arrived. `name` tells states of one path apart.
   states: [
     { path: "/instance", open: { role: "button", name: "How to regenerate", opens: { role: "button", name: "Copy command" } } },
+    ...CHECK_STATES,
   ],
   // A session route with sessionStorage written before the page loads, as the review screen keeps the
   // selection and the reasons there; `ready` is the text that proves the analysis arrived.
@@ -181,13 +264,19 @@ export const UI = {
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
 import { IMPORT, startImportFixtures } from "./import-fixtures.mjs"
+
+const GATE = new URL("./gate/", import.meta.url)
+for (const name of existsSync(GATE) ? readdirSync(GATE).filter((f) => f.endsWith(".mjs")).sort() : []) {
+  const module = await import(new URL(name, GATE).href)
+  for (const list of ["routes", "states", "sessions", "answers"]) UI[list].push(...(module[list] ?? []))
+}
 
 // A copy button shows "Copy" and keeps its full name for assistive technology. Without the
 // stylesheet's `.sr-only` rule in the import bundle, the full name prints beside the visible word.
@@ -284,6 +373,7 @@ test.beforeAll(async () => {
   const out = resolve("test-results", "gate")
   mkdirSync(out, { recursive: true })
   binary = join(out, "sealift")
+  writeCheckFiles()
   upstream = await startFakeUpstream()
   // The binary embeds web/dist, so the build comes first and the binary is built once for both roles.
   await run("pnpm", ["run", "build"])
@@ -440,19 +530,31 @@ for (const route of UI.routes) {
   }
 }
 
+// Brings a loaded page to its state: the file set on its input, then each control pressed in order.
+async function reach(page, { file, click }) {
+  if (file) await page.locator("input[type=file]").first().setInputFiles(file)
+  for (const control of click ?? []) await page.getByRole(control.role, { name: control.name, exact: true }).click()
+}
+
 for (const state of UI.states) {
+  const name = state.name ?? state.open.name
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
-      test(`${state.path} ${state.open.name} ${width} ${theme}`, async ({ page }) => {
+      test(`${state.path} ${name} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
-          where: `${state.path} · ${state.open.name} · ${width}px · ${theme}`,
-          capture: `collection-${slug(state.path, state.open.name)}`,
+          where: `${state.path} · ${name} · ${width}px · ${theme}`,
+          capture: `collection-${slug(state.path, name)}`,
           url: new URL(state.path, UI.baseURL).href,
           width,
           theme,
+          prepare: state.before,
           ready: async (p) => {
-            await p.getByRole(state.open.role, { name: state.open.name }).click()
-            await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+            await reach(p, state)
+            if (state.open) {
+              await p.getByRole(state.open.role, { name: state.open.name }).click()
+              await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+            }
+            if (state.ready) await p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
           },
         })
         expect(failures, failures.join("\n")).toEqual([])
@@ -616,6 +718,7 @@ const PHONE = {
   collection: [
     { path: "/", ready: "Start a crossing" },
     { path: "/instance", ready: "Instance", open: [{ role: "button", name: /^Public key sha256/ }, { role: "button", name: "How to regenerate" }] },
+    { path: "/update", ready: "3 checks to fix first", file: fileAt("billing-api/package.json") },
   ],
   // `columns` names blocks that must keep a readable width: a fixed grid squeezed them to nothing, and the text then ran over its neighbours inside the row, which the overflow check cannot see.
   import: [{ path: "/import", user: "alice", ready: "Not imported yet", columns: { selector: "#content li > div:first-child", min: 200 } }],
@@ -627,12 +730,13 @@ for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" 
       const base = route.role === "import" ? IMPORT.baseURL : UI.baseURL
       const failures = await inspect(page, {
         where: `${route.role} ${route.path} · ${PHONE.width}px · ${theme}`,
-        capture: `${route.role}-${slug(route.path, route.open && "open")}`,
+        capture: `${route.role}-${slug(route.path, route.open && "open", route.file && "file")}`,
         url: new URL(route.path, base).href,
         width: PHONE.width,
         theme,
         prepare: route.user ? (p) => p.setExtraHTTPHeaders({ "X-Access-Token": fixtures.token(route.user) }) : undefined,
         ready: async (p) => {
+          await reach(p, route)
           await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
           for (const control of route.open ?? []) await p.getByRole(control.role, { name: control.name }).first().click()
         },
