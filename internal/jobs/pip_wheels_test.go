@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -572,6 +573,8 @@ func TestPipAnalysisMarksAYankedReleaseWithACleanReason(t *testing.T) {
 		{"with no-break spaces in the reason", "see\u00a0issue\u202f12\u3000now", "see\u00a0issue\u202f12\u3000now"},
 		{"with a URL carrying credentials in the reason", "moved to http://alice:s3cret@host/", "moved to http://host/"},
 		{"with a reason of 300 characters", strings.Repeat("x", 300), strings.Repeat("x", 200)},
+		{"with a reason of 201 characters", strings.Repeat("x", 201), strings.Repeat("x", 200)},
+		{"with a reason of 250 two-byte characters", strings.Repeat("\u00e9", 250), strings.Repeat("\u00e9", 200)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -646,6 +649,62 @@ func TestPipAnalysisRecordsTheWheelUploadTime(t *testing.T) {
 	}
 	if n := strings.Count(string(raw), `"uploadedAt"`); n != 1 {
 		t.Errorf("pip-result.json = %s, holds %d uploadedAt keys, want 1", raw, n)
+	}
+}
+
+// An index may give an upload time with an offset; the result holds it in
+// UTC, as every other time sealift records.
+func TestPipAnalysisRecordsAnOffsetUploadTimeInUTC(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "delta", Version: "2.0.0", Tag: "py3-none-any", Uploaded: released})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		ix.ServeHTTP(rec, r)
+		for k, v := range rec.Header() {
+			if k != "Content-Length" {
+				w.Header()[k] = v
+			}
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(bytes.ReplaceAll(rec.Body.Bytes(), []byte(`"2024-09-01T00:00:00Z"`), []byte(`"2024-09-01T02:00:00+02:00"`)))
+	}))
+	t.Cleanup(srv.Close)
+	a, st := newPipAnalysis(t, srv.URL+"/simple/", store.DefaultPipTarget, reqFile("requirements.txt", "delta==2.0.0\n"))
+	a.Uv = &fakeUv{lock: "delta==2.0.0\n", set: resolved("delta", "2.0.0")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, raw := readPipResult(t, st, a)
+	if !bytes.Contains(raw, []byte(`"uploadedAt": "2024-09-01T00:00:00Z"`)) {
+		t.Errorf("pip-result.json = %s, want delta uploaded at 2024-09-01T00:00:00Z", raw)
+	}
+}
+
+// A cancelled run leaves no pip-result.json, even with a blocked pin
+// found: the run did not finish, so no list of it reads as a result.
+func TestACancelledPipAnalysisWritesNoResult(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "docopt", Version: "0.6.2"})
+	ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "docopt==0.6.2\nrequests==2.32.3\n"))
+	uv := &fakeUv{block: true, started: make(chan struct{})}
+	a.Uv = uv
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx, func(Event) {}) }()
+	<-uv.started
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("Run returned nil, want the cancellation")
+	}
+	status, _ := readStatus(t, st, a)
+	if status.State != store.Cancelled {
+		t.Errorf("state = %q, want cancelled", status.State)
+	}
+	if _, err := os.Lstat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("pip-result.json after a cancel: %v, want none", err)
 	}
 }
 

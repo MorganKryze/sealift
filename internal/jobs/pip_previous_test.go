@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -217,6 +218,33 @@ func TestPreviousCrossingThatDoesNotReadWarns(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"an earlier analysis that failed", func(t *testing.T, dir string) {
+			status := statusFile{State: store.Failed, CreatedAt: time.Now().Add(-49 * time.Hour).UTC(), PipTarget: &store.DefaultPipTarget}
+			data, err := json.Marshal(status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "status.json"), data, 0o660); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a pip-result.json that is not a regular file", func(t *testing.T, dir string) {
+			path := filepath.Join(dir, "pip-result.json")
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o770); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"an analysis that is a file", func(t *testing.T, dir string) {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(dir, []byte("{}"), 0o660); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -242,8 +270,117 @@ func TestPreviousCrossingThatDoesNotReadWarns(t *testing.T) {
 					t.Errorf("pip-result.json = %s, holds %s, want it absent", raw, key)
 				}
 			}
-			if log := pipLog(t, a); !strings.Contains(log, "the previous crossing, export "+exportID+", could not be read: ") {
+			log := pipLog(t, a)
+			if !strings.Contains(log, "the previous crossing, export "+exportID+", could not be read: ") {
 				t.Errorf("log = %q, want the cause of export %s", log, exportID)
+			}
+			if strings.Contains(log, st.Root()) {
+				t.Errorf("log = %q, names the data root %s", log, st.Root())
+			}
+		})
+	}
+}
+
+// Two done exports can carry the same instant; the higher id wins, so the
+// choice never depends on the order the store lists projects in.
+func TestPreviousCrossingBreaksATieOnTheHigherExportID(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	at := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	twin := newPipProject(t, st, "Data tools")
+	sealedCrossing(t, st, twin.ID, at, store.Done, sealedPkg("requests", "2.30.0"))
+	wantExport, _ := sealedCrossing(t, st, a.Project.ID, at.Add(time.Second), store.Done, sealedPkg("requests", "2.31.0"))
+	manifest := filepath.Join(st.Root(), "projects", a.Project.ID, "exports", wantExport, "manifest.json")
+	if err := st.WriteJSON(manifest, map[string]any{"analysisId": at.Add(time.Second - time.Hour).UTC().Format(jobIDLayout), "createdAt": at}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, earlier, err := previousCrossing(st, a.Project, time.Now())
+	if err != nil {
+		t.Fatalf("previousCrossing: %v", err)
+	}
+	if got == nil || got.ExportID != wantExport || !got.SealedAt.Equal(at) {
+		t.Fatalf("previous crossing = %+v, want export %s sealed at %v", got, wantExport, at)
+	}
+	if want := []runner.Resolved{{Name: "requests", Version: "2.31.0"}}; !slices.Equal(earlier, want) {
+		t.Errorf("earlier set = %+v, want %+v", earlier, want)
+	}
+}
+
+func TestPreviousCrossingLeavesOutAnExportAtTheAnalysisStart(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	start := time.Now().UTC().Truncate(time.Second)
+	sealedCrossing(t, st, a.Project.ID, start, store.Done, sealedPkg("requests", "2.31.0"))
+
+	got, earlier, err := previousCrossing(st, a.Project, start)
+	if err != nil {
+		t.Fatalf("previousCrossing: %v", err)
+	}
+	if got != nil || earlier != nil {
+		t.Errorf("previous crossing = %+v with %+v, want none: the export is not from before the start", got, earlier)
+	}
+}
+
+func TestPreviousCrossingTrimsTheAnalysedProjectsName(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	twin := newPipProject(t, st, "data tools")
+	wantExport, _ := sealedCrossing(t, st, twin.ID, time.Now().Add(-48*time.Hour), store.Done, sealedPkg("requests", "2.31.0"))
+	project := a.Project
+	project.Name = " \tData tools  "
+
+	got, _, err := previousCrossing(st, project, time.Now())
+	if err != nil {
+		t.Fatalf("previousCrossing: %v", err)
+	}
+	if got == nil || got.ExportID != wantExport {
+		t.Errorf("previous crossing = %+v, want export %s of %s", got, wantExport, twin.ID)
+	}
+}
+
+func TestPreviousCrossingNormalizesTheEarlierNames(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.4\n"))
+	set := resolved("jinja2", "3.1.4")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+	sealedCrossing(t, st, a.Project.ID, time.Now().Add(-48*time.Hour), store.Done, sealedPkg("Jinja2", "3.1.2"))
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, _ := readPipResult(t, st, a)
+	if len(res.Packages) != 1 || res.Packages[0].Previous == nil || res.Packages[0].Previous.Version != "3.1.2" {
+		t.Errorf("packages = %+v, want jinja2 coming from 3.1.2", res.Packages)
+	}
+	if len(res.Removed) != 0 {
+		t.Errorf("removed = %+v, want none: Jinja2 and jinja2 are one project", res.Removed)
+	}
+}
+
+// The project's name comes from the user and lands in a warning the
+// screen shows, so it is cleaned and bounded there.
+func TestTheUnreadableCrossingWarningCleansTheProjectsName(t *testing.T) {
+	cases := []struct{ label, name, want string }{
+		{"a bidi and a control character", "Data\u202e tools\x07", "Data tools"},
+		{"a name of 150 characters", strings.Repeat("n", 150), strings.Repeat("n", 100) + "..."},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+			set := resolved("requests", "2.32.3")
+			a.Uv = &fakeUv{lock: "x==1\n", set: set}
+			serveWheels(t, a, set)
+			twin := newPipProject(t, st, c.name)
+			_, analysisID := sealedCrossing(t, st, twin.ID, time.Now().Add(-48*time.Hour), store.Done, sealedPkg("requests", "2.31.0"))
+			if err := os.Remove(filepath.Join(st.Root(), "projects", twin.ID, "analyses", analysisID, "pip-result.json")); err != nil {
+				t.Fatal(err)
+			}
+			a.Project.Name = c.name
+
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			res, _ := readPipResult(t, st, a)
+			if want := []string{"The previous crossing " + c.want + " could not be read, so nothing is compared"}; !slices.Equal(res.Warnings, want) {
+				t.Errorf("warnings = %q, want %q", res.Warnings, want)
 			}
 		})
 	}
@@ -260,6 +397,7 @@ func TestPipMajorJump(t *testing.T) {
 		{"0.19", "0.20", false},
 		{"3.1.3", "3.1.5", false},
 		{"1!1.0", "2.0", true},
+		{"1!2.0", "2.0", true},
 		{"1!1.0", "1!1.5", false},
 		{"v2.0", "2.1", false},
 		{"3.1.4", "3.1.4", false},
