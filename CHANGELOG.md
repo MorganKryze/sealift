@@ -63,7 +63,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 ### Fixed
 
 - A version whose `engines` held a value that is not a string, such as `"npm": 7`, lost its Node range too and could be proposed for a Node it does not support. Its Node range now counts.
-- A version whose `engines.node` is not a string, such as `18` or `[">=18"]`, is flagged as a Node mismatch, as pnpm matches no Node against it. It used to read as a version with no Node range.
+- A version whose `engines.node` is not a string, such as `18` or `[">=18"]`, is flagged as a Node mismatch, as pnpm 10 matches no Node against it. It used to read as a version with no Node range. pnpm 12 reads such a value as no range, so for a project whose target names pnpm 12, the flag keeps out a version its pnpm installs.
 
 - Cancelling an analysis still waiting in the queue keeps it in the session as Analysis cancelled, with Start it again. It used to vanish and leave No analysis yet with no action. For a pip project, the API keeps the cancelled record the same way.
 - Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.

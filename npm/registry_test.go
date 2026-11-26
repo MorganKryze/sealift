@@ -152,9 +152,9 @@ func TestEnginesKeepsTheStringValues(t *testing.T) {
 	}
 }
 
-// pnpm reads an engines.node that is not a string as a range no Node
-// satisfies, so the decoded value must fail SatisfiesNode for any target,
-// including the number it was written as.
+// pnpm 10 reads an engines.node that is not a string, other than 0 or false,
+// as a range no Node satisfies, so the decoded value must fail SatisfiesNode
+// for any target, including the number it was written as.
 func TestEnginesNodeThatIsNotAStringSatisfiesNoNode(t *testing.T) {
 	for _, doc := range []string{`{"node": 18}`, `{"node": 18.1}`, `{"node": {"x": 1}}`, `{"node": [">=18"]}`, `{"node": true}`} {
 		var e Engines

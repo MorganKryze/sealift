@@ -80,8 +80,10 @@ func (v VersionMeta) HasProvenance() bool {
 // array instead; it decodes to no ranges. A null value reads as "". Another
 // value that is not a string is dropped and the other ranges are kept, except
 // under node: a value other than 0 or false reads as "not a string: " and its
-// JSON, a range no Node satisfies, as pnpm matches no Node against such a
-// value and skips 0 and false as it skips null.
+// JSON, a range no Node satisfies, as pnpm 10 matches no Node against such a
+// value and skips 0 and false as it skips null. pnpm 12 skips every value that
+// is not a string, so a project whose target runs pnpm 12 sees a node
+// mismatch on a version its pnpm installs.
 type Engines map[string]string
 
 // UnmarshalJSON implements json.Unmarshaler.
