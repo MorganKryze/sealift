@@ -828,10 +828,13 @@ components:
           $ref: "#/components/schemas/ReviewRule"
         cveWithoutFix:
           $ref: "#/components/schemas/ReviewRule"
+        yanked:
+          $ref: "#/components/schemas/ReviewRule"
       required:
         - proposeOtherMajors
         - majorJump
         - cveWithoutFix
+        - yanked
     ReviewRule:
       type: string
       description: reason lets the selection cross with a reason written for it; refuse stops it.

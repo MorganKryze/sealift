@@ -544,6 +544,7 @@ export interface components {
             proposeOtherMajors: boolean;
             majorJump: components["schemas"]["ReviewRule"];
             cveWithoutFix: components["schemas"]["ReviewRule"];
+            yanked: components["schemas"]["ReviewRule"];
         };
         /**
          * @description reason lets the selection cross with a reason written for it; refuse stops it.

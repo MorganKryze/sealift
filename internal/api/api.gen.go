@@ -783,6 +783,9 @@ type ReviewPolicy struct {
 
 	// ProposeOtherMajors Whether an analysis proposes versions outside the current line.
 	ProposeOtherMajors bool `json:"proposeOtherMajors"`
+
+	// Yanked reason lets the selection cross with a reason written for it; refuse stops it.
+	Yanked ReviewRule `json:"yanked"`
 }
 
 // ReviewRule reason lets the selection cross with a reason written for it; refuse stops it.
