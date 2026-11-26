@@ -151,3 +151,33 @@ func TestReadTrivyJSONKeepsDescriptionAndPublishedDate(t *testing.T) {
 		t.Errorf("rest of the report misread: %+v", findings[1:])
 	}
 }
+
+func TestReadTrivyJSONLeavesOutADateOutsideYearsOneTo9999InUTC(t *testing.T) {
+	// RFC 3339 writes a year in four digits, so a date past either end in
+	// UTC could be read here and then never answered as a date.
+	for _, c := range []struct {
+		date string
+		want time.Time
+	}{
+		{"0000-01-01T00:00:00+01:00", time.Time{}},
+		{"0000-06-15T12:00:00Z", time.Time{}},
+		{"0001-01-01T00:30:00+01:00", time.Time{}},
+		{"0001-01-01T00:00:01Z", time.Date(1, 1, 1, 0, 0, 1, 0, time.UTC)},
+		{"9999-12-31T23:59:59Z", time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)},
+		{"9999-12-31T23:30:00-01:00", time.Time{}},
+	} {
+		body := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+			{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+			 "Title": "a: one", "PublishedDate": "` + c.date + `"}]}]}`
+		findings, err := ReadTrivyJSON(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s: %v", c.date, err)
+		}
+		if len(findings) != 1 || findings[0].Title != "a: one" {
+			t.Fatalf("%s: findings = %+v, want the one finding read", c.date, findings)
+		}
+		if got := findings[0].Published; !got.Equal(c.want) || got.Location() != time.UTC {
+			t.Errorf("%s: published = %v, want %v in UTC", c.date, got, c.want)
+		}
+	}
+}

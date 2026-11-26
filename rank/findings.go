@@ -72,7 +72,7 @@ type Finding struct {
 	FixedVersion string // as Trivy reports it, possibly a list such as "4.19.2, 5.0.0-beta.3"
 	Title        string
 	Description  string    // as Trivy reports it; untrusted text from the vulnerability database
-	Published    time.Time // UTC; zero when the report gives no RFC 3339 date
+	Published    time.Time // UTC; zero when the report gives no RFC 3339 date with a UTC year from 1 to 9999
 }
 
 // ReadTrivyJSON reads the vulnerabilities of a `trivy --format json` report.
@@ -117,13 +117,19 @@ func ReadTrivyJSON(r io.Reader) ([]Finding, error) {
 }
 
 // publishedDate parses Trivy's date in UTC. A missing or malformed date is
-// a fact the answer leaves out, never a reason to refuse the report.
+// a fact the answer leaves out, never a reason to refuse the report. So is
+// a date whose year in UTC falls outside 1 to 9999: RFC 3339 has four
+// digits for the year, and a reader of the answer would refuse the date.
 func publishedDate(s string) time.Time {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		return time.Time{}
 	}
-	return t.UTC()
+	t = t.UTC()
+	if y := t.Year(); y < 1 || y > 9999 {
+		return time.Time{}
+	}
+	return t
 }
 
 // Index looks findings up by "name@version".
