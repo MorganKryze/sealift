@@ -78,15 +78,26 @@ func jsonOf(v any) (string, error) {
 // name@version to body pairs and returns their paths.
 func testArchive(t *testing.T, dir string, pkgs ...[3]string) (arch, manifest string) {
 	t.Helper()
-	var entries []archive.Entry
-	var listed []map[string]any
-	for _, p := range pkgs {
-		name, version := p[0], p[1]
-		body := string(packed(t, name, version, p[2]))
-		file, err := npm.PackFileName(name, version)
+	named := make([][4]string, len(pkgs))
+	for i, p := range pkgs {
+		file, err := npm.PackFileName(p[0], p[1])
 		if err != nil {
 			t.Fatal(err)
 		}
+		named[i] = [4]string{p[0], p[1], p[2], file}
+	}
+	return testArchiveNamed(t, dir, named...)
+}
+
+// testArchiveNamed is testArchive with the file name of each package given
+// as its fourth value.
+func testArchiveNamed(t *testing.T, dir string, pkgs ...[4]string) (arch, manifest string) {
+	t.Helper()
+	var entries []archive.Entry
+	var listed []map[string]any
+	for _, p := range pkgs {
+		name, version, file := p[0], p[1], p[3]
+		body := string(packed(t, name, version, p[2]))
 		sum := sha512.Sum512([]byte(body))
 		entries = append(entries, archive.Entry{Name: file, Size: int64(len(body)), Open: opener(body)})
 		listed = append(listed, map[string]any{

@@ -513,10 +513,20 @@ func (e *Export) stripAll(ctx context.Context, emit func(Event), downloaded []do
 	start := time.Now()
 	emitStep(emit, "strip", store.Running, 0)
 
+	locked := make([]npm.LockPackage, len(downloaded))
+	for i, d := range downloaded {
+		locked[i] = d.LockPackage
+	}
+	files, err := exportFileNames(locked)
+	if err != nil {
+		emitFailedStep(emit, "strip", time.Since(start), err)
+		return nil, err
+	}
+
 	strippedDir := filepath.Join(e.Dir, "stripped")
 	shipped := make([]shippedPackage, len(downloaded))
 	for i, d := range downloaded {
-		s, err := e.stripOne(ctx, strippedDir, d)
+		s, err := e.stripOne(ctx, strippedDir, d, files[i])
 		if err != nil {
 			emitFailedStep(emit, "strip", time.Since(start), err)
 			return nil, err
@@ -527,15 +537,46 @@ func (e *Export) stripAll(ctx context.Context, emit func(Event), downloaded []do
 	return shipped, nil
 }
 
-func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedPackage) (shippedPackage, error) {
+// exportFileNames gives each package its file name under out/, in the
+// order of pkgs. Each keeps the name npm pack gives it, so an export with
+// no collision keeps its archive bytes. npm pack names @a/b and a-b alike:
+// when packages of one export share a name, each scoped one among them
+// takes a~b-1.0.0.tgz instead, whatever the order of pkgs. npm refuses ~
+// in new names; a legacy name holding one can still land on a renamed
+// file, and the export then fails naming both packages.
+func exportFileNames(pkgs []npm.LockPackage) ([]string, error) {
+	files := make([]string, len(pkgs))
+	taken := map[string]int{}
+	for i, p := range pkgs {
+		file, err := npm.PackFileName(p.Name, p.Version)
+		if err != nil {
+			return nil, fmt.Errorf("jobs: %w", err)
+		}
+		files[i] = file
+		taken[file]++
+	}
+	for i, p := range pkgs {
+		if taken[files[i]] > 1 && strings.HasPrefix(p.Name, "@") {
+			files[i] = strings.Replace(p.Name[1:], "/", "~", 1) + "-" + p.Version + ".tgz"
+		}
+	}
+	owner := map[string]string{}
+	for i, p := range pkgs {
+		key := p.Name + "@" + p.Version
+		if other, ok := owner[files[i]]; ok {
+			return nil, fmt.Errorf("jobs: %s and %s both take the file name %s", other, key, files[i])
+		}
+		owner[files[i]] = key
+	}
+	return files, nil
+}
+
+// stripOne ships d under file, the name exportFileNames gave it.
+func (e *Export) stripOne(ctx context.Context, strippedDir string, d downloadedPackage, file string) (shippedPackage, error) {
 	if err := ctx.Err(); err != nil {
 		return shippedPackage{}, err
 	}
 
-	file, err := npm.PackFileName(d.Name, d.Version)
-	if err != nil {
-		return shippedPackage{}, fmt.Errorf("jobs: %w", err)
-	}
 	f, st, err := openRegular(d.CachePath, file)
 	if err != nil {
 		return shippedPackage{}, fmt.Errorf("jobs: %s@%s: %w", d.Name, d.Version, err)

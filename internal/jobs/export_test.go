@@ -140,6 +140,7 @@ type testHarness struct {
 	gadget21 []byte
 	gadget22 []byte
 	helper   []byte
+	extra    map[string][]byte // more tarballs by request path, set before the first request
 }
 
 func newTestHarness(t *testing.T) *testHarness {
@@ -166,6 +167,10 @@ func newTestHarness(t *testing.T) *testHarness {
 		case "/helper/-/helper-3.0.0.tgz":
 			_, _ = w.Write(h.helper)
 		default:
+			if body, ok := h.extra[r.URL.Path]; ok {
+				_, _ = w.Write(body)
+				return
+			}
 			http.NotFound(w, r)
 		}
 	}))
@@ -1269,9 +1274,9 @@ func TestExportStripRefusesAVersionThatIsNotAFileNamePart(t *testing.T) {
 			LockPackage: npm.LockPackage{Name: "widgets", Version: version, Integrity: sriOf(body)},
 			CachePath:   cachePath, SHA512: hex.EncodeToString(sum[:]),
 		}
-		s, err := (&Export{}).stripOne(context.Background(), filepath.Join(t.TempDir(), "stripped"), d)
+		shipped, err := (&Export{Dir: t.TempDir()}).stripAll(context.Background(), noopEmit, []downloadedPackage{d})
 		if err == nil {
-			t.Fatalf("version %q: strip shipped %q, want an error", version, s.File)
+			t.Fatalf("version %q: strip shipped %v, want an error", version, shipped)
 		}
 		if n := strings.Count(err.Error(), "widgets"); n != 1 {
 			t.Errorf("version %q: error %q names the package %d times, want once", version, err, n)
@@ -1718,6 +1723,120 @@ func TestExportDownloadCauseNamesNoDataDirectory(t *testing.T) {
 	for _, s := range status.Steps {
 		if strings.Contains(s.Error, h.root) {
 			t.Errorf("status.json step %+v names %s", s, h.root)
+		}
+	}
+}
+
+// npm pack names both @scope/gadget@2.1.0 and scope-gadget@2.1.0
+// scope-gadget-2.1.0.tgz. The export names the scoped one apart, and the
+// manifest says which file holds which package.
+func TestExportNamesAScopedPackageApartWhenItsFileNameIsTaken(t *testing.T) {
+	h := newTestHarness(t)
+	twin := makeTarball(t, tarFile{"package/package.json", `{"name":"scope-gadget","version":"2.1.0"}`})
+	h.extra = map[string][]byte{"/scope-gadget/-/scope-gadget-2.1.0.tgz": twin}
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	writeLockfile(t, filepath.Join(analysisDir, "project", "pnpm-lock.yaml"),
+		npm.LockPackage{Name: "helper", Version: "3.0.0", Integrity: sriOf(h.helper)},
+		npm.LockPackage{Name: "scope-gadget", Version: "2.1.0", Integrity: sriOf(twin)})
+
+	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+	if err := h.newExport(t, analysisDir, exportDir, true).Run(context.Background(), noopEmit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := readArchive(t, data)
+	if got := entries["out/scope-gadget-2.1.0.tgz"]; got != string(twin) {
+		t.Errorf("out/scope-gadget-2.1.0.tgz does not hold scope-gadget; have %v", exportArchiveKeys(entries))
+	}
+	scoped, ok := entries["out/scope~gadget-2.1.0.tgz"]
+	if !ok {
+		t.Fatalf("archive has no out/scope~gadget-2.1.0.tgz; have %v", exportArchiveKeys(entries))
+	}
+	if got := readGadgetManifest(t, scoped); got["name"] != "@scope/gadget" || got["version"] != "2.1.0" {
+		t.Errorf("out/scope~gadget-2.1.0.tgz holds %v, want @scope/gadget 2.1.0", got)
+	}
+	if _, ok := entries["out/scope-gadget-2.2.0.tgz"]; !ok {
+		t.Errorf("@scope/gadget 2.2.0 collides with nothing and lost its name; have %v", exportArchiveKeys(entries))
+	}
+
+	var manifest report.Manifest
+	readJSON(t, filepath.Join(exportDir, "manifest.json"), &manifest)
+	files := map[string]string{}
+	for _, p := range manifest.Packages {
+		files[p.Name+"@"+p.Version] = p.File
+	}
+	for key, want := range map[string]string{
+		"@scope/gadget@2.1.0": "scope~gadget-2.1.0.tgz",
+		"scope-gadget@2.1.0":  "scope-gadget-2.1.0.tgz",
+		"@scope/gadget@2.2.0": "scope-gadget-2.2.0.tgz",
+	} {
+		if files[key] != want {
+			t.Errorf("manifest file of %s = %q, want %q", key, files[key], want)
+		}
+	}
+}
+
+// fileNamePattern07 is the file name the import of sealift 0.7.0 accepts
+// under out/.
+var fileNamePattern07 = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._~+-]*\.tgz$`)
+
+func TestExportFileNames(t *testing.T) {
+	pkg := func(name, version string) npm.LockPackage { return npm.LockPackage{Name: name, Version: version} }
+	tests := []struct {
+		name string
+		pkgs []npm.LockPackage
+		want []string
+	}{
+		{"no collision keeps the pack names",
+			[]npm.LockPackage{pkg("@a/b", "1.0.0"), pkg("a-b", "2.0.0"), pkg("left-pad", "1.3.0")},
+			[]string{"a-b-1.0.0.tgz", "a-b-2.0.0.tgz", "left-pad-1.3.0.tgz"}},
+		{"the scoped package moves",
+			[]npm.LockPackage{pkg("@a/b", "1.0.0"), pkg("a-b", "1.0.0")},
+			[]string{"a~b-1.0.0.tgz", "a-b-1.0.0.tgz"}},
+		{"whatever the order",
+			[]npm.LockPackage{pkg("a-b", "1.0.0"), pkg("@a/b", "1.0.0")},
+			[]string{"a-b-1.0.0.tgz", "a~b-1.0.0.tgz"}},
+		{"two scoped packages both move",
+			[]npm.LockPackage{pkg("@a-b/c", "1.0.0"), pkg("@a/b-c", "1.0.0")},
+			[]string{"a-b~c-1.0.0.tgz", "a~b-c-1.0.0.tgz"}},
+		{"a prerelease keeps its version",
+			[]npm.LockPackage{pkg("a-b", "1.0.0-rc.1+build.5"), pkg("@a/b", "1.0.0-rc.1+build.5")},
+			[]string{"a-b-1.0.0-rc.1+build.5.tgz", "a~b-1.0.0-rc.1+build.5.tgz"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := exportFileNames(tc.pkgs)
+			if err != nil {
+				t.Fatalf("exportFileNames: %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("exportFileNames = %v, want %v", got, tc.want)
+			}
+			for _, file := range got {
+				if !fileNamePattern07.MatchString(file) {
+					t.Errorf("%q does not match the 0.7.0 import's file pattern", file)
+				}
+			}
+		})
+	}
+}
+
+// A legacy name may hold ~, so a renamed file can still land on another
+// package's name. The export then fails and names both packages.
+func TestExportFileNamesRefuseANameTakenTwice(t *testing.T) {
+	pkgs := []npm.LockPackage{{Name: "@a/b", Version: "1.0.0"}, {Name: "a-b", Version: "1.0.0"}, {Name: "a~b", Version: "1.0.0"}}
+	got, err := exportFileNames(pkgs)
+	if err == nil {
+		t.Fatalf("exportFileNames = %v, want an error", got)
+	}
+	for _, want := range []string{"@a/b@1.0.0", "a~b@1.0.0", "a~b-1.0.0.tgz"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
 		}
 	}
 }
