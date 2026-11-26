@@ -435,14 +435,25 @@ func TestQueueCancel(t *testing.T) {
 		s, _ := openStore(t, testRoot(t))
 		imp := newImport(t, s, "alice")
 		started, inRun := make(chan string, 1), make(chan struct{})
+		cancelReturned, looked := make(chan struct{}), make(chan struct{})
 		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
 			p.Listed(listedReport())
 			close(inRun)
+			// The test stops the service only once this run has looked at
+			// the cancel, so ctx can end here through the cancel alone.
 			select {
-			case <-p.Cancelled:
+			case <-cancelReturned:
 			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
 				t.Error("the cancel ended the run's context, which cuts the package in flight")
 			}
+			select {
+			case <-p.Cancelled:
+			default:
+				t.Error("the cancel never reached the run")
+			}
+			close(looked)
 			// The package in flight goes on after the cancel, until the stop cuts it.
 			<-ctx.Done()
 			pkgs := pendingResults()
@@ -455,6 +466,8 @@ func TestQueueCancel(t *testing.T) {
 		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
 			t.Fatal(err)
 		}
+		close(cancelReturned)
+		waitFor(t, looked, "the run's look at the cancel")
 		q.Close()
 		got, _ := s.Get(imp.User, imp.ID)
 		a := got.Attempts[0]
@@ -605,15 +618,21 @@ func TestQueueKeepsEachUserToTheirOwnImport(t *testing.T) {
 		if err := s.Finish(bob.User, bob.ID, 1, completeReport(), nil); err != nil {
 			t.Fatal(err)
 		}
-		started, release := make(chan string, 1), make(chan struct{})
+		next := createFor(t, s, "alice")
+		started, release := make(chan string, 2), make(chan struct{})
 		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
 			select {
 			case <-release:
-				return completeReport(), nil
-			case <-p.Cancelled:
 			case <-ctx.Done():
 			}
-			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, nil
+			// A cancel that reached this run closed p.Cancelled before the
+			// test released it.
+			select {
+			case <-p.Cancelled:
+				return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, nil
+			default:
+				return completeReport(), nil
+			}
 		})
 		q.Submit(alice.User, alice.ID)
 		waitFor(t, started, "alice's run")
@@ -621,6 +640,10 @@ func TestQueueKeepsEachUserToTheirOwnImport(t *testing.T) {
 			t.Errorf("bob's cancel of his ended import: err = %v, want ErrEnded", err)
 		}
 		close(release)
+		// The worker takes the next attempt once the end of alice's is
+		// stored, so the stop below cuts no run.
+		q.Submit(next.User, next.ID)
+		waitFor(t, started, "the next run")
 		q.Close()
 		if a, _ := s.Get(alice.User, alice.ID); a.Outcome() != importer.OutcomeComplete {
 			t.Errorf("bob's cancel reached alice's run: alice's import reads %q", a.Outcome())
