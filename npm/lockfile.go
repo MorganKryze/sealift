@@ -1,7 +1,9 @@
 package npm
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -32,10 +34,12 @@ type rawLockfile struct {
 		Resolution struct {
 			Integrity string `yaml:"integrity"`
 		} `yaml:"resolution"`
-		Engines map[string]string `yaml:"engines"`
-		OS      []string          `yaml:"os"`
-		CPU     []string          `yaml:"cpu"`
-		Libc    []string          `yaml:"libc"`
+		// Decoded loosely by the document's own decoder, whose alias limit
+		// then covers it, and read through Engines as a packument's are.
+		Engines any      `yaml:"engines"`
+		OS      []string `yaml:"os"`
+		CPU     []string `yaml:"cpu"`
+		Libc    []string `yaml:"libc"`
 	} `yaml:"packages"`
 }
 
@@ -71,13 +75,28 @@ func ParseLockfile(r io.Reader) ([]LockPackage, error) {
 			OS:        p.OS,
 			CPU:       p.CPU,
 			Libc:      p.Libc,
-			Engines:   p.Engines,
+			Engines:   lockEngines(p.Engines),
 		})
 	}
 	slices.SortFunc(pkgs, func(a, b LockPackage) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.Version, b.Version))
 	})
 	return pkgs, nil
+}
+
+// lockEngines reads a lockfile's engines with the rules Engines applies to a
+// packument. A value JSON cannot hold, such as a map with a key that is not a
+// string, reads as no ranges.
+func lockEngines(v any) map[string]string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return nil
+	}
+	var e Engines
+	_ = json.Unmarshal(b.Bytes(), &e)
+	return e
 }
 
 // splitKey splits "name@version" and "@scope/name@version".
