@@ -121,6 +121,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
 	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Libc: m.Target.Libc, Node: m.Target.Node, PnpmVer: m.Target.PnpmVer}
 	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
+	rep.Crossing = crossingOf(m.CreatedAt, len(m.Packages), m.Review)
 
 	listed := make([]Result, len(m.Packages))
 	for i, p := range m.Packages {
@@ -212,6 +213,37 @@ func readSigned(ctx context.Context, src Source, trusted ed25519.PublicKey) ([]b
 	return data, nil
 }
 
+// crossingOf is the crossing a manifest whose signature verified describes.
+// Its figures count as a reader of the review does: an update or a jumped
+// package each counts once, and the CVEs carried with a reason count by
+// dependency.
+func crossingOf(sealedAt string, packages int, r *archive.Review) *Crossing {
+	c := &Crossing{SealedAt: sealedAt, Packages: packages}
+	if r == nil {
+		return c
+	}
+	c.Project = r.Project
+	jumped := 0
+	for _, j := range r.Jumps {
+		jumped += len(j.Packages)
+	}
+	carried := map[string]bool{}
+	for _, l := range r.Left {
+		if l.Reason != "" {
+			carried[l.Dependency] = true
+		}
+	}
+	c.Review = &CrossingReview{
+		Updated: len(r.Updates) + jumped, CVEsBefore: r.CVEs.Before,
+		Carried: len(carried), Jumps: jumped,
+	}
+	if r.CVEs.After != nil {
+		after := *r.CVEs.After
+		c.Review.CVEsAfter = &after
+	}
+	return c
+}
+
 // wrongFolder refuses a manifest of ecosystem got found in a folder that takes want.
 func wrongFolder(got, want archive.Ecosystem) error {
 	article := func(e archive.Ecosystem) string {
@@ -297,6 +329,7 @@ func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publish
 	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
 	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Python: m.Target.Python, Glibc: m.Target.Glibc}
 	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
+	rep.Crossing = crossingOf(m.CreatedAt, len(m.Packages), m.Review)
 
 	listed := make([]Result, len(m.Packages))
 	for i, w := range m.Packages {

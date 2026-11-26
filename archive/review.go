@@ -21,6 +21,13 @@ const MaxReasonRunes = 300
 // characters of 4 bytes, the export's own bound before trimming.
 const maxReasonBytes = 4800
 
+// maxProjectRunes and maxProjectBytes bound a review's project name: 100
+// characters once trimmed, and 214 bytes, npm's bound on a package name.
+const (
+	maxProjectRunes = 100
+	maxProjectBytes = 214
+)
+
 // maxReviewEntries bounds each list of a review: 100,000 entries.
 const maxReviewEntries = 100_000
 
@@ -28,6 +35,10 @@ const maxReviewEntries = 100_000
 // the key review. Count vectors hold critical, high, medium, low and unknown,
 // in that order.
 type Review struct {
+	// Project is the name of the project the export ran for, as the
+	// connected side's store holds it. A review written by 0.7.0 or earlier
+	// has none.
+	Project   string         `json:"project,omitempty"`
 	CVEs      ReviewCVEs     `json:"cves"`
 	Updates   []ReviewUpdate `json:"updates"`
 	Kept      []ReviewKept   `json:"kept"`
@@ -163,7 +174,9 @@ var severities = []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
 // rawReview keeps a missing vector apart from a zero one, and a vector of
 // the wrong length apart from a short one Go would pad with zeros.
 type rawReview struct {
-	CVEs *struct {
+	// Project is raw so a name of the wrong type drops the name only.
+	Project json.RawMessage `json:"project"`
+	CVEs    *struct {
 		Before []*int `json:"before"`
 		After  []*int `json:"after"`
 	} `json:"cves"`
@@ -217,7 +230,7 @@ func checkReview(raw rawReview, rules nameRules) (*Review, string) {
 			return nil, fmt.Sprintf("review.%s holds more than %d entries", l.name, maxReviewEntries)
 		}
 	}
-	r := &Review{}
+	r := &Review{Project: readProject(raw.Project)}
 	if raw.CVEs == nil || raw.CVEs.Before == nil {
 		return nil, "review.cves.before is missing"
 	}
@@ -280,6 +293,25 @@ func checkReview(raw rawReview, rules nameRules) (*Review, string) {
 	}
 	r.Left = raw.Left
 	return r, ""
+}
+
+// readProject reads the project's name a review carries, or returns "" when
+// it carries none or one that breaks the rule: a string of at most
+// maxProjectBytes, 1 to maxProjectRunes characters once trimmed, of the
+// characters a reason holds. A name that breaks it never keeps the review
+// out.
+func readProject(data json.RawMessage) string {
+	var name string
+	if len(data) == 0 || json.Unmarshal(data, &name) != nil || len(name) > maxProjectBytes {
+		return ""
+	}
+	if strings.IndexFunc(name, func(r rune) bool { return !reasonRune(r) }) >= 0 {
+		return ""
+	}
+	if n := utf8.RuneCountInString(strings.TrimSpace(name)); n == 0 || n > maxProjectRunes {
+		return ""
+	}
+	return name
 }
 
 func (rules nameRules) jump(at string, j ReviewJump) string {

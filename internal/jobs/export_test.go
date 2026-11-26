@@ -1445,6 +1445,7 @@ func TestExportSignsItsReview(t *testing.T) {
 		t.Fatal("the project scan was not read, the test proves nothing about cves.after")
 	}
 	want := ReviewOf(exp.Analysis.Result, exp.Request, projected)
+	want.Project = exp.Project.Name
 	if !reflect.DeepEqual(*m.Review, want) {
 		t.Errorf("signed review =\n %+v\nwant\n %+v", *m.Review, want)
 	}

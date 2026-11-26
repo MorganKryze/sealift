@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -789,5 +790,200 @@ func TestStoreReadsAPipRecord(t *testing.T) {
 	if len(rep.Packages) != 3 || rep.Packages[2].Kind != importer.KindMismatch || rep.Packages[2].State != importer.Failed ||
 		rep.Packages[2].File != "certifi-2024.8.30-py3-none-any.whl" {
 		t.Errorf("packages %+v", rep.Packages)
+	}
+}
+
+// record070 is a complete pip import as sealift 0.7.0 wrote it.
+const record070 = `{
+  "formatVersion": 1,
+  "id": "20261123T141500Z-0c7e5a19",
+  "user": "alice",
+  "createdAt": "2026-11-23T14:15:00Z",
+  "archive": {
+    "key": "packages/pip/data-tools/packages_pip.tar.gz",
+    "etag": "\"6f1ed002ab5595859014ebf0951522d9\"",
+    "size": 81920
+  },
+  "manifest": {
+    "key": "packages/pip/data-tools/manifest.json",
+    "etag": "\"1f3870be274f6c49b3e31a0c6728957f\"",
+    "size": 1342
+  },
+  "signature": {
+    "key": "packages/pip/data-tools/manifest.json.sig",
+    "etag": "\"c4ca4238a0b923820dcc509a6f75849b\"",
+    "size": 214
+  },
+  "expectedSha256": "",
+  "attempts": [
+    {
+      "n": 1,
+      "status": "ended",
+      "queuedAt": "2026-11-23T14:15:00Z",
+      "startedAt": "2026-11-23T14:15:01Z",
+      "endedAt": "2026-11-23T14:15:09Z",
+      "outcome": "complete",
+      "report": {
+        "outcome": "complete",
+        "reason": "",
+        "unencrypted": false,
+        "importVersion": "0.7.0",
+        "archive": {
+          "file": "packages_pip.tar.gz",
+          "sha256": "8c2574892063f995fdf756bce07f46c1a5193e54cd52837ed91e32008ccf41ac",
+          "size": 81920
+        },
+        "toolVersion": "0.7.0",
+        "analysisId": "20261123T140210Z",
+        "target": {
+          "os": "linux",
+          "cpu": "x86_64",
+          "libc": "",
+          "node": "",
+          "pnpmVer": "",
+          "python": "3.11.2",
+          "glibc": "2.28"
+        },
+        "nexus": {
+          "url": "https://nexus.example:8443",
+          "repository": "pypi-hosted"
+        },
+        "counts": {
+          "published": 1,
+          "present": 1,
+          "failed": 0
+        },
+        "packages": [
+          {
+            "name": "six",
+            "version": "1.16.0",
+            "file": "six-1.16.0-py2.py3-none-any.whl",
+            "state": "published",
+            "reason": "",
+            "note": ""
+          },
+          {
+            "name": "idna",
+            "version": "3.10",
+            "file": "idna-3.10-py3-none-any.whl",
+            "state": "present",
+            "reason": "",
+            "note": ""
+          }
+        ],
+        "publicKeySha256": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "archiveChecked": true,
+        "ecosystem": "pip"
+      },
+      "removal": {
+        "removed": true,
+        "reason": ""
+      }
+    }
+  ]
+}
+`
+
+func TestStoreReadsAnAttemptWrittenBy070WithEveryNewFieldAbsent(t *testing.T) {
+	const id = "20261123T141500Z-0c7e5a19"
+	root := testRoot(t)
+	s, _ := openStore(t, root)
+	// The removal is dropped so the store can write it back, which rewrites
+	// the whole record.
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(record070), &doc); err != nil {
+		t.Fatal(err)
+	}
+	delete(doc["attempts"].([]any)[0].(map[string]any), "removal")
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "alice", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "import.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("alice", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := got.Attempts[0].Report
+	if rep.Crossing != nil {
+		t.Errorf("a 0.7.0 record reads with the crossing %+v, want none", rep.Crossing)
+	}
+	if got.Outcome() != importer.OutcomeComplete || rep.Ecosystem != "pip" || rep.Counts != (importer.Counts{Published: 1, Present: 1}) || len(rep.Packages) != 2 {
+		t.Errorf("import %+v", got)
+	}
+	if err := s.Removed("alice", id, 1, Removal{Removed: true}); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := os.ReadFile(filepath.Join(dir, "import.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rewritten) != record070 {
+		t.Errorf("the record rewritten differs from what 0.7.0 wrote:\n%s\nwant:\n%s", rewritten, record070)
+	}
+}
+
+func TestStoreKeepsTheCrossingThroughAWriteAndARead(t *testing.T) {
+	for name, crossing := range map[string]*importer.Crossing{
+		"a signed review": {Project: "data-tools", SealedAt: "2026-11-23T14:02:10Z", Packages: 2, Review: &importer.CrossingReview{
+			Updated: 5, CVEsBefore: [5]int{1, 4, 6, 2, 0}, CVEsAfter: &[5]int{0, 1, 3, 1, 0}, Carried: 2, Jumps: 3,
+		}},
+		"no after count": {Project: "data-tools", SealedAt: "2026-11-23T14:02:10Z", Packages: 2, Review: &importer.CrossingReview{CVEsBefore: [5]int{0, 2, 0, 0, 0}}},
+		"no review":      {SealedAt: "2026-11-23T14:02:10Z", Packages: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := testRoot(t)
+			s, _ := openStore(t, root)
+			pipArchive := Object{Key: "packages/pip/a/packages_pip.tar.gz", ETag: `"abc123"`, Size: 12}
+			pipManifest := Object{Key: "packages/pip/a/manifest.json", ETag: `"def456"`}
+			imp, err := s.Create("alice", pipArchive, pipManifest, &testSignatureObject, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := s.Begin("alice", imp.ID); err != nil {
+				t.Fatal(err)
+			}
+			listed := pipReport()
+			listed.Outcome, listed.Counts, listed.Crossing = "", importer.Counts{}, crossing
+			listed.Packages = []importer.Result{{Name: "six", Version: "1.16.0", File: "six-1.16.0-py2.py3-none-any.whl", State: importer.Pending}}
+			if err := s.Listed("alice", imp.ID, 1, listed); err != nil {
+				t.Fatal(err)
+			}
+			running, err := s.Get("alice", imp.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c := running.Attempts[0].Report.Crossing; !reflect.DeepEqual(c, crossing) {
+				t.Errorf("listed crossing %+v, want %+v", c, crossing)
+			}
+			ended := pipReport()
+			ended.Crossing = crossing
+			if err := s.Finish("alice", imp.ID, 1, ended, nil); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(root, "alice", imp.ID, "import.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(b, []byte(`"sealedAt": "2026-11-23T14:02:10Z"`)) {
+				t.Errorf("the record lacks the crossing:\n%s", b)
+			}
+			if crossing.Review == nil && bytes.Contains(b, []byte(`"review"`)) || crossing.Project == "" && bytes.Contains(b, []byte(`"project"`)) {
+				t.Errorf("the record writes an absent field:\n%s", b)
+			}
+			got, err := s.Get("alice", imp.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c := got.Attempts[0].Report.Crossing; !reflect.DeepEqual(c, crossing) {
+				t.Errorf("crossing read back %+v, want %+v", c, crossing)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package importer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -661,4 +663,188 @@ func TestPipAttemptPublishes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// crossingReviewDoc is a signed review whose figures differ by how they
+// count: two updates and three jumped packages, and three CVEs carried with
+// a reason on two dependencies beside one carried without. Its names and
+// versions read in npm and in pip.
+func crossingReviewDoc() map[string]any {
+	move := func(name string) map[string]any { return map[string]any{"name": name, "from": "1.0.0", "to": "2.0.0"} }
+	left := func(dep, id, reason string) map[string]any {
+		return map[string]any{"dependency": dep, "version": "1.0.0", "id": id, "severity": "HIGH", "package": dep, "fixedIn": "", "reason": reason}
+	}
+	return map[string]any{
+		"project": "pdf-renderer",
+		"cves":    map[string]any{"before": []any{1, 4, 6, 2, 0}, "after": []any{0, 1, 3, 1, 0}},
+		"updates": []any{
+			map[string]any{"name": "six", "from": "1.0.0", "to": "1.1.0", "fixed": []any{0, 1, 0, 0, 0}, "left": []any{0, 0, 0, 0, 0}},
+			map[string]any{"name": "idna", "from": "3.6.0", "to": "3.7.0", "fixed": []any{1, 0, 0, 0, 0}, "left": []any{0, 0, 0, 0, 0}},
+		},
+		"kept": []any{},
+		"jumps": []any{
+			map[string]any{"family": "jinja 3", "packages": []any{move("jinja2"), move("markupsafe")}, "reason": "The templates moved to the next line."},
+			map[string]any{"packages": []any{move("certifi")}, "reason": "The new line drops an old root."},
+		},
+		"left": []any{
+			left("html5lib", "CVE-2024-0001", "No release fixes it; the parser reads our own pages only."),
+			left("html5lib", "CVE-2024-0002", "No release fixes it; the parser reads our own pages only."),
+			left("lxml", "CVE-2024-0003", "No release fixes it; the feature is off."),
+			left("chardet", "CVE-2024-0004", ""),
+		},
+		"unchanged": 7,
+	}
+}
+
+// wantCrossingReview is what the report keeps of crossingReviewDoc.
+func wantCrossingReview() *CrossingReview {
+	return &CrossingReview{Updated: 5, CVEsBefore: [5]int{1, 4, 6, 2, 0}, CVEsAfter: &[5]int{0, 1, 3, 1, 0}, Carried: 2, Jumps: 3}
+}
+
+// addReview writes review into the manifest at path and signs it again.
+func addReview(t *testing.T, path string, review map[string]any) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["review"] = review
+	if b, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signManifest(t, path)
+}
+
+func TestAttemptKeepsTheCrossingAndTheReviewsFigures(t *testing.T) {
+	t.Run("npm", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		addReview(t, r.opts.Manifest, crossingReviewDoc())
+		a := r.attemptOf(t)
+		var listed Report
+		a.Progress.Listed = func(rep Report) { listed = rep }
+		rep := r.runAttempt(t, a)
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := &Crossing{Project: "pdf-renderer", SealedAt: "2026-09-23T12:04:24Z", Packages: 2, Review: wantCrossingReview()}
+		if !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("crossing %+v, review %+v, want %+v, review %+v", rep.Crossing, reviewOf(rep.Crossing), want, want.Review)
+		}
+		if !reflect.DeepEqual(listed.Crossing, want) {
+			t.Errorf("the listed report keeps the crossing %+v, want %+v", listed.Crossing, want)
+		}
+	})
+	t.Run("pip", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, crossingReviewDoc())
+		rep, _ := p.attempt(t, archive.Pip)
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := &Crossing{Project: "pdf-renderer", SealedAt: "2026-11-20T09:17:42Z", Packages: 2, Review: wantCrossingReview()}
+		if !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("crossing %+v, review %+v, want %+v, review %+v", rep.Crossing, reviewOf(rep.Crossing), want, want.Review)
+		}
+	})
+}
+
+// reviewOf is c's review, nil when c is.
+func reviewOf(c *Crossing) *CrossingReview {
+	if c == nil {
+		return nil
+	}
+	return c.Review
+}
+
+func TestAttemptKeepsNoCrossingBeforeTheSignatureVerifies(t *testing.T) {
+	other, _ := newTestKey()
+	for name, setup := range map[string]func(t *testing.T, r *runFixture, a *Attempt){
+		"another key": func(_ *testing.T, _ *runFixture, a *Attempt) {
+			a.Settings.PublicKey, a.Settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		},
+		"a review changed after the signature": func(t *testing.T, r *runFixture, _ *Attempt) {
+			sig, err := os.ReadFile(r.opts.Manifest + ".sig")
+			if err != nil {
+				t.Fatal(err)
+			}
+			review := crossingReviewDoc()
+			review["unchanged"] = 8
+			addReview(t, r.opts.Manifest, review)
+			if err := os.WriteFile(r.opts.Manifest+".sig", sig, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unsigned": func(_ *testing.T, _ *runFixture, a *Attempt) {
+			a.Source.Signature = func(context.Context) (io.ReadCloser, error) { return nil, ErrUnsigned }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRunFixture(t)
+			addReview(t, r.opts.Manifest, crossingReviewDoc())
+			a := r.attemptOf(t)
+			setup(t, r, &a)
+			rep := r.runAttempt(t, a)
+			if rep.Outcome != OutcomeRefused {
+				t.Fatalf("outcome %q (%s), want refused", rep.Outcome, rep.Reason)
+			}
+			if rep.Crossing != nil {
+				t.Errorf("a refusal before the signature verifies keeps the crossing %+v", rep.Crossing)
+			}
+			b, err := json.Marshal(rep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), `"crossing"`) || strings.Contains(string(b), "pdf-renderer") {
+				t.Errorf("the refused report names the crossing: %s", b)
+			}
+		})
+	}
+	t.Run("pip, another key", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, crossingReviewDoc())
+		p.settings.PublicKey, p.settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		rep, _ := p.attempt(t, archive.Pip)
+		if rep.Outcome != OutcomeRefused || rep.Crossing != nil {
+			t.Errorf("outcome %q, crossing %+v, want a refusal with no crossing", rep.Outcome, rep.Crossing)
+		}
+	})
+}
+
+func TestAttemptKeepsTheProjectOutOfAManifestWithNoReview(t *testing.T) {
+	t.Run("npm", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		rep := r.runAttempt(t, r.attemptOf(t))
+		want := &Crossing{SealedAt: "2026-09-23T12:04:24Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
+	t.Run("pip", func(t *testing.T) {
+		rep, _ := newPipFixture(t).attempt(t, archive.Pip)
+		want := &Crossing{SealedAt: "2026-11-20T09:17:42Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
+	t.Run("a review the import keeps out", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		review := crossingReviewDoc()
+		review["unchanged"] = -1
+		addReview(t, r.opts.Manifest, review)
+		rep := r.runAttempt(t, r.attemptOf(t))
+		want := &Crossing{SealedAt: "2026-09-23T12:04:24Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
 }
