@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -111,6 +112,10 @@ func TestParseLockfileReadsEnginesThatAreNotStrings(t *testing.T) {
 		{"node is a number", `{node: 18}`, map[string]string{"node": "not a string: 18"}},
 		{"node is null", `{node: null}`, map[string]string{"node": ""}},
 		{"another engine is a map", `{node: '>=18', npm: {min: 9}}`, map[string]string{"node": ">=18"}},
+		{"another engine is not a number", `{node: '>=18', npm: .nan}`, map[string]string{"node": ">=18"}},
+		{"node is not a number", `{node: [.inf]}`, map[string]string{"node": "not a string: [+Inf]"}},
+		{"node is 0", `{node: 0}`, map[string]string{}},
+		{"long node is cut", `{node: ['` + strings.Repeat("é", 40) + `']}`, map[string]string{"node": `not a string: ["` + strings.Repeat("é", 31)}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -154,5 +159,29 @@ func TestParseLockfileRefusesAnAliasBomb(t *testing.T) {
 	_, err := ParseLockfile(strings.NewReader(b.String()))
 	if err == nil || !strings.Contains(err.Error(), "excessive aliasing") {
 		t.Fatalf("a lockfile of nested aliases: err = %v, want excessive aliasing", err)
+	}
+}
+
+// One large value aliased from every package is walked up to 64 bytes per
+// package, never copied whole.
+func TestParseLockfileReadsALargeAliasedValueCheaply(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("lockfileVersion: '9.0'\nbig: &s ['" + strings.Repeat("x", 1<<20) + "']\npackages:\n")
+	for i := range 200 {
+		fmt.Fprintf(&b, "  p%d@1.0.0:\n    resolution: {integrity: sha512-x}\n    engines: {node: *s}\n", i)
+	}
+	doc := b.String()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	pkgs, err := ParseLockfile(strings.NewReader(doc))
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.TotalAlloc - before.TotalAlloc; got > 64<<20 {
+		t.Errorf("parsing allocated %d MiB, want at most 64", got>>20)
+	}
+	if n := len(pkgs[0].Engines["node"]); n > 80 {
+		t.Errorf("engines.node holds %d bytes", n)
 	}
 }
