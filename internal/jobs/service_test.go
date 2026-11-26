@@ -1,16 +1,19 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -1239,6 +1242,65 @@ func TestAnalysisThatFailedBeforeItBeganKeepsItsCause(t *testing.T) {
 				t.Errorf("status.json = %v, want the queued record's target and creation time kept", status)
 			}
 		})
+	}
+}
+
+// TestFailedJobLogsItsFullErrorOnce proves the server log, the operator's,
+// gets one line for a failed job with its id, its kind and the run's error
+// as it was, paths included.
+func TestFailedJobLogsItsFullErrorOnce(t *testing.T) {
+	var logged bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{w: &logged, mu: &mu}, nil))
+	previous := slog.Default()
+	slog.SetDefault(log)
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	q := NewQueue(log)
+	t.Cleanup(q.Close)
+	svc := NewService(st, q, tools.NewManager(st, nil, nil), noopPnpm{}, noopTrivy{}, &npm.Client{})
+	project := mustCreateProject(t, st)
+	pending, err := st.NewDir("analyses", project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	createdAt, _ := store.JobCreatedAt(pending.ID())
+	if err := svc.seedPending(pending, createdAt, project); err != nil {
+		t.Fatalf("seedPending: %v", err)
+	}
+	replaced := filepath.Join(pending.Path(), "status.json")
+	job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+		return fmt.Errorf("store: %s was replaced while it was written", replaced)
+	}}
+	queueID, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, "analysis", project.ID, "", pending)
+	})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+	q.Close()
+
+	mu.Lock()
+	out := logged.String()
+	mu.Unlock()
+	if n := strings.Count(out, replaced); n != 1 {
+		t.Fatalf("the log names %s %d times, want once:\n%s", replaced, n, out)
+	}
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, replaced) {
+			line = l
+		}
+	}
+	for _, want := range []string{"level=WARN", "id=" + queueID, "kind=analysis"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line %q lacks %q", line, want)
+		}
 	}
 }
 

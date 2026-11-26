@@ -353,6 +353,10 @@ func (q *Queue) run() {
 		}
 		q.mu.Unlock()
 
+		if state == store.Failed {
+			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "error", err)
+		}
+
 		// Called before the event below, and unlocked: a hook that
 		// commits a directory or reconciles a status file must run
 		// whether or not any subscriber is still keeping up, since

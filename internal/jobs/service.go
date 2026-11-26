@@ -608,7 +608,6 @@ func (s *Service) finalizeDir(tj *trackedJob, state store.State, runErr error) e
 		neverStarted := tj.kind == "analysis" && s.neverStarted(tj.pending.Path())
 		fields := map[string]any{"state": state}
 		if neverStarted && state == store.Failed && runErr != nil {
-			slog.Error("jobs: analysis failed before it began", "project", tj.projectID, "id", tj.storeID, "error", runErr)
 			fields["steps"] = []stepRecord{{Name: "prepare", State: string(store.Failed), Error: cause(s.store.Root(), runErr)}}
 		}
 		if err := rewriteStatus(s.store, tj.pending.Path(), fields); err != nil {
