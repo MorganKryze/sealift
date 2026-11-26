@@ -188,7 +188,7 @@ func TestValidIDAcceptsAdvisoryIdsOnly(t *testing.T) {
 			t.Errorf("ValidID(%q) = false, want true", id)
 		}
 	}
-	for _, id := range []string{"", "constructor", "__proto__", "CVE-", "-1", "cve 1", "CVE-1/../x", "CVE-1\u202e", "CVE-" + strings.Repeat("1", 61)} {
+	for _, id := range []string{"", "constructor", "__proto__", "CVE-", "-1", "cve 1", "CVE-1/../x", "CVE-1\u202e", "cve-2024-1", "__proto__-x", "CVE-" + strings.Repeat("1", 61)} {
 		if ValidID(id) {
 			t.Errorf("ValidID(%q) = true, want false", id)
 		}

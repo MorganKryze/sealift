@@ -621,6 +621,8 @@ func TestRankLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
 	index := rank.NewIndex([]rank.Finding{
 		{ID: "CVE-2026-00004", Package: "express", Version: "4.17.1", Severity: rank.High, Title: "secret\x1b[31m wording \u202Eevil", Description: "a\x00b"},
 		{ID: "CVE-2026-00005", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "word\u2060joiner\tand tab"},
+		// An id that is not an advisory id never reaches the log, whatever its text drops.
+		{ID: "CVE-1\x1b[2J\nx", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "t\x1b[0m"},
 	})
 	r := newRankRun(t, policy.DefaultReview())
 	var lines []string
