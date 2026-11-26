@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"sync"
+	"time"
 
 	"github.com/MorganKryze/sealift/internal/store"
 )
@@ -48,16 +49,16 @@ func (s *Service) DeleteProject(projectID string) error {
 	defer unlock()
 	// A job stays tracked until its finalizer has committed its directory,
 	// so nothing writes under the project once none is.
-	if s.tracksJobOf(projectID) {
+	if s.HasJob(projectID) {
 		return store.ErrBusy
 	}
 	return s.store.DeleteProjectUnguarded(projectID)
 }
 
-// tracksJobOf reports whether Service tracks a queued or running job of
+// HasJob reports whether Service tracks a queued or running job of
 // projectID. byProjectID holds only the latest one, which a cancel can
 // untrack while an earlier job still runs, so this walks every job.
-func (s *Service) tracksJobOf(projectID string) bool {
+func (s *Service) HasJob(projectID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.byJobKey {
@@ -66,4 +67,29 @@ func (s *Service) tracksJobOf(projectID string) bool {
 		}
 	}
 	return false
+}
+
+// PurgeIfIdle empties the shared caches when no project has a job queued
+// or running, and otherwise leaves the purge pending for the next sweep.
+// It reports whether it emptied anything.
+func (s *Service) PurgeIfIdle() (bool, error) {
+	return s.purgeIfIdle(s.HasJob)
+}
+
+// purgeIfIdle is PurgeIfIdle with the live-job check as a parameter. Lock
+// order: a project's lock, then queueing, then the store's purge lock,
+// then s.mu. Queueing a job takes the first two in that order, the purge
+// takes queueing then the store's lock, and HasJob takes s.mu last.
+func (s *Service) purgeIfIdle(hasJob func(projectID string) bool) (bool, error) {
+	s.queueing.Lock()
+	defer s.queueing.Unlock()
+	return s.store.PurgeIfIdleUnguarded(hasJob)
+}
+
+// SweepEphemeral runs one ephemeral sweep: it deletes every project with
+// no job that has been idle for idle at now, then purges the caches
+// through PurgeIfIdle when the store asks for it. The deletes take each
+// project's lock with queueing released, which keeps the lock order.
+func (s *Service) SweepEphemeral(idle time.Duration, now time.Time) store.Sweep {
+	return s.store.SweepEphemeralUnguarded(idle, now, s.HasJob, s.DeleteProject, s.PurgeIfIdle)
 }

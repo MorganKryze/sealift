@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -61,32 +60,17 @@ func (s *Store) cachesEmpty() (bool, error) {
 	return true, nil
 }
 
-// Busy reports whether any project has a job in flight: a job holds a .tmp
-// directory from the moment it queues until it commits.
-func (s *Store) Busy() (bool, error) {
+// anyJob reports whether hasJob finds a job queued or running for any
+// project. hasJob comes from the job service: a job directory outlives
+// its job when the commit fails, so the directories cannot tell.
+func (s *Store) anyJob(hasJob func(projectID string) bool) (bool, error) {
 	projects, err := os.ReadDir(filepath.Join(s.root, "projects"))
 	if err != nil {
 		return false, fmt.Errorf("store: list projects: %w", err)
 	}
 	for _, p := range projects {
-		busy, err := projectBusy(filepath.Join(s.root, "projects", p.Name()))
-		if err != nil || busy {
-			return busy, err
-		}
-	}
-	return false, nil
-}
-
-func projectBusy(dir string) (bool, error) {
-	for _, kind := range []string{"analyses", "exports"} {
-		entries, err := os.ReadDir(filepath.Join(dir, kind))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("store: list %s: %w", filepath.Join(dir, kind), err)
-		}
-		for _, e := range entries {
-			if strings.HasSuffix(e.Name(), ".tmp") {
-				return true, nil
-			}
+		if hasJob(p.Name()) {
+			return true, nil
 		}
 	}
 	return false, nil
@@ -119,13 +103,16 @@ func lastActivity(dir string) (time.Time, error) {
 	return newest, err
 }
 
-// PurgeIfIdle empties the caches when no job is in flight. With a job in
-// flight it records the purge as pending, for the sweep to run once the
-// instance is idle. It reports whether it emptied anything.
-func (s *Store) PurgeIfIdle() (bool, error) {
+// PurgeIfIdleUnguarded skips the job service's guard: a job queued
+// during the call can lose its caches. Callers outside tests go through
+// jobs.Service.PurgeIfIdle. It empties the caches when hasJob finds no project with a job
+// queued or running. Otherwise it records the purge as pending, for the
+// sweep to run once the instance is idle. It reports whether it emptied
+// anything.
+func (s *Store) PurgeIfIdleUnguarded(hasJob func(projectID string) bool) (bool, error) {
 	s.purgeMu.Lock()
 	defer s.purgeMu.Unlock()
-	busy, err := s.Busy()
+	busy, err := s.anyJob(hasJob)
 	if err != nil {
 		return false, err
 	}
@@ -161,14 +148,17 @@ type Sweep struct {
 	Failed  int
 }
 
-// SweepEphemeral deletes, through deleteProject, every project with no job
-// in flight whose newest file is older than idle. deleteProject answers
-// ErrBusy for a project whose job was queued since the sweep looked, and
-// that project stays. A project it cannot read or delete is counted and
-// skipped, so one bad entry never stops the others. It then empties the
-// caches when the instance is idle and either no project remains or a
-// purge was put off.
-func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, deleteProject func(id string) error) Sweep {
+// SweepEphemeralUnguarded skips the job service's guard on its own:
+// callers outside tests go through jobs.Service.SweepEphemeral, which
+// passes its guarded delete and purge. It deletes, through deleteProject, every project for which
+// hasJob finds no job queued or running and whose newest file is older
+// than idle. deleteProject answers ErrBusy for a project whose job was
+// queued since the sweep looked, and that project stays. A project it
+// cannot read or delete is counted and skipped, so one bad entry never
+// stops the others. It then calls purgeIfIdle when no project remains or
+// a purge was put off. The job service passes its own PurgeIfIdle, which
+// holds off new jobs during the purge.
+func (s *Store) SweepEphemeralUnguarded(idle time.Duration, now time.Time, hasJob func(projectID string) bool, deleteProject func(id string) error, purgeIfIdle func() (bool, error)) Sweep {
 	var r Sweep
 	root := filepath.Join(s.root, "projects")
 	projects, err := os.ReadDir(root)
@@ -178,16 +168,11 @@ func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, deleteProject 
 	}
 	remaining := 0
 	for _, p := range projects {
-		dir := filepath.Join(root, p.Name())
-		busy, err := projectBusy(dir)
-		if err != nil || busy {
-			if err != nil {
-				r.Failed++
-			}
+		if hasJob(p.Name()) {
 			remaining++
 			continue
 		}
-		last, err := lastActivity(dir)
+		last, err := lastActivity(filepath.Join(root, p.Name()))
 		if err != nil {
 			r.Failed++
 			remaining++
@@ -210,7 +195,7 @@ func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, deleteProject 
 		}
 	}
 	if remaining == 0 || s.isPurgePending() {
-		purged, err := s.PurgeIfIdle()
+		purged, err := purgeIfIdle()
 		if err != nil {
 			r.Failed++
 		}

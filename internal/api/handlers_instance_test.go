@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
@@ -96,6 +97,49 @@ func TestDeleteProjectPurgesCachesWhenEphemeral(t *testing.T) {
 // A job of another project in flight keeps the caches through a delete: the
 // purge waits for the sweep.
 func TestDeleteProjectKeepsCachesWhileAnotherJobRuns(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	h := newTestHandlers(t, q)
+	t.Cleanup(q.Close)
+	h.Ephemeral = time.Hour
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	t.Cleanup(srv.Close)
+	cached := filepath.Join(h.Store.Root(), "cache", "tarballs", "x.tgz")
+	if err := os.MkdirAll(filepath.Dir(cached), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cached, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hold := holdJob{started: make(chan struct{}), release: make(chan struct{})}
+	if _, err := q.Submit(hold); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	<-hold.started
+	other, err := h.Store.CreateProject("other", []byte(`{"name":"other"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := h.Service.QueueAnalysis(other.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+	p, err := h.Store.CreateProject("demo", []byte(`{"name":"demo"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := deleteProject(t, srv.URL, p.ID); code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d, want 204", code)
+	}
+	if _, err := os.Stat(cached); err != nil {
+		t.Errorf("the caches went while another project's job was queued: %v", err)
+	}
+	close(hold.release)
+	waitForTerminalState(t, h, other.ID, "analysis", info.ID)
+}
+
+// A job directory with no job behind it, which a failed commit leaves,
+// does not keep the caches through a delete.
+func TestDeleteProjectPurgesCachesPastAStaleJobDirectory(t *testing.T) {
 	srv, h := newTestServer(t)
 	h.Ephemeral = time.Hour
 	cached := filepath.Join(h.Store.Root(), "cache", "tarballs", "x.tgz")
@@ -119,8 +163,8 @@ func TestDeleteProjectKeepsCachesWhileAnotherJobRuns(t *testing.T) {
 	if code := deleteProject(t, srv.URL, p.ID); code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d, want 204", code)
 	}
-	if _, err := os.Stat(cached); err != nil {
-		t.Errorf("the caches went while another project's job ran: %v", err)
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Errorf("the tarball cache survived the delete: %v", err)
 	}
 }
 

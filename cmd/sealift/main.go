@@ -175,7 +175,7 @@ func run(addr, root string, log *slog.Logger) error {
 
 	log.Info("listening", "addr", addr, "data", root, "ephemeral", idle > 0)
 	if idle > 0 {
-		go sweepEphemeral(ctx, st, service, idle, log)
+		go sweepEphemeral(ctx, service, idle, log)
 	}
 	select {
 	case err := <-serveErr:
@@ -373,7 +373,7 @@ func ephemeralConfig(on, idle string) (time.Duration, error) {
 // sweepEphemeral erases idle projects through the service, which refuses
 // one with a job queued or running, then the caches once none remains,
 // every minute until ctx ends. Its log lines carry counts, never an id.
-func sweepEphemeral(ctx context.Context, st *store.Store, service *jobs.Service, idle time.Duration, log *slog.Logger) {
+func sweepEphemeral(ctx context.Context, service *jobs.Service, idle time.Duration, log *slog.Logger) {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for {
@@ -382,7 +382,7 @@ func sweepEphemeral(ctx context.Context, st *store.Store, service *jobs.Service,
 			return
 		case now := <-tick.C:
 			// Counts only: an error's text can hold a path that names a package.
-			r := st.SweepEphemeral(idle, now, service.DeleteProject)
+			r := service.SweepEphemeral(idle, now)
 			if r.Failed > 0 {
 				log.Error("ephemeral sweep could not erase everything", "failed", r.Failed, "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
 			} else if r.Deleted > 0 || r.Purged {
