@@ -443,3 +443,204 @@ func TestRankWritesAnEmptyFamiliesList(t *testing.T) {
 		t.Errorf("families = %q, want []: a result without the key reads as one from an older release", got)
 	}
 }
+
+func TestRankWritesAnAdvisoryForEveryCVEIdTheResultNames(t *testing.T) {
+	data, err := os.ReadFile("../../rank/testdata/trivy-report.json")
+	if err != nil {
+		t.Fatalf("read testdata: %v", err)
+	}
+	findings, err := rank.ReadTrivyJSON(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatalf("ReadTrivyJSON: %v", err)
+	}
+	r := newRankRun(t, policy.DefaultReview())
+	express, expressOutcomes := fakeDependency("express", "4.17.1",
+		fakeVersion{version: "4.19.2", published: longAgo},
+		fakeVersion{version: "4.21.2", published: longAgo})
+	expressOutcomes[0].pkgs = append(expressOutcomes[0].pkgs, npm.LockPackage{Name: "path-to-regexp", Version: "0.1.7"})
+	lodash, lodashOutcomes := fakeDependency("lodash", "4.17.20", fakeVersion{version: "4.17.21", published: longAgo})
+	if err := r.stepRank([]depInfo{express, lodash}, append(expressOutcomes, lodashOutcomes...), rank.NewIndex(findings)); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	named := map[string]bool{}
+	for _, dr := range r.result.Dependencies {
+		for _, c := range dr.CVEs {
+			named[c.ID] = true
+		}
+		for _, cand := range dr.Candidates {
+			for _, c := range cand.CVEs {
+				named[c.ID] = true
+			}
+		}
+	}
+	if len(named) < 10 {
+		t.Fatalf("the result names %d ids, want the fixture's express, path-to-regexp and lodash ids", len(named))
+	}
+	for id := range named {
+		a, ok := r.result.Advisories[id]
+		if !ok {
+			t.Errorf("%s: the result names it, but the table holds no advisory", id)
+			continue
+		}
+		if a.Title == "" || a.Published == "" || a.Summary != "" {
+			t.Errorf("%s: advisory %+v, want a title and a date and no summary, as the fixture gives", id, a)
+		}
+	}
+	for id := range r.result.Advisories {
+		if !named[id] {
+			t.Errorf("%s: the table holds an advisory the result never names", id)
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(r.a.Dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	var written Result
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(written.Advisories) != len(named) {
+		t.Errorf("candidates.json holds %d advisories, want %d", len(written.Advisories), len(named))
+	}
+}
+
+func TestAdvisoriesKeepTheFirstWordingInResultOrder(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2026-00001", Package: "body-parser", Version: "1.19.0", Severity: rank.High, Title: "body-parser: the candidate's wording"},
+		{ID: "CVE-2026-00001", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "express: the current version's wording"},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("express", "4.17.1", fakeVersion{version: "4.18.0", published: longAgo})
+	outcomes[1].pkgs = append(outcomes[1].pkgs, npm.LockPackage{Name: "body-parser", Version: "1.19.0"})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	if got := r.result.Advisories["CVE-2026-00001"].Title; got != "express: the current version's wording" {
+		t.Errorf("title = %q, want the current version's wording, which the result lists first", got)
+	}
+}
+
+func TestRankWritesAnAdvisoryForAnIdOnlyACandidateNames(t *testing.T) {
+	// A newer version often pulls in a transitive package the current one
+	// lacks, and with it a CVE id that only the candidate's list names.
+	index := rank.NewIndex([]rank.Finding{{
+		ID: "CVE-2026-00002", Package: "body-parser", Version: "1.20.0", Severity: rank.Medium,
+		Title:       "body-parser: only the candidate holds it",
+		Description: "The parser reads past the end.",
+		Published:   time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
+	}})
+	r := newRankRun(t, policy.DefaultReview())
+	d, outcomes := fakeDependency("express", "4.17.1", fakeVersion{version: "4.18.0", published: longAgo})
+	outcomes[1].pkgs = append(outcomes[1].pkgs, npm.LockPackage{Name: "body-parser", Version: "1.20.0"})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+
+	express := dependencyNamed(t, r, "express")
+	if len(express.CVEs) != 0 {
+		t.Fatalf("current version CVEs = %+v, want none", express.CVEs)
+	}
+	candidate := slices.IndexFunc(express.Candidates, func(c Candidate) bool {
+		return slices.ContainsFunc(c.CVEs, func(cve CVE) bool { return cve.ID == "CVE-2026-00002" })
+	})
+	if candidate < 0 {
+		t.Fatalf("no candidate names CVE-2026-00002: %+v", express.Candidates)
+	}
+	want := Advisory{
+		Title:     "body-parser: only the candidate holds it",
+		Summary:   "The parser reads past the end.",
+		Published: "2026-03-04T05:06:07Z",
+	}
+	if got, ok := r.result.Advisories["CVE-2026-00002"]; !ok || got != want {
+		t.Errorf("advisory = %+v (present %v), want %+v", got, ok, want)
+	}
+}
+
+func TestRankStoresAdvisoryPathsRelativeToTheDataDirectory(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	r.root = r.a.Store.Root()
+	key := filepath.Join("private", "signing-key.pem")
+	index := rank.NewIndex([]rank.Finding{{
+		ID: "CVE-2026-00003", Package: "axios", Version: "1.7.9", Severity: rank.High,
+		Title:       "axios: reads " + filepath.Join(r.root, key),
+		Description: "A crafted URL makes axios read " + filepath.Join(r.root, key) + ".",
+	}})
+	rankAll(t, r, index, func() (depInfo, []candidateOutcome) { return fakeDependency("axios", "1.7.9") })
+
+	raw, err := os.ReadFile(filepath.Join(r.a.Dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	var written Result
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := Advisory{Title: "axios: reads " + key, Summary: "A crafted URL makes axios read " + key + "."}
+	if got := written.Advisories["CVE-2026-00003"]; got != want {
+		t.Errorf("candidates.json advisory = %+v, want %+v", got, want)
+	}
+	if strings.Contains(string(raw), r.root) {
+		t.Errorf("candidates.json names the data directory: %s", raw)
+	}
+}
+
+func TestRankResultMarshalsAdvisoriesAsTheContractNamesThem(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{{
+		ID: "CVE-2025-58754", Package: "axios", Version: "1.7.9", Severity: rank.High,
+		Title:       "axios: Axios DoS via lack of data size check",
+		Description: "Axios decodes a data: URI into memory.",
+		Published:   time.Date(2025, 9, 12, 2, 15, 46, 873_000_000, time.UTC),
+	}})
+	r := newRankRun(t, policy.DefaultReview())
+	rankAll(t, r, index, func() (depInfo, []candidateOutcome) { return fakeDependency("axios", "1.7.9") })
+
+	encoded, err := json.Marshal(r.result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `"advisories":{"CVE-2025-58754":{"title":"axios: Axios DoS via lack of data size check","summary":"Axios decodes a data: URI into memory.","published":"2025-09-12T02:15:46Z"}}`
+	if !strings.Contains(string(encoded), want) {
+		t.Errorf("result = %s, want it to hold %s", encoded, want)
+	}
+
+	clean := newRankRun(t, policy.DefaultReview())
+	rankAll(t, clean, index, func() (depInfo, []candidateOutcome) { return fakeDependency("lodash", "4.17.21") })
+	raw, err := os.ReadFile(filepath.Join(clean.a.Dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	if strings.Contains(string(raw), `"advisories"`) {
+		t.Errorf("a result that names no CVE carries no advisories key: %s", raw)
+	}
+}
+
+func TestRankLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2026-00004", Package: "express", Version: "4.17.1", Severity: rank.High, Title: "secret\x1b[31m wording \u202Eevil", Description: "a\x00b"},
+		{ID: "CVE-2026-00005", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "word\u2060joiner\tand tab"},
+		// An id that is not an advisory id never reaches the log, whatever its text drops.
+		{ID: "CVE-1\x1b[2J\nx", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "t\x1b[0m"},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	var lines []string
+	r.emit = func(e Event) {
+		if e.Kind == "log" {
+			var d logData
+			if err := json.Unmarshal(e.Data, &d); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			lines = append(lines, d.Line)
+		}
+	}
+	d, outcomes := fakeDependency("express", "4.17.1", fakeVersion{version: "4.17.1", published: longAgo})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+	want := []string{"CVE-2026-00004: advisory text dropped bidi, control characters"}
+	if !slices.Equal(lines, want) {
+		t.Errorf("log = %q, want %q", lines, want)
+	}
+}
