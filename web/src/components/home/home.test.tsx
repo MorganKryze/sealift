@@ -115,9 +115,9 @@ describe("the online home", () => {
     expect(within(needs).getByText("Review waits")).toBeInTheDocument()
     expect(within(needs).getByText("Failed at Analyse")).toBeInTheDocument()
     expect(within(needs).getByText("Not analysed yet")).toBeInTheDocument()
-    expect(within(needs).getByRole("link", { name: `Review web-portal · ${crossingDay(at(10, 23))}` })).toHaveAttribute("href", "/sessions/web-portal/review")
-    expect(within(needs).getByRole("link", { name: `Open kiosk-ui · ${crossingDay(at(10, 21))}` })).toHaveAttribute("href", "/sessions/kiosk-ui")
-    expect(within(needs).getByRole("link", { name: "Open fresh" })).toHaveAttribute("href", "/sessions/fresh/drop")
+    expect(within(needs).getByRole("link", { name: `Review web-portal · ${crossingDay(at(10, 23))}` })).toHaveAttribute("href", "/crossings/web-portal")
+    expect(within(needs).getByRole("link", { name: `Open kiosk-ui · ${crossingDay(at(10, 21))}` })).toHaveAttribute("href", "/crossings/kiosk-ui")
+    expect(within(needs).getByRole("link", { name: "Open fresh" })).toHaveAttribute("href", "/crossings/fresh?step=check")
     expect(screen.queryByRole("region", { name: "In progress" })).toBeNull()
   })
 
@@ -134,7 +134,11 @@ describe("the online home", () => {
     expect(within(progress).getByText("Queued")).toBeInTheDocument()
     expect(within(progress).getByText("Analysing")).toBeInTheDocument()
     expect(within(progress).getByText("Sealing")).toBeInTheDocument()
-    expect(within(progress).getAllByRole("link", { name: /^Open / })).toHaveLength(3)
+    expect(within(progress).getAllByRole("link", { name: /^Open / }).map((link) => link.getAttribute("href"))).toEqual([
+      "/crossings/queued-one",
+      "/crossings/billing-api",
+      "/crossings/data-pipeline",
+    ])
     expect(screen.queryByRole("region", { name: "Needs you" })).toBeNull()
   })
 

@@ -283,7 +283,21 @@ describe("Update, the Check step", () => {
 
     startProject = () => Promise.resolve(json(created, 201))
     fireEvent.click(retry)
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId/analysis", params: { sessionId: created.id } }))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/crossings/$projectId", params: { projectId: created.id } }))
+  })
+
+  it("opens the crossing once the server answers", async () => {
+    let answer: (response: Response) => void = () => {}
+    startProject = () => new Promise((resolve) => (answer = resolve))
+    const { container } = withClient(<UpdateScreen />)
+    drop(container, COMPLIANT)
+    fireEvent.click(await screen.findByRole("button", { name: /^Analyse$/ }))
+    await screen.findByRole("button", { name: "Starting" })
+    expect(navigate).not.toHaveBeenCalled()
+
+    answer(json(created, 201))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: "/crossings/$projectId", params: { projectId: created.id } }))
+    expect(navigate).toHaveBeenCalledTimes(1)
   })
 
   it("offers to open the crossing a byte-identical file had", async () => {
@@ -293,7 +307,7 @@ describe("Update, the Check step", () => {
 
     const dialog = await screen.findByRole("dialog")
     fireEvent.click(within(dialog).getByRole("button", { name: "Resume that session" }))
-    expect(navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: past.id } })
+    expect(navigate).toHaveBeenCalledWith({ to: "/crossings/$projectId", params: { projectId: past.id } })
   })
 })
 

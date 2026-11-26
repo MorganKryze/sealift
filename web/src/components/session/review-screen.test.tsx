@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -90,6 +90,12 @@ const worstReasons = {
   "major-jump:vite 7": "CI and every dev machine run Node 22; Vite 7 builds the app",
   "cve-without-fix:html-minifier": "Dev dependency, runs at build time on our own HTML",
   "cve-without-fix:lodash.template": "Templates are our own files, never user input",
+}
+// The three reasons the worst case still waits for, so it reads Ready to seal.
+const lastReasons = {
+  "cve-without-fix:angular": "Pinned by the legacy kiosk, removed in Q3",
+  [`cve-without-fix:${babel}`]: "Build only, never in the bundle",
+  "cve-without-fix:request": "Called once at deploy time against our own host",
 }
 
 function renderReview(analysis: Analysis, storage: { selection?: object; reasons?: object } = {}) {
@@ -216,23 +222,103 @@ describe("ReviewScreen", () => {
     expect(terms("What a major jump is")).toHaveLength(1)
   })
 
-  it("puts the info buttons on the title and the kept row when the reasons block is absent", () => {
+  it("puts the info buttons on the title and the kept row while a jump's reason waits", () => {
     const calm = analysisOf("20261124T121500Z", oneMissing.result!.dependencies.filter((d) => d.name !== "html-minifier"))
-    renderReview(calm)
-    expect(screen.queryByRole("group", { name: /major jumps|known CVEs/ })).toBeNull()
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Ready to seal")
+    renderReview(calm, { selection: { esbuild: ["0.25.12"] } })
+    expect(screen.queryByRole("group", { name: /known CVEs/ })).toBeNull()
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("One thing needs you")
     expect(terms("What a CVE is")).toHaveLength(1)
     expect(screen.getByText("Known CVEs", { selector: "[data-known-cves] *" }).closest("[data-known-cves]")).toContainElement(terms("What a CVE is")[0])
-    expect(terms("What a major jump is")).toHaveLength(1)
-    const kept = screen.getByRole("button", { name: /^1 package kept on their major/ })
-    expect(kept.closest("[data-group]")).toContainElement(terms("What a major jump is")[0])
     expect(terms("What a severity is")).toHaveLength(0)
     fireEvent.click(screen.getByRole("button", { name: /^2 packages updated/ }))
-    fireEvent.click(kept)
     expect(terms("What a severity is")).toHaveLength(1)
     const lodashRow = screen.getByText("lodash", { selector: "td *, td" }).closest("tr") as HTMLElement
     expect(lodashRow).toContainElement(terms("What a severity is")[0])
     expect(terms("What a CVE is")).toHaveLength(1)
+  })
+
+  it("reads Ready to seal once every reason is written", () => {
+    renderReview(worst, { selection: worstSelection, reasons: { ...worstReasons, ...lastReasons, "cve-without-fix:request": "   " } })
+    expect(screen.getByRole("heading", { level: 1, name: "One thing needs you" })).toBeInTheDocument()
+    expect(screen.queryByRole("region", { name: "Known CVEs" })).toBeNull()
+    expect(seal()).toHaveAttribute("aria-disabled", "true")
+    cleanup()
+    renderReview(worst, { selection: worstSelection, reasons: { ...worstReasons, ...lastReasons } })
+    expect(screen.getByRole("heading", { level: 1, name: "Ready to seal" })).toBeInTheDocument()
+    expect(screen.getByText(/direct dependencies/)).toHaveTextContent("26 direct dependencies")
+    const head = screen.getByRole("region", { name: "Known CVEs" })
+    // 15 kept by the five packages with no fix, plus lodash's one, before; lodash's update fixes its one.
+    expect(head.querySelector("[data-total]")).toHaveTextContent("16 to 15")
+    // The families' jumps depart from the proposal, so the after figure sums each package's own scan.
+    expect(screen.getByText("Not checked together")).toBeInTheDocument()
+    expect(screen.queryByText(/^Opens once/)).toBeNull()
+    expect(seal()).not.toHaveAttribute("aria-disabled")
+  })
+
+  it("names a hand-made selection's after figure as not checked together", () => {
+    const ready = { ...oneMissing, result: { ...oneMissing.result!, after: [0, 1, 1, 0, 0] } } as Analysis
+    renderReview(ready, { reasons: { "cve-without-fix:html-minifier": "build tool, never shipped" } })
+    expect(screen.queryByText("Not checked together")).toBeNull()
+    cleanup()
+    sessionStorage.clear()
+    renderReview(ready, { selection: { express: [] }, reasons: { "cve-without-fix:html-minifier": "build tool, never shipped" } })
+    expect(screen.getByText("Not checked together")).toBeInTheDocument()
+    // express keeps its medium: each package's own scan, summed.
+    expect(screen.getByRole("region", { name: "Known CVEs" }).querySelector("[data-total]")).toHaveTextContent("5 to 3")
+  })
+
+  it("places each info button once on Ready", () => {
+    renderReview(oneMissing, { reasons: { "cve-without-fix:html-minifier": "build tool, never shipped" } })
+    const head = screen.getByRole("region", { name: "Known CVEs" })
+    expect(terms("What a CVE is")).toHaveLength(1)
+    expect(head).toContainElement(terms("What a CVE is")[0])
+    expect(terms("What a severity is")).toHaveLength(1)
+    expect(head).toContainElement(terms("What a severity is")[0])
     expect(terms("What a major jump is")).toHaveLength(1)
+    expect(screen.getByRole("button", { name: /kept on their major/ }).closest("[data-group]")).toContainElement(terms("What a major jump is")[0])
+    for (const group of [/^2 packages updated/, /kept on their major/, /unchanged/]) fireEvent.click(screen.getByRole("button", { name: group }))
+    expect(terms("What a CVE is")).toHaveLength(1)
+    expect(terms("What a severity is")).toHaveLength(1)
+    expect(terms("What a major jump is")).toHaveLength(1)
+    cleanup()
+    renderReview(worst, { selection: worstSelection, reasons: { ...worstReasons, ...lastReasons } })
+    expect(terms("What a CVE is")).toHaveLength(1)
+    expect(terms("What a severity is")).toHaveLength(1)
+    expect(screen.getByRole("region", { name: "Known CVEs" })).toContainElement(terms("What a severity is")[0])
+    expect(terms("What a major jump is")).toHaveLength(1)
+    expect(screen.getByRole("group", { name: /major jumps/ })).toContainElement(terms("What a major jump is")[0])
+  })
+
+  it("shows each reason as it will be signed, with Change", () => {
+    const reasons = { ...worstReasons, ...lastReasons }
+    renderReview(worst, { selection: worstSelection, reasons })
+    expect(screen.getAllByText(/./, { selector: "[data-reason-name]" })).toHaveLength(Object.keys(reasons).length)
+    for (const [key, text] of Object.entries(reasons)) {
+      const label = key.slice(key.indexOf(":") + 1)
+      const row = screen.getByText(label, { selector: "[data-reason-name]" }).closest("[data-reason-row]") as HTMLElement
+      expect(within(row).getByText(`“${text.trim()}”`)).toBeInTheDocument()
+      expect(within(row).getByRole("button", { name: `Change ${label}` })).toBeInTheDocument()
+    }
+  })
+
+  it("reopens the panel from Change", () => {
+    renderReview(worst, { selection: worstSelection, reasons: { ...worstReasons, ...lastReasons } })
+    fireEvent.click(screen.getByRole("button", { name: "Change html-minifier" }))
+    expect(within(screen.getByRole("dialog")).getByRole("textbox")).toHaveValue(worstReasons["cve-without-fix:html-minifier"])
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }))
+    fireEvent.click(screen.getByRole("button", { name: "Change vite 7" }))
+    expect(within(screen.getByRole("dialog")).getByRole("textbox")).toHaveValue(worstReasons["major-jump:vite 7"])
+  })
+
+  it("sends the reasons shown, word for word", async () => {
+    vi.mocked(queueExport).mockResolvedValue({ id: "x", projectId: "demo", analysisId: worst.id, state: "queued", createdAt: "" } as Export)
+    const spaced = { ...worstReasons, ...lastReasons, "cve-without-fix:angular": "  Pinned by the legacy kiosk;  removed in Q3   " }
+    renderReview(worst, { selection: worstSelection, reasons: spaced })
+    const shown = screen.getAllByText(/^“.*”$/).map((node) => (node.textContent ?? "").slice(1, -1))
+    fireEvent.click(seal())
+    await waitFor(() => expect(queueExport).toHaveBeenCalled())
+    const sent = vi.mocked(queueExport).mock.calls[0][2].reasons ?? []
+    expect(sent.map((reason) => reason.text).sort()).toEqual(shown.sort())
+    expect(sent.find((reason) => reason.dependencies.includes("angular"))?.text).toBe("Pinned by the legacy kiosk;  removed in Q3")
   })
 })

@@ -6,6 +6,7 @@ import { ProblemError } from "@/api/client"
 import { getProjectManifest, queueExport, type Analysis, type DependencyResult, type Project } from "@/api/projects"
 import { ProblemNotice } from "@/components/problem-notice"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
+import { ReadySummary } from "@/components/session/ready-summary"
 import { ReasonsBlock } from "@/components/session/reasons-block"
 import { DecidePanel, JumpPanel, SeverityCounts, VersionChange, releaseAge } from "@/components/session/review-panels"
 import { StepBar, type StepId } from "@/components/step-bar"
@@ -126,20 +127,24 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   const picked = (dependency: DependencyResult) => pickedOf(dependency, selection.selection[dependency.name])
   const groups = groupDependencies(dependencies, selection.selection, families)
   const departs = dependencies.some((d) => picked(d) !== (d.best || d.current))
-  const after = !departs && result.after ? result.after : afterVectorOf(dependencies, picked)
+  // The combined check measured the proposal only; any other selection sums each package's own scan.
+  const checkedTogether = !departs && result.after !== undefined
+  const after = checkedTogether && result.after ? result.after : afterVectorOf(dependencies, picked)
+  const ready = waiting.length === 0
   const changed = Object.keys(toExport).length
 
   const hasCveBand = needed.some((n) => n.kind === "cve-without-fix")
   const hasJumpBand = needed.some((n) => n.kind === "major-jump")
-  // The severity's explanation goes to the first row on screen that shows severities, when no reason row shows them first.
-  const severityRow = hasCveBand
+  // The severity's explanation goes to the first row on screen that shows severities, when neither Ready's head nor
+  // a reason row shows them first.
+  const severityRow = ready || hasCveBand
     ? undefined
     : (["updated", "kept", "unchanged"] as const)
         .filter((key) => open.has(key))
         .flatMap((key) => groups[key].map((d) => ({ key, d })))
         .find(({ key, d }) => total(rowVectors(key, d, picked(d)).flat()) > 0)
 
-  const title = waiting.length === 0 ? "Ready to seal" : waiting.length === 1 ? "One thing needs you" : `${plural(waiting.length, "thing", "things")} need you`
+  const title = ready ? "Ready to seal" : waiting.length === 1 ? "One thing needs you" : `${plural(waiting.length, "thing", "things")} need you`
   const names = waiting.map((n) => n.label)
   const cause =
     names.length > 0
@@ -177,17 +182,20 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
       <StepBar steps={steps} />
 
-      <div className="mb-5">
+      <div className={ready ? "mb-1" : "mb-5"}>
         <h1 className="text-[28px] font-bold tracking-tight text-ink">{title}</h1>
-        <p data-known-cves className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[15px] text-muted">
-          <span>Known CVEs</span>{" "}
-          <span className="figure text-ink-2">{total(result.before).toLocaleString("en-US")}</span>
-          <ArrowRight aria-hidden="true" className="size-3.5" />
-          <span className="sr-only"> to </span>
-          <span className="figure text-ink">{total(after).toLocaleString("en-US")}</span>
-          {hasCveBand ? null : <Term id="cve" />}
-        </p>
+        {ready ? null : (
+          <p data-known-cves className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[15px] text-muted">
+            <span>Known CVEs</span>{" "}
+            <span className="figure text-ink-2">{total(result.before).toLocaleString("en-US")}</span>
+            <ArrowRight aria-hidden="true" className="size-3.5" />
+            <span className="sr-only"> to </span>
+            <span className="figure text-ink">{total(after).toLocaleString("en-US")}</span>
+            {hasCveBand ? null : <Term id="cve" />}
+          </p>
+        )}
       </div>
+      {ready ? <ReadySummary before={result.before} after={after} checkedTogether={checkedTogether} directDependencies={dependencies.length} /> : null}
 
       <AnalysisWarnings warnings={result.warnings} />
 
@@ -196,6 +204,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
         reasons={reasons.reasons}
         result={result}
         refusal={refusal}
+        explainCves={!ready}
         onDecide={(name) => setOpened({ kind: "decide", name })}
         onJump={(name) => setOpened({ kind: "jump", name })}
       />

@@ -11,6 +11,17 @@ export const Route = createRootRoute({
   // The settings sheet's old address, kept so a bookmark lands on Instance.
   beforeLoad: ({ location }) => {
     if (location.pathname === "/settings") throw redirect({ to: "/instance", replace: true })
+    // The session pages' old addresses, kept so a bookmark lands on its crossing, at the step it named.
+    const earlier = /^\/sessions\/([^/]+)(?:\/(drop|analysis|review|export))?\/?$/.exec(location.pathname)
+    if (earlier) {
+      const step = earlier[2] === "drop" ? "check" : earlier[2] === "review" ? "review" : undefined
+      throw redirect({
+        to: "/crossings/$projectId",
+        params: { projectId: decoded(earlier[1]) },
+        search: { ...analysisSearch(location.search), ...(step ? { step } : {}) },
+        replace: true,
+      })
+    }
   },
   component: () => (
     <WhenReady>
@@ -19,11 +30,20 @@ export const Route = createRootRoute({
   ),
 })
 
+/** A path segment as the router's params hold it; a malformed escape stays as written. */
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
 function OnlineFrame() {
   const instance = useInstance()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const analysisId = useRouterState({ select: (s) => analysisSearch(s.location.search).analysis })
-  const projectId = /^\/(?:sessions|projects)\/([^/]+)/.exec(pathname)?.[1]
+  const projectId = /^\/(?:crossings|projects)\/([^/]+)/.exec(pathname)?.[1]
   // The page's own route asks for the same cache entry, so the crumb costs no extra request.
   const project = useQuery({
     queryKey: ["project", projectId],

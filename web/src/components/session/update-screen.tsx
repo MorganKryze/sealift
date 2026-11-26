@@ -78,7 +78,7 @@ export function UpdateScreen() {
     onSuccess: (project) => {
       queryClient.setQueryData(["project", project.id], project)
       void queryClient.invalidateQueries({ queryKey: ["projects"] })
-      void navigate({ to: "/sessions/$sessionId/analysis", params: { sessionId: project.id } })
+      void navigate({ to: "/crossings/$projectId", params: { projectId: project.id } })
     },
   })
 
@@ -219,7 +219,7 @@ export function UpdateScreen() {
           onResume={() => {
             const id = duplicate.match.id
             setDuplicate(null)
-            void navigate({ to: "/sessions/$sessionId", params: { sessionId: id } })
+            void navigate({ to: "/crossings/$projectId", params: { projectId: id } })
           }}
           onStartNew={() => {
             setPending(duplicate.pending)
