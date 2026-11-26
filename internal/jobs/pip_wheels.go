@@ -74,7 +74,7 @@ func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 			f := c.file
 			r.wheels[pkg.Name] = PipWheel{File: f.Filename, URL: f.URL, Sha256: f.Sha256, Size: f.Size}
 			if f.Yanked {
-				reason := cleanText(f.YankedReason, yankedReasonLimit)
+				reason := strings.TrimSpace(cleanText(f.YankedReason, yankedReasonLimit))
 				if reason == "" {
 					reason = "no reason given"
 				}

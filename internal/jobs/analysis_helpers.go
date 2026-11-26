@@ -116,12 +116,7 @@ func (a *Analysis) scanPackages(ctx context.Context, pkgs []npm.LockPackage, out
 		return nil, fmt.Errorf("trivy scan: %w", err)
 	}
 
-	report, err := openRegularFile(outPath)
-	if err != nil {
-		return nil, err
-	}
-	defer report.Close()
-	return rank.ReadTrivyJSON(report)
+	return readTrivyReport(outPath, trivyReportLimit)
 }
 
 func componentsOf(pkgs []npm.LockPackage) []sbom.Component {

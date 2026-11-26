@@ -21,6 +21,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Each CVE in an analysis keeps the package Trivy found it in and the versions that fix it.
 - Three review rules in the policy file: `review.proposeOtherMajors`, `review.majorJump` and `review.cveWithoutFix`. By default, proposals stay in their line and a jump or a CVE without fix needs a reason; `refuse` stops such an export whatever its reason. [Settings](docs/settings.md#review-rules) lists them.
 - An info button explains CVE, a severity and major jump where each first appears on a screen, in two sentences with a link to its section of [How sealift chooses](docs/how-sealift-chooses.md#terms).
+- An analysis answer carries `advisories`: for each CVE id it lists, the title, a short summary and the publication date from the Trivy report, for npm and pip. An analysis from an earlier release answers without them.
 
 ### Changed
 

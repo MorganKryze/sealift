@@ -179,9 +179,84 @@ func TestDecodeA070ResultHasNoJumpOrFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"families"`, `"jump"`, `"family"`, `"package"`, `"fixedIn"`} {
+	for _, key := range []string{`"families"`, `"jump"`, `"family"`, `"package"`, `"fixedIn"`, `"advisories"`} {
 		if strings.Contains(string(encoded), key) {
 			t.Errorf("the answer for a 0.7.0 analysis carries %s: %s", key, encoded)
+		}
+	}
+}
+
+func TestDecodeKeepsAdvisories(t *testing.T) {
+	raw := json.RawMessage(`{
+		"target": {"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},
+		"before": [0,1,0,0,0],
+		"dependencies": [],
+		"warnings": [],
+		"advisories": {
+			"CVE-2025-58754": {"title":"axios: Axios DoS via lack of data size check","summary":"Axios decodes a data: URI into memory.","published":"2025-09-12T02:15:46Z"},
+			"CVE-2025-27152": {"title":"axios: Possible SSRF and Credential Leakage via Absolute URL in axios Requests"}
+		}
+	}`)
+	result, ok := decodeAnalysisResult(raw)
+	if !ok {
+		t.Fatal("decodeAnalysisResult rejected an analysis with advisories")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"CVE-2025-58754":{"published":"2025-09-12T02:15:46Z","summary":"Axios decodes a data: URI into memory.","title":"axios: Axios DoS via lack of data size check"}`,
+		`"CVE-2025-27152":{"title":"axios: Possible SSRF and Credential Leakage via Absolute URL in axios Requests"}`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("the answer = %s, want it to hold %s", encoded, want)
+		}
+	}
+}
+
+// pip070 is a pip-result.json as sealift 0.7.0 wrote it: no advisories,
+// and each title as Trivy gave it, before titles were cleaned and bounded.
+var pip070 = `{
+  "target": {"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"},
+  "files": ["requirements.txt"],
+  "packages": [
+    {"name":"jinja2","version":"3.1.2","files":["requirements.txt"],
+     "wheel":{"file":"jinja2-3.1.2-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/jinja2-3.1.2-py3-none-any.whl","sha256":"6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61","size":133101},
+     "cves": [
+       {"id":"CVE-2024-22195","severity":"MEDIUM","fixedVersions":["3.1.3"],"title":"jinja2: \u001b[0mHTML attribute injection` + strings.Repeat(" when passing user input", 10) + `"}
+     ]},
+    {"name":"markupsafe","version":"3.0.2","files":[],"cves":[]}
+  ],
+  "blocking": [],
+  "warnings": []
+}`
+
+func TestDecodeA070PipResultHasNoAdvisories(t *testing.T) {
+	result, ok := decodePipResult(json.RawMessage(pip070))
+	if !ok {
+		t.Fatal("decodePipResult rejected a 0.7.0 pip analysis")
+	}
+	if result.Advisories != nil {
+		t.Errorf("Advisories = %+v, want absent", *result.Advisories)
+	}
+	if len(result.Packages) != 2 || len(result.Packages[0].Cves) != 1 {
+		t.Fatalf("packages = %+v, want jinja2 with one CVE and markupsafe", result.Packages)
+	}
+	want := "jinja2: \x1b[0mHTML attribute injection" + strings.Repeat(" when passing user input", 10)
+	if got := result.Packages[0].Cves[0].Title; got == nil || *got != want {
+		t.Errorf("title = %v, want it as stored: %q", got, want)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), `"advisories"`) {
+		t.Errorf("the answer for a 0.7.0 pip analysis carries advisories: %s", encoded)
+	}
+	for _, field := range []string{`"target":{`, `"files":["requirements.txt"]`, `"fixedVersions":["3.1.3"]`, `"blocking":[]`, `"warnings":[]`, `"cves":[]`, `"sha256":"6088930b`} {
+		if !strings.Contains(string(encoded), field) {
+			t.Errorf("the answer = %s, want it to hold %s as stored", encoded, field)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Severity orders vulnerability severities from most to least serious.
@@ -70,6 +71,8 @@ type Finding struct {
 	Severity     Severity
 	FixedVersion string // as Trivy reports it, possibly a list such as "4.19.2, 5.0.0-beta.3"
 	Title        string
+	Description  string    // as Trivy reports it; untrusted text from the vulnerability database
+	Published    time.Time // UTC; zero when the report gives no RFC 3339 date with a UTC year from 1 to 9999
 }
 
 // ReadTrivyJSON reads the vulnerabilities of a `trivy --format json` report.
@@ -84,6 +87,8 @@ func ReadTrivyJSON(r io.Reader) ([]Finding, error) {
 				FixedVersion     string
 				Severity         string
 				Title            string
+				Description      string
+				PublishedDate    string
 			}
 		}
 	}
@@ -103,10 +108,28 @@ func ReadTrivyJSON(r io.Reader) ([]Finding, error) {
 				Severity:     ParseSeverity(v.Severity),
 				FixedVersion: v.FixedVersion,
 				Title:        v.Title,
+				Description:  v.Description,
+				Published:    publishedDate(v.PublishedDate),
 			})
 		}
 	}
 	return findings, nil
+}
+
+// publishedDate parses Trivy's date in UTC. A missing or malformed date is
+// a fact the answer leaves out, never a reason to refuse the report. So is
+// a date whose year in UTC falls outside 1 to 9999: RFC 3339 has four
+// digits for the year, and a reader of the answer would refuse the date.
+func publishedDate(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	t = t.UTC()
+	if y := t.Year(); y < 1 || y > 9999 {
+		return time.Time{}
+	}
+	return t
 }
 
 // Index looks findings up by "name@version".
@@ -153,4 +176,35 @@ func VectorOf(set map[string]Finding) Vector {
 // It returns -1, 0 or +1.
 func (v Vector) Compare(o Vector) int {
 	return slices.Compare(v[:], o[:])
+}
+
+// idLimit bounds an advisory id in bytes. The longest real ids, such as
+// GHSA-xxxx-xxxx-xxxx or RUSTSEC-2024-0001, are far shorter.
+const idLimit = 64
+
+// ValidID reports whether id has an advisory id's shape: an upper-case
+// prefix, a hyphen, then letters, digits and hyphens, at most idLimit
+// bytes. An id from the report that fails it names no advisory: it could
+// collide with a client's object keys, such as "constructor".
+func ValidID(id string) bool {
+	if len(id) > idLimit {
+		return false
+	}
+	prefix, rest, ok := strings.Cut(id, "-")
+	if !ok || prefix == "" || rest == "" {
+		return false
+	}
+	for _, r := range prefix {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	for _, r := range rest {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
