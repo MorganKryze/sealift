@@ -223,3 +223,20 @@ func TestAddAdvisoryKeysOnlyAnAdvisoryShapedId(t *testing.T) {
 		t.Errorf("table = %+v, want only CVE-2026-00001", table)
 	}
 }
+
+func TestAdvisoryEdgesOfTheLimitsAndHeadings(t *testing.T) {
+	title := strings.Repeat("t", 99) + " " + strings.Repeat("é", 100)
+	summary := strings.Repeat("s", 249) + " " + strings.Repeat("é", 250)
+	boundary := strings.Repeat("w", 197) + " tail"
+	for _, c := range []struct{ name, got, want string }{
+		{"a title of exactly 200 code points", advisoryTitle("", title), title},
+		{"a summary of exactly 500 code points", advisorySummary("", summary), summary},
+		{"a prefix that ends on a word boundary", advisoryTitle("", boundary), strings.Repeat("w", 197) + "..."},
+		{"a heading indented four spaces", advisorySummary("", "    # Indented\n\nNext."), "# Indented"},
+		{"a line of seven #", advisorySummary("", "####### seven\n\nNext."), "####### seven"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}

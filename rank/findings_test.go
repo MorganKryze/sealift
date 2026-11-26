@@ -197,3 +197,18 @@ func TestValidIDAcceptsAdvisoryIdsOnly(t *testing.T) {
 		t.Errorf("an id of 64 bytes must pass")
 	}
 }
+
+func TestReadTrivyJSONTurnsAnOffsetDateToUTC(t *testing.T) {
+	const body = `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+		{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+		 "PublishedDate": "2026-02-09T23:15:49+02:00"}
+	]}]}`
+	findings, err := ReadTrivyJSON(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 2, 9, 21, 15, 49, 0, time.UTC)
+	if got := findings[0].Published; !got.Equal(want) || got.Location() != time.UTC {
+		t.Errorf("published = %v, want %v in UTC", got, want)
+	}
+}
