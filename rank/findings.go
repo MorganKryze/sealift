@@ -177,3 +177,34 @@ func VectorOf(set map[string]Finding) Vector {
 func (v Vector) Compare(o Vector) int {
 	return slices.Compare(v[:], o[:])
 }
+
+// idLimit bounds an advisory id in bytes. The longest real ids, such as
+// GHSA-xxxx-xxxx-xxxx or RUSTSEC-2024-0001, are far shorter.
+const idLimit = 64
+
+// ValidID reports whether id has an advisory id's shape: an upper-case
+// prefix, a hyphen, then letters, digits and hyphens, at most idLimit
+// bytes. An id from the report that fails it names no advisory: it could
+// collide with a client's object keys, such as "constructor".
+func ValidID(id string) bool {
+	if len(id) > idLimit {
+		return false
+	}
+	prefix, rest, ok := strings.Cut(id, "-")
+	if !ok || prefix == "" || rest == "" {
+		return false
+	}
+	for _, r := range prefix {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	for _, r := range rest {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}

@@ -213,3 +213,13 @@ func TestAdvisorySummaryReadsLinesAsTheCleaningLeavesThem(t *testing.T) {
 		}
 	}
 }
+
+func TestAddAdvisoryKeysOnlyAnAdvisoryShapedId(t *testing.T) {
+	table := map[string]Advisory{}
+	for _, id := range []string{"constructor", "CVE-" + strings.Repeat("9", 61), "CVE-2026-00001"} {
+		addAdvisory(table, "", rank.Finding{ID: id, Title: "a: one"})
+	}
+	if len(table) != 1 || table["CVE-2026-00001"].Title != "a: one" {
+		t.Errorf("table = %+v, want only CVE-2026-00001", table)
+	}
+}

@@ -181,3 +181,19 @@ func TestReadTrivyJSONLeavesOutADateOutsideYearsOneTo9999InUTC(t *testing.T) {
 		}
 	}
 }
+
+func TestValidIDAcceptsAdvisoryIdsOnly(t *testing.T) {
+	for _, id := range []string{"CVE-2026-12345", "GHSA-jr5f-v2jv-69x6", "PYSEC-2021-123", "GO-2022-0001"} {
+		if !ValidID(id) {
+			t.Errorf("ValidID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{"", "constructor", "__proto__", "CVE-", "-1", "cve 1", "CVE-1/../x", "CVE-1\u202e", "CVE-" + strings.Repeat("1", 61)} {
+		if ValidID(id) {
+			t.Errorf("ValidID(%q) = true, want false", id)
+		}
+	}
+	if id := "CVE-" + strings.Repeat("1", 60); !ValidID(id) {
+		t.Errorf("an id of 64 bytes must pass")
+	}
+}

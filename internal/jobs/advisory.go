@@ -172,8 +172,12 @@ func advisoryOf(root string, f rank.Finding) (Advisory, bool) {
 }
 
 // addAdvisory adds f's advisory to table unless the table already holds
-// one for its id: the first wording stays.
+// one for its id, or the id lacks an advisory id's shape: the first
+// wording stays.
 func addAdvisory(table map[string]Advisory, root string, f rank.Finding) {
+	if !rank.ValidID(f.ID) {
+		return
+	}
 	if _, ok := table[f.ID]; ok {
 		return
 	}
