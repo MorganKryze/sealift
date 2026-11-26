@@ -20,6 +20,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The signed `manifest.json` of an npm export carries a `review`: CVE totals before and after, updates, kept dependencies, jumps with their reasons, and each CVE the project keeps with its fixing versions or its reason. The import of sealift 0.7.0 imports such an archive as before, and a review an import cannot read never refuses an archive. [The air gap](docs/air-gap.md#the-review-in-the-manifest) describes it.
 - Each CVE in an analysis keeps the package Trivy found it in and the versions that fix it.
 - Three review rules in the policy file: `review.proposeOtherMajors`, `review.majorJump` and `review.cveWithoutFix`. By default, proposals stay in their line and a jump or a CVE without fix needs a reason; `refuse` stops such an export whatever its reason. [Settings](docs/settings.md#review-rules) lists them.
+- An info button explains CVE, a severity and major jump where each first appears on a screen, in two sentences with a link to its section of [How sealift chooses](docs/how-sealift-chooses.md#terms).
 
 ### Changed
 
@@ -45,6 +46,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - An export request holds at most 10,000 reasons, 10,000 selected dependencies and 10,000 dependencies per reason, each name at most 214 bytes; a request past a bound gets a 400 that names it. A JSON request body over 16 MiB, or a project upload over 41 MiB, gets a 413, and a body that is neither JSON nor a multipart upload gets a 415.
 - A CVE's fixing versions longer than 256 bytes are shortened at a version boundary in the signed review, instead of failing the export. The Trivy report in the archive keeps the full list.
 - An analysis made by sealift 0.7.0 recorded no fixing versions, so an export from it counts each CVE as one without fix and asks a reason for it. A new analysis records them.
+- The Update flow is redrawn in four steps, Check, Analyse, Review and Seal. Check runs three checks on the `package.json` and reads Compliant when all pass. Analyse shows the live log, and a stopped analysis names its cause with the one action that clears it. Review groups packages as updated, kept on their major and unchanged, asks each reason in a Decide or Jump panel, and reads Ready to seal once none is missing. Seal builds the archive on the same page and ends on Sealed with the files to carry; Done opens once a download starts. [Workflow](docs/workflow.md) walks through each screen.
+- A crossing lives at one address, `/crossings/<project>`, with `?analysis=` and `?step=`. Links to the earlier `/sessions/` pages still open, on the same crossing at the step they named.
 
 ### Removed
 

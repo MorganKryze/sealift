@@ -8,7 +8,11 @@ Every screen but the preparing one sits in the same frame. The sidebar on the le
 
 A crossing is named after its project and the day its analysis started, such as `sealift-demo · 25 Nov`. A second analysis of the same project on the same day reads `sealift-demo · 25 Nov · 2`.
 
-The step bar at the top of a session shows Drop, Analyse, Review and Export. A finished step shows a check mark and opens again on a click. A running step shows a spinner, a failed one a cross.
+A crossing lives at one address, `/crossings/<project>`. `?analysis=<id>` opens an earlier analysis of the project, and `?step=check` or `?step=review` opens that step. An address of an earlier release, `/sessions/<project>` with or without its step, lands on the same crossing at the step it named.
+
+The step bar at the top of a crossing shows Check, Analyse, Review and Seal. A finished step shows a check mark and opens again on a click. A running step shows a spinner, a failed one a cross, and a cancelled one a dotted ring.
+
+An info button beside CVE, a severity or major jump explains the term in two sentences, with **Read more** to its section of How sealift chooses: [Known CVEs](how-sealift-chooses.md#known-cves), [Severity](how-sealift-chooses.md#severity) or [Major jump](how-sealift-chooses.md#major-jump). Each screen carries one per term, at the term's first place.
 
 ## Preparing
 
@@ -39,7 +43,7 @@ A sealed or cancelled crossing leaves the home: Projects keeps it. A group shows
 
 ## Update
 
-**Update** opens Update a project, with the drop zone: Drop package.json here, and **Choose a file**. The zone repeats the rule sealift applies to every file: direct dependencies must be pinned to exact versions, such as `4.17.1`. It also names the current target.
+**Update** opens Update a project, with the drop zone: Drop a package.json, and **Choose file**. A dropped file opens the Check step.
 
 ## Projects
 
@@ -52,123 +56,109 @@ A project's page shows its name, its target and its crossings, newest first, suc
 
 An archive signed with a key this instance has since replaced reads Signed with a key this instance has replaced, then Offline refuses this archive unless it still trusts that key, with that key's sha256.
 
-## Drop
+## Check
 
-The preview reads the file before anything runs. It shows the project name, the count of prod and dev dependencies, the pinning check and the target.
+Check reads the file before anything runs. The title names the project, such as Update sealift-demo, and the line under it the target: `npm · Node 22.17.1 · linux x64`. The file's block shows `package.json` with its modified time, a badge, and the package count, such as 5 packages, with 3 dependencies and 2 devDependencies. The count unfolds into each package and its version.
 
-![The drop preview with all five dependencies pinned](assets/drop-preview.png)
+![Check for sealift-demo: Compliant, and 5 packages](assets/drop-preview.png)
 
-When the file breaks a rule, Pinning shows the number of problems and a list names each one. **Analyse** stays disabled until you fix the file and drop it again.
+The badge reads Compliant when the file passes three checks, and unfolds into them:
 
-![A drop preview with three problems: overrides not supported, a caret range on express, an npm alias on lodash](assets/drop-problems.png)
+| Check | Passes when | Reads, such as |
+| --- | --- | --- |
+| Exact versions | every direct dependency names one version, such as `4.17.1` | 5 of 5 pinned |
+| Registry only | every version comes from the npm registry | 5 of 5 on npm |
+| Supported fields | the file holds no `overrides`, `resolutions`, `pnpm.overrides` or `pnpm.patchedDependencies` | the fields it lists, such as `dependencies · devDependencies` |
 
-sealift reads `dependencies`, `devDependencies` and `optionalDependencies`, and refuses:
+sealift reads `dependencies`, `devDependencies` and `optionalDependencies`. When a check fails, the badge counts the issues, such as 3 issues, and each failed check names its packages or fields with their values and the fix. **Analyse** stays disabled, and the text before it counts what is left: 3 checks to fix first. **Replace** takes another file.
 
-- a range or a tag instead of an exact version: `^4.17.1`, `~4.17.1`, `latest` (version must be exact, such as 1.2.3);
-- a version from anywhere but the npm registry: `npm:`, `git+`, `git:`, `github:`, `file:`, `link:`, `workspace:`, `http:` or `https:` (only npm registry versions are supported);
-- the fields `overrides`, `resolutions`, `pnpm.overrides` and `pnpm.patchedDependencies` (not supported);
-- a file with no dependency (lists no dependency to update).
+![Check with 3 issues: a range on express, an npm alias on lodash, and overrides](assets/drop-problems.png)
 
-Dropping a file that an earlier session already used, byte for byte, opens You already analysed this file. It says how that session ended. **Resume that session** opens it; **Start a new session** analyses the file again with fresh data.
+Dropping a file that an earlier crossing already used, byte for byte, opens You already analysed this file, or the day you did. It says how that crossing ended. **Resume that session** opens it; **Start a new session** analyses the file again with fresh data.
 
-**Analyse 5 dependencies** starts the analysis. **Choose another file** clears the preview.
+**Analyse** starts the analysis and opens the crossing's address.
 
-## Analysis
+## Analyse
 
-The analysis runs nine steps. Each shows a check mark and its duration once done.
+The analysis shows the step it runs, such as Trying newer versions, the time left once sealift can estimate it, and a count such as 212 of 486 newer versions tried. The log below shows what pnpm and Trivy write as they write it. You can leave the page: the analysis keeps running on the server.
 
-1. Check the manifest
-2. Prepare pnpm and Trivy
-3. Resolve the project
-4. Scan for known CVEs
-5. List newer versions
-6. Resolve candidate versions
-7. Scan candidate versions
-8. Rank and propose
-9. Check the combined install
+![The analysis trying newer versions, with the time left and the log](assets/analysis.png)
 
-Resolve candidate versions takes most of the time: sealift installs each newer version of each dependency against the whole project. A counter shows the candidates resolved so far and the time left. You can leave the page; the session keeps running on the server.
+sealift runs one job at a time. An analysis queued behind another job reads Starts in about the time that job has left when it is next, or Waits for the running job otherwise, with One job runs at a time. and the job under Running now.
 
-sealift runs one job at a time. An analysis started while another analysis or an export runs reads Waiting for another job and starts on its own when that job ends. Until then, no step shows as in progress.
+**Cancel** asks in place before it stops, with **Cancel analysis** and **Keep running**. A cancelled analysis reads Analysis cancelled, its step marked with a dotted ring, with **Replace package.json** and **Start again**. An analysis the server's restart stopped reads Analysis interrupted, with **Start again**. Both keep the `package.json`.
 
-![The analysis at step 6, with 6 of 254 candidates resolved and about 2 minutes 45 seconds left](assets/analysis.png)
+When a step fails, the screen reads Analysis stopped, with how long it ran, and one block names the cause and the action that clears it:
 
-**Cancel** asks Cancel this analysis? before it stops. A cancelled analysis reads Analysis cancelled, with **Start it again**, whether it was running or still waiting.
+| Cause | Action |
+| --- | --- |
+| A pinned version is not on npm, with the package and its version | **Replace package.json**: a retry gives the same answer |
+| No answer from the registry's host, such as registry.npmjs.org | **Retry** |
+| The vulnerability database did not download | **Retry** |
+| Any other cause, in the first line of the tool's message | **Retry** |
 
-When a step fails, the screen reads Analysis stopped, with the cause under What went wrong and the actions that fit:
+An analysis from a release that kept no cause reads The cause was not recorded, and names the step it stopped at. The log stays folded under the block, and **Open Instance** shows the target and limits in effect. See your administrators closes the page with the deployment's contact.
 
-- **Retry** starts the analysis again from the beginning, with the same file.
-- **Open Instance** opens the Instance page, which shows the target and the limits in effect. The deployment's policy file sets them. A session keeps the target it started with; a new target applies to new sessions.
-- **Choose another file** goes back to the drop screen.
-- **Show the log** unfolds everything pnpm and Trivy wrote, with the error code the message above leaves out.
+![Analysis stopped: A pinned version is not on npm, lodash 4.17.99, with Replace package.json](assets/analysis-failed.png)
 
-![Analysis stopped at Resolve the project on lodash 4.17.99](assets/analysis-failed.png)
-
-[Troubleshooting](troubleshooting.md) lists each message and its fix.
+[Troubleshooting](troubleshooting.md#analyse) gives each cause and its fix. Once the analysis finishes, the crossing opens Review.
 
 ## Review
 
-The review opens on sealift's proposal. The summary compares the CVEs today with the CVEs left with the selection, by severity, and counts the dependencies that change.
+Review opens on sealift's proposal. Its title says what is left to do: One thing needs you, 3 things need you, or Ready to seal. The line under it reads Known CVEs, today's count then the count with the selection.
 
-A warnings block above the summary names what the analysis could not check, such as a dependency whose registry metadata failed. Such a dependency can look clean in the list, so read the block before you confirm. The analysis checked its proposal as a whole: once you change a pick, the bar above Confirm says your selection was not installed together.
+A warnings block names what the analysis could not check, such as a package whose registry metadata failed. Such a package can look clean in the list, so read the block before you seal.
 
-![The review: 45 CVEs today, none with the selection, express opened on its candidates](assets/review.png)
+The packages fall into groups, each a row with its count that unfolds into a table:
 
-Dependencies fall into three groups:
-
-| Group | Holds |
-| --- | --- |
-| To decide | A proposal with a signal worth a second look, or one that may break, which only a policy that allows other lines proposes |
-| Proposed | Jumps that fix CVEs |
-| Nothing to do | No CVE, or no newer version helps |
-
-A row names the dependency, the CVEs its proposal fixes, the kind of jump, the release age, and the change from the current version to the proposed one. A click opens it:
-
-- Current lists the CVE ids of the current version.
-- The key candidates follow, each with its CVE counts by severity, its release age and its signals. The proposed one reads proposed.
-- A release younger than the minimum release age reads Held back as too recent for the minimum release age, and cannot be chosen.
-- **Keep the current version** leaves the dependency as it is.
-- **Show all 22 newer versions** lists every candidate; **Show fewer versions** folds them again.
+| Group | Holds | Columns |
+| --- | --- | --- |
+| updated | packages the selection moves to a new version, with the known CVEs fixed | Package, Version, Known CVEs fixed, Left, Release age |
+| kept on their major | packages with a better version on the next major, which sealift does not take for you | Package, Kept to next major, Known CVEs, and **Jump** |
+| unchanged | packages no newer version improves | Package, Version, Known CVEs |
 
 [How sealift chooses](how-sealift-chooses.md) explains the proposal and each signal.
 
-The bar at the bottom counts the changes and the CVEs left. **Confirm and build the archive** starts the export with the selection.
+![Ready to seal: Known CVEs 46 to 24, 4 packages updated, 1 package kept on their major](assets/review.png)
 
-### Reasons
+### What needs a reason
 
-A selection that takes a version outside its dependency's line, or keeps a CVE that no version fixes, needs a reason for each. The Reasons block appears above the bar with one field per reason:
+A selection that takes a package to a new major, or keeps a CVE that no version fixes, needs a reason for each. The Reasons block opens the page with a band per kind, such as 1 major jump, carried with 1 reason, or 1 known CVE with no fixed version. Each row names its package or family, its versions and its CVEs, then Reason missing with **Decide** or **Jump**, or the reason in quotes with **Change**.
 
-- a family, or a lone dependency, the selection takes out of its line, labelled Leaves its line, with each move under it, such as `react 18.3.1 to 19.2.0`;
-- a dependency whose version in the archive keeps a CVE with no known fix, labelled Keeps a CVE with no known fix, with the version and the CVE ids under it.
+**Decide** opens Decision beside the page: the CVEs with no fixed version, each id linking to its public advisory, and the newest version. **Carry** keeps the package and asks a reason; **Leave out** takes it out of the archive and asks none.
 
-A dependency the selection keeps at its current version counts too: the project keeps that version on the air-gapped side. Write each reason on one line, 300 characters at most. Enter adds nothing, and a pasted line break shows its problem under the field: Keep the reason on one line, with no tab or control character.
+**Jump** opens Major jump: the version change, the release age and the known CVEs before and after. **Keep** stays on the current major; **Jump to** takes the next one and asks a reason. A family jumps together, so the panel names its members.
 
-While a field is empty or breaks that rule, **Confirm and build the archive** stays disabled, and the text before it names what is missing: 2 reasons missing: react 19, html-minifier. Past five names, the text ends with the count of the others, such as and 3 more. The reasons stay in this browser beside the selection, so a **Retry** on the export screen sends them again.
+A reason holds one line, 300 characters at most. A pasted line break shows Keep the reason on one line, with no tab or control character. **Record** saves the reason; Escape closes the panel and changes nothing. The reasons stay in this browser beside the selection.
 
-When the server still refuses, the block shows The server refused the export for its reasons, with the server's words. The deployment's policy can refuse a jump or a CVE without fix whatever the reason says; the server's words then name the policy key. [How sealift chooses](how-sealift-chooses.md#reasons) lists what asks a reason, and the signed manifest carries each one to the import side.
+While a reason is missing, **Seal** stays disabled and the text before it names what waits: Opens once html-minifier has a reason. With no package changing version, it reads Opens once a package changes version. When the server still refuses, the block shows The server refused these reasons, with the server's words. [How sealift chooses](how-sealift-chooses.md#reasons) lists what asks a reason, and the signed manifest carries each one to the import side.
+
+### Ready to seal
+
+Once nothing waits, the title reads Ready to seal. The head shows Known CVEs, before and after, then By severity, each count with its change. Not checked together shows under it once you change a pick: the analysis checked its proposal as one install, and your selection was not.
 
 The review also comes in dark:
 
-![The review in the dark theme](assets/review-dark.png)
+![Ready to seal in the dark theme](assets/review-dark.png)
 
-## Export
+## Seal
 
-The export runs five steps: List the packages to export, Download and verify each package, Strip publishConfig, Pack the archive, Sign the manifest and write the reports. While it runs, it counts the packages downloaded, those served from the cache, and the percentage done. An export started while another job runs reads Waiting for another job, with no counters, until that job ends.
+**Seal** builds the archive on the same page. It shows the step it runs, such as Downloading and verifying each package, and a count such as 14 of 94 packages downloaded. A seal queued behind another job waits as an analysis does.
 
-![Building the archive: 74 of 100 packages, none from cache, 74 percent](assets/export-running.png)
+![Sealing: downloading and verifying each package](assets/export-running.png)
 
-**Cancel** asks Cancel this export? before it stops. A cancelled export reads Export cancelled, with **Start the export again**, a waiting one included. A failed one reads Export failed and names the step, with **Retry** and **Choose different versions**, which returns to the review.
+**Cancel** asks before it stops, with **Cancel sealing** and **Keep sealing**; the selection and its reasons are kept, and Review comes back at Ready to seal. A failed seal reads Sealing stopped and names the step, with **Retry** and **Back**, which returns to Review. One the server's restart stopped reads Sealing interrupted, with **Start again**.
 
-A finished export reads Archive ready:
+A finished seal reads Sealed, with the crossing's name, once `manifest.json` reads:
 
-- the archive card shows Sealed, the package count, the size, and the sha256 with **Copy**;
-- **Download archive** downloads `packages_npm.tar.gz`;
-- under the sha256, one line says which key signed the archive: this sealift's current key, a key replaced since (export again), or none, for an archive exported by 0.4.0 or earlier;
-- Reports lists six files, each with **Download**: `findings.csv`, `manifest.json`, `manifest.json.sig`, `report.cdx.json`, `report.trivy.json`, `summary.md`. The import needs `manifest.json` and `manifest.json.sig` beside the archive.
+- To carry: `packages_npm.tar.gz` with its package count, size and sha256, `manifest.json` and `manifest.json.sig`, each with its download, and **Download all** for the three. The import needs all three.
+- Reports: `summary.md`, `findings.csv`, `report.cdx.json` and `report.trivy.json`, each with **Open**, which shows it in a new tab, and its download.
 
-![Archive ready, with the archive card and the six files](assets/export-done.png)
+**Done** returns home. It opens once a download of a file to carry starts from this page: until then it reads Opens once a download starts. A report's **Open** does not count.
 
-**Export another selection** returns to the review to build a second archive from the same analysis. The earlier one stays below, under Earlier archive from this analysis. **Start a new session** returns home.
+![Sealed: the three files to carry with the archive's sha256, and four reports](assets/export-done.png)
+
+Review stays open from the step bar, to seal another selection of the same analysis. The earlier one stays below, under Earlier archive of this crossing.
 
 [The air gap](air-gap.md) covers what to do with these files.
 

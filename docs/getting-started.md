@@ -62,27 +62,27 @@ Save this as `package.json`:
 }
 ```
 
-On the home, press **Update**, then drop the file on Drop package.json here, or press **Choose a file**. The preview counts the dependencies, checks that each one is pinned to an exact version, and names the target sealift resolves for.
+On the home, press **Update**, then drop the file on Drop a package.json, or press **Choose file**. Check counts the packages, runs its three checks, and names the target sealift resolves for. This file reads Compliant: 5 packages, 3 dependencies and 2 devDependencies.
 
-![The drop preview for sealift-demo: 3 prod and 2 dev dependencies, pinning all exact, target linux/x64 with glibc and Node 22.17.1](assets/drop-preview.png)
+![Check for sealift-demo: Compliant, 5 packages, target npm, Node 22.17.1, linux x64](assets/drop-preview.png)
 
-Press **Analyse 5 dependencies**.
+Press **Analyse**.
 
 ## 4. Wait for the analysis
 
-sealift resolves the project, scans it, lists the newer versions of each dependency, then resolves and scans each candidate. For this project that is 254 candidates, about a minute and a half on a laptop. You can close the page; the session keeps running.
+sealift resolves the project, scans it, lists the newer versions of each dependency, then resolves and scans each one. The page counts the newer versions tried and shows the log. You can close the page; the analysis keeps running.
 
-## 5. Review and export
+## 5. Review and seal
 
-The review opens on sealift's proposal: 45 CVEs today, including 1 critical, and none with the proposed versions. Open **express** to see why sealift proposes 5.1.0 and holds 4.22.3 back. [How sealift chooses](how-sealift-chooses.md) explains the rules.
+Review opens on sealift's proposal. For this project it reads Ready to seal: Known CVEs 46 to 24, 4 packages updated with 22 known CVEs fixed, and esbuild kept on their major, at 0.17.19, with 0.25.0 on the next major. [How sealift chooses](how-sealift-chooses.md) explains the rules.
 
-Press **Confirm and build the archive**. sealift downloads the 101 packages the selection needs, checks each one's integrity, signs the manifest with the key, and ends on Archive ready.
+Press **Seal**. sealift downloads the 92 packages the selection needs, checks each one's integrity, signs the manifest with the key, and ends on Sealed.
 
-![Archive ready: packages_npm.tar.gz, sealed, 101 packages, 6.7 MB, with its sha256, a download button, and six files below](assets/export-done.png)
+![Sealed: packages_npm.tar.gz, 92 packages, 2.3 MB, with its sha256, the two manifest files, and four reports](assets/export-done.png)
 
 ## 6. Take the files
 
-Press **Download archive** for `packages_npm.tar.gz`, and **Download** next to `manifest.json`, `manifest.json.sig` and each report you want to hand over. The import refuses an archive that arrives without its manifest and its signature. The same files stay on the volume under `/data/projects/<session>/exports/<export>/`:
+Press **Download all** for `packages_npm.tar.gz`, `manifest.json` and `manifest.json.sig`, and download each report you want to hand over. The import refuses an archive that arrives without its manifest and its signature. **Done** opens once a download starts. The same files stay on the volume under `/data/projects/<project>/exports/<export>/`:
 
 ```
 packages_npm.tar.gz   the packages
