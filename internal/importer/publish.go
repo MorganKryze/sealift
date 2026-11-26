@@ -87,7 +87,8 @@ func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, e
 }
 
 // publishEach checks the repository, then runs one on each package in order
-// until ctx is done.
+// until ctx is done or the attempt is cancelled. A cancel never reaches the
+// package one is running: it finishes on ctx, and the next one never starts.
 func publishEach(ctx context.Context, p Publisher, pkgs []Package, ended func(int, Result), one func(Package) Result) []Result {
 	results := make([]Result, len(pkgs))
 	done := func(i int, r Result) {
@@ -103,14 +104,35 @@ func publishEach(ctx context.Context, p Publisher, pkgs []Package, ended func(in
 		return results
 	}
 	for i, pkg := range pkgs {
-		// A package that has not started never starts after an interrupt.
-		if ctx.Err() != nil {
+		// A package that has not started never starts after an interrupt or a cancel.
+		if ctx.Err() != nil || cancelled(ctx) {
 			done(i, failed(pkg, KindInterrupted, reasonInterrupted))
 			continue
 		}
 		done(i, one(pkg))
 	}
 	return results
+}
+
+// cancelKey carries, in the context the packages publish on, the channel a
+// cancel of the attempt closes.
+type cancelKey struct{}
+
+// withCancelled returns ctx carrying ch, the channel a cancel of the attempt
+// closes; publishEach reads it between packages only.
+func withCancelled(ctx context.Context, ch <-chan struct{}) context.Context {
+	return context.WithValue(ctx, cancelKey{}, ch)
+}
+
+// cancelled reports whether the attempt that publishes on ctx was cancelled.
+func cancelled(ctx context.Context) bool {
+	ch, _ := ctx.Value(cancelKey{}).(<-chan struct{})
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // reasonInterrupted is the reason of a package an interrupt kept from finishing.

@@ -39,12 +39,17 @@ type Source struct {
 	Archive       func(ctx context.Context) (io.ReadCloser, error)
 }
 
-// Progress receives the attempt's package states as they change. Either field
-// may be nil.
+// Progress receives the attempt's package states as they change, and tells it
+// when its user cancels it. Any field may be nil.
 type Progress struct {
 	Listed  func(rep Report)      // the manifest is read: the report so far, every package pending, no outcome
 	Checked func()                // the archive passed its checks
 	Ended   func(i int, r Result) // package i has ended
+	// Cancelled closes when the attempt's user cancels it. The checks stop at
+	// once and the publishing before its next package: the package in flight
+	// finishes its upload and its read back, so its result says what Nexus
+	// holds. Only the attempt's context ending cuts that package.
+	Cancelled <-chan struct{}
 }
 
 // Attempt is one try at importing an archive.
@@ -140,6 +145,11 @@ func (o onlyListed) Upload(ctx context.Context, file string, r io.Reader) error 
 // runAttempt takes the publishing step as a parameter so a test can fix its results.
 func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), publishAll publishEachFunc) Report {
 	defer emptyDir(a.Dir)
+	// The packages publish on the caller's context, which a cancel leaves
+	// running so the package in flight finishes; the checks stop at once.
+	publishing := withCancelled(ctx, a.Progress.Cancelled)
+	ctx, endChecks := untilClosed(ctx, a.Progress.Cancelled)
+	defer endChecks()
 	rep := Report{
 		Outcome:         OutcomeRefused,
 		Unencrypted:     a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
@@ -179,7 +189,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		return stop(wrongFolder(eco, a.Ecosystem))
 	}
 	if eco == archive.Pip {
-		return runPip(ctx, a, newPublisher, data, &rep, stop)
+		return runPip(ctx, publishing, a, newPublisher, data, &rep, stop)
 	}
 	m, err := archive.ParseManifest(data)
 	if err != nil {
@@ -243,7 +253,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		}
 	}
 
-	rep.Packages = publish(ctx, a, newPublisher, publishAll, pkgs)
+	rep.Packages = publish(publishing, a, newPublisher, publishAll, pkgs)
 	for _, r := range rep.Packages {
 		switch r.State {
 		case Published:
@@ -381,9 +391,10 @@ func verify(ctx context.Context, a Attempt, m archive.Manifest) ([]archive.Check
 
 // runPip goes on with a pip manifest whose signature checked. rep is the
 // attempt's report, the one stop fills. The settings and the repository are
-// checked before the archive is read, so a deployment that cannot take wheels
-// refuses the archive without reading it.
-func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), data []byte, rep *Report, stop func(error) Report) Report {
+// checked on ctx before the archive is read, so a deployment that cannot take
+// wheels refuses the archive without reading it; the wheels publish on
+// publishing.
+func runPip(ctx, publishing context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), data []byte, rep *Report, stop func(error) Report) Report {
 	rep.Ecosystem = ecosystemPip
 	rep.Nexus.Repository = ""
 	if a.Settings.Pip != nil {
@@ -471,7 +482,7 @@ func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publish
 		wheels[i] = Package{Name: c.Wheel.Name, Version: c.Wheel.Version, File: c.Wheel.File, Path: c.Path, SHA512: c.SHA512}
 	}
 	// PublishWheels hashes the Nexus copies as they arrive, so it needs no directory.
-	rep.Packages = PublishWheels(ctx, pub, wheels, "", func(i int, r Result) { ended(i, r) })
+	rep.Packages = PublishWheels(publishing, pub, wheels, "", func(i int, r Result) { ended(i, r) })
 	rep.Counts = Counts{}
 	for i, r := range rep.Packages {
 		rep.Packages[i].Reason = cut(r.Reason)
@@ -543,6 +554,28 @@ func publish(ctx context.Context, a Attempt, newPublisher func(Settings) (Publis
 		results[i] = finish(i, results[i])
 	}
 	return results
+}
+
+// untilClosed returns a context that ends with ctx or once ch closes; a nil
+// ch never closes.
+func untilClosed(ctx context.Context, ch <-chan struct{}) (context.Context, context.CancelFunc) {
+	c, stop := context.WithCancel(ctx)
+	if ch == nil {
+		return c, stop
+	}
+	select {
+	case <-ch:
+		stop()
+	default:
+		go func() {
+			select {
+			case <-ch:
+				stop()
+			case <-c.Done():
+			}
+		}()
+	}
+	return c, stop
 }
 
 // cut keeps the first maxStoredReason characters of a reason.

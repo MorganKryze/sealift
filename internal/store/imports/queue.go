@@ -11,8 +11,9 @@ import (
 )
 
 // RunFunc runs one attempt of imp in dir, a working directory the queue owns,
-// and reports each package's state through p. It never writes the attempt's
-// end. The Remover it returns is nil unless the attempt may remove the archive.
+// and reports each package's state through p. ctx ends on Close; p.Cancelled
+// closes on a cancel of the attempt. It never writes the attempt's end. The
+// Remover it returns is nil unless the attempt may remove the archive.
 type RunFunc func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, Remover)
 
 // Remover deletes the archive and says what became of it. The queue calls it
@@ -35,10 +36,9 @@ var ErrEnded = errors.New("imports: the latest attempt has ended")
 // guarded by the queue's mutex.
 type current struct {
 	queued
-	ctx       context.Context // ends on Close or on a cancel of this attempt
-	stop      context.CancelFunc
-	cancelled bool // a cancel reached the run before it returned
-	returned  bool // the run returned: a cancel comes too late
+	cancel    chan struct{} // closed on the first cancel of this attempt
+	cancelled bool          // a cancel reached the run before it returned
+	returned  bool          // the run returned: a cancel comes too late
 }
 
 // Queue runs submitted attempts on one goroutine, the first submitted first.
@@ -134,8 +134,10 @@ func (q *Queue) cancel(user, id string) cancelResult {
 		if c.returned {
 			return cancelTooLate
 		}
-		c.cancelled = true
-		c.stop()
+		if !c.cancelled {
+			c.cancelled = true
+			close(c.cancel)
+		}
 		return cancelStopping
 	}
 	return cancelUnknown
@@ -149,15 +151,14 @@ func (q *Queue) loop() {
 			return
 		}
 		q.process(c)
-		c.stop()
 		q.mu.Lock()
 		q.now = nil
 		q.mu.Unlock()
 	}
 }
 
-// next waits for the first queued attempt and makes it the current one, with
-// a context of its own. It returns false once the queue is closed.
+// next waits for the first queued attempt and makes it the current one. It
+// returns false once the queue is closed.
 func (q *Queue) next() (*current, bool) {
 	for {
 		q.mu.Lock()
@@ -166,8 +167,7 @@ func (q *Queue) next() (*current, bool) {
 			return nil, false
 		}
 		if len(q.items) > 0 {
-			ctx, stop := context.WithCancel(q.ctx)
-			c := &current{queued: q.items[0], ctx: ctx, stop: stop}
+			c := &current{queued: q.items[0], cancel: make(chan struct{})}
 			q.items = q.items[1:]
 			q.now = c
 			q.mu.Unlock()
@@ -210,6 +210,7 @@ func (q *Queue) process(c *current) {
 		return
 	}
 	progress := importer.Progress{
+		Cancelled: c.cancel,
 		Listed: func(rep importer.Report) {
 			if err := q.s.Listed(it.user, it.id, n, rep); err != nil {
 				logf("could not store the package list", err)
@@ -226,7 +227,7 @@ func (q *Queue) process(c *current) {
 			}
 		},
 	}
-	rep, remove, panicked := q.guarded(c.ctx, it, imp, dir, progress)
+	rep, remove, panicked := q.guarded(q.ctx, it, imp, dir, progress)
 	q.mu.Lock()
 	c.returned = true
 	cancelled := c.cancelled
@@ -244,7 +245,9 @@ func (q *Queue) process(c *current) {
 	if rep.Outcome == importer.OutcomeIncomplete {
 		switch {
 		case cancelled:
-			cancelledReport(&rep)
+			// A stop of the service may have cut a package after its upload
+			// reached Nexus, so the reasons name the cancel only without one.
+			cancelledReport(&rep, q.ctx.Err() == nil)
 			remove = nil
 		case q.ctx.Err() != nil:
 			rep.Outcome, remove = OutcomeInterrupted, nil
@@ -284,12 +287,16 @@ func (q *Queue) guarded(ctx context.Context, it queued, imp Import, dir string, 
 	return rep, remove, false
 }
 
-// cancelledReport marks the report of a run a cancel cut short: the packages
-// it did not reach say so, and those in Nexus stay as they ended.
-func cancelledReport(rep *importer.Report) {
+// cancelledReport marks the report of a run a cancel cut short: with
+// reasons, the packages it did not reach say so, and those in Nexus stay as
+// they ended.
+func cancelledReport(rep *importer.Report, reasons bool) {
 	rep.Outcome = OutcomeCancelled
 	if rep.Reason == "" || rep.Reason == OutcomeInterrupted {
 		rep.Reason = OutcomeCancelled
+	}
+	if !reasons {
+		return
 	}
 	for i, p := range rep.Packages {
 		if p.State == importer.Failed && p.Kind == importer.KindInterrupted {

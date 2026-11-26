@@ -360,25 +360,36 @@ func TestQueueCancel(t *testing.T) {
 
 	t.Run("stops a running attempt before its next package", func(t *testing.T) {
 		s, _ := openStore(t, testRoot(t))
-		imp := newImport(t, s, "alice")
-		started, inRun := make(chan string, 1), make(chan struct{})
-		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+		imp, next := newImport(t, s, "alice"), newImport(t, s, "bob")
+		started, inRun := make(chan string, 2), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, run Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			if run.ID == next.ID {
+				return completeReport(), nil
+			}
 			p.Listed(listedReport())
 			first := pendingResults()[0]
 			first.State = importer.Published
 			p.Ended(0, first)
 			close(inRun)
-			<-ctx.Done()
+			select {
+			case <-p.Cancelled:
+			case <-ctx.Done():
+				t.Error("the cancel ended the run's context, which cuts the package in flight")
+			}
 			second := pendingResults()[1]
 			second.State, second.Kind, second.Reason = importer.Failed, importer.KindInterrupted, "interrupted"
 			p.Ended(1, second)
 			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{first, second}, Counts: importer.Counts{Published: 1, Failed: 1}}, nil
 		})
 		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
 		waitFor(t, inRun, "the first package")
 		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
 			t.Fatal(err)
 		}
+		// The worker takes the next attempt once the end of this one is stored.
+		q.Submit(next.User, next.ID)
+		waitFor(t, started, "the next run")
 		q.Close()
 		got, _ := s.Get(imp.User, imp.ID)
 		a := got.Attempts[0]
@@ -398,8 +409,11 @@ func TestQueueCancel(t *testing.T) {
 		imp := newImport(t, s, "alice")
 		started := make(chan string, 1)
 		removed := false
-		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, _ importer.Progress) (importer.Report, Remover) {
-			<-ctx.Done()
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			select {
+			case <-p.Cancelled:
+			case <-ctx.Done():
+			}
 			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, func(context.Context) *Removal {
 				removed = true
 				return &Removal{Removed: true}
@@ -417,6 +431,41 @@ func TestQueueCancel(t *testing.T) {
 		}
 	})
 
+	t.Run("keeps the reason of a package a stop of the service cut after a cancel", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, inRun := make(chan string, 1), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			p.Listed(listedReport())
+			close(inRun)
+			select {
+			case <-p.Cancelled:
+			case <-ctx.Done():
+				t.Error("the cancel ended the run's context, which cuts the package in flight")
+			}
+			// The package in flight goes on after the cancel, until the stop cuts it.
+			<-ctx.Done()
+			pkgs := pendingResults()
+			pkgs[0].State = importer.Published
+			pkgs[1].State, pkgs[1].Kind, pkgs[1].Reason = importer.Failed, importer.KindInterrupted, "interrupted"
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: pkgs, Counts: importer.Counts{Published: 1, Failed: 1}}, nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, inRun, "the run")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		a := got.Attempts[0]
+		if a.Outcome != OutcomeCancelled || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		if p := a.Report.Packages[1]; p.Reason != "interrupted" {
+			t.Errorf("the package the stop cut reads %q, though its upload may have reached Nexus", p.Reason)
+		}
+	})
+
 	t.Run("keeps an attempt that ended every package before the cancel as it ended", func(t *testing.T) {
 		s, _ := openStore(t, testRoot(t))
 		imp := newImport(t, s, "alice")
@@ -428,8 +477,11 @@ func TestQueueCancel(t *testing.T) {
 		})
 		q.Submit(imp.User, imp.ID)
 		waitFor(t, inRun, "the run")
-		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
-			t.Fatal(err)
+		// A second cancel of the same run answers as the first.
+		for range 2 {
+			if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+				t.Fatal(err)
+			}
 		}
 		close(release)
 		q.Close()

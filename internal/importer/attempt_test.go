@@ -21,6 +21,7 @@ import (
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importtest"
 	"github.com/MorganKryze/sealift/internal/nexus"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 func fileSource(opts Options) Source {
@@ -891,5 +892,65 @@ func TestAttemptKeepsTheProjectOutOfAManifestWithNoReview(t *testing.T) {
 		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
 			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
 		}
+	})
+}
+
+func TestRunAttemptCancel(t *testing.T) {
+	newFixture := func(t *testing.T) *runFixture {
+		t.Helper()
+		r := newRunFixture(t)
+		r.opts.Archive, r.opts.Manifest = testArchive(t, r.archives,
+			[3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"}, [3]string{"right-pad", "1.0.0", "right body"})
+		return r
+	}
+	t.Run("lets the package in flight finish and starts no other", func(t *testing.T) {
+		r := newFixture(t)
+		cancelled := make(chan struct{})
+		r.f.onUpload = func(f *fakeNexus, u upload) {
+			if info, err := npm.InspectTarball(bytes.NewReader(u.Body)); err == nil {
+				f.put(info.Name, info.Version, u.Body)
+			}
+			// Nexus has stored the package and its answer has not left yet.
+			if u.File == "left-pad-1.3.0.tgz" {
+				close(cancelled)
+			}
+		}
+		a := r.attemptOf(t)
+		a.Progress.Cancelled = cancelled
+		rep := r.runAttempt(t, a)
+		if p := rep.Packages[0]; p.State != Published {
+			t.Errorf("the package in flight = %+v, want published once read back", p)
+		}
+		for _, p := range rep.Packages[1:] {
+			if p.State != Failed || p.Kind != KindInterrupted || p.Reason != reasonInterrupted {
+				t.Errorf("%s after the cancel = %+v, want failed interrupted", p.Name, p)
+			}
+		}
+		if n := r.f.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if rep.Outcome != OutcomeIncomplete || rep.Counts.Published != 1 || rep.Counts.Failed != 2 {
+			t.Errorf("outcome %q, counts %+v", rep.Outcome, rep.Counts)
+		}
+	})
+	t.Run("stops the checks of an attempt cancelled before its first package", func(t *testing.T) {
+		r := newFixture(t)
+		cancelled := make(chan struct{})
+		close(cancelled)
+		a := r.attemptOf(t)
+		a.Progress.Cancelled = cancelled
+		rep := r.runAttempt(t, a)
+		if rep.Outcome != OutcomeIncomplete || len(rep.Packages) != 3 || *rep.ArchiveChecked {
+			t.Fatalf("outcome %q (%s), checked %v, packages %+v", rep.Outcome, rep.Reason, *rep.ArchiveChecked, rep.Packages)
+		}
+		for _, p := range rep.Packages {
+			if p.State != Failed || p.Kind != KindInterrupted {
+				t.Errorf("%s = %+v, want failed interrupted", p.Name, p)
+			}
+		}
+		if r.f.mu.Lock(); len(r.f.requests) != 0 {
+			t.Errorf("%d requests reached Nexus", len(r.f.requests))
+		}
+		r.f.mu.Unlock()
 	})
 }

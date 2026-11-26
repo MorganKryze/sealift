@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,6 +69,8 @@ type rigOptions struct {
 	pause    bool
 	pkgs     []testPkg
 	settings func(*importer.Settings) // changes the settings that point at the fake Nexus
+	// publisher wraps each client of the fake Nexus the service builds.
+	publisher func(importer.Publisher) importer.Publisher
 }
 
 func newImportRig(t *testing.T, o rigOptions) *importRig {
@@ -90,16 +93,27 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 	if o.settings != nil {
 		o.settings(&settings)
 	}
+	publisher := newPublisher
+	if o.publisher != nil {
+		publisher = func(s importer.Settings) (importer.Publisher, error) {
+			p, err := newPublisher(s)
+			if err != nil {
+				return nil, err
+			}
+			return o.publisher(p), nil
+		}
+	}
 	r.rig = newRigConfig(t, Config{
 		Verifier: r.verifier, MinIO: r.minio, UnencryptedLinks: o.links,
 		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
-		Settings: settings, NewPublisher: newPublisher, ImportVersion: "0.3.0",
+		Settings: settings, NewPublisher: publisher, ImportVersion: "0.3.0",
 	})
 	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 		if o.hold {
 			r.entered <- imp.ID
 			select {
 			case <-r.release:
+			case <-p.Cancelled:
 			case <-ctx.Done():
 			}
 		}
@@ -112,6 +126,7 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 					r.entered <- imp.ID
 					select {
 					case <-r.release:
+					case <-p.Cancelled:
 					case <-ctx.Done():
 					}
 				}
@@ -1331,6 +1346,39 @@ func TestCancelImport(t *testing.T) {
 		}
 	})
 
+	t.Run("lets the package in flight finish its upload and its read back", func(t *testing.T) {
+		uploaded, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}, publisher: func(p importer.Publisher) importer.Publisher {
+			return &slowAnswer{Publisher: p, uploaded: uploaded, release: release}
+		}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad, zeta))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-uploaded:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no upload reached Nexus")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		close(release)
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		got := resultsByName(a.Report)
+		if p := got["left-pad"]; p.State != importer.Published {
+			t.Errorf("the package Nexus stored during the cancel = %+v, want published", p)
+		}
+		if p := got["zeta"]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the package after the cancel = %+v", p)
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
 	t.Run("answers 409 to a cancel of an ended import", func(t *testing.T) {
 		r := newImportRig(t, rigOptions{})
 		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
@@ -1452,4 +1500,32 @@ func TestQueueRankOnTheImport(t *testing.T) {
 			t.Errorf("the ended import ranks %d", *got.QueueAhead)
 		}
 	})
+}
+
+// slowAnswer holds Nexus's answer to the first upload, which Nexus has stored,
+// until the test releases it or the upload's context ends, as a slow network
+// would.
+type slowAnswer struct {
+	importer.Publisher
+	uploaded chan<- struct{}
+	release  <-chan struct{}
+	once     sync.Once
+}
+
+func (s *slowAnswer) Upload(ctx context.Context, file string, r io.Reader) error {
+	if err := s.Publisher.Upload(ctx, file, r); err != nil {
+		return err
+	}
+	first := false
+	s.once.Do(func() { first = true })
+	if !first {
+		return nil
+	}
+	close(s.uploaded)
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
