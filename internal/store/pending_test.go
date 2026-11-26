@@ -282,3 +282,36 @@ func TestNewDirGivesConcurrentJobsOfOneSecondDistinctIDs(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestNewDirTakesTheNextCounterOfItsSecond(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing []string
+		want     string
+	}{
+		{"free second", nil, "20261126T001927Z"},
+		{"other seconds only", []string{"20261126T001926Z-000005", "20261126T001928Z"}, "20261126T001927Z"},
+		{"bare stamp taken", []string{"20261126T001927Z"}, "20261126T001927Z-000001"},
+		{"counter taken", []string{"20261126T001927Z", "20261126T001927Z-000001"}, "20261126T001927Z-000002"},
+		{"pending counter taken", []string{"20261126T001927Z", "20261126T001927Z-000002.tmp"}, "20261126T001927Z-000003"},
+		{"older random suffix", []string{"20261126T001927Z", "20261126T001927Z-f3a9c1"}, "20261126T001927Z-f3a9c2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			for _, id := range tc.existing {
+				writeAnalysisDir(t, s, id, "")
+			}
+			fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+			defer stubNow(func() time.Time { return fixed })()
+
+			p, err := s.NewDir("analyses", "proj-1")
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+			if p.ID() != tc.want {
+				t.Fatalf("NewDir id = %q, want %q", p.ID(), tc.want)
+			}
+		})
+	}
+}
