@@ -78,11 +78,11 @@ func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 				if reason == "" {
 					reason = "no reason given"
 				}
-				r.warnings = append(r.warnings, fmt.Sprintf("%s==%s is yanked on the index: %s", pkg.Name, pkg.Version, reason))
+				r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf("%s==%s is yanked on the index: %s", pkg.Name, pkg.Version, reason)))
 			}
 			if f.UploadTime.After(cut) {
-				r.warnings = append(r.warnings, fmt.Sprintf("%s==%s was uploaded on %s, within the %d-day minimum release age",
-					pkg.Name, pkg.Version, f.UploadTime.UTC().Format(time.DateOnly), days))
+				r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf("%s==%s was uploaded on %s, within the %d-day minimum release age",
+					pkg.Name, pkg.Version, f.UploadTime.UTC().Format(time.DateOnly), days)))
 			}
 		}
 		return r.refuse(blocking)
