@@ -83,7 +83,7 @@ Two rules keep the screens steady while events arrive several times a second:
 
 ## The review selection
 
-`web/src/hooks/use-selection.ts` holds the version chosen for each dependency, starting from `best`, and keeps it in `sessionStorage` so a reload does not lose it. `web/src/lib/reviewGroups.ts` sorts dependencies into To decide, Proposed and Nothing to do from sealift's proposal, not from the selection, so a row does not move while someone picks a version. `web/src/lib/exportSelection.ts` turns the selection into the export request; a retried export sends the same selection. [Ranking](ranking.md#the-review-groups) gives the grouping rule.
+`web/src/hooks/use-selection.ts` holds the version chosen for each dependency, starting from `best`, and keeps it in `sessionStorage` so a reload does not lose it. `web/src/lib/reviewGroups.ts` sorts dependencies into four groups from the selection: the reasons block, updated, kept on its major and unchanged, so a row moves when its pick changes what it needs. `web/src/lib/exportSelection.ts` turns the selection into the export request; a retried export sends the same selection. [Ranking](ranking.md#the-review-groups) gives the grouping rule.
 
 ## The preparing screen
 
