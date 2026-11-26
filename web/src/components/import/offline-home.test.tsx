@@ -100,8 +100,9 @@ const rowOf = (name: string) => screen.getByText(name, { selector: "[data-row-na
 
 describe("rows", () => {
   it("names each crossing in weight 600", async () => {
-    const { container } = renderHome({ archives: folderList([archive("web-portal-2026-11-20", at(25, 12))]) })
-    await screen.findByText("web-portal-2026-11-20", { selector: "[data-row-name]" })
+    const signed = { signature: "verified" as const, crossing: { project: "web-portal", sealedAt: "2026-11-25T09:00:00Z", packages: 12 } }
+    const { container } = renderHome({ archives: folderList([archive("web-portal-2026-11-20", at(25, 12), signed)]) })
+    await screen.findByText("web-portal · 25 Nov", { selector: "[data-row-name]" })
     const names = [...container.querySelectorAll("[data-row-name]")]
     expect(names.length).toBeGreaterThan(0)
     for (const name of names) expect(name).toHaveClass("font-semibold")
@@ -150,23 +151,23 @@ describe("the offline home", () => {
     const pip = archive("data-pipeline-2026-11-22", at(25, 12), { key: "packages/pip/data-pipeline-2026-11-22/packages_pip.tar.gz", ecosystem: "pip", size: 92_400_000 })
     renderHome({ archives: folderList([archive("web-portal-2026-11-20", at(24, 9)), pip]) })
     const needs = await screen.findByRole("region", { name: "Needs you" })
-    expect(rowNames(needs)).toEqual(["data-pipeline-2026-11-22", "web-portal-2026-11-20"])
-    const row = rowOf("data-pipeline-2026-11-22")
+    expect(rowNames(needs)).toEqual(["data-pipeline-2026-11-22/", "web-portal-2026-11-20/"])
+    const row = rowOf("data-pipeline-2026-11-22/")
     expect(row).toHaveTextContent("pip · 88.1 MB · uploaded 2 hours ago")
-    const action = within(row).getByRole("link", { name: "Import data-pipeline-2026-11-22" })
+    const action = within(row).getByRole("link", { name: "Import data-pipeline-2026-11-22/" })
     expect(action).toHaveAttribute("href", `/import?start=${encodeURIComponent(pip.key)}`)
-    expect(rowOf("web-portal-2026-11-20")).toHaveTextContent("npm · 5.2 MB · uploaded yesterday")
+    expect(rowOf("web-portal-2026-11-20/")).toHaveTextContent("npm · 5.2 MB · uploaded yesterday")
   })
 
   it("lists a failed import with Open in Needs you", async () => {
     const failed = imp("i-failed", "admin-console-2026-11-19", "incomplete", at(25, 10), packages(98, 3))
     renderHome({ archives: folderList([archive("admin-console-2026-11-19", at(24, 9), { latestImport: { id: "i-failed", outcome: "incomplete" } })]), imports: [failed] })
     const needs = await screen.findByRole("region", { name: "Needs you" })
-    expect(rowNames(needs)).toEqual(["admin-console-2026-11-19"])
-    const row = rowOf("admin-console-2026-11-19")
+    expect(rowNames(needs)).toEqual(["admin-console-2026-11-19/"])
+    const row = rowOf("admin-console-2026-11-19/")
     expect(row).toHaveTextContent("Failed")
     expect(row).toHaveTextContent("3 packages not in Nexus")
-    expect(within(row).getByRole("link", { name: "Open admin-console-2026-11-19" })).toHaveAttribute("href", "/imports/i-failed")
+    expect(within(row).getByRole("link", { name: "Open admin-console-2026-11-19/" })).toHaveAttribute("href", "/imports/i-failed")
     expect(within(row).queryByRole("link", { name: /^Import/ })).not.toBeInTheDocument()
     expect(screen.queryByRole("region", { name: "In progress" })).not.toBeInTheDocument()
   })
@@ -181,16 +182,16 @@ describe("the offline home", () => {
       imports: [refusedImport],
     })
     await screen.findByRole("region", { name: "Needs you" })
-    const listed = rowOf("billing-api-2026-11-18")
+    const listed = rowOf("billing-api-2026-11-18/")
     expect(listed).toHaveTextContent("Refused")
     expect(listed).toHaveTextContent("no manifest.json.sig in its folder")
     expect(within(listed).getAllByRole("link")).toHaveLength(1)
-    expect(within(listed).getByRole("link", { name: "Open billing-api-2026-11-18" })).toHaveAttribute("href", "/import")
-    const imported = rowOf("pdf-renderer-2026-11-18")
+    expect(within(listed).getByRole("link", { name: "Open billing-api-2026-11-18/" })).toHaveAttribute("href", "/import")
+    const imported = rowOf("pdf-renderer-2026-11-18/")
     expect(imported).toHaveTextContent("Refused")
     expect(imported).toHaveTextContent("signed with a key this side does not trust")
     expect(within(imported).getAllByRole("link")).toHaveLength(1)
-    expect(within(imported).getByRole("link", { name: "Open pdf-renderer-2026-11-18" })).toHaveAttribute("href", "/imports/i-refused")
+    expect(within(imported).getByRole("link", { name: "Open pdf-renderer-2026-11-18/" })).toHaveAttribute("href", "/imports/i-refused")
   })
 
   it("names an archive by its folder and file when its folder holds another", async () => {
@@ -213,12 +214,12 @@ describe("the offline home", () => {
       ],
     })
     const progress = await screen.findByRole("region", { name: "In progress" })
-    expect(rowNames(progress)).toEqual(["intranet-portal-2026-11-25", "search-indexer-2026-11-21"])
-    expect(rowOf("intranet-portal-2026-11-25")).toHaveTextContent("Queued")
-    const running = rowOf("search-indexer-2026-11-21")
+    expect(rowNames(progress)).toEqual(["intranet-portal-2026-11-25/", "search-indexer-2026-11-21/"])
+    expect(rowOf("intranet-portal-2026-11-25/")).toHaveTextContent("Queued")
+    const running = rowOf("search-indexer-2026-11-21/")
     expect(running).toHaveTextContent("Importing")
     expect(running).toHaveTextContent("37 of 101 packages")
-    expect(within(running).getByRole("link", { name: "Open search-indexer-2026-11-21" })).toHaveAttribute("href", "/imports/i-running")
+    expect(within(running).getByRole("link", { name: "Open search-indexer-2026-11-21/" })).toHaveAttribute("href", "/imports/i-running")
   })
 
   it("lists imports complete today in Done today", async () => {
@@ -230,12 +231,12 @@ describe("the offline home", () => {
       ],
     })
     const done = await screen.findByRole("region", { name: "Done today" })
-    expect(rowNames(done)).toEqual(["maps-2026-11-24", "kiosk-ui-2026-11-21"])
-    const row = rowOf("kiosk-ui-2026-11-21")
+    expect(rowNames(done)).toEqual(["maps-2026-11-24/", "kiosk-ui-2026-11-21/"])
+    const row = rowOf("kiosk-ui-2026-11-21/")
     expect(row).toHaveTextContent("Done")
     expect(row).toHaveTextContent("1,284 packages in Nexus")
-    expect(within(row).getByRole("link", { name: "Open kiosk-ui-2026-11-21" })).toHaveAttribute("href", "/imports/i-today")
-    expect(screen.queryByText("hr-forms-2026-11-20")).not.toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Open kiosk-ui-2026-11-21/" })).toHaveAttribute("href", "/imports/i-today")
+    expect(screen.queryByText("hr-forms-2026-11-20/")).not.toBeInTheDocument()
   })
 
   it("never lists a failure or a refusal in Done today", async () => {
@@ -248,7 +249,7 @@ describe("the offline home", () => {
       ],
     })
     const needs = await screen.findByRole("region", { name: "Needs you" })
-    expect(rowNames(needs)).toEqual(["payments-2026-11-25", "maps-viewer-2026-11-25", "docs-site-2026-11-25"])
+    expect(rowNames(needs)).toEqual(["payments-2026-11-25/", "maps-viewer-2026-11-25/", "docs-site-2026-11-25/"])
     expect(screen.queryByRole("region", { name: "Done today" })).not.toBeInTheDocument()
   })
 
@@ -268,12 +269,59 @@ describe("the offline home", () => {
     expect(screen.queryByRole("region", { name: "Done today" })).not.toBeInTheDocument()
   })
 
+  it("puts refused and failed rows first, ten, then Show all", async () => {
+    // 16 archives with 40-character names: 11 to import, 3 refused by the list, 2 with a failed import.
+    const long = (i: number) => `${"customer-portal-frontend-monorepo-".slice(0, 33)}${String(i).padStart(2, "0")}-2611`
+    const toImport = Array.from({ length: 11 }, (_, i) => archive(long(i), at(25, 13, 50 - i)))
+    const refused = Array.from({ length: 3 }, (_, i) => archive(long(20 + i), at(20, 9, i), { importable: false, reason: "its signature does not match its manifest", signature: "mismatch" }))
+    const failedImports = [imp("i-f1", long(30), "incomplete", at(21, 9), packages(10, 3)), imp("i-f2", long(31), "incomplete", at(22, 9), packages(10, 2))]
+    const failedArchives = failedImports.map((f, i) => archive(long(30 + i), at(19, 9), { latestImport: { id: f.id, outcome: "incomplete" } }))
+    expect(long(0)).toHaveLength(40)
+    renderHome({ archives: folderList([...toImport, ...refused, ...failedArchives]), imports: failedImports })
+    const needs = await screen.findByRole("region", { name: "Needs you" })
+    const first = rowNames(needs)
+    expect(first).toHaveLength(10)
+    expect(first.slice(0, 5)).toEqual([`${long(31)}/`, `${long(30)}/`, `${long(22)}/`, `${long(21)}/`, `${long(20)}/`])
+    expect(first.slice(5)).toEqual(Array.from({ length: 5 }, (_, i) => `${long(i)}/`))
+    const more = within(needs).getByRole("button", { name: "Show all 16 archives" })
+    expect(more).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(more)
+    expect(rowNames(group("Needs you"))).toHaveLength(16)
+    const fewer = within(group("Needs you")).getByRole("button", { name: "Show fewer" })
+    expect(fewer).toHaveAttribute("aria-expanded", "true")
+    fireEvent.click(fewer)
+    expect(rowNames(group("Needs you"))).toHaveLength(10)
+  })
+
+  it("keeps an interrupted or cancelled import out of In progress", async () => {
+    renderHome({
+      imports: [
+        imp("i-interrupted", "payments-2026-11-25", "interrupted", at(25, 10), packages(52, 45)),
+        imp("i-cancelled", "billing-api-2026-11-25", "cancelled", at(25, 11), packages(40, 0, 61)),
+        imp("i-running", "search-indexer-2026-11-21", "running", at(25, 12), packages(37, 0, 64)),
+      ],
+    })
+    const needs = await screen.findByRole("region", { name: "Needs you" })
+    expect(rowNames(needs)).toEqual(["billing-api-2026-11-25/", "payments-2026-11-25/"])
+    expect(rowOf("billing-api-2026-11-25/")).toHaveTextContent("Cancelled")
+    expect(rowOf("billing-api-2026-11-25/")).toHaveTextContent("61 packages not in Nexus")
+    expect(rowNames(group("In progress"))).toEqual(["search-indexer-2026-11-21/"])
+  })
+
+  it("names an import by its crossing once its report has one", async () => {
+    const done = imp("i-today", "kiosk-ui-2026-11-21", "complete", at(25, 9), packages(12, 0))
+    done.attempts[0].report.crossing = { project: "kiosk-ui", sealedAt: "2026-11-21T09:00:00Z", packages: 12 }
+    renderHome({ imports: [done] })
+    await screen.findByRole("region", { name: "Done today" })
+    expect(rowOf("kiosk-ui · 25 Nov")).toHaveTextContent("12 packages in Nexus")
+  })
+
   it("shows 10 rows of a group and a control that shows all 18", async () => {
     const many = Array.from({ length: 18 }, (_, i) => archive(`app-${String(i).padStart(2, "0")}`, at(25, 13, 59 - i)))
     renderHome({ archives: folderList(many) })
     const needs = await screen.findByRole("region", { name: "Needs you" })
-    expect(rowNames(needs)).toEqual(Array.from({ length: 10 }, (_, i) => `app-${String(i).padStart(2, "0")}`))
-    fireEvent.click(within(needs).getByRole("button", { name: "Show all 18 archives and imports" }))
+    expect(rowNames(needs)).toEqual(Array.from({ length: 10 }, (_, i) => `app-${String(i).padStart(2, "0")}/`))
+    fireEvent.click(within(needs).getByRole("button", { name: "Show all 18 archives" }))
     expect(within(group("Needs you")).getAllByRole("listitem")).toHaveLength(18)
     expect(within(group("Needs you")).queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument()
   })

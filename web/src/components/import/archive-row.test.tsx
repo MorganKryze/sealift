@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router"
 import { describe, expect, it } from "vitest"
 
 import type { Archive } from "@/import/api/queries"
 import type { Attempt, Import, ReportPackage } from "@/import/lib/outcome"
 
-import { ArchiveRow } from "./archive-row"
+import { ArchiveRow, crossingLabel, HomeArchiveRow } from "./archive-row"
 
 const KEY = "packages/npm/2026-11-05-reports/packages_npm.tar.gz"
 
@@ -129,5 +129,113 @@ describe("ArchiveRow", () => {
     renderRow(withLatest("incomplete"))
     expect(await screen.findByText("Incomplete")).toBeInTheDocument()
     expect(screen.getByRole("link", { name: /^Open import of/ })).toBeInTheDocument()
+  })
+})
+
+const FOLDER_KEY = "packages/npm/web-portal-2026-11-20/packages_npm.tar.gz"
+const files = [
+  { name: "packages_npm.tar.gz", size: 225_000_000, modified: "2026-11-25T10:00:00Z" },
+  { name: "manifest.json", size: 310_000, modified: "2026-11-25T10:00:00Z" },
+  { name: "manifest.json.sig", size: 214, modified: "2026-11-25T10:00:00Z" },
+]
+const verified = (over: Partial<Archive> = {}): Archive => ({
+  key: FOLDER_KEY, ecosystem: "npm", size: 225_000_000, modified: new Date(2026, 10, 25, 12, 0).toISOString(), importable: true,
+  signature: "verified", declaredSize: 225_000_000, files, crossing: { project: "web-portal", sealedAt: "2026-11-25T09:00:00Z", packages: 1284 }, ...over,
+})
+
+function renderHomeRow(a: Archive, rank: { project?: string; sameDay: string[] } = { project: a.crossing?.project, sameDay: [a.modified] }) {
+  const root = createRootRoute({ component: () => <ul><HomeArchiveRow archive={a} rank={rank} /></ul> })
+  const page = createRoute({ getParentRoute: () => root, path: "/import", component: () => <p>page</p> })
+  const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ["/"] }) })
+  render(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>)
+}
+
+const nameOf = async () => (await screen.findByText(/./, { selector: "[data-row-name]" }))
+
+describe("HomeArchiveRow", () => {
+  it("names a verified archive by its crossing", async () => {
+    renderHomeRow(verified())
+    const name = await nameOf()
+    expect(name).toHaveTextContent(/^web-portal · 25 Nov$/)
+    expect(name).not.toHaveClass("font-mono")
+    const row = name.closest("li") as HTMLElement
+    expect(row).toHaveTextContent("npm · 1,284 packages · 214.6 MB · uploaded")
+    expect(within(row).getByText("1,284", { selector: "b" })).toHaveClass("font-semibold")
+    expect(within(row).getByText("214.6 MB", { selector: "b" })).toHaveClass("font-semibold")
+    expect(within(row).getByRole("link", { name: "Import web-portal · 25 Nov" })).toHaveAttribute("href", `/import?start=${encodeURIComponent(FOLDER_KEY)}`)
+  })
+
+  it("names an unverified one by its folder", async () => {
+    for (const signature of ["not-checked", "unknown-key", "mismatch", undefined] as const) {
+      // A project handed in for a row whose signature did not verify must not reach the screen.
+      renderHomeRow({ ...verified({ signature }), crossing: signature === "mismatch" ? verified().crossing : undefined }, { project: "web-portal", sameDay: [] })
+      const names = await screen.findAllByText("web-portal-2026-11-20/", { selector: "[data-row-name]" })
+      expect(names.at(-1)).toHaveClass("font-mono")
+      expect(screen.queryByText(/web-portal ·/)).not.toBeInTheDocument()
+      cleanup()
+    }
+  })
+
+  it("numbers a second crossing of the day", async () => {
+    const first = new Date(2026, 10, 25, 9, 0).toISOString()
+    const second = new Date(2026, 10, 25, 15, 30).toISOString()
+    expect(crossingLabel("web-portal", first, [second, first])).toBe("web-portal · 25 Nov")
+    expect(crossingLabel("web-portal", second, [second, first])).toBe("web-portal · 25 Nov · 2")
+    expect(crossingLabel("web-portal", new Date(2025, 2, 14, 9, 0).toISOString(), [])).toBe("web-portal · 14 Mar 2025")
+    renderHomeRow(verified({ modified: second }), { project: "web-portal", sameDay: [first, second] })
+    expect(await nameOf()).toHaveTextContent(/^web-portal · 25 Nov · 2$/)
+  })
+
+  it("shows Compliant only when every check passes", async () => {
+    renderHomeRow(verified())
+    expect(await screen.findByRole("button", { name: "Compliant" })).toHaveAttribute("aria-expanded", "false")
+    cleanup()
+    for (const over of [{ declaredSize: 225_000_001 }, { files: files.slice(0, 2) }, { signature: "not-checked" as const }, { importable: false, reason: "the archive does not match its manifest" }, { declaredSize: undefined }]) {
+      renderHomeRow(verified(over))
+      await nameOf()
+      expect(screen.queryByRole("button", { name: /Compliant/ })).not.toBeInTheDocument()
+      cleanup()
+    }
+  })
+
+  it("opens the four checks with Contents unticked", async () => {
+    renderHomeRow(verified({ key: "packages/pip/data-pipeline-2026-11-24/packages_pip.tar.gz", ecosystem: "pip" }))
+    const chip = await screen.findByRole("button", { name: "Compliant" })
+    expect(screen.queryByText("3 checks passed")).not.toBeInTheDocument()
+    fireEvent.click(chip)
+    expect(chip).toHaveAttribute("aria-expanded", "true")
+    const checks = screen.getByRole("list", { name: "3 checks passed" })
+    expect(document.getElementById(chip.getAttribute("aria-controls") ?? "")).toContainElement(checks)
+    const rows = within(checks).getAllByRole("listitem")
+    expect(rows.map((r) => r.textContent)).toEqual([
+      "Filesdata-pipeline-2026-11-24/ holds the archive, its manifest and its signature",
+      "SignatureEd25519, by the key this side trusts",
+      "Foldera pip manifest, in packages/pip/",
+      "Contentssha256 and sha512, checked when the import starts",
+    ])
+    for (const r of rows.slice(0, 3)) expect(r.querySelector("svg.lucide-check")).not.toBeNull()
+    expect(rows[3].querySelector("svg.lucide-check")).toBeNull()
+    expect(rows[3].querySelector("svg.lucide-circle-dashed")).not.toBeNull()
+  })
+
+  it("draws a refused row with its reason and Open", async () => {
+    renderHomeRow(verified({ importable: false, reason: "signed with a key this side does not trust", signature: "unknown-key", crossing: undefined, declaredSize: undefined }), { sameDay: [] })
+    const name = await nameOf()
+    const row = name.closest("li") as HTMLElement
+    expect(row).toHaveClass("tinted-bad")
+    expect(row).toHaveTextContent("Refused")
+    expect(row).toHaveTextContent("signed with a key this side does not trust")
+    expect(within(row).getAllByRole("link")).toHaveLength(1)
+    expect(within(row).getByRole("link", { name: "Open web-portal-2026-11-20/" })).toHaveAttribute("href", "/import")
+    expect(within(row).queryByRole("button", { name: /Compliant/ })).not.toBeInTheDocument()
+  })
+
+  it("says Not checked yet with no chip", async () => {
+    renderHomeRow(verified({ signature: "not-checked", crossing: undefined, declaredSize: undefined }), { sameDay: [] })
+    const row = (await nameOf()).closest("li") as HTMLElement
+    expect(row).toHaveTextContent("Not checked yet")
+    expect(row).toHaveTextContent("npm · 214.6 MB · uploaded")
+    expect(within(row).queryByRole("button", { name: /Compliant/ })).not.toBeInTheDocument()
+    expect(within(row).getByRole("link", { name: "Import web-portal-2026-11-20/" })).toBeInTheDocument()
   })
 })
