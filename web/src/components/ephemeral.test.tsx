@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ProblemError } from "@/api/client"
@@ -66,14 +66,39 @@ describe("ephemeral banner", () => {
 })
 
 describe("erase project", () => {
+  const erase = (onErased = vi.fn()) => wrap(<EraseProject projectId="project-abc123" idleMinutes={30} onErased={onErased} />)
+
+  it("shows the delay with Erase now", () => {
+    erase()
+    const row = screen.getByText(/erased after/).closest("section") as HTMLElement
+    expect(row).toHaveTextContent("This project and its files are erased after 30 minutes without activity.")
+    expect(row.querySelector(".tinted-warn")).not.toBeNull()
+    expect(within(row).getByText("30 minutes")).toHaveClass("figure")
+    expect(within(row).getByRole("button", { name: "Erase now" })).toBeInTheDocument()
+  })
+
+  it("says minute for a one-minute delay", () => {
+    wrap(<EraseProject projectId="project-abc123" idleMinutes={1} onErased={vi.fn()} />)
+    expect(screen.getByText("1 minute")).toBeInTheDocument()
+  })
+
+  it("confirms in place and focuses Keep it", () => {
+    erase()
+    fireEvent.click(screen.getByRole("button", { name: "Erase now" }))
+    const confirm = screen.getByRole("alertdialog", { name: "Erase this project and its files now?" })
+    expect(confirm).toHaveClass("tinted-bad")
+    expect(confirm).toHaveTextContent("Download what you carry first.")
+    expect(within(confirm).getByRole("button", { name: "Keep it" })).toHaveFocus()
+    expect(deleteProject).not.toHaveBeenCalled()
+  })
+
   it("asks first, then deletes, clears the tab's storage and hands back", async () => {
-    vi.mocked(getInstance).mockResolvedValue(instance({ ephemeral: true, idleMinutes: 60 }))
     vi.mocked(deleteProject).mockResolvedValue(undefined)
     sessionStorage.setItem("selection:a1", '{"lodash":["4.17.21"]}')
     const onErased = vi.fn()
-    wrap(<EraseProject projectId="project-abc123" onErased={onErased} />)
+    erase(onErased)
 
-    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Erase now" }))
     expect(deleteProject).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Erase" }))
 
@@ -83,40 +108,34 @@ describe("erase project", () => {
   })
 
   it("clears the tab's storage when the delete answered after removing the project", async () => {
-    vi.mocked(getInstance).mockResolvedValue(instance({ ephemeral: true, idleMinutes: 60 }))
     vi.mocked(deleteProject).mockRejectedValue(new ProblemError(500, { type: "about:blank", title: "delete project", status: 500 }))
     sessionStorage.setItem("selection:a1", '{"lodash":["4.17.21"]}')
-    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
-    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
+    erase()
+    fireEvent.click(screen.getByRole("button", { name: "Erase now" }))
     fireEvent.click(screen.getByRole("button", { name: "Erase" }))
     await waitFor(() => expect(sessionStorage.getItem("selection:a1")).toBeNull())
   })
 
   it("keeps the tab's storage when a running job refused the delete", async () => {
-    vi.mocked(getInstance).mockResolvedValue(instance({ ephemeral: true, idleMinutes: 60 }))
     vi.mocked(deleteProject).mockRejectedValue(new ProblemError(409, { type: "about:blank", title: "delete project", status: 409 }))
     sessionStorage.setItem("selection:a1", '{"lodash":["4.17.21"]}')
-    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
-    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
+    erase()
+    fireEvent.click(screen.getByRole("button", { name: "Erase now" }))
     fireEvent.click(screen.getByRole("button", { name: "Erase" }))
     expect(await screen.findByText("delete project")).toBeInTheDocument()
     expect(sessionStorage.getItem("selection:a1")).not.toBeNull()
     sessionStorage.clear()
   })
 
-  it("keeps the project when the user steps back", async () => {
-    vi.mocked(getInstance).mockResolvedValue(instance({ ephemeral: true, idleMinutes: 60 }))
-    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
-    fireEvent.click(await screen.findByRole("button", { name: "Erase this project now" }))
-    fireEvent.click(screen.getByRole("button", { name: "Keep it" }))
+  it.each([
+    ["Keep it", (confirm: HTMLElement) => fireEvent.click(within(confirm).getByRole("button", { name: "Keep it" }))],
+    ["Escape", (confirm: HTMLElement) => fireEvent.keyDown(confirm, { key: "Escape" })],
+  ])("keeps the project on %s and gives the focus back to Erase now", (_name, stepBack) => {
+    erase()
+    fireEvent.click(screen.getByRole("button", { name: "Erase now" }))
+    stepBack(screen.getByRole("alertdialog"))
     expect(deleteProject).not.toHaveBeenCalled()
     expect(screen.queryByRole("alertdialog")).toBeNull()
-  })
-
-  it("is absent outside the mode", async () => {
-    vi.mocked(getInstance).mockResolvedValue(instance({ ephemeral: false }))
-    wrap(<EraseProject projectId="project-abc123" onErased={vi.fn()} />)
-    await waitFor(() => expect(getInstance).toHaveBeenCalled())
-    expect(screen.queryByRole("button", { name: "Erase this project now" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Erase now" })).toHaveFocus()
   })
 })

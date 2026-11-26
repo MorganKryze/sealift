@@ -62,14 +62,26 @@ const SHA256 = /^[0-9a-f]{64}$/
 
 // Neither file's shape is in the API schema: the download route serves every file as bytes.
 interface SealManifest {
-  archive?: { sha256?: unknown }
+  archive?: { sha256?: unknown; size?: unknown }
+  packages?: unknown
 }
 interface SealSignature {
   publicKeySha256?: unknown
 }
 
-/** Reads the archive's sha256 from manifest.json and the signing key's sha256 from manifest.json.sig, refusing either unless it is 64 lowercase hex characters. */
-export async function readSeal(projectId: string, exportId: string): Promise<{ archiveSha256: string; keySha256: string }> {
+/** What manifest.json says of its archive; a figure the file does not hold stays absent, never 0. */
+export interface SealFigures {
+  packages?: number
+  size?: number
+}
+
+const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined)
+
+/**
+ * Reads the archive's sha256, package count and size from manifest.json and the signing key's sha256 from
+ * manifest.json.sig, refusing either sha256 unless it is 64 lowercase hex characters.
+ */
+export async function readSeal(projectId: string, exportId: string): Promise<{ archiveSha256: string; keySha256: string; figures: SealFigures }> {
   const file = (name: string) => `/projects/${encodeURIComponent(projectId)}/exports/${encodeURIComponent(exportId)}/files/${name}`
   // Each cause starts with the file it comes from, so a screen can say which one did not read.
   const read = <T,>(name: string) =>
@@ -85,7 +97,12 @@ export async function readSeal(projectId: string, exportId: string): Promise<{ a
   if (typeof keySha256 !== "string" || !SHA256.test(keySha256)) {
     throw new Error("manifest.json.sig: no key sha256 of 64 lowercase hex characters")
   }
-  return { archiveSha256, keySha256 }
+  const figures: SealFigures = {}
+  const packages = Array.isArray(manifest.packages) ? manifest.packages.length : undefined
+  if (packages !== undefined) figures.packages = packages
+  const size = count(manifest.archive?.size)
+  if (size !== undefined) figures.size = size
+  return { archiveSha256, keySha256, figures }
 }
 
 const sortKey = (name: string) => name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")
