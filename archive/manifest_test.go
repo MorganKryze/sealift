@@ -76,6 +76,21 @@ func TestParseManifestAccepts(t *testing.T) {
 	}
 }
 
+// An export names a scoped package scope~name-version.tgz when another
+// package of the archive takes its npm pack name.
+func TestParseManifestAcceptsAScopedFileNamedApart(t *testing.T) {
+	doc := manifestDoc()
+	addPackage(doc, "a-b", "1.0.0", "a-b-1.0.0.tgz")
+	addPackage(doc, "@a/b", "1.0.0", "a~b-1.0.0.tgz")
+	m, err := ParseManifest(encode(t, doc))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if len(m.Packages) != 3 || m.Packages[2].Name != "@a/b" || m.Packages[2].File != "a~b-1.0.0.tgz" {
+		t.Errorf("packages = %+v", m.Packages)
+	}
+}
+
 func TestParseManifestAcceptsAnEmptyLibc(t *testing.T) {
 	doc := manifestDoc()
 	doc["target"].(map[string]any)["libc"] = ""
