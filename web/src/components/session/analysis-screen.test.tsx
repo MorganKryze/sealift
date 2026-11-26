@@ -351,3 +351,16 @@ describe("analysisCause", () => {
     expect(analysisCause({ state: "interrupted" }).action).toBe("start-again")
   })
 })
+
+describe("the Analyse step bar on an earlier crossing", () => {
+  it("follows the crossing on screen, not a later cancelled analysis", () => {
+    const shown = analysisIn("done", { createdAt: "2026-11-26T14:05:00Z" })
+    const later = analysisIn("cancelled", { id: "20261126T150000Z", createdAt: "2026-11-26T15:00:00Z" })
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AnalysisScreen projectId="web-portal" project={{ ...projectWith(shown), analyses: [shown, later] } as Project} analysis={shown} onChanged={vi.fn()} onNavigateStep={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    expect(within(screen.getByRole("navigation", { name: "Session steps" })).queryByText(", cancelled")).toBeNull()
+  })
+})

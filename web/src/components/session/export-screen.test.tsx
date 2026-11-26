@@ -362,3 +362,12 @@ describe("sealed", () => {
     expect(screen.queryByRole("button", { name: "Erase now" })).not.toBeInTheDocument()
   })
 })
+
+describe("the Seal step bar on an earlier crossing", () => {
+  it("follows the crossing on screen, not a later cancelled analysis", () => {
+    const later = { ...analysis, id: "20260922T090000Z", state: "cancelled", createdAt: "2026-09-22T09:00:00Z" } as Analysis
+    serve()
+    renderScreen(exportRecord({}), { on: { ...project, analyses: [analysis, later], exports: [exportRecord({})] } as Project })
+    expect(within(screen.getByRole("navigation", { name: "Session steps" })).queryByText(", cancelled")).toBeNull()
+  })
+})

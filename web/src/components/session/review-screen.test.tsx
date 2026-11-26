@@ -347,3 +347,16 @@ describe("ReviewScreen", () => {
     expect(sent.find((reason) => reason.dependencies.includes("angular"))?.text).toBe("Pinned by the legacy kiosk;  removed in Q3")
   })
 })
+
+describe("the Review step bar on an earlier crossing", () => {
+  it("follows the crossing on screen, not a later cancelled analysis", () => {
+    const shown = analysisOf("20261124T101500Z", [unchanged("left-pad")])
+    const later = { ...shown, id: "20261125T090000Z", state: "cancelled", createdAt: "2026-11-25T09:00:00Z", result: undefined } as Analysis
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ReviewScreen project={{ ...projectOf(shown), analyses: [shown, later] } as Project} analysis={shown} onNavigateStep={vi.fn()} />
+      </QueryClientProvider>,
+    )
+    expect(within(screen.getByRole("navigation", { name: "Session steps" })).queryByText(", cancelled")).toBeNull()
+  })
+})
