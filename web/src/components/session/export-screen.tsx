@@ -1,24 +1,25 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
-import { X } from "lucide-react"
-import { useState } from "react"
+import { ArrowLeft, Check, LoaderCircle, RotateCcw } from "lucide-react"
+import { useEffect, useId, useState, type ReactNode } from "react"
 
-import { apiFetch, ApiError } from "@/api/client"
-import { getSigningKey } from "@/api/settings"
-import { cancelExport, queueExport, type Analysis, type AnalysisResult, type Export, type Project } from "@/api/projects"
-import { Mark } from "@/components/brand/Mark"
-import { EraseProject } from "@/components/ephemeral"
+import { ApiError } from "@/api/client"
+import { cancelExport, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
+import { EraseProject, useInstance } from "@/components/ephemeral"
+import { FailureBlock } from "@/components/failure-block"
+import { CancelRow, JobProgress, type CancelWords } from "@/components/job-progress"
 import { ProblemNotice } from "@/components/problem-notice"
+import { CrossingFiles } from "@/components/projects/crossing-files"
+import { analysisCause } from "@/components/session/analysis-screen"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Progress } from "@/components/ui/progress"
 import { useJobEvents } from "@/hooks/use-job-events"
 import { useReasons, useSelection } from "@/hooks/use-selection"
+import { timeLeft } from "@/lib/analysisEvents"
+import { crossingName, readSeal } from "@/lib/crossings"
 import { exportSelection } from "@/lib/exportSelection"
 import { reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
-import { sessionSteps, TERMINAL_FAILED_STATES } from "@/lib/sessionSteps"
-import { cn, formatBytes, formatDuration } from "@/lib/utils"
+import { sessionSteps } from "@/lib/sessionSteps"
 
 interface ExportScreenProps {
   project: Project
@@ -30,423 +31,312 @@ interface ExportScreenProps {
   onNavigateStep: (step: StepId) => void
 }
 
+/**
+ * The Seal step: a queued export waits for the running job, a running one shows its progress as Analyse
+ * does, a stopped one its cause in words with Retry, a cancelled one goes back to Ready to seal, and a done
+ * one reads Sealed once its manifest.json reads.
+ */
 export function ExportScreen({ project, analysis, relatedExport, previousArchive, onChanged, onNavigateStep }: ExportScreenProps) {
-  const navigate = useNavigate()
   const steps = sessionSteps({ project, current: "export", onNavigate: onNavigateStep })
 
-  return (
-    <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
-      <StepBar steps={steps} />
-
-      {!relatedExport ? (
-        <div className="flex flex-col items-start gap-3 p-8">
-          <p className="text-muted">Nothing exported yet for this analysis.</p>
-          <Button asChild>
-            <Link to="/sessions/$sessionId/review" params={{ sessionId: project.id }}>
-              Go to Review
-            </Link>
+  let body: ReactNode
+  if (!relatedExport) {
+    body = (
+      <>
+        <h1 className="text-[28px] font-bold tracking-tight text-ink">Nothing sealed yet</h1>
+        <div className="mt-7 flex justify-end">
+          <Button type="button" variant="outline" size="page" onClick={() => onNavigateStep("review")}>
+            <ArrowLeft aria-hidden="true" />
+            Back
           </Button>
         </div>
-      ) : relatedExport.state === "done" ? (
-        <ArchiveDone
-          projectId={project.id}
-          exportId={relatedExport.id}
-          files={relatedExport.files ?? []}
-          onExportAnother={() => void navigate({ to: "/sessions/$sessionId/review", params: { sessionId: project.id } })}
-          onNewSession={() => void navigate({ to: "/update" })}
-        />
-      ) : (
-        <ExportProgress
-          key={relatedExport.id}
-          projectId={project.id}
-          analysisId={analysis.id}
-          result={analysis.result}
-          exportRecord={relatedExport}
-          onChanged={onChanged}
-        />
-      )}
+      </>
+    )
+  } else if (relatedExport.state === "done") {
+    body = <Sealed key={relatedExport.id} project={project} analysis={analysis} exported={relatedExport} />
+  } else {
+    // Keyed by the export's own id, so a retry (a new export, a new id) mounts fresh.
+    body = <SealProgress key={relatedExport.id} project={project} analysis={analysis} exportRecord={relatedExport} onChanged={onChanged} onNavigateStep={onNavigateStep} />
+  }
 
+  return (
+    <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
+      <StepBar steps={steps} />
+      {body}
       {previousArchive ? (
-        <section className="mt-10 border-t border-line pt-8">
-          <h2 className="mb-4 text-lg font-semibold text-ink">Earlier archive from this analysis</h2>
-          <ArchiveDone projectId={project.id} exportId={previousArchive.id} files={previousArchive.files ?? []} />
+        <section className="mt-10">
+          <h2 className="text-lg font-semibold text-ink">Earlier archive of this crossing</h2>
+          <FilesFrame>
+            <CrossingFiles project={project} exported={previousArchive} />
+          </FilesFrame>
         </section>
       ) : null}
     </div>
   )
 }
 
-interface ExportProgressProps {
-  projectId: string
-  analysisId: string
-  result?: AnalysisResult
+// The files block draws a rule above itself for the project page's row; here its frame stands alone.
+function FilesFrame({ children }: { children: ReactNode }) {
+  return <div className="mt-5 overflow-hidden rounded-xl border border-rule [&>div]:border-t-0">{children}</div>
+}
+
+// What each step of internal/jobs' export does while it runs, by the name its step event carries.
+const DOING: Record<string, string> = {
+  prepare: "Reading the signing key",
+  "package-list": "Listing the packages to seal",
+  download: "Downloading and verifying each package",
+  strip: "Stripping publishConfig",
+  archive: "Packing the archive",
+  reports: "Signing the manifest and writing the reports",
+}
+
+const doing = (step: string | undefined) => (step ? (DOING[step] ?? `Running ${step}`) : "Sealing")
+const lower = (words: string) => words.charAt(0).toLowerCase() + words.slice(1)
+
+const COUNT = new Intl.NumberFormat("en-GB")
+const figure = (n: number) => <span className="figure text-ink">{COUNT.format(n)}</span>
+
+const KEPT = "Your selection and its reasons are kept."
+
+interface SealProgressProps {
+  project: Project
+  analysis: Analysis
   exportRecord: Export
   onChanged: () => void
+  onNavigateStep: (step: StepId) => void
 }
 
 /**
- * Covers queued, running and every terminal-but-failed state in one
- * component, keyed by the export's own id so a retry (a new export, a new
- * id) mounts fresh. A failed or cancelled export keeps its status.json on
- * the server (see internal/jobs.Export.Run), so exportRecord.failure
- * survives a reload; while the live stream is still open, events.steps
- * carries the same cause a beat earlier, before the next poll refreshes
- * exportRecord itself.
+ * A queued, running or stopped export. A failed or interrupted export keeps its status.json on the server,
+ * so exportRecord.failure survives a reload; while the stream is open, its failed step event carries the
+ * same cause a beat before the next poll refreshes exportRecord.
  */
-function ExportProgress({ projectId, analysisId, result, exportRecord, onChanged }: ExportProgressProps) {
-  const selection = useSelection(analysisId)
-  const reasons = useReasons(analysisId)
-  const [cancelling, setCancelling] = useState(false)
+function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateStep }: SealProgressProps) {
+  const selection = useSelection(analysis.id)
+  const reasons = useReasons(analysis.id)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
-  const active = exportRecord.state === "queued" || exportRecord.state === "running"
+  const queued = exportRecord.state === "queued"
+  const active = queued || exportRecord.state === "running"
   const events = useJobEvents(exportRecord.id, active, onChanged)
 
-  const retryMutation = useMutation({
+  // A cancel is the developer's own stop: the selection and its reasons stay, and Ready to seal comes back.
+  const cancelled = exportRecord.state === "cancelled" || (events.ended && events.endState === "cancelled")
+  useEffect(() => {
+    if (cancelled) onNavigateStep("review")
+  }, [cancelled, onNavigateStep])
+
+  const retry = useMutation({
     mutationFn: () => {
-      const toExport = exportSelection(result?.dependencies ?? [], selection.selection)
-      const needed = result ? requiredReasons(result, toExport) : []
-      return queueExport(projectId, analysisId, { selection: toExport, includeProject: false, reasons: reasonsToSend(needed, reasons.reasons) })
+      const toExport = exportSelection(analysis.result?.dependencies ?? [], selection.selection)
+      const needed = analysis.result ? requiredReasons(analysis.result, toExport) : []
+      return queueExport(project.id, analysis.id, { selection: toExport, includeProject: false, reasons: reasonsToSend(needed, reasons.reasons) })
     },
     onSuccess: onChanged,
   })
-  const retryError = retryMutation.error instanceof ApiError ? retryMutation.error : null
+  const retryError = retry.error instanceof ApiError ? retry.error : null
 
-  async function handleCancel() {
-    if (!window.confirm("Cancel this export?")) {
-      return
-    }
-    setCancelling(true)
+  async function cancelRun() {
     setCancelError(null)
     try {
-      await cancelExport(projectId, exportRecord.id)
+      await cancelExport(project.id, exportRecord.id)
       onChanged()
     } catch (error) {
       setCancelError(error instanceof ApiError ? error : null)
-    } finally {
-      setCancelling(false)
+      throw error
     }
   }
+  const cancel = (words: Pick<CancelWords, "lost" | "keep">): CancelWords => ({ label: "Cancel", confirm: "Cancel sealing", onConfirm: cancelRun, ...words })
 
-  // A page opened directly on an already-terminal export never had a live
-  // stream: everything shown then comes from exportRecord itself, which a
-  // failed or cancelled export's status.json fills in (see
-  // internal/store.readExportInfo).
-  const cold = !active && !events.ended
-  const failed = cold ? TERMINAL_FAILED_STATES.has(exportRecord.state) : events.ended && events.endState !== "done"
-  const stoppedAt = events.ended ? events.steps.find((step) => step.state === "failed") : undefined
-  // A cancel stops the download with a "context canceled" error; the user
-  // asked for that stop, so it reads as their action, not as a failure.
-  const cancelled = (cold ? exportRecord.state : events.endState) === "cancelled"
-  const failureMessage = cancelled ? "You cancelled this export." : (exportRecord.failure?.message ?? stoppedAt?.error)
-  const progressPercent =
-    events.progress && events.progress.total > 0 ? Math.round((events.progress.done / events.progress.total) * 100) : null
+  if (cancelled) return null
 
-  const queued = exportRecord.state === "queued" && !failed
-  const title = failed ? (cancelled ? "Export cancelled" : "Export failed") : queued ? "Waiting for another job" : "Building the archive"
+  const failedStep = events.steps.find((step) => step.state === "failed")
+  const failure = exportRecord.failure ?? (failedStep ? { step: failedStep.name, message: failedStep.error ?? "" } : undefined)
+  const stopped = exportRecord.state === "failed" || exportRecord.state === "interrupted" || (events.ended && events.endState !== "done")
+
+  const back = (
+    <Button type="button" variant="outline" size="page" onClick={() => onNavigateStep("review")}>
+      <ArrowLeft aria-hidden="true" />
+      Back
+    </Button>
+  )
+  const again = (label: string) => (
+    <Button
+      type="button"
+      size="page"
+      aria-busy={retry.isPending ? true : undefined}
+      onClick={() => {
+        if (!retry.isPending) retry.mutate()
+      }}
+    >
+      {retry.isPending ? <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" /> : <RotateCcw aria-hidden="true" />}
+      {retry.isPending ? "Starting" : label}
+    </Button>
+  )
+
+  let body: ReactNode
+  if (stopped && failure) {
+    // The cause's words are the analysis' own: the same registries fail the same way.
+    const { title } = analysisCause({ state: "failed", failure })
+    body = (
+      <FailureBlock
+        projectId={project.id}
+        analysisId={analysis.id}
+        heading="Sealing stopped"
+        sub={KEPT}
+        cause={{ title, diagnosis: `It stopped while ${lower(doing(failure.step))}.` }}
+        tone="failure"
+        actions={
+          <>
+            {back}
+            {again("Retry")}
+          </>
+        }
+      />
+    )
+  } else if (stopped) {
+    // An interrupted export never failed: the server restarted under it. A failure with no record names no cause.
+    const interrupted = exportRecord.state === "interrupted" || events.endState === "interrupted"
+    body = (
+      <FailureBlock
+        projectId={project.id}
+        analysisId={analysis.id}
+        heading={interrupted ? "Sealing interrupted" : "Sealing stopped"}
+        sub={interrupted ? `The server restarted while it ran. ${KEPT}` : `The version that ran it did not record why. ${KEPT}`}
+        tone={interrupted ? "neutral" : "failure"}
+        actions={
+          <>
+            {back}
+            {again(interrupted ? "Start again" : "Retry")}
+          </>
+        }
+      />
+    )
+  } else if (queued) {
+    body = (
+      <div>
+        <h1 aria-live="polite" className="text-[34px] leading-tight font-bold tracking-tight text-ink">
+          Waits for the running job
+        </h1>
+        <p className="mt-1.5 text-[15px] text-muted">One job runs at a time.</p>
+        <CancelRow note="Keeps its place if you leave this page" cancel={cancel({ lost: `It leaves the queue. ${KEPT}`, keep: "Keep its place" })} />
+      </div>
+    )
+  } else {
+    // An export reports each step as it starts, so the last one reported and not done is the one running.
+    const last = events.steps.at(-1)
+    const step = last && last.state !== "done" ? last.name : undefined
+    const download = events.progressByStep.download
+    // The export sends no estimate today; the title gives the time left only when a progress event carries one.
+    const left = download && step === "download" ? timeLeft(download.estimatedRemainingMs) : undefined
+    body = (
+      <JobProgress
+        title={left ?? doing(step)}
+        counted={
+          download ? (
+            <>
+              {figure(download.done)} of {figure(download.total)} packages downloaded
+            </>
+          ) : undefined
+        }
+        progress={download ? { done: download.done, total: download.total } : undefined}
+        estimating={!download}
+        log={events.log}
+        logCount={events.logCount}
+        live
+        note="Keeps running if you leave this page"
+        cancel={cancel({ lost: `The downloads so far stop here. ${KEPT}`, keep: "Keep sealing" })}
+      />
+    )
+  }
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">{title}</h1>
-        <p className="mt-1.5 max-w-[62ch] text-muted">
-          {failed
-            ? (failureMessage ?? (stoppedAt ? `Stopped at ${stoppedAt.name}.` : "Stopped. The next action is below."))
-            : queued
-              ? "sealift runs one job at a time. This export starts when the one before it ends. You can leave this page."
-              : events.progress?.estimatedRemainingMs !== undefined
-              ? `Downloading each package from the registry, checking its integrity, then packing. About ${formatDuration(events.progress.estimatedRemainingMs)} remaining.`
-              : "Downloading each package from the registry, checking its integrity, then packing."}
-        </p>
-      </div>
-
-      {!failed && !queued ? (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <Card className="p-4">
-              <p className="text-xs text-muted">Packages</p>
-              <p className="text-xl font-bold tracking-tight text-ink tabular-nums">
-                {events.progress?.done ?? 0}
-                <span className="ml-1 text-sm font-medium text-muted">/ {events.progress?.total ?? "…"}</span>
-              </p>
-            </Card>
-            <Card className="p-4">
-              <p className="text-xs text-muted">From cache</p>
-              <p className="text-xl font-bold tracking-tight text-ink tabular-nums">{events.progress?.cacheHits ?? 0}</p>
-            </Card>
-          </div>
-          {progressPercent !== null ? (
-            <div className="mt-3">
-              <Progress value={progressPercent} label="Export progress" />
-              <p className="mt-1.5 text-right text-xs text-muted tabular-nums">{progressPercent}%</p>
-            </div>
-          ) : null}
-        </>
-      ) : null}
-
-      {events.steps.length > 0 ? (
-        <Card className="mt-5">
-          <ol>
-            {events.steps.map((step, index) => (
-              <li
-                key={step.name}
-                className={cn("flex items-center justify-between px-4.5 py-2.5 text-sm", index > 0 && "border-t border-line")}
-              >
-                <span className={step.state === "failed" && !cancelled ? "text-severity-critical-fg" : "text-ink"}>
-                  {EXPORT_STEP_LABELS[step.name] ?? step.name}
-                </span>
-                <span className="text-xs text-muted">
-                  {step.state === "running"
-                    ? "Running…"
-                    : step.state === "failed"
-                      ? cancelled
-                        ? "Stopped by you"
-                        : "Failed"
-                      : step.state === "done"
-                        ? `Done · ${formatDuration(step.durationMs ?? 0)}`
-                        : step.state}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </Card>
-      ) : null}
-
-      {!failed && active ? (
-        <div className="mt-5 flex flex-col items-start gap-2">
-          <Button variant="tinted" onClick={() => void handleCancel()} disabled={cancelling}>
-            <X aria-hidden="true" />
-            Cancel
-          </Button>
-          {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} /> : null}
-        </div>
-      ) : null}
-
-      {failed ? (
-        <div className="mt-5 flex flex-col items-start gap-2">
-          <div className="flex w-full flex-wrap justify-end gap-3">
-            <Button variant="ghost" asChild>
-              <Link to="/sessions/$sessionId/review" params={{ sessionId: projectId }}>
-                Choose different versions
-              </Link>
-            </Button>
-            <Button onClick={() => retryMutation.mutate()} disabled={retryMutation.isPending}>
-              {retryMutation.isPending ? "Starting…" : cancelled ? "Start the export again" : "Retry"}
-            </Button>
-          </div>
-          {retryError ? <ProblemNotice status={retryError.status} problem={retryError.problem} /> : null}
-        </div>
-      ) : null}
+      {body}
+      {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} className="mt-4" /> : null}
+      {retryError ? <ProblemNotice status={retryError.status} problem={retryError.problem} className="mt-4" /> : null}
     </>
   )
 }
 
-// internal/jobs/export.go names its steps; these are the words the user reads.
-const EXPORT_STEP_LABELS: Record<string, string> = {
-  prepare: "Read the signing key",
-  "package-list": "List the packages to export",
-  download: "Download and verify each package",
-  strip: "Strip publishConfig",
-  archive: "Pack the archive",
-  reports: "Sign the manifest and write the reports",
-}
+// Kept beside the selection's keys, per export: a reload of the tab keeps Done open, a new tab starts with it disabled.
+const startedKey = (exportId: string) => `sealift:download-started:${exportId}`
 
-const REPORT_DESCRIPTIONS: Record<string, string> = {
-  "summary.md": "Readable summary: before, after, remaining CVEs",
-  "findings.csv": "Every CVE, one row each",
-  "manifest.json": "Every package with its sha512. The import needs it.",
-  "manifest.json.sig": "The manifest's signature. The import needs it.",
-  "report.cdx.json": "CycloneDX SBOM",
-  "report.trivy.json": "Raw Trivy output",
-}
-
-// manifest.json's shape is not part of the OpenAPI schema (the download
-// route types every file as an opaque octet-stream); this mirrors
-// internal/report.Manifest, the job's own writer.
-interface ExportManifest {
-  archive: {
-    sha256: string
-    size: number
-  }
-  packages: unknown[]
-}
-
-// manifest.json.sig's shape is not in the OpenAPI schema either; the screen
-// reads only the key it names.
-interface SignatureFile {
-  publicKeySha256?: string
-}
-
-/** What the done screen says about an export's signature, from the file and the key now in use. */
-type SignedBy = { state: "current" | "replaced"; sha: string } | { state: "unsigned" } | { state: "unreadable" }
-
-function useSignedBy(projectId: string, exportId: string, files: string[]): SignedBy | undefined {
-  const listed = files.includes("manifest.json.sig")
-  const signatureQuery = useQuery({
-    queryKey: ["export-signature", projectId, exportId],
-    queryFn: () => apiFetch<SignatureFile>(`/projects/${projectId}/exports/${exportId}/files/manifest.json.sig`),
-    enabled: listed,
-  })
-  const keyQuery = useQuery({ queryKey: ["signing-key"], queryFn: getSigningKey, enabled: listed })
-
-  if (!listed) {
-    return { state: "unsigned" }
-  }
-  if (signatureQuery.isError || keyQuery.isError) {
-    return { state: "unreadable" }
-  }
-  if (!signatureQuery.data || !keyQuery.data) {
-    return undefined
-  }
-  const sha = signatureQuery.data.publicKeySha256
-  if (typeof sha !== "string" || sha === "") {
-    return { state: "unreadable" }
-  }
-  return { state: sha === keyQuery.data.publicKeySha256 ? "current" : "replaced", sha }
-}
-
-function SignedByLine({ signedBy }: { signedBy: SignedBy }) {
-  switch (signedBy.state) {
-    case "current":
-      return <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">{`Signed with this sealift's key, public key sha256 ${signedBy.sha}.`}</p>
-    case "replaced":
-      return (
-        <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">
-          Signed with a key replaced since, public key sha256 {signedBy.sha}. The import refuses this archive once it trusts the current key:
-          export the selection again.
-        </p>
-      )
-    case "unsigned":
-      return (
-        <p className="mt-2.5 text-sm text-ink [overflow-wrap:anywhere]">
-          Not signed: sealift 0.4.0 or earlier exported this archive, and the import refuses it. Export the selection again.
-        </p>
-      )
-    case "unreadable":
-      return <p className="mt-2.5 text-sm text-severity-critical-fg">Could not read manifest.json.sig.</p>
+function readStarted(exportId: string): boolean {
+  try {
+    return sessionStorage.getItem(startedKey(exportId)) === "true"
+  } catch {
+    return false
   }
 }
 
-interface ArchiveDoneProps {
-  projectId: string
-  exportId: string
-  files: string[]
-  /** Absent for an earlier archive shown under a later export: the page already offers the next steps. */
-  onExportAnother?: () => void
-  onNewSession?: () => void
-}
-
-function ArchiveDone({ projectId, exportId, files, onExportAnother, onNewSession }: ArchiveDoneProps) {
-  const manifestQuery = useQuery({
-    queryKey: ["export-manifest", projectId, exportId],
-    queryFn: () => apiFetch<ExportManifest>(`/projects/${projectId}/exports/${exportId}/files/manifest.json`),
-  })
-  const signedBy = useSignedBy(projectId, exportId, files)
-  const [copied, setCopied] = useState(false)
-  const archiveFile = files.find((name) => name === "packages_npm.tar.gz")
-  const reportFiles = files.filter((name) => name !== archiveFile)
-
-  async function copyHash() {
-    if (!manifestQuery.data) {
-      return
-    }
+/** Whether a download of a file to carry started from this page in this tab, and the call that records one. */
+function useDownloadStarted(exportId: string) {
+  const [started, setStarted] = useState(() => readStarted(exportId))
+  function markStarted() {
+    setStarted(true)
     try {
-      await navigator.clipboard.writeText(manifestQuery.data.archive.sha256)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      sessionStorage.setItem(startedKey(exportId), "true")
     } catch {
-      // Clipboard API unavailable (permissions, insecure context): the
-      // hash is still there to select and copy by hand.
+      // Storage unavailable: Done opens for this page and forgets it on a reload.
     }
   }
+  return [started, markStarted] as const
+}
 
-  const isMain = onExportAnother !== undefined
+/**
+ * A done export: Sealed with the crossing's name once manifest.json reads, the erase row on an ephemeral
+ * instance, the files to carry and the reports, then Done, which leads Home once a download of a file to
+ * carry started.
+ */
+function Sealed({ project, analysis, exported }: { project: Project; analysis: Analysis; exported: Export }) {
+  const navigate = useNavigate()
+  const instance = useInstance()
+  // The files block reads the same seal under the same key, so the page asks once.
+  const seal = useQuery({ queryKey: ["seal", project.id, exported.id], queryFn: () => readSeal(project.id, exported.id), retry: false })
+  const [started, markStarted] = useDownloadStarted(exported.id)
+  const causeId = useId()
+  const name = crossingName(project.name, analysis, project.analyses ?? [analysis])
+  const idleMinutes = instance.data?.ephemeral ? instance.data.idleMinutes : undefined
 
   return (
     <>
-      {isMain ? (
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold tracking-tight text-ink">Archive ready</h1>
-          <p className="mt-1.5 max-w-[62ch] text-muted">
-            Carry the archive, manifest.json and manifest.json.sig through the kiosk, side by side: the import refuses the archive without
-            the other two. The reports travel with them.
-          </p>
-        </div>
-      ) : null}
-
-      <Card className="grid grid-cols-[auto_1fr] items-center gap-5 p-6">
-        <Mark size={72} className="animate-stamp" />
-        <div>
-          {manifestQuery.isPending ? (
-            <p className="text-sm text-muted">Reading the manifest…</p>
-          ) : manifestQuery.isError ? (
-            <p className="text-sm text-severity-critical-fg">Could not read manifest.json.</p>
-          ) : (
-            <>
-              <p className="text-xs uppercase tracking-wide text-muted">
-                Sealed · {manifestQuery.data.packages.length} packages · {formatBytes(manifestQuery.data.archive.size)}
-              </p>
-              <h2 className="mt-1 font-mono text-lg font-semibold text-ink">packages_npm.tar.gz</h2>
-              <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                <code className="flex-1 break-all rounded-lg border border-line bg-card px-2.5 py-1.5 font-mono text-xs">
-                  sha256 {manifestQuery.data.archive.sha256}
-                </code>
-                <Button variant="outline" size="sm" onClick={() => void copyHash()}>
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-              </div>
-              {signedBy ? <SignedByLine signedBy={signedBy} /> : null}
-              {archiveFile ? (
-                <div className="mt-3.5">
-                  <Button size="lg" asChild>
-                    <a href={`/api/projects/${projectId}/exports/${exportId}/files/${encodeURIComponent(archiveFile)}`} download>
-                      Download archive
-                    </a>
-                  </Button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </Card>
-
-      {reportFiles.length > 0 ? (
-        <section className="mt-7">
-          <div className="mb-2.5 flex items-baseline gap-2.5">
-            <h2 className="text-lg font-semibold text-ink">Reports</h2>
-            <span className="text-sm text-muted">{reportFiles.length} files, included in the archive&rsquo;s folder</span>
+      {seal.isSuccess ? (
+        <div className="flex items-center gap-4">
+          <span className="grid size-11 flex-none place-items-center rounded-full bg-ok text-bg">
+            <Check aria-hidden="true" className="size-5" strokeWidth={2.5} />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-[28px] leading-tight font-bold tracking-tight text-ink">Sealed</h1>
+            <p className="text-[15px] text-muted [overflow-wrap:anywhere]">{name}</p>
           </div>
-          <Card>
-            {reportFiles.map((name, index) => (
-              <div
-                key={name}
-                className={cn("flex items-center justify-between gap-3 px-4.5 py-3", index > 0 && "border-t border-line")}
-              >
-                <span>
-                  <span className="font-mono text-sm text-ink">{name}</span>
-                  <p className="text-xs text-muted">{REPORT_DESCRIPTIONS[name] ?? ""}</p>
-                </span>
-                <Button variant="outline" size="sm" asChild>
-                  <a href={`/api/projects/${projectId}/exports/${exportId}/files/${encodeURIComponent(name)}`} download>
-                    Download
-                  </a>
-                </Button>
-              </div>
-            ))}
-          </Card>
-        </section>
-      ) : null}
-
-      {isMain ? (
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Button variant="outline" onClick={onExportAnother}>
-            Export another selection
-          </Button>
-          <Button variant="ghost" onClick={onNewSession}>
-            Start a new session
-          </Button>
         </div>
-      ) : null}
-      {isMain && onNewSession ? <EraseProject projectId={projectId} onErased={onNewSession} /> : null}
+      ) : (
+        <h1 className="text-[28px] leading-tight font-bold tracking-tight text-ink [overflow-wrap:anywhere]">{name}</h1>
+      )}
+      {idleMinutes !== undefined ? <EraseProject projectId={project.id} idleMinutes={idleMinutes} onErased={() => void navigate({ to: "/" })} /> : null}
+      <FilesFrame>
+        <CrossingFiles project={project} exported={exported} downloadAllPrimary onDownload={markStarted} />
+      </FilesFrame>
+      <div className="mt-7 flex flex-wrap items-center justify-end gap-3">
+        {started ? (
+          <Button asChild variant="outline" size="page">
+            <Link to="/">
+              <Check aria-hidden="true" />
+              Done
+            </Link>
+          </Button>
+        ) : (
+          <>
+            <p id={causeId} className="text-[13px] text-muted">
+              Opens once a download starts
+            </p>
+            <Button type="button" variant="outline" size="page" aria-disabled="true" aria-describedby={causeId}>
+              <Check aria-hidden="true" />
+              Done
+            </Button>
+          </>
+        )}
+      </div>
     </>
   )
 }

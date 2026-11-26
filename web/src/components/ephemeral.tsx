@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useState } from "react"
+import { Timer, Trash2 } from "lucide-react"
+import { useEffect, useId, useRef, useState } from "react"
 
 import { ProblemError } from "@/api/client"
 import { deleteProject } from "@/api/projects"
@@ -8,7 +9,7 @@ import { ProblemNotice } from "@/components/problem-notice"
 import { Button } from "@/components/ui/button"
 
 /** The deployment mode never changes while the server runs, so it is read once. */
-function useInstance() {
+export function useInstance() {
   return useQuery({ queryKey: ["instance"], queryFn: getInstance, staleTime: Infinity })
 }
 
@@ -28,6 +29,8 @@ export function EphemeralBanner() {
 
 interface EraseProjectProps {
   projectId: string
+  /** The instance's idle delay, after which the sweep erases the project. */
+  idleMinutes: number
   /** Called once the server erased the project, to leave its screens. */
   onErased: () => void
 }
@@ -41,10 +44,15 @@ function clearTabStorage() {
   }
 }
 
-/** The archive screen's erase control, on an ephemeral instance only. */
-export function EraseProject({ projectId, onErased }: EraseProjectProps) {
-  const { data } = useInstance()
+/**
+ * Sealed's erase row on an ephemeral instance: a closed amber row with the idle delay and Erase now. Erase now
+ * asks in place, in red, with the focus on Keep it; only Erase erases, and Keep it or Escape gives the focus back.
+ */
+export function EraseProject({ projectId, idleMinutes, onErased }: EraseProjectProps) {
   const [confirming, setConfirming] = useState(false)
+  const section = useRef<HTMLElement>(null)
+  const focusNext = useRef<"keep" | "erase-now" | null>(null)
+  const titleId = useId()
   const erase = useMutation({
     mutationFn: () => deleteProject(projectId),
     onSuccess: () => {
@@ -59,36 +67,59 @@ export function EraseProject({ projectId, onErased }: EraseProjectProps) {
   })
   const failure = erase.error instanceof ProblemError ? erase.error : null
 
-  if (!data?.ephemeral) return null
+  useEffect(() => {
+    const target = focusNext.current
+    focusNext.current = null
+    if (target) section.current?.querySelector<HTMLElement>(`[data-focus=${target}]`)?.focus()
+  }, [confirming])
+
+  function ask(next: boolean) {
+    focusNext.current = next ? "keep" : "erase-now"
+    setConfirming(next)
+  }
+
   return (
-    <section className="mt-7 flex flex-col gap-3">
+    <section ref={section} className="mt-5 flex flex-col gap-3">
       {confirming ? (
         <div
           role="alertdialog"
-          aria-label="Erase this project"
+          aria-labelledby={titleId}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setConfirming(false)
+            if (event.key === "Escape") ask(false)
           }}
-          className="rounded-lg border border-severity-critical/40 bg-severity-critical/5 p-3.5 text-sm"
+          className="tinted-bad flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5"
         >
-          <p className="font-medium text-ink">Erase this project?</p>
-          <p className="mt-1 text-ink">
-            Its manifest, analyses, reports and archive leave this server. The caches that recorded its packages go with them, or as soon
-            as no other analysis or export runs. Download the archive, manifest.json and manifest.json.sig first: nothing brings them back.
-          </p>
-          <div className="mt-3 flex gap-2">
-            <Button type="button" size="sm" disabled={erase.isPending} onClick={() => erase.mutate()}>
-              Erase
-            </Button>
-            <Button type="button" size="sm" variant="ghost" autoFocus onClick={() => setConfirming(false)}>
-              Keep it
-            </Button>
+          <Trash2 aria-hidden="true" className="size-4 flex-none text-bad" />
+          <div className="min-w-0 flex-1">
+            <p id={titleId} className="text-sm font-semibold text-ink">
+              Erase this project and its files now?
+            </p>
+            <p className="text-[13px] text-ink-2">Download what you carry first.</p>
           </div>
+          <Button type="button" variant="outline" data-focus="keep" onClick={() => ask(false)}>
+            Keep it
+          </Button>
+          <Button
+            type="button"
+            aria-busy={erase.isPending ? true : undefined}
+            onClick={() => {
+              if (!erase.isPending) erase.mutate()
+            }}
+            className="border-bad bg-bad text-bg hover:border-bad hover:bg-bad"
+          >
+            <Trash2 aria-hidden="true" />
+            Erase
+          </Button>
         </div>
       ) : (
-        <div>
-          <Button type="button" variant="outline" onClick={() => setConfirming(true)}>
-            Erase this project now
+        <div className="tinted-warn flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
+          <Timer aria-hidden="true" className="size-4 flex-none text-warn" />
+          <p className="min-w-0 flex-1 text-sm text-ink">
+            This project and its files are erased after <span className="figure">{`${idleMinutes} ${idleMinutes === 1 ? "minute" : "minutes"}`}</span> without activity.
+          </p>
+          <Button type="button" variant="outline" data-focus="erase-now" onClick={() => ask(true)}>
+            <Trash2 aria-hidden="true" />
+            Erase now
           </Button>
         </div>
       )}
