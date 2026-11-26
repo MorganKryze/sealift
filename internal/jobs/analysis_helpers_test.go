@@ -204,7 +204,9 @@ func TestFactsOfFlagsANodeEngineThatIsNotAString(t *testing.T) {
 	    "1.2.0": {"version": "1.2.0", "engines": {"node": {"x": 1}}},
 	    "1.3.0": {"version": "1.3.0", "engines": {"node": [">=18"]}},
 	    "1.4.0": {"version": "1.4.0", "engines": {"node": null}},
-	    "1.5.0": {"version": "1.5.0", "engines": {"node": ">=99"}}
+	    "1.5.0": {"version": "1.5.0", "engines": {"node": ">=99"}},
+	    "1.6.0": {"version": "1.6.0", "engines": {"node": 0}},
+	    "1.7.0": {"version": "1.7.0", "engines": {"node": false}}
 	  }
 	}`
 	var pk npm.Packument
@@ -214,10 +216,11 @@ func TestFactsOfFlagsANodeEngineThatIsNotAString(t *testing.T) {
 	target := store.Target{Node: "18.20.4"}
 	policy := rank.Policy{TargetNode: target.Node}
 	current := factsOf("1.0.0", pk.Versions["1.0.0"], pk, target)
-	// pnpm skips an engines.node that is null, as it skips one that is
-	// absent or empty, so null sets no constraint.
+	// pnpm skips an engines.node that is null, 0 or false, as it skips one
+	// that is absent or empty, so those set no constraint.
 	for version, wantMismatch := range map[string]bool{
 		"1.0.0": false, "1.1.0": true, "1.2.0": true, "1.3.0": true, "1.4.0": false, "1.5.0": true,
+		"1.6.0": false, "1.7.0": false,
 	} {
 		t.Run(version, func(t *testing.T) {
 			f := factsOf(version, pk.Versions[version], pk, target)

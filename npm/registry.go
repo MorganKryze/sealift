@@ -79,8 +79,9 @@ func (v VersionMeta) HasProvenance() bool {
 // Engines maps an engine name to its version range. Old packages publish an
 // array instead; it decodes to no ranges. A null value reads as "". Another
 // value that is not a string is dropped and the other ranges are kept, except
-// under node: it reads as "not a string: " and its JSON, a range no Node
-// satisfies, as pnpm matches no Node against such a value.
+// under node: a value other than 0 or false reads as "not a string: " and its
+// JSON, a range no Node satisfies, as pnpm matches no Node against such a
+// value and skips 0 and false as it skips null.
 type Engines map[string]string
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -94,7 +95,7 @@ func (e *Engines) UnmarshalJSON(b []byte) error {
 		var r string
 		if json.Unmarshal(value, &r) == nil {
 			m[name] = r
-		} else if name == "node" {
+		} else if name == "node" && !zeroOrFalse(value) {
 			var text bytes.Buffer
 			_ = json.Compact(&text, value)
 			m[name] = "not a string: " + text.String()
@@ -102,6 +103,12 @@ func (e *Engines) UnmarshalJSON(b []byte) error {
 	}
 	*e = m
 	return nil
+}
+
+func zeroOrFalse(value json.RawMessage) bool {
+	var n float64
+	var b bool
+	return json.Unmarshal(value, &n) == nil && n == 0 || json.Unmarshal(value, &b) == nil && !b
 }
 
 // Deprecation holds a deprecation message. A value that is not a string
