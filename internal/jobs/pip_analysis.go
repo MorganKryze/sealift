@@ -365,7 +365,7 @@ func (r *pipRun) stepScan() error {
 				Name:    p.Name,
 				Version: p.Version,
 				Files:   nonNil(r.set.FilesOf(p.Name)),
-				CVEs:    pipFindingsOf(r.root, index.Set([]string{key}), advisories),
+				CVEs:    pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
 			}
 			if w, ok := r.wheels[p.Name]; ok {
 				pkg.Wheel = &w
@@ -412,11 +412,13 @@ func outsideWarning(findings int, names []string) string {
 const shownNameLimit = 100
 
 // cleanName drops control and format characters from a name Trivy
-// reported and cuts it to shownNameLimit runes.
+// reported, turns each whitespace control into a space, and cuts it to
+// shownNameLimit runes.
 func cleanName(s string) string { return cleanText(s, shownNameLimit) }
 
 // cleanText drops control and format characters from s, which comes from
-// outside, and cuts it to limit runes.
+// outside, turns each whitespace control into a space, and cuts it to
+// limit runes.
 func cleanText(s string, limit int) string {
 	runes := []rune(dropControl(s))
 	if len(runes) <= limit {
@@ -467,14 +469,17 @@ func readTrivyReport(path string, limit int64) ([]rank.Finding, error) {
 // it, into findings sorted by severity, critical first, then id, with
 // titles cleaned as advisoryTitle cleans them. It adds each finding's
 // advisory to advisories in that order, unless the table already holds
-// one for its id.
-func pipFindingsOf(root string, set map[string]rank.Finding, advisories map[string]Advisory) []PipFinding {
+// one for its id, and passes logDropped each finding it adds.
+func pipFindingsOf(root string, set map[string]rank.Finding, advisories map[string]Advisory, logDropped func(rank.Finding)) []PipFinding {
 	sorted := slices.SortedFunc(maps.Values(set), func(a, b rank.Finding) int {
 		return cmp.Or(cmp.Compare(a.Severity, b.Severity), strings.Compare(a.ID, b.ID))
 	})
 	findings := make([]PipFinding, len(sorted))
 	for i, f := range sorted {
 		findings[i] = PipFinding{ID: f.ID, Severity: severityText(f.Severity), FixedVersions: fixedVersions(f.FixedVersion), Title: advisoryTitle(root, f.Title)}
+		if _, ok := advisories[f.ID]; !ok {
+			logDropped(f)
+		}
 		addAdvisory(advisories, root, f)
 	}
 	return findings

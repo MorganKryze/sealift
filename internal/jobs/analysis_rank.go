@@ -126,7 +126,7 @@ func (r *run) setAdvisories(index rank.Index) {
 // logDropped logs the kinds of character the cleaning drops from f's
 // title and description, never the text: an id whose wording carries an
 // escape or a bidi control is worth a look in the database.
-func (r *run) logDropped(f rank.Finding) {
+func (r *stepLog) logDropped(f rank.Finding) {
 	if !rank.ValidID(f.ID) {
 		return
 	}

@@ -1112,7 +1112,7 @@ func TestPipFindingTitleIsCleanedAndBounded(t *testing.T) {
 	set := map[string]rank.Finding{"CVE-2024-56326": {ID: "CVE-2024-56326", Severity: rank.High, Title: title}}
 	advisories := map[string]Advisory{}
 
-	findings := pipFindingsOf(root, set, advisories)
+	findings := pipFindingsOf(root, set, advisories, func(rank.Finding) {})
 
 	if len(findings) != 1 {
 		t.Fatalf("findings = %+v, want one", findings)
@@ -1161,5 +1161,40 @@ func TestPipAnalysisStoresAdvisoryTextWithDataPathsRelative(t *testing.T) {
 	}
 	if bytes.Contains(raw, []byte(st.Root())) || bytes.Contains(raw, []byte("secret")) {
 		t.Errorf("pip-result.json = %s, want neither the data directory nor the password", raw)
+	}
+}
+
+func TestPipScanLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
+	a, _ := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2"))
+	vulns, err := json.Marshal([]map[string]string{
+		{"VulnerabilityID": "CVE-2026-00004", "PkgName": "Jinja2", "InstalledVersion": "3.1.2", "Severity": "HIGH", "Title": "secret\x1b[31m wording \u202Eevil", "Description": "a\x00b"},
+		{"VulnerabilityID": "CVE-2026-00005", "PkgName": "Jinja2", "InstalledVersion": "3.1.2", "Severity": "LOW", "Title": "word\u2060joiner\tand tab"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Trivy = &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Target":"project.trivy.json.cdx.json","Class":"lang-pkgs","Type":"python-pkg","Vulnerabilities":` + string(vulns) + `}]}`}
+
+	var lines []string
+	emit := func(e Event) {
+		if e.Kind != "log" {
+			return
+		}
+		var d logData
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if strings.Contains(d.Line, "advisory text dropped") {
+			lines = append(lines, d.Line)
+		}
+	}
+	if err := a.Run(context.Background(), emit); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"CVE-2026-00004: advisory text dropped bidi, control characters"}
+	if !slices.Equal(lines, want) {
+		t.Errorf("log = %q, want %q", lines, want)
 	}
 }
