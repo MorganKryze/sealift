@@ -187,6 +187,47 @@ func TestPurgeIfIdleWaitsForAJobBeingQueued(t *testing.T) {
 	waitForTerminal(t, svc, project.ID, "analysis", info.ID)
 }
 
+// A purge that starts once an export has its directory, before the
+// service tracks it, waits for the export to be queued, then sees it.
+func TestPurgeIfIdleWaitsForAnExportBeingQueued(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	analysisID := writeDoneAnalysis(t, st, project)
+	release := holdWorker(t, svc)
+	writeCache(t, st)
+
+	type result struct {
+		purged bool
+		err    error
+	}
+	purge := make(chan result, 1)
+	svc.afterNewDir = func() {
+		go func() {
+			purged, err := svc.PurgeIfIdle()
+			purge <- result{purged, err}
+		}()
+		// Long enough for a purge that does not wait to finish.
+		select {
+		case r := <-purge:
+			purge <- r
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	info, err := svc.QueueExport(project.ID, analysisID, ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+	if err != nil {
+		t.Fatalf("QueueExport: %v", err)
+	}
+	r := <-purge
+	if r.err != nil {
+		t.Fatalf("PurgeIfIdle: %v", r.err)
+	}
+	if r.purged {
+		t.Error("the purge emptied the caches under an export being queued")
+	}
+	release()
+	waitForTerminal(t, svc, project.ID, "export", info.ID)
+}
+
 // Queueing and purging at once ends with the caches kept whenever the
 // purge saw the job, and gone only when it did not.
 func TestPurgeIfIdleRacingQueueAnalysis(t *testing.T) {

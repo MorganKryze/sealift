@@ -394,6 +394,9 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 // returns its queued state. A job the queue refuses gives its directory
 // back.
 func (s *Service) submitExport(job Job, projectID, analysisID string, pending *store.Pending) (store.ExportInfo, error) {
+	if s.afterNewDir != nil {
+		s.afterNewDir()
+	}
 	// Registered before the worker can start the job: tracking it after
 	// Submit returns races a job that has already finished, and the
 	// finalize hook would find nothing to finalize.

@@ -84,7 +84,7 @@ func TestPurgeCachesEmptiesUvCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	purged, err := s.PurgeIfIdle(noJob)
+	purged, err := s.PurgeIfIdleUnguarded(noJob)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestPurgeCachesEmptiesTheWheelCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	purged, err := s.PurgeIfIdle(noJob)
+	purged, err := s.PurgeIfIdleUnguarded(noJob)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestSweepEphemeral(t *testing.T) {
 	age(t, fresh.Dir, now, 10*time.Minute)
 	writeCaches(t, s)
 
-	if r := s.SweepEphemeral(time.Hour, now, hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(hasJob) }); r != (Sweep{Deleted: 1}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(hasJob) }); r != (Sweep{Deleted: 1}) {
 		t.Errorf("first sweep = %+v, want 1 deleted and no purge (a job is in flight)", r)
 	}
 	if _, err := os.Stat(old.Dir); !os.IsNotExist(err) {
@@ -160,7 +160,7 @@ func TestSweepEphemeral(t *testing.T) {
 	running[busy.ID] = false
 	age(t, busy.Dir, now, 2*time.Hour)
 	age(t, fresh.Dir, now, 2*time.Hour)
-	if r := s.SweepEphemeral(time.Hour, now, hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(hasJob) }); r != (Sweep{Deleted: 2, Purged: true}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(hasJob) }); r != (Sweep{Deleted: 2, Purged: true}) {
 		t.Errorf("second sweep = %+v, want 2 deleted and the caches purged", r)
 	}
 	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")); !os.IsNotExist(err) {
@@ -169,7 +169,7 @@ func TestSweepEphemeral(t *testing.T) {
 
 	// Nothing left to erase: the next sweep reports nothing, so the log
 	// stays quiet on an idle instance.
-	if r := s.SweepEphemeral(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(noJob) }); r != (Sweep{}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(noJob) }); r != (Sweep{}) {
 		t.Errorf("idle sweep = %+v, want nothing done", r)
 	}
 }
@@ -213,7 +213,7 @@ func TestSweepEphemeralErasesAProjectWithAStaleJobDirectory(t *testing.T) {
 	writeStaleJobDir(t, p, now)
 	writeCaches(t, s)
 
-	if r := s.SweepEphemeral(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(noJob) }); r != (Sweep{Deleted: 1, Purged: true}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(noJob) }); r != (Sweep{Deleted: 1, Purged: true}) {
 		t.Errorf("sweep = %+v, want the project deleted and the caches purged", r)
 	}
 	if _, err := os.Stat(p.Dir); !os.IsNotExist(err) {
@@ -240,7 +240,7 @@ func TestSweepEphemeralKeepsAProjectWithAJob(t *testing.T) {
 		deleted = true
 		return s.DeleteProjectUnguarded(id)
 	}
-	if r := s.SweepEphemeral(time.Hour, now, hasJob, deleteProject, func() (bool, error) { return s.PurgeIfIdle(hasJob) }); r != (Sweep{}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, hasJob, deleteProject, func() (bool, error) { return s.PurgeIfIdleUnguarded(hasJob) }); r != (Sweep{}) {
 		t.Errorf("sweep = %+v, want nothing deleted, purged or failed", r)
 	}
 	if deleted {
@@ -265,7 +265,7 @@ func TestPurgeIfIdleIgnoresAStaleJobDirectory(t *testing.T) {
 	writeStaleJobDir(t, p, time.Now())
 	writeCaches(t, s)
 
-	if purged, err := s.PurgeIfIdle(noJob); err != nil || !purged {
+	if purged, err := s.PurgeIfIdleUnguarded(noJob); err != nil || !purged {
 		t.Fatalf("PurgeIfIdle = %v, %v; want the caches emptied", purged, err)
 	}
 	if s.isPurgePending() {
@@ -287,7 +287,7 @@ func TestSweepEphemeralKeepsAProjectItsDeleteFindsBusy(t *testing.T) {
 	writeCaches(t, s)
 
 	busy := func(string) error { return ErrBusy }
-	if r := s.SweepEphemeral(time.Hour, now, noJob, busy, func() (bool, error) { return s.PurgeIfIdle(noJob) }); r != (Sweep{}) {
+	if r := s.SweepEphemeralUnguarded(time.Hour, now, noJob, busy, func() (bool, error) { return s.PurgeIfIdleUnguarded(noJob) }); r != (Sweep{}) {
 		t.Errorf("sweep = %+v, want nothing deleted, purged or failed", r)
 	}
 	if _, err := os.Stat(p.Dir); err != nil {
@@ -323,7 +323,7 @@ func TestSweepEphemeralSkipsAnUnreadableProject(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o770) })
 
-	r := s.SweepEphemeral(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(noJob) })
+	r := s.SweepEphemeralUnguarded(time.Hour, now, noJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(noJob) })
 	if r.Deleted != 1 || r.Failed != 1 {
 		t.Errorf("sweep = %+v, want 1 deleted and 1 failed", r)
 	}
@@ -346,19 +346,19 @@ func TestPurgeIfIdlePutsOffAPurgeWhileAJobRuns(t *testing.T) {
 	writeCaches(t, s)
 	tarball := filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")
 
-	if purged, err := s.PurgeIfIdle(hasJob); err != nil || purged {
+	if purged, err := s.PurgeIfIdleUnguarded(hasJob); err != nil || purged {
 		t.Fatalf("PurgeIfIdle with a job in flight = %v, %v; want false, nil", purged, err)
 	}
 	if _, err := os.Stat(tarball); err != nil {
 		t.Fatalf("the caches went while a job ran: %v", err)
 	}
 	// Still busy: the sweep keeps the caches.
-	if r := s.SweepEphemeral(time.Hour, time.Now(), hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(hasJob) }); r.Purged {
+	if r := s.SweepEphemeralUnguarded(time.Hour, time.Now(), hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(hasJob) }); r.Purged {
 		t.Errorf("sweep purged while a job ran")
 	}
 	running = false
 	// The project is fresh, so it stays; the put-off purge runs anyway.
-	if r := s.SweepEphemeral(time.Hour, time.Now(), hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdle(hasJob) }); !r.Purged || r.Deleted != 0 {
+	if r := s.SweepEphemeralUnguarded(time.Hour, time.Now(), hasJob, s.DeleteProjectUnguarded, func() (bool, error) { return s.PurgeIfIdleUnguarded(hasJob) }); !r.Purged || r.Deleted != 0 {
 		t.Errorf("sweep after the job = %+v, want the put-off purge and no deletion", r)
 	}
 	if _, err := os.Stat(tarball); !os.IsNotExist(err) {
@@ -399,7 +399,7 @@ func TestEphemeralPipProjectLeavesNoFile(t *testing.T) {
 	if err := s.DeleteProjectUnguarded(p.ID); err != nil {
 		t.Fatal(err)
 	}
-	if purged, err := s.PurgeIfIdle(noJob); err != nil || !purged {
+	if purged, err := s.PurgeIfIdleUnguarded(noJob); err != nil || !purged {
 		t.Fatalf("PurgeIfIdle = %v, %v; want the caches emptied", purged, err)
 	}
 

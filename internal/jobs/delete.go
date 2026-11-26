@@ -83,7 +83,7 @@ func (s *Service) PurgeIfIdle() (bool, error) {
 func (s *Service) purgeIfIdle(hasJob func(projectID string) bool) (bool, error) {
 	s.queueing.Lock()
 	defer s.queueing.Unlock()
-	return s.store.PurgeIfIdle(hasJob)
+	return s.store.PurgeIfIdleUnguarded(hasJob)
 }
 
 // SweepEphemeral runs one ephemeral sweep: it deletes every project with
@@ -91,5 +91,5 @@ func (s *Service) purgeIfIdle(hasJob func(projectID string) bool) (bool, error) 
 // through PurgeIfIdle when the store asks for it. The deletes take each
 // project's lock with queueing released, which keeps the lock order.
 func (s *Service) SweepEphemeral(idle time.Duration, now time.Time) store.Sweep {
-	return s.store.SweepEphemeral(idle, now, s.HasJob, s.DeleteProject, s.PurgeIfIdle)
+	return s.store.SweepEphemeralUnguarded(idle, now, s.HasJob, s.DeleteProject, s.PurgeIfIdle)
 }

@@ -103,11 +103,13 @@ func lastActivity(dir string) (time.Time, error) {
 	return newest, err
 }
 
-// PurgeIfIdle empties the caches when hasJob finds no project with a job
+// PurgeIfIdleUnguarded skips the job service's guard: a job queued
+// during the call can lose its caches. Callers outside tests go through
+// jobs.Service.PurgeIfIdle. It empties the caches when hasJob finds no project with a job
 // queued or running. Otherwise it records the purge as pending, for the
 // sweep to run once the instance is idle. It reports whether it emptied
 // anything.
-func (s *Store) PurgeIfIdle(hasJob func(projectID string) bool) (bool, error) {
+func (s *Store) PurgeIfIdleUnguarded(hasJob func(projectID string) bool) (bool, error) {
 	s.purgeMu.Lock()
 	defer s.purgeMu.Unlock()
 	busy, err := s.anyJob(hasJob)
@@ -146,7 +148,9 @@ type Sweep struct {
 	Failed  int
 }
 
-// SweepEphemeral deletes, through deleteProject, every project for which
+// SweepEphemeralUnguarded skips the job service's guard on its own:
+// callers outside tests go through jobs.Service.SweepEphemeral, which
+// passes its guarded delete and purge. It deletes, through deleteProject, every project for which
 // hasJob finds no job queued or running and whose newest file is older
 // than idle. deleteProject answers ErrBusy for a project whose job was
 // queued since the sweep looked, and that project stays. A project it
@@ -154,7 +158,7 @@ type Sweep struct {
 // stops the others. It then calls purgeIfIdle when no project remains or
 // a purge was put off. The job service passes its own PurgeIfIdle, which
 // holds off new jobs during the purge.
-func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, hasJob func(projectID string) bool, deleteProject func(id string) error, purgeIfIdle func() (bool, error)) Sweep {
+func (s *Store) SweepEphemeralUnguarded(idle time.Duration, now time.Time, hasJob func(projectID string) bool, deleteProject func(id string) error, purgeIfIdle func() (bool, error)) Sweep {
 	var r Sweep
 	root := filepath.Join(s.root, "projects")
 	projects, err := os.ReadDir(root)
