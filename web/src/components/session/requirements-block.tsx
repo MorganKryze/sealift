@@ -189,6 +189,9 @@ function FailedCheck({ check, onAddFiles, busy }: { check: RequirementsCheck; on
         <Evidence check={check} className="col-start-2 sm:col-start-auto" />
       </div>
       <p className="mt-1.5 pl-7 text-[13px] text-ink-2">{check.fix}</p>
+      {check.id === "exact" ? (
+        <UnpinnedLines shown={shown} total={check.offenders} />
+      ) : (
       <ul className="mt-2 pl-7">
         {shown.map((offender, i) => (
           <OffendingLine
@@ -199,6 +202,7 @@ function FailedCheck({ check, onAddFiles, busy }: { check: RequirementsCheck; on
           />
         ))}
       </ul>
+      )}
       {shown.length < check.offenders.length || onAddFiles ? (
         <div className="mt-3 ml-7 flex flex-wrap gap-2">
           {shown.length < check.offenders.length ? (
@@ -215,6 +219,33 @@ function FailedCheck({ check, onAddFiles, busy }: { check: RequirementsCheck; on
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+// Lines without an exact version are many in a set written by hand, so they read per file in the pins' grid:
+// the name and what stands in place of a version, each file headed by its count of lines.
+function UnpinnedLines({ shown, total }: { shown: RequirementsLine[]; total: RequirementsLine[] }) {
+  const files = [...new Set(shown.map((line) => line.file))]
+  return (
+    <div className="mt-2 pl-7">
+      {files.map((file) => (
+        <div key={file} className="mt-1 first:mt-0">
+          <p className="py-1 text-[13px] text-muted">
+            <span className="font-mono text-xs text-ink-2">{file}</span> {plural(total.filter((line) => line.file === file).length, "line", "lines")}
+          </p>
+          <ul aria-label={`Lines in ${file}`} className="grid grid-cols-1 gap-x-7 sm:grid-cols-3">
+            {shown
+              .filter((line) => line.file === file)
+              .map((line) => (
+                <li key={line.line} className="flex min-h-8 min-w-0 flex-wrap items-baseline justify-between gap-x-3 border-b border-warn-line/50 py-1.5 text-[13px]">
+                  <span className="min-w-0 text-ink [overflow-wrap:anywhere]">{line.name}</span>
+                  <span className="ml-auto min-w-0 text-right font-mono text-xs font-semibold text-warn [font-variant-ligatures:none] [overflow-wrap:anywhere]">{line.value}</span>
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
     </div>
   )
 }
