@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Severity orders vulnerability severities from most to least serious.
@@ -70,6 +71,8 @@ type Finding struct {
 	Severity     Severity
 	FixedVersion string // as Trivy reports it, possibly a list such as "4.19.2, 5.0.0-beta.3"
 	Title        string
+	Description  string    // as Trivy reports it; untrusted text from the vulnerability database
+	Published    time.Time // UTC; zero when the report gives no RFC 3339 date
 }
 
 // ReadTrivyJSON reads the vulnerabilities of a `trivy --format json` report.
@@ -84,6 +87,8 @@ func ReadTrivyJSON(r io.Reader) ([]Finding, error) {
 				FixedVersion     string
 				Severity         string
 				Title            string
+				Description      string
+				PublishedDate    string
 			}
 		}
 	}
@@ -103,10 +108,22 @@ func ReadTrivyJSON(r io.Reader) ([]Finding, error) {
 				Severity:     ParseSeverity(v.Severity),
 				FixedVersion: v.FixedVersion,
 				Title:        v.Title,
+				Description:  v.Description,
+				Published:    publishedDate(v.PublishedDate),
 			})
 		}
 	}
 	return findings, nil
+}
+
+// publishedDate parses Trivy's date in UTC. A missing or malformed date is
+// a fact the answer leaves out, never a reason to refuse the report.
+func publishedDate(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // Index looks findings up by "name@version".

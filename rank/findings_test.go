@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/trivy-report.json: `trivy sbom --format json` (Trivy 0.72.0) on
@@ -112,5 +113,41 @@ func TestSeverityMarshalText(t *testing.T) {
 	}
 	if _, err := Severity(99).MarshalText(); err == nil {
 		t.Error("MarshalText of an out-of-range severity: want an error, got nil")
+	}
+}
+
+func TestReadTrivyJSONKeepsDescriptionAndPublishedDate(t *testing.T) {
+	const body = `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+		{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+		 "Title": "a: one", "Description": "First line.\n\nSecond \u2060 part.", "PublishedDate": "2026-02-09T21:15:49.01Z"},
+		{"VulnerabilityID": "CVE-2", "PkgName": "b", "InstalledVersion": "2.0.0", "Severity": "LOW",
+		 "Title": "b: two", "PublishedDate": "not a date"},
+		{"VulnerabilityID": "CVE-3", "PkgName": "c", "InstalledVersion": "3.0.0", "Severity": "MEDIUM"}
+	]}]}`
+	findings, err := ReadTrivyJSON(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 3 {
+		t.Fatalf("got %d findings, want 3", len(findings))
+	}
+	first := findings[0]
+	if first.Description != "First line.\n\nSecond \u2060 part." {
+		t.Errorf("description = %q, want it byte for byte", first.Description)
+	}
+	want := time.Date(2026, 2, 9, 21, 15, 49, 10_000_000, time.UTC)
+	if !first.Published.Equal(want) || first.Published.Location() != time.UTC {
+		t.Errorf("published = %v, want %v in UTC", first.Published, want)
+	}
+	for _, f := range findings[1:] {
+		if !f.Published.IsZero() {
+			t.Errorf("%s: published = %v, want zero", f.ID, f.Published)
+		}
+		if f.Description != "" {
+			t.Errorf("%s: description = %q, want empty", f.ID, f.Description)
+		}
+	}
+	if findings[1].Title != "b: two" || findings[1].Severity != Low || findings[2].Severity != Medium {
+		t.Errorf("rest of the report misread: %+v", findings[1:])
 	}
 }
