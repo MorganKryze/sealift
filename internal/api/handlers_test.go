@@ -1093,18 +1093,68 @@ func TestDeleteProjectAnalysisExport(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	pending, err := h.Store.NewDir("analyses", project.Id)
-	if err != nil {
+	// A directory a crashed job left behind holds no live job.
+	if _, err := h.Store.NewDir("analyses", project.Id); err != nil {
 		t.Fatalf("NewDir: %v", err)
-	}
-	if status := deleteProject(); status != http.StatusConflict {
-		t.Fatalf("DELETE project during a job: status = %d, want 409", status)
-	}
-	if err := pending.Discard(); err != nil {
-		t.Fatalf("Discard: %v", err)
 	}
 	if status := deleteProject(); status != http.StatusNoContent {
 		t.Fatalf("DELETE project status = %d, want 204", status)
+	}
+	if _, err := h.Store.Project(project.Id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Project after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// holdJob keeps the queue's worker busy until release closes or the
+// queue stops.
+type holdJob struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (holdJob) Kind() string { return "hold" }
+
+func (j holdJob) Run(ctx context.Context, _ func(jobs.Event)) error {
+	close(j.started)
+	select {
+	case <-j.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func TestDeleteProjectAnswers409WhileItsAnalysisIsQueued(t *testing.T) {
+	q := jobs.NewQueue(nil)
+	h := newTestHandlers(t, q)
+	t.Cleanup(q.Close)
+	srv := httptest.NewServer(Routes(h, testStatic()))
+	t.Cleanup(srv.Close)
+
+	hold := holdJob{started: make(chan struct{}), release: make(chan struct{})}
+	if _, err := q.Submit(hold); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	<-hold.started
+	p, err := h.Store.CreateProject("demo", []byte(`{"name":"demo"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := h.Service.QueueAnalysis(p.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis: %v", err)
+	}
+
+	if code := deleteProject(t, srv.URL, p.ID); code != http.StatusConflict {
+		t.Fatalf("DELETE with a queued analysis = %d, want 409", code)
+	}
+	if _, err := h.Store.Project(p.ID); err != nil {
+		t.Fatalf("project after a refused delete: %v", err)
+	}
+
+	close(hold.release)
+	waitForTerminalState(t, h, p.ID, "analysis", info.ID)
+	if code := deleteProject(t, srv.URL, p.ID); code != http.StatusNoContent {
+		t.Fatalf("DELETE once the analysis ended = %d, want 204", code)
 	}
 }
 

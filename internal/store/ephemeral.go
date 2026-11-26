@@ -161,12 +161,14 @@ type Sweep struct {
 	Failed  int
 }
 
-// SweepEphemeral deletes every project with no job in flight whose newest
-// file is older than idle. A project it cannot read or delete is counted
-// and skipped, so one bad entry never stops the others. It then empties the
+// SweepEphemeral deletes, through deleteProject, every project with no job
+// in flight whose newest file is older than idle. deleteProject answers
+// ErrBusy for a project whose job was queued since the sweep looked, and
+// that project stays. A project it cannot read or delete is counted and
+// skipped, so one bad entry never stops the others. It then empties the
 // caches when the instance is idle and either no project remains or a
 // purge was put off.
-func (s *Store) SweepEphemeral(idle time.Duration, now time.Time) Sweep {
+func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, deleteProject func(id string) error) Sweep {
 	var r Sweep
 	root := filepath.Join(s.root, "projects")
 	projects, err := os.ReadDir(root)
@@ -195,8 +197,7 @@ func (s *Store) SweepEphemeral(idle time.Duration, now time.Time) Sweep {
 			remaining++
 			continue
 		}
-		// DeleteProject checks again for a job queued since.
-		switch err := s.DeleteProject(p.Name()); {
+		switch err := deleteProject(p.Name()); {
 		case err == nil:
 			r.Deleted++
 		case errors.Is(err, ErrNotFound):

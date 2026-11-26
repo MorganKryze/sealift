@@ -78,6 +78,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - pnpm resolves through `SEALIFT_NPM_REGISTRY`. It used to resolve through the public registry unless `NPM_CONFIG_REGISTRY` named the mirror too. `NPM_CONFIG_REGISTRY` no longer reaches pnpm: remove it from your deployment.
 - A request with a method an `/api` route does not serve, such as `DELETE /api/instance`, answers 405 with an `Allow` header naming the methods it serves. It used to answer 404. An unknown `/api` path answers 404 as Problem Details, in JSON like every other API error.
 - A failure cause, on screen and in the API, names a file in the data volume by its path inside the volume, such as `private/signing-key.pem`. Some causes used to carry the server's full path. The server log keeps the full error: it gets one warning per failed job, with the job's id and kind.
+- Deleting a project answers 409 only while one of its analyses or exports is queued or running. A working directory left by a stopped job used to answer 409 until the next restart. The delete now removes it with the rest. An analysis or export started during the delete is refused with 404: it could recreate part of the deleted project, or make the delete fail with 500.
 
 ### Security
 

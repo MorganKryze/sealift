@@ -347,7 +347,9 @@ func (s *Store) SetProjectTarget(id string, t Target) error {
 	return writeJSONFile(path, record, fileMode)
 }
 
-// DeleteProject removes a project directory and everything under it.
+// DeleteProject removes a project directory and everything under it. It
+// does not know whether a job still writes there: jobs.Service.DeleteProject
+// asks the queue first, and a directory a crashed job left goes too.
 func (s *Store) DeleteProject(id string) error {
 	if err := validID(id); err != nil {
 		return err
@@ -358,21 +360,6 @@ func (s *Store) DeleteProject(id string) error {
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: stat %s: %w", dir, err)
-	}
-	// A job holds its .tmp directory from the moment it queues until it
-	// commits. Two races stay open: a job queued right after this check,
-	// and the status a job writes just after its commit. A .tmp a crash
-	// left behind answers busy until the sweep at the next start clears it.
-	for _, kind := range []string{"analyses", "exports"} {
-		entries, err := os.ReadDir(filepath.Join(dir, kind))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("store: list %s of %s: %w", kind, id, err)
-		}
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".tmp") {
-				return ErrBusy
-			}
-		}
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("store: delete %s: %w", dir, err)
