@@ -154,7 +154,10 @@ function readOption(file: string, line: number, text: string, found: Found, incl
   const at: RequirementsLine = { file, line, text: clean(text) }
   const [option] = token.split("=", 1)
   if (option === "-e" || option === "--editable") {
-    found.offPyPI.push(at)
+    // The package's name when the line gives one (#egg=), else the target as written.
+    const target = token.includes("=") ? token.slice(token.indexOf("=") + 1) : fields.slice(1).join(" ")
+    const egg = /#egg=([A-Za-z0-9._-]+)/.exec(target)?.[1]
+    found.offPyPI.push({ ...at, name: clean(egg ?? target) || undefined, value: at.text })
     return
   }
   let kind: "-r" | "-c" | undefined

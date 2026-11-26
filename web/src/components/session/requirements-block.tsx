@@ -190,8 +190,13 @@ function FailedCheck({ check, onAddFiles, busy }: { check: RequirementsCheck; on
       </div>
       <p className="mt-1.5 pl-7 text-[13px] text-ink-2">{check.fix}</p>
       <ul className="mt-2 pl-7">
-        {shown.map((offender) => (
-          <OffendingLine key={`${offender.file}:${offender.line}`} offender={offender} />
+        {shown.map((offender, i) => (
+          <OffendingLine
+            key={`${offender.file}:${offender.line}`}
+            offender={offender}
+            // A package at two versions is named once: its second line reads under the first.
+            continued={check.id === "one-version" && i > 0 && shown[i - 1].name === offender.name}
+          />
         ))}
       </ul>
       {shown.length < check.offenders.length || onAddFiles ? (
@@ -216,12 +221,12 @@ function FailedCheck({ check, onAddFiles, busy }: { check: RequirementsCheck; on
 
 // The line as written, split where the check names a part: the name, then the part at fault in amber. A line
 // with no name to give, such as a URL or an editable install, reads whole.
-function OffendingLine({ offender }: { offender: RequirementsLine }) {
+function OffendingLine({ offender, continued = false }: { offender: RequirementsLine; continued?: boolean }) {
   return (
     <li className="grid min-h-8 min-w-0 grid-cols-1 items-baseline gap-x-4 gap-y-0.5 border-b border-warn-line/50 py-1.5 text-[13px] sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)_auto]">
       {offender.name !== undefined ? (
         <>
-          <span className={cn("min-w-0 text-ink [overflow-wrap:anywhere]", offender.name.startsWith("-") && "font-mono text-xs")}>{offender.name}</span>
+          <span className={cn("min-w-0 text-ink [overflow-wrap:anywhere]", offender.name.startsWith("-") && "font-mono text-xs")}>{continued ? null : offender.name}</span>
           <span className="min-w-0 font-mono text-xs font-semibold text-warn [font-variant-ligatures:none] [overflow-wrap:anywhere]">{offender.value}</span>
         </>
       ) : (

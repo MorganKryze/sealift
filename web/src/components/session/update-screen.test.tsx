@@ -525,11 +525,11 @@ describe("Update, the Check step for requirements files", () => {
     expect(exact).toHaveTextContent("1 of 3 not pinned with ==")
     expect(exact).toHaveTextContent("Pin the version you run, such as Django==4.2.16; pip freeze prints them.")
     expect(within(exact).getAllByRole("listitem").map((r) => r.textContent)).toEqual(["Django>=4.2,<5requirements.txt:2"])
-    expect(screen.getByRole("group", { name: "PyPI only" })).toHaveTextContent("-e git+https://github.com/acme/billing-sdk.git@v2.3.1#egg=billing-sdkrequirements.txt:4")
+    expect(screen.getByRole("group", { name: "PyPI only" })).toHaveTextContent("billing-sdk-e git+https://github.com/acme/billing-sdk.git@v2.3.1#egg=billing-sdkrequirements.txt:4")
     expect(screen.getByRole("group", { name: "Supported options" })).toHaveTextContent("--index-urlhttps://pypi.internal.example.com/simplerequirements.txt:1")
     expect(within(screen.getByRole("group", { name: "One version each" })).getAllByRole("listitem").map((r) => r.textContent)).toEqual([
       "requests2.32.3requirements.txt:3",
-      "requests2.31.0constraints.txt:1",
+      "2.31.0constraints.txt:1",
     ])
     const passing = screen.getByText("Included files").closest("li") as HTMLElement
     expect(passing).toHaveTextContent("Included filesNo file includes another")

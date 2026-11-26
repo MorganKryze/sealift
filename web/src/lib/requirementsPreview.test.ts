@@ -101,12 +101,12 @@ describe("parseRequirementsPreview", () => {
     expect(pypi.passed).toBe(false)
     expect(pypi.evidence).toBe("6 lines off PyPI")
     expect(pypi.offenders.map((o) => [o.line, o.name, o.value ?? o.text])).toEqual([
-      [1, undefined, "-e git+https://github.com/acme/billing-sdk.git@v2.3.1#egg=billing-sdk"],
+      [1, "billing-sdk", "-e git+https://github.com/acme/billing-sdk.git@v2.3.1#egg=billing-sdk"],
       [2, "internal-auth", "@ git+ssh://gitlab.example.com/platform/internal-auth.git@4f2a91c"],
       [3, undefined, "https://files.example.com/pkg-1.0.tar.gz"],
       [4, undefined, "git+https://github.com/acme/tool.git"],
       [5, undefined, "./libs/shared-models"],
-      [6, undefined, "--editable ../widgets"],
+      [6, "../widgets", "--editable ../widgets"],
     ])
     expect(check(preview, "options").passed).toBe(true)
     expect(check(preview, "exact").evidence).toBe("1 of 1 pinned with ==")
