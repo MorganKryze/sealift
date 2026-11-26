@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -691,5 +692,56 @@ func TestQueueCancelAfterEveryPackageEnded(t *testing.T) {
 	}
 	if p := a.Report.Packages[1]; p.Kind != importer.KindConflict || p.Reason != "Nexus holds other bytes" {
 		t.Errorf("the conflict became %+v", p)
+	}
+}
+
+// recordReadOnly makes the import's folder refuse new files, so every write
+// of its record fails while reads still work.
+func recordReadOnly(t *testing.T, s *Store, imp Import) func() {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("root writes through the mode")
+	}
+	dir := s.dir(imp.User, imp.ID)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() { _ = os.Chmod(dir, 0o700) }
+	t.Cleanup(restore)
+	return restore
+}
+
+// blockingHandler holds the logging of one message until release closes.
+type blockingHandler struct {
+	slog.Handler
+	msg     string
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (h blockingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == h.msg {
+		close(h.reached)
+		<-h.release
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func TestQueueCancelOfAnAttemptThatCouldNotStartAnswersEnded(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp := newImport(t, s, "alice")
+	recordReadOnly(t, s, imp)
+	h := blockingHandler{Handler: slog.NewTextHandler(io.Discard, nil), msg: "could not start an attempt", reached: make(chan struct{}), release: make(chan struct{})}
+	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+		t.Error("an attempt that could not start ran")
+		return completeReport(), nil
+	}, slog.New(h))
+	t.Cleanup(q.Close)
+	q.Submit(imp.User, imp.ID)
+	waitFor(t, h.reached, "the failed start")
+	_, err := s.Cancel(imp.User, imp.ID)
+	close(h.release)
+	if !errors.Is(err, ErrEnded) {
+		t.Errorf("err = %v, want ErrEnded", err)
 	}
 }

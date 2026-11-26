@@ -197,14 +197,22 @@ func (q *Queue) process(c *current) {
 			logf("could not end an attempt", err)
 		}
 	}
+	// An attempt that never reaches its run has ended for a cancel.
+	ended := func() {
+		q.mu.Lock()
+		c.returned = true
+		q.mu.Unlock()
+	}
 	dir, n, err := q.s.Begin(it.user, it.id)
 	if err != nil {
+		ended()
 		logf("could not start an attempt", err)
 		abandon("the import could not be started; see the service log")
 		return
 	}
 	imp, err := q.s.Get(it.user, it.id)
 	if err != nil {
+		ended()
 		logf("could not read an import to run", err)
 		abandon("the import could not be read; see the service log")
 		return
