@@ -122,7 +122,8 @@ export function CrossingFiles({ project, exported, downloadAllPrimary = false, o
       link.download = name
       link.click()
     }
-    onDownload?.()
+    // Done opens on a download of a file to carry: with none, nothing went out.
+    if (carry.length > 0) onDownload?.()
   }
 
   async function openReport(name: string) {

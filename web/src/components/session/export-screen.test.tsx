@@ -173,7 +173,6 @@ describe("a failed export", () => {
     expect(cause).toHaveTextContent("It stopped while reading the signing key.")
     expect(within(cause).getByRole("button", { name: "Retry" })).toBeInTheDocument()
     expect(apiFetch).not.toHaveBeenCalled()
-    await waitFor(() => expect(getAnalysisLog).toHaveBeenCalled())
   })
 
   it("says a registry that did not answer by its host", () => {
@@ -183,6 +182,23 @@ describe("a failed export", () => {
     expect(cause).toHaveTextContent("No answer from registry.npmjs.org")
     expect(cause).toHaveTextContent("It stopped while downloading and verifying each package.")
     expect(cause).not.toHaveTextContent("dial tcp")
+  })
+
+  it("gives an export's own cause, never the analysis' database words", () => {
+    const message = "jobs: write the package database index: no space left on device"
+    renderScreen(exportRecord({ state: "failed", files: undefined, failure: { step: "archive", message } as Export["failure"] }))
+    const cause = screen.getByRole("alert")
+    expect(cause).not.toHaveTextContent(/vulnerability database/i)
+    expect(cause).not.toHaveTextContent("package.json")
+    expect(cause).toHaveTextContent(message)
+  })
+
+  it("does not fold the analysis log under a failed export", async () => {
+    vi.mocked(getAnalysisLog).mockResolvedValue("resolve: lodash 4.17.21\n")
+    renderScreen(exportRecord({ state: "failed", files: undefined, failure: { step: "download", message: "registry unreachable" } as Export["failure"] }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(getAnalysisLog).not.toHaveBeenCalled()
+    expect(screen.queryByText("resolve: lodash 4.17.21")).not.toBeInTheDocument()
   })
 
   it("sends the same reasons on a retry", async () => {

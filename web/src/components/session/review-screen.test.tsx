@@ -255,6 +255,31 @@ describe("ReviewScreen", () => {
     expect(seal()).not.toHaveAttribute("aria-disabled")
   })
 
+  it("does not title Ready to seal when a reason is the only change", () => {
+    const alone = analysisOf("20261124T121500Z", [withoutFix("request", "2.88.2", [cve("CVE-2023-28155", "MEDIUM", "request@2.88.2", "")])])
+    renderReview(alone, { reasons: { "cve-without-fix:request": "Called once at deploy time against our own host" } })
+    expect(screen.queryByRole("heading", { level: 1, name: "Ready to seal" })).toBeNull()
+    expect(screen.getByRole("heading", { level: 1, name: "Nothing to seal" })).toBeInTheDocument()
+    expect(screen.getByText("Opens once a package changes version.")).toBeInTheDocument()
+    expect(seal()).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("keeps the severity explanation off Ready's package rows", () => {
+    // No reason is needed, so no reason row holds the severity's explanation and only Ready's head may.
+    const updatesOnly = analysisOf("20261124T131500Z", [
+      update("lodash", "4.17.20", "4.17.21", [cve("CVE-2021-23337", "HIGH", "lodash@4.17.20", "4.17.21")]),
+      unchanged("left-pad"),
+    ])
+    renderReview(updatesOnly)
+    expect(screen.getByRole("heading", { level: 1, name: "Ready to seal" })).toBeInTheDocument()
+    for (const group of [/^1 package updated/, /unchanged/]) {
+      const toggle = screen.queryByRole("button", { name: group })
+      if (toggle && toggle.getAttribute("aria-expanded") !== "true") fireEvent.click(toggle)
+    }
+    expect(terms("What a severity is")).toHaveLength(1)
+    for (const row of document.querySelectorAll("[data-group]")) expect(within(row as HTMLElement).queryByRole("button", { name: "What a severity is" })).toBeNull()
+  })
+
   it("names a hand-made selection's after figure as not checked together", () => {
     const ready = { ...oneMissing, result: { ...oneMissing.result!, after: [0, 1, 1, 0, 0] } } as Analysis
     renderReview(ready, { reasons: { "cve-without-fix:html-minifier": "build tool, never shipped" } })
