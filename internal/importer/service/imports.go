@@ -102,8 +102,8 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if err != nil {
 		return nil, err
 	}
-	// Every match is read, newest first: records made in one second have no
-	// reliable order, so a refused import must not hide an unfinished one.
+	// Every match is read, newest first, so a newer refused import does not
+	// hide an older unfinished one.
 	for _, imp := range existing {
 		// A replaced manifest or signature makes another import: a refusal for it must not block the objects now in MinIO.
 		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag || sigOf(imp).ETag != signature.ETag {

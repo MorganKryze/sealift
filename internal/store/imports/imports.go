@@ -3,8 +3,6 @@
 package imports
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +25,9 @@ const FormatVersion = 1
 const (
 	recordFile = "import.json"
 	workPrefix = "work-"
-	idAttempts = 5 // ids drawn before Create gives up on a collision
+	idAttempts = 5 // ids tried before Create gives up when another process takes them
+	idLayout   = "20060102T150405Z"
+	lastSuffix = 0xffffffff
 )
 
 // The three states of an attempt.
@@ -129,6 +129,14 @@ type Store struct {
 	root string
 	log  *slog.Logger
 	now  func() time.Time
+	// given holds, per user, the last id Create handed out, so a removed
+	// import's id never comes back while the clock moves forward.
+	given map[string]idMark
+}
+
+type idMark struct {
+	second string
+	suffix int64
 }
 
 // Open creates root (mode 0700) when it is missing.
@@ -143,7 +151,7 @@ func Open(root string, log *slog.Logger) (*Store, error) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		return nil, fmt.Errorf("imports: %w", err)
 	}
-	return &Store{root: root, log: log, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Store{root: root, log: log, now: func() time.Time { return time.Now().UTC() }, given: map[string]idMark{}}, nil
 }
 
 func (s *Store) clock() time.Time { return s.now().UTC().Truncate(time.Second) }
@@ -161,18 +169,19 @@ func (s *Store) Create(user string, archive, manifest Object, signature *Object,
 		return Import{}, err
 	}
 	now := s.clock()
+	second := now.Format(idLayout)
 	for range idAttempts {
-		var b [4]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return Import{}, fmt.Errorf("imports: %w", err)
+		id, suffix, err := s.nextID(user, second)
+		if err != nil {
+			return Import{}, err
 		}
-		id := now.Format("20060102T150405Z") + "-" + hex.EncodeToString(b[:])
 		if err := os.Mkdir(s.dir(user, id), 0o700); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				continue
 			}
 			return Import{}, fmt.Errorf("imports: %w", err)
 		}
+		s.given[user] = idMark{second, suffix}
 		imp := Import{
 			FormatVersion: FormatVersion, ID: id, User: user, CreatedAt: now,
 			Archive: archive, Manifest: manifest, Signature: signature, ExpectedSHA256: expectedSHA256,
@@ -184,7 +193,34 @@ func (s *Store) Create(user string, archive, manifest Object, signature *Object,
 		}
 		return normalize(imp), nil
 	}
-	return Import{}, errors.New("imports: could not draw a free id")
+	return Import{}, errors.New("imports: could not find a free id")
+}
+
+// nextID returns the id Create tries next for user in second, and its
+// suffix: one past the highest suffix of that second in the user's folder or
+// already given by this store, 00000000 for the first. Ids of sealift 0.7.0,
+// with a random suffix, keep their place: a new import counts past them.
+func (s *Store) nextID(user, second string) (string, int64, error) {
+	entries, err := os.ReadDir(filepath.Join(s.root, user))
+	if err != nil {
+		return "", 0, fmt.Errorf("imports: %w", err)
+	}
+	highest := int64(-1)
+	if m, ok := s.given[user]; ok && m.second == second {
+		highest = m.suffix
+	}
+	for _, e := range entries {
+		suffix, ok := strings.CutPrefix(e.Name(), second+"-")
+		if !ok || !ValidID(e.Name()) {
+			continue
+		}
+		n, _ := strconv.ParseInt(suffix, 16, 64) // ValidID admits 8 hex digits only
+		highest = max(highest, n)
+	}
+	if highest >= lastSuffix {
+		return "", 0, fmt.Errorf("imports: no id left for %s in %s", user, second)
+	}
+	return fmt.Sprintf("%s-%08x", second, highest+1), highest + 1, nil
 }
 
 // Get reads one import. Another user's id answers ErrNotFound like a missing one.
