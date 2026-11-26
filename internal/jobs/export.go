@@ -541,9 +541,10 @@ func (e *Export) stripAll(ctx context.Context, emit func(Event), downloaded []do
 // order of pkgs. Each keeps the name npm pack gives it, so an export with
 // no collision keeps its archive bytes. npm pack names @a/b and a-b alike:
 // when packages of one export share a name, each scoped one among them
-// takes a~b-1.0.0.tgz instead, whatever the order of pkgs. npm refuses ~
-// in new names; a legacy name holding one can still land on a renamed
-// file, and the export then fails naming both packages.
+// takes a~b-1.0.0.tgz instead, whatever the order of pkgs. A pair that
+// still shares a name after that, such as a legacy name holding ~ or two
+// names that split name and version at another hyphen, fails the export
+// naming both packages; no archive ships with a wrong file.
 func exportFileNames(pkgs []npm.LockPackage) ([]string, error) {
 	files := make([]string, len(pkgs))
 	taken := map[string]int{}
