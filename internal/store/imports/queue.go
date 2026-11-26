@@ -244,7 +244,7 @@ func (q *Queue) process(c *current) {
 	// every package stays what it says, even when a cancel or Close came last.
 	if rep.Outcome == importer.OutcomeIncomplete {
 		switch {
-		case cancelled:
+		case cancelled && cutShort(rep):
 			// A stop of the service may have cut a package after its upload
 			// reached Nexus, so the reasons name the cancel only without one.
 			cancelledReport(&rep, q.ctx.Err() == nil)
@@ -285,6 +285,20 @@ func (q *Queue) guarded(ctx context.Context, it queued, imp Import, dir string, 
 	}()
 	rep, remove = q.run(ctx, imp, dir, p)
 	return rep, remove, false
+}
+
+// cutShort reports whether a run stopped before it listed its packages or
+// left one interrupted; an incomplete report without either ended on its own.
+func cutShort(rep importer.Report) bool {
+	if len(rep.Packages) == 0 {
+		return true
+	}
+	for _, p := range rep.Packages {
+		if p.State == importer.Failed && p.Kind == importer.KindInterrupted {
+			return true
+		}
+	}
+	return false
 }
 
 // cancelledReport marks the report of a run a cancel cut short: with

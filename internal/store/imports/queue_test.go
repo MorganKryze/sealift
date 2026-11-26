@@ -650,3 +650,46 @@ func TestQueueKeepsEachUserToTheirOwnImport(t *testing.T) {
 		}
 	})
 }
+
+// waitStored waits for the latest attempt of imp to end, so the queue's
+// Close cannot be what ends it.
+func waitStored(t *testing.T, s *Store, imp Import) Import {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		got, err := s.Get(imp.User, imp.ID)
+		if err == nil && got.Attempts[len(got.Attempts)-1].Status == StatusEnded {
+			return got
+		}
+	}
+	t.Fatal("timed out waiting for the attempt to end")
+	return Import{}
+}
+
+func TestQueueCancelAfterEveryPackageEnded(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp := newImport(t, s, "alice")
+	started, inRun, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+	q := heldQueue(t, s, started, func(_ context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+		p.Listed(listedReport())
+		close(inRun)
+		<-release
+		pkgs := pendingResults()
+		pkgs[0].State = importer.Published
+		pkgs[1].State, pkgs[1].Kind, pkgs[1].Reason = importer.Failed, importer.KindConflict, "Nexus holds other bytes"
+		return importer.Report{Outcome: importer.OutcomeIncomplete, Reason: "one package failed", Packages: pkgs}, nil
+	})
+	q.Submit(imp.User, imp.ID)
+	waitFor(t, inRun, "the run")
+	if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	a := waitStored(t, s, imp).Attempts[0]
+	q.Close()
+	if a.Outcome != importer.OutcomeIncomplete || a.Report.Reason != "one package failed" {
+		t.Errorf("outcome %q reason %q, want the incomplete end the run reported", a.Outcome, a.Report.Reason)
+	}
+	if p := a.Report.Packages[1]; p.Kind != importer.KindConflict || p.Reason != "Nexus holds other bytes" {
+		t.Errorf("the conflict became %+v", p)
+	}
+}
