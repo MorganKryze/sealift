@@ -65,6 +65,9 @@ func NewPnpmCLI(cacheDir, registry string, asUser *Credential) *PnpmCLI {
 	return &PnpmCLI{cacheDir: cacheDir, registry: registry, asUser: asUser}
 }
 
+// Registry returns the npm registry c resolves through.
+func (c *PnpmCLI) Registry() string { return c.registry }
+
 // workspaceFile is the subset of pnpm-workspace.yaml that pins a
 // resolution to a target: the Node version engines checks run against, and
 // the platforms pnpm downloads optional dependencies for.

@@ -108,6 +108,9 @@ func run(addr, root string, log *slog.Logger) error {
 	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
 	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "cache", "pnpm"), toolsManager.NPMRegistry, asUser)
+	if onPnpmReady != nil {
+		onPnpmReady(pnpmRunner)
+	}
 	registry := newRegistryClient(toolsManager.NPMRegistry)
 
 	queue := jobs.NewQueue(log)
@@ -262,6 +265,10 @@ var onQueueReady func(*jobs.Queue)
 // up. Only a test in this package sets it, to read what the service hands
 // each analysis.
 var onServiceReady func(*jobs.Service)
+
+// onPnpmReady, when non-nil, is called with the pnpm runner run hands the
+// service. Only a test in this package sets it, to check its registry.
+var onPnpmReady func(*runner.PnpmCLI)
 
 // onRegistryReady, when non-nil, is called with the npm client run hands
 // the service. Only a test in this package sets it, to check its timeout.
