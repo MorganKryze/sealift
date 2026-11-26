@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -471,6 +472,123 @@ func TestServiceFinalizesEvenWhenASubscriberNeverReadsAndEventsOverflow(t *testi
 	if status.State != string(store.Done) {
 		t.Errorf("status.json state = %q, want %q (the queue's own outcome, Run returned nil)", status.State, store.Done)
 	}
+}
+
+// TestServiceStopsTrackingAJobOnlyOnceItsRecordIsFinal polls LiveState
+// with nothing else to wake it, as GetAnalysis and GetExport do before
+// they read the store. The first untracked answer must find the job's
+// directory committed with the queue's outcome: a job untracked before
+// its commit or its reconcile would read as missing, or with a stale
+// state, right after it ends. That window lasts a few file operations, so
+// each case runs its job several times.
+func TestServiceStopsTrackingAJobOnlyOnceItsRecordIsFinal(t *testing.T) {
+	const rounds = 20
+	cases := []struct {
+		name string
+		kind string
+		run  func(pending *store.Pending) error
+		want store.State
+	}{
+		{
+			name: "analysis that committed itself with a stale state",
+			kind: "analysis",
+			run: func(pending *store.Pending) error {
+				body := []byte(`{"state":"cancelled","step":"resolve"}`)
+				if err := os.WriteFile(filepath.Join(pending.Path(), "status.json"), body, 0o664); err != nil {
+					return err
+				}
+				return os.Rename(pending.Path(), pending.Final())
+			},
+			want: store.Done,
+		},
+		{
+			name: "analysis that failed before it began",
+			kind: "analysis",
+			run:  func(*store.Pending) error { return errors.New("jobs: open log.txt: permission denied") },
+			want: store.Failed,
+		},
+		{
+			name: "export that left its files for the finalizer",
+			kind: "export",
+			run: func(pending *store.Pending) error {
+				return os.WriteFile(filepath.Join(pending.Path(), "packages_npm.tar.gz"), []byte("archive"), 0o664)
+			},
+			want: store.Done,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			project := mustCreateProject(t, st)
+			for round := range rounds {
+				pending := submitHeld(t, svc, st, project, tc.kind, tc.run)
+				hang := time.Now().Add(jobHangLimit)
+				for {
+					if _, _, tracked := svc.LiveState(project.ID, tc.kind, pending.ID()); !tracked {
+						break
+					}
+					if time.Now().After(hang) {
+						t.Fatalf("%s %s still tracked after %s", tc.kind, pending.ID(), jobHangLimit)
+					}
+					runtime.Gosched()
+				}
+				state, err := committedState(st, tc.kind, project.ID, pending.ID())
+				if err != nil {
+					t.Fatalf("round %d: %s %s untracked before its directory was committed: %v", round, tc.kind, pending.ID(), err)
+				}
+				if state != tc.want {
+					t.Fatalf("round %d: %s %s untracked while its record said %s, want %s", round, tc.kind, pending.ID(), state, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// submitHeld reserves a directory for a job of kind, seeded as
+// QueueAnalysis seeds an analysis, and submits a job that runs run on it.
+// The job waits until the test has seen it tracked, so the test's polling
+// is already under way when it ends.
+func submitHeld(t *testing.T, svc *Service, st *store.Store, project store.Project, kind string, run func(*store.Pending) error) *store.Pending {
+	t.Helper()
+	dirKind := "exports"
+	if kind == "analysis" {
+		dirKind = "analyses"
+	}
+	pending, err := st.NewDir(dirKind, project.ID)
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if kind == "analysis" {
+		createdAt, _ := store.JobCreatedAt(pending.ID())
+		if err := svc.seedPending(pending, createdAt, project); err != nil {
+			t.Fatalf("seedPending: %v", err)
+		}
+	}
+	release := make(chan struct{})
+	job := &fakeJob{kind: kind, run: func(context.Context, func(Event)) error {
+		<-release
+		return run(pending)
+	}}
+	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+		svc.track(queueID, kind, project.ID, "", pending)
+	}); err != nil {
+		t.Fatalf("Submit(%s): %v", kind, err)
+	}
+	if _, _, tracked := svc.LiveState(project.ID, kind, pending.ID()); !tracked {
+		t.Fatalf("%s %s untracked before it ran", kind, pending.ID())
+	}
+	close(release)
+	return pending
+}
+
+// committedState reads the state of the committed analysis or export id.
+func committedState(st *store.Store, kind, projectID, id string) (store.State, error) {
+	if kind == "analysis" {
+		info, err := st.AnalysisInfo(projectID, id)
+		return info.State, err
+	}
+	info, err := st.ExportInfo(projectID, id)
+	return info.State, err
 }
 
 // TestSubscribeCarriesTheStoreIDIncludingOnTheEndEvent proves Subscribe
