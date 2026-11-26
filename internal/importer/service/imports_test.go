@@ -873,7 +873,7 @@ func TestImportReportKindsReachTheAPI(t *testing.T) {
 		kind    ReportPackageKind
 	}{
 		"complete":    {0, true, ""},
-		"cut archive": {len(good.archive) / 2, false, Source},
+		"cut archive": {len(good.archive) / 2, false, ReportPackageKindSource},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newImportRig(t, rigOptions{})

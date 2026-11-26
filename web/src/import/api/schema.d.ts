@@ -148,6 +148,56 @@ export interface components {
             /** @description Why the archive cannot be imported; absent when it can */
             reason?: string;
             latestImport?: components["schemas"]["LatestImport"];
+            crossing?: components["schemas"]["Crossing"];
+            /**
+             * @description What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+             * @enum {string}
+             */
+            signature?: "verified" | "unsigned" | "unknown-key" | "mismatch" | "unreadable" | "not-checked";
+            /** @description The key sha256 that manifest.json.sig names, on an unknown-key archive only, and only when it is 64 lowercase hex digits. It is never trusted. Absent from an archive listed by sealift 0.7.0 or earlier. */
+            signerKeySha256?: string;
+            /**
+             * Format: int64
+             * @description The archive's size as its signed manifest states it, once the signature verifies. Absent otherwise, and from an archive listed by sealift 0.7.0 or earlier.
+             */
+            declaredSize?: number;
+            /** @description The archive, manifest.json and manifest.json.sig of the archive's folder as MinIO lists them, in that order, each when present. Absent from an archive listed by sealift 0.7.0 or earlier. */
+            files?: components["schemas"]["ArchiveFile"][];
+        };
+        /** @description A file of an archive's folder as MinIO lists it */
+        ArchiveFile: {
+            /** @description The file's name in its folder */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When MinIO received the file
+             */
+            modified: string;
+        };
+        /** @description The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before. */
+        Crossing: {
+            /** @description The project's name the manifest's review signs. Absent when the manifest carries no review or no readable name, as a manifest of sealift 0.7.0 or earlier. */
+            project?: string;
+            /** @description The manifest's createdAt, an RFC 3339 time */
+            sealedAt: string;
+            /** @description How many packages the manifest lists */
+            packages: number;
+            review?: components["schemas"]["CrossingReview"];
+        };
+        /** @description The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review. */
+        CrossingReview: {
+            /** @description The packages the review updates, those of its major jumps included */
+            updated: number;
+            /** @description The known CVEs before the update, by severity, critical first */
+            cvesBefore: number[];
+            /** @description The known CVEs after the update, by severity; absent when they were not checked together */
+            cvesAfter?: number[];
+            /** @description The dependencies carried with a reason for the CVEs they keep */
+            carried: number;
+            /** @description The packages its major jumps move */
+            jumps: number;
         };
         /**
          * @description The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
@@ -229,6 +279,8 @@ export interface components {
             archiveChecked?: boolean;
             /** @description The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier. */
             publicKeySha256?: string;
+            /** @description The crossing the signed manifest names, set once the signature verifies. Absent before, and from a report written by sealift 0.7.0 or earlier. */
+            crossing?: components["schemas"]["Crossing"];
         };
         ReportArchive: {
             file: string;

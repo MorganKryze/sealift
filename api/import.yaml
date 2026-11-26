@@ -274,11 +274,125 @@ components:
           description: Why the archive cannot be imported; absent when it can
         latestImport:
           $ref: "#/components/schemas/LatestImport"
+        crossing:
+          $ref: "#/components/schemas/Crossing"
+        signature:
+          type: string
+          enum:
+            - verified
+            - unsigned
+            - unknown-key
+            - mismatch
+            - unreadable
+            - not-checked
+          description: >
+            What the list found when it checked the manifest's signature
+            against the trusted key: verified, unsigned (no manifest.json.sig
+            in the folder), unknown-key (manifest.json.sig names another key),
+            mismatch (the signature does not match the manifest), unreadable
+            (manifest.json or manifest.json.sig cannot be read), or
+            not-checked (this list read neither, as when its read bound is
+            reached; a later list checks it). Absent from an archive listed by
+            sealift 0.7.0 or earlier.
+        signerKeySha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >
+            The key sha256 that manifest.json.sig names, on an unknown-key
+            archive only, and only when it is 64 lowercase hex digits. It is
+            never trusted. Absent from an archive listed by sealift 0.7.0 or
+            earlier.
+        declaredSize:
+          type: integer
+          format: int64
+          description: >
+            The archive's size as its signed manifest states it, once the
+            signature verifies. Absent otherwise, and from an archive listed
+            by sealift 0.7.0 or earlier.
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArchiveFile"
+          description: >
+            The archive, manifest.json and manifest.json.sig of the archive's
+            folder as MinIO lists them, in that order, each when present.
+            Absent from an archive listed by sealift 0.7.0 or earlier.
       required:
         - key
         - size
         - modified
         - importable
+    ArchiveFile:
+      type: object
+      description: A file of an archive's folder as MinIO lists it
+      properties:
+        name:
+          type: string
+          description: The file's name in its folder
+        size:
+          type: integer
+          format: int64
+        modified:
+          type: string
+          format: date-time
+          description: When MinIO received the file
+      required:
+        - name
+        - size
+        - modified
+    Crossing:
+      type: object
+      description: >
+        The crossing an archive comes from, read from its manifest once the
+        signature verifies with the trusted key, and never before.
+      properties:
+        project:
+          type: string
+          description: >
+            The project's name the manifest's review signs. Absent when the
+            manifest carries no review or no readable name, as a manifest of
+            sealift 0.7.0 or earlier.
+        sealedAt:
+          type: string
+          description: The manifest's createdAt, an RFC 3339 time
+        packages:
+          type: integer
+          description: How many packages the manifest lists
+        review:
+          $ref: "#/components/schemas/CrossingReview"
+      required:
+        - sealedAt
+        - packages
+    CrossingReview:
+      type: object
+      description: >
+        The figures of the review the signed manifest carries. Absent on an
+        archive's crossing, and from a report whose manifest has no review.
+      properties:
+        updated:
+          type: integer
+          description: The packages the review updates, those of its major jumps included
+        cvesBefore:
+          type: array
+          items:
+            type: integer
+          description: The known CVEs before the update, by severity, critical first
+        cvesAfter:
+          type: array
+          items:
+            type: integer
+          description: The known CVEs after the update, by severity; absent when they were not checked together
+        carried:
+          type: integer
+          description: The dependencies carried with a reason for the CVEs they keep
+        jumps:
+          type: integer
+          description: The packages its major jumps move
+      required:
+        - updated
+        - cvesBefore
+        - carried
+        - jumps
     Ecosystem:
       type: string
       enum:
@@ -453,6 +567,12 @@ components:
           type: string
           pattern: "^[0-9a-f]{64}$"
           description: The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
+        crossing:
+          $ref: "#/components/schemas/Crossing"
+          description: >
+            The crossing the signed manifest names, set once the signature
+            verifies. Absent before, and from a report written by sealift
+            0.7.0 or earlier.
       required:
         - outcome
         - reason

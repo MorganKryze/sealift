@@ -16,6 +16,36 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ArchiveSignature.
+const (
+	ArchiveSignatureMismatch   ArchiveSignature = "mismatch"
+	ArchiveSignatureNotChecked ArchiveSignature = "not-checked"
+	ArchiveSignatureUnknownKey ArchiveSignature = "unknown-key"
+	ArchiveSignatureUnreadable ArchiveSignature = "unreadable"
+	ArchiveSignatureUnsigned   ArchiveSignature = "unsigned"
+	ArchiveSignatureVerified   ArchiveSignature = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ArchiveSignature enum.
+func (e ArchiveSignature) Valid() bool {
+	switch e {
+	case ArchiveSignatureMismatch:
+		return true
+	case ArchiveSignatureNotChecked:
+		return true
+	case ArchiveSignatureUnknownKey:
+		return true
+	case ArchiveSignatureUnreadable:
+		return true
+	case ArchiveSignatureUnsigned:
+		return true
+	case ArchiveSignatureVerified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Ecosystem.
 const (
 	Npm Ecosystem = "npm"
@@ -36,28 +66,28 @@ func (e Ecosystem) Valid() bool {
 
 // Defines values for ReportPackageKind.
 const (
-	Conflict    ReportPackageKind = "conflict"
-	Interrupted ReportPackageKind = "interrupted"
-	Local       ReportPackageKind = "local"
-	Mismatch    ReportPackageKind = "mismatch"
-	Nexus       ReportPackageKind = "nexus"
-	Source      ReportPackageKind = "source"
+	ReportPackageKindConflict    ReportPackageKind = "conflict"
+	ReportPackageKindInterrupted ReportPackageKind = "interrupted"
+	ReportPackageKindLocal       ReportPackageKind = "local"
+	ReportPackageKindMismatch    ReportPackageKind = "mismatch"
+	ReportPackageKindNexus       ReportPackageKind = "nexus"
+	ReportPackageKindSource      ReportPackageKind = "source"
 )
 
 // Valid indicates whether the value is a known member of the ReportPackageKind enum.
 func (e ReportPackageKind) Valid() bool {
 	switch e {
-	case Conflict:
+	case ReportPackageKindConflict:
 		return true
-	case Interrupted:
+	case ReportPackageKindInterrupted:
 		return true
-	case Local:
+	case ReportPackageKindLocal:
 		return true
-	case Mismatch:
+	case ReportPackageKindMismatch:
 		return true
-	case Nexus:
+	case ReportPackageKindNexus:
 		return true
-	case Source:
+	case ReportPackageKindSource:
 		return true
 	default:
 		return false
@@ -66,9 +96,18 @@ func (e ReportPackageKind) Valid() bool {
 
 // Archive defines model for Archive.
 type Archive struct {
+	// Crossing The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before.
+	Crossing *Crossing `json:"crossing,omitempty"`
+
+	// DeclaredSize The archive's size as its signed manifest states it, once the signature verifies. Absent otherwise, and from an archive listed by sealift 0.7.0 or earlier.
+	DeclaredSize *int64 `json:"declaredSize,omitempty"`
+
 	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
-	Ecosystem  *Ecosystem `json:"ecosystem,omitempty"`
-	Importable bool       `json:"importable"`
+	Ecosystem *Ecosystem `json:"ecosystem,omitempty"`
+
+	// Files The archive, manifest.json and manifest.json.sig of the archive's folder as MinIO lists them, in that order, each when present. Absent from an archive listed by sealift 0.7.0 or earlier.
+	Files      *[]ArchiveFile `json:"files,omitempty"`
+	Importable bool           `json:"importable"`
 
 	// Key The object key, under packages/npm/ or packages/pip/
 	Key string `json:"key"`
@@ -79,7 +118,26 @@ type Archive struct {
 
 	// Reason Why the archive cannot be imported; absent when it can
 	Reason *string `json:"reason,omitempty"`
-	Size   int64   `json:"size"`
+
+	// Signature What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+	Signature *ArchiveSignature `json:"signature,omitempty"`
+
+	// SignerKeySha256 The key sha256 that manifest.json.sig names, on an unknown-key archive only, and only when it is 64 lowercase hex digits. It is never trusted. Absent from an archive listed by sealift 0.7.0 or earlier.
+	SignerKeySha256 *string `json:"signerKeySha256,omitempty"`
+	Size            int64   `json:"size"`
+}
+
+// ArchiveSignature What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+type ArchiveSignature string
+
+// ArchiveFile A file of an archive's folder as MinIO lists it
+type ArchiveFile struct {
+	// Modified When MinIO received the file
+	Modified time.Time `json:"modified"`
+
+	// Name The file's name in its folder
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // ArchiveList defines model for ArchiveList.
@@ -127,6 +185,39 @@ type Attempt struct {
 
 	// Status queued, running or ended
 	Status string `json:"status"`
+}
+
+// Crossing The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before.
+type Crossing struct {
+	// Packages How many packages the manifest lists
+	Packages int `json:"packages"`
+
+	// Project The project's name the manifest's review signs. Absent when the manifest carries no review or no readable name, as a manifest of sealift 0.7.0 or earlier.
+	Project *string `json:"project,omitempty"`
+
+	// Review The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review.
+	Review *CrossingReview `json:"review,omitempty"`
+
+	// SealedAt The manifest's createdAt, an RFC 3339 time
+	SealedAt string `json:"sealedAt"`
+}
+
+// CrossingReview The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review.
+type CrossingReview struct {
+	// Carried The dependencies carried with a reason for the CVEs they keep
+	Carried int `json:"carried"`
+
+	// CvesAfter The known CVEs after the update, by severity; absent when they were not checked together
+	CvesAfter *[]int `json:"cvesAfter,omitempty"`
+
+	// CvesBefore The known CVEs before the update, by severity, critical first
+	CvesBefore []int `json:"cvesBefore"`
+
+	// Jumps The packages its major jumps move
+	Jumps int `json:"jumps"`
+
+	// Updated The packages the review updates, those of its major jumps included
+	Updated int `json:"updated"`
 }
 
 // Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
@@ -232,6 +323,9 @@ type Report struct {
 	// ArchiveChecked True when the archive passed its checks against the manifest and the signature key, false when the attempt ended or stands before they passed. Absent in a report written by sealift 0.4.0 or earlier.
 	ArchiveChecked *bool        `json:"archiveChecked,omitempty"`
 	Counts         ReportCounts `json:"counts"`
+
+	// Crossing The crossing the signed manifest names, set once the signature verifies. Absent before, and from a report written by sealift 0.7.0 or earlier.
+	Crossing *Crossing `json:"crossing,omitempty"`
 
 	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
 	Ecosystem     *Ecosystem      `json:"ecosystem,omitempty"`
