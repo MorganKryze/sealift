@@ -104,6 +104,25 @@ func TestAdvisoryTextDropsControlCredentialsAndDataPaths(t *testing.T) {
 	if got := advisorySummary(root, text); got != want {
 		t.Errorf("advisorySummary = %q, want %q", got, want)
 	}
+
+	// A character that the cleaning drops or folds must not hide a URL or
+	// a path from it.
+	key := filepath.Join("private", "signing-key.pem")
+	sep := string(filepath.Separator)
+	for _, c := range []struct{ text, want string }{
+		{"https:\u2060//user:secret@host.example/x", "https://host.example/x"},
+		{"https:\x00//user:secret@host.example/x", "https://host.example/x"},
+		{"https:/\u200B/user:secret@host.example/x", "https://host.example/x"},
+		{root + "\u2060" + sep + key, key},
+		{"see\u00A0" + filepath.Join(root, key), "see " + key},
+	} {
+		if got := advisoryTitle(root, c.text); got != c.want {
+			t.Errorf("advisoryTitle(%q) = %q, want %q", c.text, got, c.want)
+		}
+		if got := advisorySummary(root, c.text); got != c.want {
+			t.Errorf("advisorySummary(%q) = %q, want %q", c.text, got, c.want)
+		}
+	}
 }
 
 func TestAdvisoryTextKeepsMarkupAsPlainCharacters(t *testing.T) {

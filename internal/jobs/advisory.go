@@ -34,10 +34,14 @@ func dropControl(s string) string {
 	}, s)
 }
 
-// advisoryText cleans s as a failure cause is cleaned, drops its control
-// and format characters, and folds its whitespace to single spaces.
+// advisoryText drops s's control and format characters and folds its
+// whitespace to single spaces, then cleans it as a failure cause is
+// cleaned. The cause cleaning runs last because a format character inside
+// "://", or a no-break space before a path, hides a URL's credentials or
+// a data-directory path from it, and the first two steps make them whole
+// again.
 func advisoryText(root, s string) string {
-	return strings.Join(strings.Fields(dropControl(causeText(root, s))), " ")
+	return causeText(root, strings.Join(strings.Fields(dropControl(s)), " "))
 }
 
 // advisoryTitle is Trivy's title, cleaned and cut at a word to
