@@ -54,11 +54,11 @@ describe("parseRequirementsPreview", () => {
 
   it("counts lines not pinned with == and lists each as written with file and line", () => {
     const preview = parseRequirementsPreview([
-      { name: "requirements.txt", text: lines("--index-url https://pypi.internal.example.com/simple", "", "Django>=4.2,<5", "celery~=5.4.0", "numpy==2.1.*", "torch==2.5.1+cpu", "attrs===24.2.0", "idna==3.10") },
+      { name: "requirements.txt", text: lines("--index-url https://pypi.internal.example.com/simple", "", "Django>=4.2,<5", "celery~=5.4.0", "numpy==2.1.*", "torch==2.5.1+cpu", "attrs===24.2.0", "idna==3.10", "flask>=3.0") },
     ])
     const exact = check(preview, "exact")
     expect(exact.passed).toBe(false)
-    expect(exact.evidence).toBe("5 of 6 not pinned with ==")
+    expect(exact.evidence).toBe("6 of 7 not pinned with ==")
     expect(exact.fix).toBe("Pin the version you run, such as Django==4.2.16; pip freeze prints them.")
     expect(exact.offenders).toEqual([
       { file: "requirements.txt", line: 3, text: "Django>=4.2,<5", name: "Django", value: ">=4.2,<5" },
@@ -66,6 +66,7 @@ describe("parseRequirementsPreview", () => {
       { file: "requirements.txt", line: 5, text: "numpy==2.1.*", name: "numpy", value: "==2.1.*" },
       { file: "requirements.txt", line: 6, text: "torch==2.5.1+cpu", name: "torch", value: "==2.5.1+cpu" },
       { file: "requirements.txt", line: 7, text: "attrs===24.2.0", name: "attrs", value: "===24.2.0" },
+      { file: "requirements.txt", line: 9, text: "flask>=3.0", name: "flask", value: ">=3.0" },
     ])
   })
 
