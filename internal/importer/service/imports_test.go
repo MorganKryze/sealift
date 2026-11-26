@@ -1499,6 +1499,33 @@ func TestCancelImport(t *testing.T) {
 		}
 	})
 
+	t.Run("logs a refused cancel by its kind", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := r.endedImport(t, importer.OutcomeComplete)
+		if rec := r.cancel("t", id); rec.Code != http.StatusConflict {
+			t.Fatalf("ended: status %d", rec.Code)
+		}
+		if rec := r.cancel("t", "20261106T090000Z-ffffffff"); rec.Code != http.StatusNotFound {
+			t.Fatalf("unknown: status %d", rec.Code)
+		}
+		if rec := r.cancel("t", "not-an-id"); rec.Code != http.StatusNotFound {
+			t.Fatalf("malformed: status %d", rec.Code)
+		}
+		logs := r.logs.String()
+		for _, want := range []string{
+			`"msg":"refused a cancel","user":"alice","id":"` + id + `","check":"ended"`,
+			`"msg":"refused a cancel","user":"alice","id":"20261106T090000Z-ffffffff","check":"not found"`,
+		} {
+			if !strings.Contains(logs, want) {
+				t.Errorf("the log lacks %s:\n%s", want, logs)
+			}
+		}
+		if strings.Contains(logs, "not-an-id") {
+			t.Error("the log repeats an id that is not one")
+		}
+	})
+
 	t.Run("answers 409 to a cancel of an ended import", func(t *testing.T) {
 		r := newImportRig(t, rigOptions{})
 		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))

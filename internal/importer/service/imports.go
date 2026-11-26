@@ -359,6 +359,15 @@ func (h *Handlers) RetryImport(ctx context.Context, req RetryImportRequestObject
 // one at once, a running one before its next package.
 func (h *Handlers) CancelImport(ctx context.Context, req CancelImportRequestObject) (CancelImportResponseObject, error) {
 	user := userFrom(ctx)
+	// logRefused names the kind of a refusal; an id of the wrong shape stays
+	// out of the log, since it comes from the client unchecked.
+	logRefused := func(check string) {
+		args := []any{"user", user}
+		if imports.ValidID(req.ImportId) {
+			args = append(args, "id", req.ImportId)
+		}
+		h.log.Info("refused a cancel", append(args, "check", check)...)
+	}
 	refuse := func(detail, id string) (CancelImportResponseObject, error) {
 		return CancelImport409ApplicationProblemPlusJSONResponse(ImportConflict{
 			Type: ptr("about:blank"), Title: "Cannot cancel this import", Status: 409, Detail: &detail, ImportId: &id,
@@ -372,10 +381,13 @@ func (h *Handlers) CancelImport(ctx context.Context, req CancelImportRequestObje
 	imp, err := h.store.Cancel(user, req.ImportId)
 	switch {
 	case errors.Is(err, imports.ErrNotFound):
+		logRefused("not found")
 		return CancelImportdefaultApplicationProblemPlusJSONResponse{StatusCode: 404, Body: newProblem(404, "Not found", "no such import")}, nil
 	case errors.Is(err, imports.ErrEnded):
+		logRefused("ended")
 		return refuse("the latest attempt of this import has ended", req.ImportId)
 	case errors.Is(err, imports.ErrBusy):
+		logRefused("running")
 		return refuse("the running attempt of this import cannot be stopped here", req.ImportId)
 	case err != nil:
 		return nil, err
