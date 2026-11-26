@@ -37,9 +37,8 @@ describe("ReadySummary", () => {
     expect(delta(high).querySelector(".lucide-arrow-up")).not.toBeNull()
 
     const medium = severity("medium")
-    expect(delta(medium)).toHaveTextContent(/^0$/)
-    expect(delta(medium)).toHaveClass("text-faint")
-    expect(delta(medium).querySelector("svg")).toBeNull()
+    // An unchanged count shows no delta: the arrow already says it.
+    expect(delta(medium)).toBeNull()
     expect(severity("low")).toHaveTextContent("0 to 0")
     // Unknown shows only when a count holds one, so the four columns add up to the total.
     expect(screen.queryByText("unknown", { selector: "[data-severity] *" })).toBeNull()

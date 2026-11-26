@@ -72,15 +72,11 @@ export function ReadySummary({ before, after, checkedTogether, directDependencie
   )
 }
 
-/** What the selection changes in a count: down green, up red, each with its arrow and sign; 0 faint. */
+/** What the selection changes in a count: down green, up red, each with its arrow and sign; nothing when it is unchanged. */
 function Delta({ before, after, className }: { before: number; after: number; className?: string }) {
   const change = after - before
   if (change === 0) {
-    return (
-      <span data-delta className={cn("inline-flex h-5.5 items-center self-start font-mono text-[12.5px] font-medium text-faint", className)}>
-        0
-      </span>
-    )
+    return null
   }
   const down = change < 0
   const Arrow = down ? ArrowDown : ArrowUp
