@@ -273,7 +273,7 @@ func recorded(imp imports.Import) []recordedObject {
 // its attempt so no record waits for a restart's sweep.
 func (h *Handlers) stopping(user, id string) problem {
 	if err := h.store.Abandon(user, id, "the service was stopping and did not run this attempt"); err != nil {
-		h.log.Error("could not end an attempt that will not run", "id", id, "error", cleanText(err.Error()))
+		h.log.Error("could not end an attempt that will not run", "user", user, "id", id, "error", cleanText(err.Error()))
 	}
 	return problem{status: 503, body: newProblem(503, "Service stopping", "the service is stopping and takes no new work")}
 }
@@ -390,7 +390,7 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 	}
 	work, err := os.MkdirTemp(dir, "run-")
 	if err != nil {
-		h.log.Error("could not make a working directory", "id", imp.ID, "error", cleanText(err.Error()))
+		h.log.Error("could not make a working directory", "user", imp.User, "id", imp.ID, "error", cleanText(err.Error()))
 		return h.stopped(imp, importer.OutcomeRefused, "could not check the archive: no working directory"), nil
 	}
 	defer os.RemoveAll(work)

@@ -32,7 +32,7 @@ func (h *Handlers) remove(ctx context.Context, bucket string, imp imports.Import
 			return kept(o.what + " is no longer in MinIO; nothing was removed")
 		case err != nil:
 			why := minioText(err)
-			h.log.Warn("could not check an object before removing it", "id", imp.ID, "error", why)
+			h.log.Warn("could not check an object before removing it", "user", imp.User, "id", imp.ID, "error", why)
 			return kept("could not check " + o.what + " before removing it; nothing was removed: " + why)
 		case got.ETag != o.obj.ETag:
 			return kept(o.what + " changed in MinIO after the import read it; nothing was removed")
@@ -40,19 +40,19 @@ func (h *Handlers) remove(ctx context.Context, bucket string, imp imports.Import
 	}
 	if err := h.objects.Delete(ctx, bucket, imp.Archive.Key); err != nil {
 		why := minioText(err)
-		h.log.Warn("could not remove an archive", "id", imp.ID, "error", why)
+		h.log.Warn("could not remove an archive", "user", imp.User, "id", imp.ID, "error", why)
 		return kept("could not remove the archive: " + why)
 	}
 	if err := h.objects.Delete(ctx, bucket, imp.Manifest.Key); err != nil {
 		why := minioText(err)
-		h.log.Warn("could not remove a manifest", "id", imp.ID, "error", why)
+		h.log.Warn("could not remove a manifest", "user", imp.User, "id", imp.ID, "error", why)
 		return &imports.Removal{Removed: true, Reason: cleanText("the archive was removed, but the manifest could not be and stays in the folder: " + why)}
 	}
 	// A record of sealift 0.4 holds no signature, and none is deleted for it.
 	if sig := sigOf(imp); sig.Key != "" {
 		if err := h.objects.Delete(ctx, bucket, sig.Key); err != nil {
 			why := minioText(err)
-			h.log.Warn("could not remove a signature", "id", imp.ID, "error", why)
+			h.log.Warn("could not remove a signature", "user", imp.User, "id", imp.ID, "error", why)
 			return &imports.Removal{Removed: true, Reason: cleanText("the archive and the manifest were removed, but " + path.Base(sig.Key) + " could not be and stays in the folder: " + why)}
 		}
 	}
