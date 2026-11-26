@@ -1,46 +1,45 @@
-import { useId, useRef, useState, type DragEvent, type ReactNode } from "react"
+import { FileDown, FileJson, FolderOpen } from "lucide-react"
+import { useId, useRef, useState, type DragEvent } from "react"
 
-import { Mark } from "@/components/brand/Mark"
 import { Button } from "@/components/ui/button"
-
 import { cn } from "@/lib/utils"
 
 interface DropZoneProps {
   onFile: (file: File) => void
-  onInvalidFile: (message: string) => void
-  /** Rules shown inside the zone, under the button. */
-  children?: ReactNode
+  /** A choice that is no package.json: the file's name, or null when several files came at once. */
+  onInvalidFile: (name: string | null) => void
 }
 
-const LABEL = "Drop package.json here, or browse"
+/** The one .json file of a choice or a drop, sent to `onFile`; anything else goes to `onInvalidFile`. */
+export function takeJsonFile(files: FileList | null, { onFile, onInvalidFile }: DropZoneProps) {
+  if (!files || files.length === 0) {
+    return
+  }
+  if (files.length > 1) {
+    onInvalidFile(null)
+    return
+  }
+  const file = files[0]
+  if (!file.name.toLowerCase().endsWith(".json")) {
+    onInvalidFile(file.name)
+    return
+  }
+  onFile(file)
+}
 
-export function DropZone({ onFile, onInvalidFile, children }: DropZoneProps) {
+/** Update's zone before a file: one line and one button. A file over it turns the dashed line solid. */
+export function DropZone({ onFile, onInvalidFile }: DropZoneProps) {
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
-  function handleFiles(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0) {
-      return
-    }
-    if (fileList.length > 1) {
-      onInvalidFile("Drop a single package.json file.")
-      return
-    }
-    const file = fileList[0]
-    if (!file.name.toLowerCase().endsWith(".json")) {
-      onInvalidFile(`${file.name} is not a .json file.`)
-      return
-    }
-    onFile(file)
-  }
-
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setIsDragging(false)
-    handleFiles(event.dataTransfer.files)
+    takeJsonFile(event.dataTransfer.files, { onFile, onInvalidFile })
   }
 
+  const Icon = isDragging ? FileDown : FileJson
   return (
     <div
       onClick={() => inputRef.current?.click()}
@@ -51,26 +50,31 @@ export function DropZone({ onFile, onInvalidFile, children }: DropZoneProps) {
       onDragLeave={() => setIsDragging(false)}
       onDrop={handleDrop}
       className={cn(
-        "flex w-full cursor-pointer flex-col items-center gap-3.5 rounded-2xl border-[1.5px] border-dashed border-accent/45 bg-card px-6 py-11 text-center transition-colors",
-        "hover:border-accent",
-        isDragging && "border-accent bg-accent/10",
+        "flex min-h-65 w-full cursor-pointer flex-col items-center justify-center gap-3.5 rounded-xl border border-dashed border-field bg-canvas px-6 py-10 text-center transition-colors duration-150",
+        isDragging && "border-solid border-ink",
       )}
     >
-      <Mark size={56} />
-      <h2 className="text-lg font-semibold tracking-tight text-ink">Drop package.json here</h2>
+      <span className="grid size-12 place-items-center rounded-xl border border-rule-2 bg-bg text-ink-2">
+        <Icon aria-hidden="true" className="size-5" />
+      </span>
+      <h2 className="text-[15px] font-semibold text-ink">
+        Drop a <span className="font-mono font-normal">package.json</span>
+      </h2>
       <Button
         type="button"
+        variant="outline"
+        size="sm"
         data-choose-file
         onClick={(event) => {
           event.stopPropagation()
           inputRef.current?.click()
         }}
       >
-        Choose a file
+        <FolderOpen aria-hidden="true" />
+        Choose file
       </Button>
-      {children ? <div className="max-w-[52ch] text-sm text-muted">{children}</div> : null}
       <label htmlFor={inputId} className="sr-only">
-        {LABEL}
+        Choose a package.json
       </label>
       <input
         ref={inputRef}
@@ -80,7 +84,7 @@ export function DropZone({ onFile, onInvalidFile, children }: DropZoneProps) {
         accept="application/json,.json"
         className="sr-only"
         onChange={(event) => {
-          handleFiles(event.target.files)
+          takeJsonFile(event.target.files, { onFile, onInvalidFile })
           event.target.value = ""
         }}
       />

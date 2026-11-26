@@ -98,33 +98,100 @@ write(`analyses/${reasons.analysis}/status.json`, {
 write(`analyses/${reasons.analysis}/candidates.json`, JSON.stringify(reasonsResult(null), null, 2), reasons.project)
 write(`analyses/${reasons.analysis}/ranking.json`, JSON.stringify(reasonsResult([0, 0, 1, 0, 0]), null, 2), reasons.project)
 
-// The worst case for the review's reasons: twenty dependencies keep a CVE no version fixes, one with a
-// 40-character name, and a twenty-first the gate moves off its proposal, so the Export bar shows its note
-// and a two-line cause.
-const worst = { project: "worst", analysis: "20261124T111500Z" }
-const worstNames = ["@northwind-industries/holdings-dashboard", ...Array.from({ length: 20 }, (_, i) => `keeps-cve-${i + 1}`)]
-const worstManifest = JSON.stringify({ name: "worst", dependencies: Object.fromEntries(worstNames.map((n) => [n, "1.0.0"])) }, null, 2)
+// The review's worst case: 15 major jumps in 3 families, 15 CVEs that no version fixes in 5 packages (angular
+// 1.8.3 with its 11, a long scoped name at a long version with a GHSA id), 8 updates and 127 packages that
+// stay. The shapes are what the rank step writes; the gate stores the selection that takes every jump.
+const worst = { project: "worst", analysis: "20261125T091500Z" }
+const worstFamilies = {
+  "react 19": [["react", "18.3.1", "19.2.0"], ["react-dom", "18.3.1", "19.2.0"], ["@types/react", "18.3.12", "19.2.2"], ["@types/react-dom", "18.3.1", "19.2.2"], ["react-router-dom", "6.30.1", "7.9.4"], ["@testing-library/react", "15.0.7", "16.3.0"], ["react-redux", "8.1.3", "9.2.0"]],
+  "eslint 9": [["eslint", "8.57.1", "9.38.0"], ["eslint-plugin-react-hooks", "4.6.2", "5.2.0"], ["@typescript-eslint/parser", "7.18.0", "8.46.1"], ["@typescript-eslint/eslint-plugin", "7.18.0", "8.46.1"], ["eslint-config-prettier", "9.1.0", "10.1.8"]],
+  "vite 7": [["vite", "5.4.20", "7.1.12"], ["@vitejs/plugin-react", "4.7.0", "5.1.0"], ["vitest", "2.1.9", "4.0.8"]],
+}
+const babel = "@babel/plugin-transform-async-generator-functions"
+const finding = (id, severity, name, version, fixedIn) => ({ id, severity, package: `${name}@${version}`, fixedIn })
+const counted = (cves) => ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].map((s) => new Set(cves.filter((c) => c.severity === s).map((c) => c.id)).size)
+const keeps = (name, version, ids) => {
+  const cves = ids.map(([id, severity]) => finding(id, severity, name, version, ""))
+  return { name, current: version, vector: counted(cves), cves, candidates: [] }
+}
+const updates = (name, from, to, ids) => {
+  const cves = ids.map(([id, severity]) => finding(id, severity, name, from, to))
+  return { name, current: from, best: to, vector: counted(cves), cves, candidates: [stored(to)] }
+}
+const worstDependencies = [
+  ...Object.entries(worstFamilies).flatMap(([family, members]) =>
+    members.map(([name, from, to]) => ({ name, current: from, vector: zero, cves: [], candidates: [stored(to, leaves(from.split(".")[0]))], jump: to, family })),
+  ),
+  keeps("angular", "1.8.3", [
+    ["CVE-2024-21490", "HIGH"],
+    ...["CVE-2025-4690", "CVE-2025-2336", "CVE-2025-0716", "CVE-2024-8373", "CVE-2024-8372", "CVE-2023-26118", "CVE-2023-26117", "CVE-2023-26116", "CVE-2022-25869", "CVE-2022-25844"].map((id) => [id, "MEDIUM"]),
+  ]),
+  keeps("html-minifier", "4.0.0", [["CVE-2022-37620", "HIGH"]]),
+  keeps("lodash.template", "4.5.0", [["CVE-2021-23337", "HIGH"]]),
+  keeps(babel, "1.0.0-beta.12+build.345", [["GHSA-2fx7-6rpj-5w4c", "HIGH"]]),
+  keeps("request", "2.88.2", [["CVE-2023-28155", "MEDIUM"]]),
+  updates("form-data", "4.0.0", "4.0.4", [["CVE-2025-7783", "CRITICAL"]]),
+  updates("axios", "1.6.0", "1.12.2", [["CVE-2024-39338", "HIGH"], ["CVE-2025-27152", "HIGH"], ["CVE-2025-58754", "HIGH"]]),
+  updates("lodash", "4.17.20", "4.17.21", [["CVE-2021-23337", "HIGH"]]),
+  updates("express", "4.18.2", "4.21.2", [["CVE-2024-29041", "MEDIUM"], ["CVE-2024-43796", "MEDIUM"]]),
+  updates("follow-redirects", "1.15.2", "1.15.11", [["CVE-2023-26159", "MEDIUM"], ["CVE-2024-28849", "MEDIUM"], ["CVE-2025-52999", "MEDIUM"]]),
+  updates("postcss", "8.4.27", "8.5.6", [["CVE-2023-44270", "MEDIUM"], ["CVE-2025-27789", "LOW"]]),
+  updates("@typescript/native-preview", "7.0.0-dev.20251001.1", "7.0.0-dev.20251101.1", [["CVE-2025-30204", "LOW"]]),
+  updates("ws", "8.17.0", "8.18.3", [["CVE-2024-37890", "HIGH"]]),
+  ...Array.from({ length: 127 }, (_, i) => ({ name: `kiosk-lib-${String(i + 1).padStart(3, "0")}`, current: `${1 + (i % 9)}.${i % 23}.${i % 7}`, vector: zero, cves: [], candidates: [] })),
+]
+const worstManifest = JSON.stringify({ name: "kiosk-ui", dependencies: Object.fromEntries(worstDependencies.map((d) => [d.name, d.current])) }, null, 2)
 const worstResult = (after) => ({
   target,
-  before: [0, 0, 21, 0, 0],
+  before: worstDependencies.reduce((sum, d) => sum.map((n, i) => n + d.vector[i]), [0, 0, 0, 0, 0]),
   after,
-  dependencies: worstNames.map((name, i) => ({
-    name, current: "1.0.0", vector: [0, 0, 1, 0, 0],
-    cves: [{ id: `CVE-2025-${1000 + i}`, severity: "MEDIUM", package: `${name}@1.0.0`, fixedIn: "" }],
-    candidates: [stored("1.0.0"), stored("1.0.1")],
-  })),
+  dependencies: worstDependencies,
   warnings: [],
+  families: Object.entries(worstFamilies).map(([name, members]) => ({ name, members: members.map(([n]) => n).sort() })),
 })
 write("package.json", worstManifest, worst.project)
 write("project.json", {
-  id: worst.project, name: "worst", target, createdAt: "2026-11-24T11:14:00Z",
+  id: worst.project, name: "kiosk-ui", target, createdAt: "2026-11-25T09:14:00Z",
   manifestSha256: createHash("sha256").update(worstManifest).digest("hex"),
 }, worst.project)
 write(`analyses/${worst.analysis}/status.json`, {
-  state: "done", pnpmVersion: "12.3.4", trivyVersion: "0.74.0", trivyDbDate: "2026-11-24T06:12:00Z",
+  state: "done", pnpmVersion: "12.3.4", trivyVersion: "0.74.0", trivyDbDate: "2026-11-25T06:12:00Z",
 }, worst.project)
 write(`analyses/${worst.analysis}/candidates.json`, JSON.stringify(worstResult(null), null, 2), worst.project)
-write(`analyses/${worst.analysis}/ranking.json`, JSON.stringify(worstResult([0, 0, 21, 0, 0]), null, 2), worst.project)
+write(`analyses/${worst.analysis}/ranking.json`, JSON.stringify(worstResult([0, 0, 11, 0, 0]), null, 2), worst.project)
+
+// An analysis sealift 0.7.0 wrote: no jump, no family and no families, CVEs with their id and severity only,
+// and a status with no database date. Its review offers no Jump and says the fix was not recorded.
+const legacy = { project: "legacy", analysis: "20261020T101500Z" }
+const legacyManifest = JSON.stringify({ name: "legacy-portal", dependencies: { angular: "1.8.3", chalk: "4.1.2", lodash: "4.17.20" } }, null, 2)
+const legacyCandidate = (version, vector, cves) => ({ version, vector, cves, signals: [], key: true, resolved: true, published })
+const legacyResult = (after) => ({
+  target,
+  before: [0, 3, 1, 0, 0],
+  after,
+  dependencies: [
+    {
+      name: "angular", current: "1.8.3", vector: [0, 1, 1, 0, 0],
+      cves: [{ id: "CVE-2024-21490", severity: "HIGH" }, { id: "CVE-2025-4690", severity: "MEDIUM" }],
+      candidates: [legacyCandidate("2.0.0", [0, 0, 0, 0, 0], [])],
+    },
+    { name: "chalk", current: "4.1.2", vector: zero, cves: [], candidates: [legacyCandidate("5.3.0", zero, [])] },
+    {
+      name: "lodash", current: "4.17.20", best: "4.17.21", vector: [0, 2, 0, 0, 0],
+      cves: [{ id: "CVE-2021-23337", severity: "HIGH" }, { id: "CVE-2020-8203", severity: "HIGH" }],
+      candidates: [legacyCandidate("4.17.21", zero, [])],
+    },
+  ],
+  warnings: [],
+})
+write("package.json", legacyManifest, legacy.project)
+write("project.json", {
+  id: legacy.project, name: "legacy-portal", target, createdAt: "2026-10-20T10:14:00Z",
+  manifestSha256: createHash("sha256").update(legacyManifest).digest("hex"),
+}, legacy.project)
+write(`analyses/${legacy.analysis}/status.json`, { state: "done", pnpmVersion: "10.18.0", trivyVersion: "0.66.0" }, legacy.project)
+write(`analyses/${legacy.analysis}/candidates.json`, JSON.stringify(legacyResult(null), null, 2), legacy.project)
+write(`analyses/${legacy.analysis}/ranking.json`, JSON.stringify(legacyResult([0, 1, 1, 0, 0]), null, 2), legacy.project)
 
 // The key is made per run and written as the store writes it: PKCS#8 PEM, mode 0600, in private/ at 0700.
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")

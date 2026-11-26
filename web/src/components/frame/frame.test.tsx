@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import { type Brand, BrandMark, BrandProvider, contrastRatio, DEFAULT_BRAND, PAGE, SideLabel, usableAccent } from "@/components/frame/brand"
 import { Frame } from "@/components/frame/frame"
 import { StepBar, stepBarStep } from "@/components/step-bar"
+import type { Analysis, Project } from "@/api/projects"
+import { crossingName } from "@/lib/crossings"
 import { ONLINE_INSTANCE, ONLINE_PLACES, onlineCrumbs } from "@/lib/places"
 
 // Vitest empties every .css import, ?raw included, so the theme is read from disk, as theme.test.ts does.
@@ -26,7 +28,9 @@ const WARNING = "CVE database refresh failed: dial tcp: lookup ghcr.io: no such 
 
 const BRANDED: Brand = { name: "Northwind lift", online: "Connected", offline: "Isolated", reviewWord: "MR", logo: true }
 
-async function renderAt(path: string, { brand = DEFAULT_BRAND, warning, projectName }: { brand?: Brand; warning?: string; projectName?: string } = {}) {
+type Shown = string | Pick<Project, "name" | "analyses">
+
+async function renderAt(path: string, { brand = DEFAULT_BRAND, warning, projectName }: { brand?: Brand; warning?: string; projectName?: Shown } = {}) {
   const root = createRootRoute({
     component: function Root() {
       const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -41,7 +45,7 @@ async function renderAt(path: string, { brand = DEFAULT_BRAND, warning, projectN
   })
   const page = (p: string) => createRoute({ getParentRoute: () => root, path: p, component: () => <p>page {p}</p> })
   const router = createRouter({
-    routeTree: root.addChildren([page("/"), page("/instance"), page("/sessions/$sessionId/analysis")]),
+    routeTree: root.addChildren([page("/"), page("/instance"), page("/crossings/$projectId")]),
     history: createMemoryHistory({ initialEntries: [path] }),
   })
   const view = render(<RouterProvider router={router} />)
@@ -85,12 +89,12 @@ describe("Frame", () => {
     expect(placeLink("Instance")).toHaveAttribute("href", "/instance")
   })
 
-  it("marks Instance as the current place on its own page and Home on a session's", async () => {
+  it("marks Instance as the current place on its own page and Home on a crossing's", async () => {
     const view = await renderAt("/instance")
     expect(placeLink("Instance")).toHaveAttribute("aria-current", "page")
     expect(placeLink("Home")).not.toHaveAttribute("aria-current")
     view.unmount()
-    await renderAt("/sessions/demo/analysis", { projectName: "web-portal" })
+    await renderAt("/crossings/demo", { projectName: "web-portal" })
     expect(placeLink("Home")).toHaveAttribute("aria-current", "page")
   })
 
@@ -138,12 +142,20 @@ describe("Frame", () => {
     expect(home).toHaveAttribute("aria-current", "page")
     view.unmount()
 
-    await renderAt("/sessions/demo/analysis", { projectName: "web-portal" })
+    await renderAt("/crossings/demo", { projectName: "web-portal" })
     const crumbs = within(screen.getByRole("navigation", { name: "Breadcrumb" })).getAllByRole("listitem")
     expect(crumbs.map((c) => c.textContent)).toEqual(["Home", "web-portal"])
     expect(within(crumbs[0]).getByRole("link", { name: "Home" })).toHaveAttribute("href", "/")
     expect(within(crumbs[1]).getByText("web-portal")).toHaveAttribute("aria-current", "page")
     expect(within(crumbs[1]).queryByRole("link")).not.toBeInTheDocument()
+  })
+
+  it("names a crossing's crumb at its own address", async () => {
+    const analyses = [{ id: "20261124T101500Z", projectId: "demo", state: "done", createdAt: "2026-11-24T10:15:00Z" }] as Analysis[]
+    await renderAt("/crossings/demo", { projectName: { name: "web-portal", analyses } })
+    const crumbs = within(screen.getByRole("navigation", { name: "Breadcrumb" })).getAllByRole("listitem")
+    expect(crumbs.map((c) => c.textContent)).toEqual(["Home", crossingName("web-portal", analyses[0], analyses)])
+    expect(crumbs[1].textContent).toMatch(/^web-portal · /)
   })
 
   it("shows the deployment's name in the title, its logo and its side label", async () => {
@@ -246,18 +258,33 @@ describe("StepBar", () => {
     stepBarStep("export", "upcoming", false),
   ]
 
-  it("numbers each step and marks the current one with aria-current step", () => {
+  it("numbers Check, Analyse, Review and Seal", () => {
     render(<StepBar steps={[stepBarStep("drop", "available", true), ...steps.slice(1).map((s) => ({ ...s, current: false }))]} />)
     const items = [...screen.getByRole("navigation", { name: "Session steps" }).querySelectorAll("[data-step]")]
-    expect(items.map((i) => i.textContent)).toEqual(["1Drop", "2Analyse", "3Review", "4Export"])
-    expect(screen.getByText("Drop").closest("[aria-current]")).toHaveAttribute("aria-current", "step")
+    expect(items.map((i) => i.textContent)).toEqual(["1Check", "2Analyse", "3Review", "4Seal"])
+    expect(screen.getByText("Check").closest("[aria-current]")).toHaveAttribute("aria-current", "step")
     expect(document.querySelectorAll("[aria-current]")).toHaveLength(1)
+    expect(screen.queryByText(/^(Drop|Export)$/)).toBeNull()
   })
 
   it("shows a done step with a check and keeps the current one marked", () => {
     render(<StepBar steps={steps} />)
-    expect(screen.getByRole("button", { name: /Drop/ }).querySelector("svg.lucide-check")).not.toBeNull()
+    expect(screen.getByRole("button", { name: /Check/ }).querySelector("svg.lucide-check")).not.toBeNull()
     expect(screen.getByText("Analyse").closest("[aria-current]")).toHaveAttribute("aria-current", "step")
+  })
+
+  it("draws a cancelled step as a dotted circle and names it", () => {
+    const cancelled = [steps[0], stepBarStep("analysis", "cancelled", false, () => {}), steps[2], steps[3]]
+    render(<StepBar steps={cancelled} />)
+    const step = screen.getByRole("button", { name: /Analyse, cancelled$/ })
+    const circle = step.firstElementChild as HTMLElement
+    expect(circle).toHaveClass("border-dotted")
+    expect(circle).toHaveTextContent(/^2$/)
+    expect(circle.querySelector("svg")).toBeNull()
+    expect(circle.className).not.toMatch(/bad/)
+    // Even on screen, a cancelled step keeps its dotted circle.
+    const { container } = render(<StepBar steps={[steps[0], stepBarStep("analysis", "cancelled", true), steps[2], steps[3]]} />)
+    expect(container.querySelector('[aria-current="step"]')?.firstElementChild).toHaveClass("border-dotted")
   })
 
   it("fills the step line with a transform", () => {

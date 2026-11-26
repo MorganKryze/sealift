@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { Analysis, Export } from "@/api/projects"
-import { byName, crossingDay, crossingName, crossingState, readSeal } from "@/lib/crossings"
+import { byName, crossingDay, crossingName, crossingState, cveNote, readSeal } from "@/lib/crossings"
 
 const NOW = new Date(2026, 10, 25, 12, 0)
 const local = (month: number, day: number, hour = 10, minute = 0, year = 2026) => new Date(year, month - 1, day, hour, minute).toISOString()
@@ -91,6 +91,20 @@ describe("crossing states", () => {
 })
 
 describe("readSeal", () => {
+  it("reads the known CVEs before and after from the manifest's review", async () => {
+    vi.stubGlobal("fetch", (url: string) =>
+      url.endsWith("/manifest.json")
+        ? answer({ archive: { sha256: SHA }, review: { cves: { before: [1, 4, 10, 10, 0], after: [0, 0, 1, 1, 0] } } })
+        : answer({ publicKeySha256: KEY }),
+    )
+    const { figures } = await readSeal("web-portal", "20261120T102000Z")
+    expect(figures.cves).toEqual({ before: 25, after: 2 })
+    expect(cveNote(figures)).toBe("known CVEs 25 → 2")
+    expect(cveNote({})).toBe("known CVEs before and after")
+    expect(cveNote({ cves: { before: 25 } })).toBe("known CVEs before and after")
+  })
+
+
   it("reads the archive's sha256 and the signature's key from the seal files", async () => {
     const fetch = vi.fn((url: string) =>
       url.endsWith("/manifest.json")
@@ -98,11 +112,34 @@ describe("readSeal", () => {
         : answer({ algorithm: "ed25519", publicKeySha256: KEY, signature: "c2ln" }),
     )
     vi.stubGlobal("fetch", fetch)
-    await expect(readSeal("web-portal", "20261120T102000Z")).resolves.toEqual({ archiveSha256: SHA, keySha256: KEY })
+    await expect(readSeal("web-portal", "20261120T102000Z")).resolves.toEqual({ archiveSha256: SHA, keySha256: KEY, figures: { packages: 0, size: 4096 } })
     expect(fetch.mock.calls.map(([url]) => url).sort()).toEqual([
       "/api/projects/web-portal/exports/20261120T102000Z/files/manifest.json",
       "/api/projects/web-portal/exports/20261120T102000Z/files/manifest.json.sig",
     ])
+  })
+
+  it("reads the package count and size from the manifest", async () => {
+    const packages = Array.from({ length: 1284 }, (_, i) => ({ name: `lib-${i}`, version: "1.0.0" }))
+    vi.stubGlobal("fetch", (url: string) =>
+      url.endsWith("/manifest.json") ? answer({ archive: { sha256: SHA, size: 96_500_000 }, packages }) : answer({ publicKeySha256: KEY }),
+    )
+    await expect(readSeal("p", "e")).resolves.toMatchObject({ figures: { packages: 1284, size: 96_500_000 } })
+  })
+
+  it("reads a manifest that lacks them as unknown, never zero", async () => {
+    for (const manifest of [
+      { archive: { sha256: SHA } },
+      { archive: { sha256: SHA, size: -1 }, packages: "1284" },
+      { archive: { sha256: SHA, size: 12.5 }, packages: { length: 3 } },
+      { archive: { sha256: SHA, size: "4096" }, packages: null },
+    ]) {
+      vi.stubGlobal("fetch", (url: string) => (url.endsWith("/manifest.json") ? answer(manifest) : answer({ publicKeySha256: KEY })))
+      const seal = await readSeal("p", "e")
+      expect(seal.figures).toEqual({})
+      expect(seal.figures.packages).toBeUndefined()
+      expect(seal.figures.size).toBeUndefined()
+    }
   })
 
   it("refuses a sha256 that is not 64 lowercase hex characters", async () => {

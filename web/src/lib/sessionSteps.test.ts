@@ -27,7 +27,27 @@ describe("sessionSteps", () => {
     expect(view(project(analysis("done"), exp("done")), "export")).toEqual({ drop: "done", analysis: "done", review: "done", export: "done*" })
   })
 
-  it("marks a cancelled export failed and keeps it reachable", () => {
-    expect(view(project(analysis("done"), exp("cancelled")), "review").export).toBe("failed")
+  it("marks a cancelled analysis cancelled, never failed or done", () => {
+    expect(view(project(analysis("cancelled")), "analysis")).toEqual({ drop: "done", analysis: "cancelled*", review: "upcoming", export: "upcoming" })
+    expect(view(project(analysis("cancelled")), "drop").analysis).toBe("cancelled")
+  })
+
+  it("leaves Seal to do after a cancelled export", () => {
+    expect(view(project(analysis("done"), exp("cancelled")), "review")).toEqual({ drop: "done", analysis: "done", review: "available*", export: "upcoming" })
+  })
+
+  it("keeps a failed export failed and reachable", () => {
+    const steps = sessionSteps({ project: project(analysis("done"), exp("failed")), current: "review", onNavigate: () => {} })
+    const seal = steps.find((s) => s.id === "export")
+    expect(seal?.status).toBe("failed")
+    expect(seal?.onNavigate).toBeDefined()
+  })
+
+  it("follows the analysis on screen, not a later one", () => {
+    const sealed = { ...analysis("done"), createdAt: "2026-09-22T09:00:00Z" } as Analysis
+    const later = { ...analysis("cancelled"), id: "a2", createdAt: "2026-09-22T12:00:00Z" } as Analysis
+    const p = { id: "p1", name: "demo", analyses: [sealed, later], exports: [exp("done")] } as unknown as Project
+    const steps = sessionSteps({ project: p, analysis: sealed, current: "export", onNavigate: () => {} })
+    expect(Object.fromEntries(steps.map((s) => [s.id, s.status]))).toEqual({ drop: "done", analysis: "done", review: "done", export: "done" })
   })
 })

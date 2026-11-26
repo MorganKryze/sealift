@@ -46,7 +46,7 @@ The web app has two entries, built apart:
 
 | Entry | Source | Built to | Served by |
 | --- | --- | --- | --- |
-| Collection screens: setup, home, settings, and a session's drop, analysis, review and export | `web/index.html`, `web/src/routes/`, `web/src/components/` | `web/dist/app` | `sealift` |
+| Collection screens: setup, home, settings, and a crossing's Check, Analyse, Review and Seal | `web/index.html`, `web/src/routes/`, `web/src/components/` | `web/dist/app` | `sealift` |
 | Import screens: Archives, Imports and one import | `web/import/index.html`, `web/src/import/`, `web/src/components/import/` | `web/dist/import` | `sealift import-server` |
 
 ## How the Go packages depend on each other
@@ -377,9 +377,9 @@ A route for the import service follows the same steps with `api/import.yaml`, `i
 
 ### A collection screen
 
-1. Add a file to `web/src/routes/`, named for the path with dots, as in `sessions.$sessionId.review.tsx`. Commit the regenerated `web/src/routeTree.gen.ts`.
+1. Add a file to `web/src/routes/`, named for the path with dots, as in `crossings.$projectId.tsx`. Commit the regenerated `web/src/routeTree.gen.ts`.
 2. Put the screen's components in `web/src/components/session/`, or the folder that fits. Keep pure logic in `web/src/lib/` so it tests without a DOM.
-3. If the screen is a step of a session, extend `web/src/lib/sessionSteps.ts` and its test: every route renders the step bar from that one function.
+3. If the screen is a step of a crossing, extend `web/src/lib/sessionSteps.ts` and its test: the crossing route renders the step bar from that one function, and a step opens from `?step=` on `/crossings/<project>`.
 4. Add component tests beside the files, and add the route to `UI.routes` in the browser gate, with seed data if it needs a session.
 5. Drive the screen in a real browser against a real server, in the running, failed and reloaded states and in both themes, as [Web](web.md#checking-a-screen-in-a-browser) describes.
 6. Re-read the pages that quote the screen's words, which the table in [Contributing](../../CONTRIBUTING.md#changing-the-interface) lists, and retake the screenshots in `docs/assets/` if the screen changed.

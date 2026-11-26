@@ -4,7 +4,7 @@ Short answers to the questions that come up first. Each links to the page with t
 
 ## Can I drop a lockfile instead of a package.json?
 
-No. sealift takes a `package.json` whose direct dependencies are pinned to exact versions, and resolves the rest itself with pnpm, for the target platform you set. A `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock` is not read. Workspaces and `overrides` are not supported either. [Workflow](workflow.md#drop) lists what the drop refuses.
+No. sealift takes a `package.json` whose direct dependencies are pinned to exact versions, and resolves the rest itself with pnpm, for the target platform you set. A `package-lock.json`, `pnpm-lock.yaml` or `yarn.lock` is not read. Workspaces and `overrides` are not supported either. [Workflow](workflow.md#check) lists what Check refuses.
 
 ## Does sealift update transitive dependencies?
 
@@ -43,7 +43,7 @@ The interface has no delete button yet. The API removes a session with everythin
 curl -X DELETE http://localhost:8080/api/projects/sealift-demo-321183
 ```
 
-The session id is in the address bar, after `/sessions/`.
+The project id is in the address bar, after `/crossings/`.
 
 ## How do I start over from scratch?
 
@@ -59,7 +59,7 @@ docker volume rm sealift-data
 
 That the `manifest.json` came from the holder of sealift's private key, which stays in that sealift's data volume. The manifest names the archive's sha256 and every package's sha512, so a valid signature covers every byte the import publishes. The import checks it with the public key you carried once to its settings, and refuses an archive signed by any other key. [The air gap](air-gap.md#the-signature-and-the-trusted-key) explains both sides.
 
-It does not prove who pressed Export: anyone who reaches sealift's port can have a selection signed. It says nothing about freshness, so an old archive with a valid signature stays importable until you regenerate the key. It does not cover the reports. [Security policy](../SECURITY.md) lists these limits.
+It does not prove who pressed Seal: anyone who reaches sealift's port can have a selection signed. It says nothing about freshness, so an old archive with a valid signature stays importable until you regenerate the key. It does not cover the reports. [Security policy](../SECURITY.md) lists these limits.
 
 ## What if I regenerate the key, or lose the volume?
 

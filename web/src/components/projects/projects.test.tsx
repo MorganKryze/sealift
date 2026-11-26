@@ -71,7 +71,7 @@ async function renderIn(element: ReactNode) {
   const root = createRootRoute({ component: () => <Outlet /> })
   const page = (path: string, component = () => <p>page {path}</p>) => createRoute({ getParentRoute: () => root, path, component })
   const router = createRouter({
-    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/sessions/$sessionId"), page("/sessions/$sessionId/analysis")]),
+    routeTree: root.addChildren([page("/", () => <>{element}</>), page("/projects/$projectId"), page("/crossings/$projectId")]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   })
   const view = render(
@@ -218,14 +218,14 @@ describe("ProjectPage", () => {
     expect(crossing("web-portal · 18 Nov")).toHaveTextContent("Cancelled")
   })
 
-  it("opens each crossing on its own analysis", async () => {
+  it("opens each crossing at its own address", async () => {
     await renderIn(<ProjectPage project={webPortal()} />)
     for (const [name, at] of [
       ["web-portal · 18 Nov", local(11, 18)],
       ["web-portal · 20 Nov", local(11, 20, 9)],
     ]) {
       const open = within(crossing(name)).getByRole("link", { name: `Open ${name}` })
-      expect(open).toHaveAttribute("href", `/sessions/web-portal/analysis?analysis=${id(at)}`)
+      expect(open).toHaveAttribute("href", `/crossings/web-portal?analysis=${id(at)}`)
     }
   })
 
@@ -325,19 +325,18 @@ describe("ProjectPage", () => {
 })
 
 describe("places and crumbs", () => {
-  it("names a session's crumb by its crossing", () => {
-    const project = webPortal()
-    expect(onlineCrumbs("/sessions/web-portal/review", project)).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 20 Nov · 2" }])
-    expect(onlineCrumbs("/sessions/web-portal/review", { ...project, analyses: [] })).toEqual([{ label: "Home", to: "/" }, { label: "web-portal" }])
-    expect(onlineCrumbs("/projects")).toEqual([{ label: "Projects" }])
-    expect(onlineCrumbs("/projects/web-portal", project)).toEqual([{ label: "Projects", to: "/projects" }, { label: "web-portal" }])
-  })
-
-  it("names an older crossing opened by its id, not the latest", () => {
+  it("names a crossing's crumb by its analysis", () => {
     const project = webPortal()
     const older = project.analyses?.find((a) => a.createdAt === local(11, 6))
-    expect(onlineCrumbs("/sessions/web-portal/analysis", project, older?.id)).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 6 Nov" }])
-    expect(onlineCrumbs("/sessions/web-portal/analysis", project, "gone")).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 20 Nov · 2" }])
+    expect(onlineCrumbs("/crossings/web-portal", project)).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 20 Nov · 2" }])
+    expect(onlineCrumbs("/crossings/web-portal", project, older?.id)).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 6 Nov" }])
+    expect(onlineCrumbs("/crossings/web-portal", project, "gone")).toEqual([{ label: "Home", to: "/" }, { label: "web-portal · 20 Nov · 2" }])
+    expect(onlineCrumbs("/crossings/web-portal", { ...project, analyses: [] })).toEqual([{ label: "Home", to: "/" }, { label: "web-portal" }])
+  })
+
+  it("names the project lists' crumbs", () => {
+    expect(onlineCrumbs("/projects")).toEqual([{ label: "Projects" }])
+    expect(onlineCrumbs("/projects/web-portal", webPortal())).toEqual([{ label: "Projects", to: "/projects" }, { label: "web-portal" }])
   })
 
   it("puts Update under Home", () => {

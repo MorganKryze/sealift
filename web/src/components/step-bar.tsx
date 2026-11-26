@@ -6,15 +6,15 @@ export type StepId = "drop" | "analysis" | "review" | "export"
 
 /**
  * What a step's work has come to. "available" is reachable but not done
- * yet (Review before any export); which step is on screen is a separate
+ * yet (Review before any export); "cancelled" marks where a stopped run
+ * ended, with no word of failure. Which step is on screen is a separate
  * flag, so a failed analysis still reads as failed while it is shown.
  */
-export type StepStatus = "upcoming" | "available" | "running" | "done" | "failed"
+export type StepStatus = "upcoming" | "available" | "running" | "done" | "failed" | "cancelled"
 
 export interface StepBarStep {
   id: StepId
   label: string
-  sub: string
   status: StepStatus
   /** The step on screen. */
   current: boolean
@@ -26,16 +26,19 @@ interface StepBarProps {
   steps: StepBarStep[]
 }
 
-const STEP_LABELS: Record<StepId, { label: string; sub: string }> = {
-  drop: { label: "Drop", sub: "package.json" },
-  analysis: { label: "Analyse", sub: "scan and rank" },
-  review: { label: "Review", sub: "proposal" },
-  export: { label: "Export", sub: "archive" },
+// The ids stay those of the routes and the API; only the words the developer reads changed.
+const STEP_LABELS: Record<StepId, string> = {
+  drop: "Check",
+  analysis: "Analyse",
+  review: "Review",
+  export: "Seal",
 }
 
-/** Fills in label/sub from the step id, so callers only pass status and onNavigate. */
+const SPOKEN: Partial<Record<StepStatus, string>> = { failed: ", failed", running: ", running", cancelled: ", cancelled" }
+
+/** Fills in the label from the step id, so callers only pass status and onNavigate. */
 export function stepBarStep(id: StepId, status: StepStatus, current: boolean, onNavigate?: () => void): StepBarStep {
-  return { id, ...STEP_LABELS[id], status, current, onNavigate }
+  return { id, label: STEP_LABELS[id], status, current, onNavigate }
 }
 
 /**
@@ -57,7 +60,8 @@ export function StepBar({ steps }: StepBarProps) {
                 step.status === "running" && "border-info bg-info-tint text-info",
                 step.status === "available" && "border-field text-ink",
                 step.status === "upcoming" && "border-rule-2 text-muted",
-                step.current && step.status !== "failed" && step.status !== "done" && "border-ink bg-ink text-bg",
+                step.status === "cancelled" && "border-[1.5px] border-dotted border-muted text-muted",
+                step.current && (step.status === "upcoming" || step.status === "available") && "border-ink bg-ink text-bg",
               )}
             >
               {step.status === "done" ? (
@@ -72,9 +76,9 @@ export function StepBar({ steps }: StepBarProps) {
           const content = (
             <>
               {circle}
-              <span className={cn(step.current ? "font-semibold text-ink" : step.status === "upcoming" ? "text-muted" : "text-ink")}>{step.label}</span>
-              {step.status === "failed" ? <span className="sr-only">, failed</span> : null}
-              {step.status === "running" ? <span className="sr-only">, running</span> : null}
+              {/* Under 640 px only the step on screen keeps its word beside the number; the others keep it for a screen reader. */}
+              <span className={cn(step.current ? "font-semibold text-ink" : step.status === "upcoming" ? "text-muted max-sm:sr-only" : "text-ink max-sm:sr-only")}>{step.label}</span>
+              {SPOKEN[step.status] ? <span className="sr-only">{SPOKEN[step.status]}</span> : null}
             </>
           )
           const className = "inline-flex min-h-8 flex-none items-center gap-2 rounded-lg px-1 text-sm"

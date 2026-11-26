@@ -12,14 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InstanceRouteImport } from './routes/instance'
 import { Route as UpdateRouteImport } from './routes/update'
+import { Route as CrossingsProjectIdRouteImport } from './routes/crossings.$projectId'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
-import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
-import { Route as SessionsSessionIdIndexRouteImport } from './routes/sessions.$sessionId.index'
-import { Route as SessionsSessionIdAnalysisRouteImport } from './routes/sessions.$sessionId.analysis'
-import { Route as SessionsSessionIdDropRouteImport } from './routes/sessions.$sessionId.drop'
-import { Route as SessionsSessionIdExportRouteImport } from './routes/sessions.$sessionId.export'
-import { Route as SessionsSessionIdReviewRouteImport } from './routes/sessions.$sessionId.review'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -36,6 +31,11 @@ const UpdateRoute = UpdateRouteImport.update({
   path: '/update',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CrossingsProjectIdRoute = CrossingsProjectIdRouteImport.update({
+  id: '/crossings/$projectId',
+  path: '/crossings/$projectId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
   id: '/projects/',
   path: '/projects/',
@@ -46,76 +46,31 @@ const ProjectsProjectIdRoute = ProjectsProjectIdRouteImport.update({
   path: '/projects/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
-  id: '/sessions/$sessionId',
-  path: '/sessions/$sessionId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SessionsSessionIdIndexRoute = SessionsSessionIdIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => SessionsSessionIdRoute,
-} as any)
-const SessionsSessionIdAnalysisRoute =
-  SessionsSessionIdAnalysisRouteImport.update({
-    id: '/analysis',
-    path: '/analysis',
-    getParentRoute: () => SessionsSessionIdRoute,
-  } as any)
-const SessionsSessionIdDropRoute = SessionsSessionIdDropRouteImport.update({
-  id: '/drop',
-  path: '/drop',
-  getParentRoute: () => SessionsSessionIdRoute,
-} as any)
-const SessionsSessionIdExportRoute = SessionsSessionIdExportRouteImport.update({
-  id: '/export',
-  path: '/export',
-  getParentRoute: () => SessionsSessionIdRoute,
-} as any)
-const SessionsSessionIdReviewRoute = SessionsSessionIdReviewRouteImport.update({
-  id: '/review',
-  path: '/review',
-  getParentRoute: () => SessionsSessionIdRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
-  '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
-  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
-  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
-  '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
-  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
-  '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects': typeof ProjectsIndexRoute
-  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
-  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
-  '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
-  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
-  '/sessions/$sessionId': typeof SessionsSessionIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
-  '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
-  '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
-  '/sessions/$sessionId/drop': typeof SessionsSessionIdDropRoute
-  '/sessions/$sessionId/export': typeof SessionsSessionIdExportRoute
-  '/sessions/$sessionId/review': typeof SessionsSessionIdReviewRoute
-  '/sessions/$sessionId/': typeof SessionsSessionIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -123,47 +78,33 @@ export interface FileRouteTypes {
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
-    | '/sessions/$sessionId'
     | '/projects/'
-    | '/sessions/$sessionId/analysis'
-    | '/sessions/$sessionId/drop'
-    | '/sessions/$sessionId/export'
-    | '/sessions/$sessionId/review'
-    | '/sessions/$sessionId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
     | '/projects'
-    | '/sessions/$sessionId/analysis'
-    | '/sessions/$sessionId/drop'
-    | '/sessions/$sessionId/export'
-    | '/sessions/$sessionId/review'
-    | '/sessions/$sessionId'
   id:
     | '__root__'
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
-    | '/sessions/$sessionId'
     | '/projects/'
-    | '/sessions/$sessionId/analysis'
-    | '/sessions/$sessionId/drop'
-    | '/sessions/$sessionId/export'
-    | '/sessions/$sessionId/review'
-    | '/sessions/$sessionId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   InstanceRoute: typeof InstanceRoute
   UpdateRoute: typeof UpdateRoute
+  CrossingsProjectIdRoute: typeof CrossingsProjectIdRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
-  SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
   ProjectsIndexRoute: typeof ProjectsIndexRoute
 }
 
@@ -190,6 +131,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UpdateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/crossings/$projectId': {
+      id: '/crossings/$projectId'
+      path: '/crossings/$projectId'
+      fullPath: '/crossings/$projectId'
+      preLoaderRoute: typeof CrossingsProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/projects/': {
       id: '/projects/'
       path: '/projects'
@@ -204,76 +152,15 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sessions/$sessionId': {
-      id: '/sessions/$sessionId'
-      path: '/sessions/$sessionId'
-      fullPath: '/sessions/$sessionId'
-      preLoaderRoute: typeof SessionsSessionIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sessions/$sessionId/': {
-      id: '/sessions/$sessionId/'
-      path: '/'
-      fullPath: '/sessions/$sessionId/'
-      preLoaderRoute: typeof SessionsSessionIdIndexRouteImport
-      parentRoute: typeof SessionsSessionIdRoute
-    }
-    '/sessions/$sessionId/analysis': {
-      id: '/sessions/$sessionId/analysis'
-      path: '/analysis'
-      fullPath: '/sessions/$sessionId/analysis'
-      preLoaderRoute: typeof SessionsSessionIdAnalysisRouteImport
-      parentRoute: typeof SessionsSessionIdRoute
-    }
-    '/sessions/$sessionId/drop': {
-      id: '/sessions/$sessionId/drop'
-      path: '/drop'
-      fullPath: '/sessions/$sessionId/drop'
-      preLoaderRoute: typeof SessionsSessionIdDropRouteImport
-      parentRoute: typeof SessionsSessionIdRoute
-    }
-    '/sessions/$sessionId/export': {
-      id: '/sessions/$sessionId/export'
-      path: '/export'
-      fullPath: '/sessions/$sessionId/export'
-      preLoaderRoute: typeof SessionsSessionIdExportRouteImport
-      parentRoute: typeof SessionsSessionIdRoute
-    }
-    '/sessions/$sessionId/review': {
-      id: '/sessions/$sessionId/review'
-      path: '/review'
-      fullPath: '/sessions/$sessionId/review'
-      preLoaderRoute: typeof SessionsSessionIdReviewRouteImport
-      parentRoute: typeof SessionsSessionIdRoute
-    }
   }
 }
-
-interface SessionsSessionIdRouteChildren {
-  SessionsSessionIdAnalysisRoute: typeof SessionsSessionIdAnalysisRoute
-  SessionsSessionIdDropRoute: typeof SessionsSessionIdDropRoute
-  SessionsSessionIdExportRoute: typeof SessionsSessionIdExportRoute
-  SessionsSessionIdReviewRoute: typeof SessionsSessionIdReviewRoute
-  SessionsSessionIdIndexRoute: typeof SessionsSessionIdIndexRoute
-}
-
-const SessionsSessionIdRouteChildren: SessionsSessionIdRouteChildren = {
-  SessionsSessionIdAnalysisRoute: SessionsSessionIdAnalysisRoute,
-  SessionsSessionIdDropRoute: SessionsSessionIdDropRoute,
-  SessionsSessionIdExportRoute: SessionsSessionIdExportRoute,
-  SessionsSessionIdReviewRoute: SessionsSessionIdReviewRoute,
-  SessionsSessionIdIndexRoute: SessionsSessionIdIndexRoute,
-}
-
-const SessionsSessionIdRouteWithChildren =
-  SessionsSessionIdRoute._addFileChildren(SessionsSessionIdRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   InstanceRoute: InstanceRoute,
   UpdateRoute: UpdateRoute,
+  CrossingsProjectIdRoute: CrossingsProjectIdRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
-  SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
   ProjectsIndexRoute: ProjectsIndexRoute,
 }
 export const routeTree = rootRouteImport

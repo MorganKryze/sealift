@@ -93,11 +93,11 @@ The operator checks the archive's sha256 on both sides of the USB key and can pa
 
 ## The collection pipeline
 
-A session holds one `package.json`. Its screens follow four steps: Drop, Analyse, Review, Export ([Workflow](workflow.md)). The server runs one job at a time, in memory and in submission order, and streams the job's events to the interface ([Architecture](dev/architecture.md#requests-and-jobs)).
+A crossing holds one `package.json`. Its screens follow four steps: Check, Analyse, Review, Seal ([Workflow](workflow.md)), at one address, `/crossings/<project>`. The server runs one job at a time, in memory and in submission order, and streams the job's events to the interface ([Architecture](dev/architecture.md#requests-and-jobs)).
 
 | Stage | What happens | Detail |
 | --- | --- | --- |
-| Validate | `npm.Manifest.Validate` refuses ranges, tags, non-registry sources and the fields `overrides` and `resolutions` | [Workflow](workflow.md#drop) |
+| Validate | `npm.Manifest.Validate` refuses ranges, tags, non-registry sources and the fields `overrides` and `resolutions` | [Workflow](workflow.md#check) |
 | Resolve | pnpm resolves the project for the target platform with `pnpm install --lockfile-only` | [Architecture](dev/architecture.md#the-analysis) |
 | Scan | Trivy scans the resolved project and reports its CVEs | [Architecture](dev/architecture.md#the-analysis) |
 | Candidates | The registry lists the newer stable versions of each direct dependency. sealift resolves each one in isolation and scans it, key versions first | [Ranking](dev/ranking.md#key-versions) |
@@ -150,7 +150,7 @@ Each check answers a different question about what arrived.
 | Archive sha256 | Manifest field `archive.sha256`, checked by the import | The archive is the file the export wrote. The operator can also compare it with a value received by another channel and pass it as `expectedSha256` | The manifest travels next to the archive, so only a value from a separate channel shows the manifest itself is the exporter's |
 | Per-package sha512 | Manifest field `shippedSha512`, checked by the import | Each tarball in `out/` is the file listed for it. `originalIntegrity` also matches unless sealift removed `publishConfig` from that package | The hash covers the file's bytes and says nothing about what the package does |
 | The manifest | `archive.ParseManifest` | The manifest has the known shape: bounded size, valid names, versions and file names, printable text, no duplicate. The archive holds exactly the files it lists | A manifest from a newer `formatVersion` is refused |
-| Signature | `manifest.json.sig`, checked by the import against the trusted public key | The manifest was made by the holder of the private key and has not changed since. The manifest names the archive's sha256 and the sha512 of every package, so one signature covers every byte the import publishes | It does not show who pressed Export, it has no freshness check, and the four reports are not signed. A key carried with the archive would prove nothing, so the import trusts only the public key file its settings name |
+| Signature | `manifest.json.sig`, checked by the import against the trusted public key | The manifest was made by the holder of the private key and has not changed since. The manifest names the archive's sha256 and the sha512 of every package, so one signature covers every byte the import publishes | It does not show who pressed Seal, it has no freshness check, and the four reports are not signed. A key carried with the archive would prove nothing, so the import trusts only the public key file its settings name |
 | Token check | `internal/importer/token` | A request carries an access token signed by the realm's keys, for the expected issuer and audience, and within its lifetime with 60 seconds of leeway. Only asymmetric algorithms pass | The token is checked when a request arrives. An import that started goes on after the token expires |
 | Per-user scope | `internal/importer/service` | A user sees their own bucket, archives and imports. The service reads the user from the token's claim and from nowhere else, and another user's import answers 404 | The gateway must set `X-Access-Token` from its own variable |
 | Nexus read-back | `internal/importer` | An uploaded package is served with the shipped bytes. An existing version with other bytes is never overwritten | Set the repository's deployment policy to disable redeploy, so Nexus refuses an overwrite as well |

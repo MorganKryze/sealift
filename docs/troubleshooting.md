@@ -2,7 +2,7 @@
 
 This page lists the messages sealift shows, grouped by where they appear, with their cause and their fix. Search the page for the words on your screen.
 
-When an analysis or an export stops, the cause shows under What went wrong. **Show the log** unfolds what pnpm and Trivy wrote, including their own error codes, which the message leaves out.
+When an analysis or a seal stops, one block names the cause and the action that clears it. The log, folded under the block, holds what pnpm and Trivy wrote, including their own error codes, which the block leaves out.
 
 ## Anywhere
 
@@ -54,18 +54,19 @@ The policy file holds an unknown key, a value outside its range, or cannot be re
 
 The settings 0.7.0 saved in `private/settings.json` hold a value this release refuses. sealift does not start, and the message names the policy key that replaces it, such as `set minReleaseAgeDays in the policy file to replace it`. Set that key in the policy file and start again.
 
-## Drop
+## Check
 
-### sealift cannot analyse this file yet
+### 3 issues, and 3 checks to fix first
 
-The drop preview found entries sealift refuses. Each one shows with its reason:
+Check found entries sealift refuses. Each failed check names its packages or fields with their values:
 
-| Reason | Fix |
+| Check | Fix |
 | --- | --- |
-| version must be exact, such as 1.2.3 | Replace the range or tag with the version the project uses today |
-| only npm registry versions are supported | Replace the alias, Git URL or path with a registry version |
-| not supported | Remove `overrides`, `resolutions`, `pnpm.overrides` or `pnpm.patchedDependencies` |
-| lists no dependency to update | Drop a `package.json` with at least one dependency |
+| Exact versions, such as 1 of 2 is a range | Replace the range or tag with the version the project uses today |
+| Registry only, such as 1 of 2 off npm | Replace the alias, Git URL or path with a registry version |
+| Supported fields, such as 1 field not supported | Remove `overrides`, `resolutions`, `pnpm.overrides` or `pnpm.patchedDependencies` |
+
+A file with no dependency reads The file lists no dependency. Drop a `package.json` with at least one.
 
 The API gives the same answer to a file sent directly:
 
@@ -80,28 +81,39 @@ curl -s -F manifest=@/tmp/range.json http://localhost:8080/api/projects
 {"detail":"the manifest has entries sealift cannot analyze","errors":[{"field":"dependencies","name":"express","reason":"version must be exact, such as 1.2.3","value":"^4.17.1"}],"status":400,"title":"invalid package.json","type":"about:blank"}
 ```
 
-### That file is not valid JSON.
+### The file is not valid JSON.
 
 The dropped file does not parse. Check that you dropped the `package.json` itself, not a lockfile or another file.
 
-### That file holds JSON, but not an object like a package.json.
+### The file holds JSON, but not an object like a package.json.
 
 The file parses, but holds an array, a string or a number at its top level.
 
-## Analysis
+## Analyse
 
-The message under What went wrong starts with the step that failed, such as `resolve project:`.
+When an analysis stops, the screen reads Analysis stopped, and its block names one of four causes.
 
-### resolve project: pnpm install
+### A pinned version is not on npm
 
-pnpm could not install the project as dropped. The message carries pnpm's reason, and **Show the log** gives its full output. The common ones:
+pnpm found no such version on the registry (`ERR_PNPM_NO_MATCHING_VERSION` in the log). The block names the package and the version, such as lodash 4.17.99. A retry gives the same answer, since the version comes from your `package.json`. Fix the version, then press **Replace package.json** and drop the file again.
 
-| In the message | Cause | Fix |
-| --- | --- | --- |
-| `ERR_PNPM_NO_MATCHING_VERSION` | A version that does not exist on the registry | Fix the version in the `package.json`, then drop it again |
-| `ERR_PNPM_FETCH_404` | A package name that does not exist, or a private package | Fix the name; sealift reads the public registry, or the mirror set in [Deployment](deployment.md#outbound-access) |
+![Analysis stopped: A pinned version is not on npm, lodash 4.17.99](assets/analysis-failed.png)
 
-![Analysis stopped at Resolve the project, with the message and the actions](assets/analysis-failed.png)
+### No answer from registry.npmjs.org
+
+A fetch timed out, was refused, or found no host. The title names the host from the message, or reads No answer from the registry. The file is not the cause. Check that sealift reaches the registry, or the mirror set in [Deployment](deployment.md#outbound-access), then press **Retry**.
+
+### The vulnerability database did not download
+
+The scan needs Trivy's database, and its download failed. The file is not the cause. Press **Retry**; when it fails again, see [vulnerability database download](#vulnerability-database-download).
+
+### Any other cause
+
+The block's title is the first line of the tool's message, such as a package name pnpm does not find (`ERR_PNPM_FETCH_404`): sealift reads the public registry, or the mirror set in [Deployment](deployment.md#outbound-access). The log holds the whole message. Fix what it names, then press **Retry**.
+
+### The cause was not recorded
+
+A release before this one kept no cause for a failed analysis. The block names the step it stopped at; the log has what the tools wrote. Press **Retry**.
 
 ### fork/exec /usr/local/bin/node: operation not permitted
 
@@ -109,21 +121,21 @@ sealift could not start pnpm as its `tools` user. The container runs with `no-ne
 
 ### An analysis shows Analysis interrupted after a restart
 
-The server was killed while the analysis ran: a crash, or a stop that outlasted the grace period. The session keeps the analysis, marked interrupted, with the log of the steps it reached. Start the analysis again. A normal stop, such as `docker stop` or a compose recreate during an upgrade, ends the running analysis as Analysis failed instead. Start it again too. Some analyses are not kept: one still waiting in the queue, one whose status file is damaged, and any the server could not mark because `/data` was not writable at startup. Start those again.
+The server was killed while the analysis ran: a crash, or a stop that outlasted the grace period. The session keeps the analysis, marked interrupted, with the log of the steps it reached. Start the analysis again. A normal stop, such as `docker stop` or a compose recreate during an upgrade, ends the running analysis as Analysis stopped instead. Start it again too. Some analyses are not kept: one still waiting in the queue, one whose status file is damaged, and any the server could not mark because `/data` was not writable at startup. Start those again.
 
-### A dependency with CVEs shows under Nothing to do
+### A package with known CVEs shows under unchanged
 
-No candidate it could propose has fewer CVEs: the ones that would are too recent, excluded by the Node version, deprecated or fail to resolve. Open the row: each candidate shows the signal that blocks it. [How sealift chooses](how-sealift-chooses.md#signals) explains each one.
+No candidate it could propose has fewer CVEs: the ones that would are too recent, excluded by the Node version, deprecated or fail to resolve. sealift keeps the package at its current version. [How sealift chooses](how-sealift-chooses.md#signals) explains each one.
 
-## Export
+## Seal
 
 ### jobs: sign manifest.json
 
-The export packed the archive but could not sign its manifest. The export fails at its Sign the manifest and write the reports step and offers no file to download. The message after the colon names the cause. Retry once; if it fails again, check the log of the container for the signing key's own message, described under [store: signing key cannot be read](#store-signing-key-cannot-be-read).
+The export packed the archive but could not sign its manifest. The seal reads Sealing stopped, It stopped while signing the manifest and writing the reports, and offers no file to download. The message after the colon names the cause. Retry once; if it fails again, check the log of the container for the signing key's own message, described under [store: signing key cannot be read](#store-signing-key-cannot-be-read).
 
-### Signed with a key replaced since
+### Signed with a key this instance has replaced
 
-The done screen says an archive carries a key replaced after the export, by `sealift signing-key regenerate`. The import refuses it once it trusts the new key. Press **Export another selection**, or run the same selection again, and carry the new files.
+Sealed, or a project's page, says Signed with a key this instance has replaced: the key changed after the seal, by `sealift signing-key regenerate`. The import refuses the archive once it trusts the new key. Open Review from the step bar, press **Seal** again, and carry the new files.
 
 ### Not signed: sealift 0.4.0 or earlier exported this archive
 
@@ -131,7 +143,7 @@ The archive was exported before signing existed. The import refuses it as unsign
 
 ### Could not read manifest.json.sig
 
-The done screen could not read the signature file of an export. The file is missing or damaged in the volume. Export the selection again.
+Sealed could not read the signature file of an export. The file is missing or damaged in the volume. Export the selection again.
 
 ### jobs: the export selects no version and leaves out the current project, so it would pack nothing
 
@@ -153,7 +165,7 @@ The selection names a version the analysis did not resolve. This happens through
 
 A downloaded package does not match the sha512 the registry published. sealift stops and packs nothing. Retry once; if it fails again, a proxy or mirror between sealift and the registry serves altered files. Do not work around it.
 
-### Stopped at Download and verify each package.
+### It stopped while downloading and verifying each package.
 
 The export could not download a package. The message and the log name it. A registry or proxy that times out or limits connections is the usual cause: lower [download parallelism](settings.md#download-parallelism), then **Retry**.
 

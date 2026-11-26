@@ -4,75 +4,127 @@ export interface ManifestDependency {
   kind: "prod" | "dev"
 }
 
-/** One reason the server would refuse the manifest, in the server's own words. */
-export interface ManifestProblem {
-  where: string
-  reason: string
+export type CheckId = "exact" | "registry" | "fields"
+
+/** One check the server makes on upload, with its evidence and, when it fails, what to do and each entry it caught. */
+export interface ManifestCheck {
+  id: CheckId
+  label: string
+  passed: boolean
+  evidence: string
+  fix: string
+  offenders: { name: string; value: string }[]
 }
 
 export interface ManifestPreview {
   name: string
   dependencies: ManifestDependency[]
-  problems: ManifestProblem[]
+  checks: ManifestCheck[]
 }
 
-// The same rules npm.Manifest.Validate applies on upload, so the drop
-// screen can list every problem before anything runs. The server stays the
-// authority: it validates again.
+// The same rules npm.Manifest.Validate applies on upload, so Check can name every problem before
+// anything runs. The server stays the authority: it validates again.
 const EXACT_VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
 const SOURCE_PREFIXES = ["npm:", "git+", "git:", "github:", "file:", "link:", "workspace:", "http:", "https:"]
+const PACKAGE_NAME = /^(@[A-Za-z0-9_~-][A-Za-z0-9._~-]*\/)?[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/
+const MAX_NAME_LENGTH = 214
+const DEPENDENCY_FIELDS = [
+  ["dependencies", "prod"],
+  ["devDependencies", "dev"],
+  ["optionalDependencies", "dev"],
+] as const
 
-/** Thrown when the dropped file's content is not readable as a manifest preview. */
-export class ManifestPreviewError extends Error {}
+/** Thrown when the dropped file cannot be a package.json to update; `kind` says why. */
+export class ManifestPreviewError extends Error {
+  constructor(public readonly kind: "not-json" | "not-object" | "no-dependency") {
+    super(kind === "not-json" ? "The file is not valid JSON." : kind === "not-object" ? "The file holds JSON, but not an object like a package.json." : "The file lists no dependency.")
+    this.name = "ManifestPreviewError"
+  }
+}
+
+const figure = (n: number) => n.toLocaleString("en-US")
 
 /**
- * Parses a package.json for the drop screen: name, direct dependencies,
- * and every problem that would make the server refuse it.
+ * Reads a package.json in the browser: its name, its direct dependencies and the three checks the server
+ * makes on upload. A file that is not a JSON object, or that lists no dependency, is refused outright.
  */
 export function parseManifestPreview(text: string, fallbackName: string): ManifestPreview {
   let data: unknown
   try {
     data = JSON.parse(text)
   } catch {
-    throw new ManifestPreviewError("That file is not valid JSON.")
+    throw new ManifestPreviewError("not-json")
   }
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
-    throw new ManifestPreviewError("That file holds JSON, but not an object like a package.json.")
+    throw new ManifestPreviewError("not-object")
   }
   const record = data as Record<string, unknown>
-  const dependencies = [
-    ...toDependencyList(record.dependencies, "prod"),
-    ...toDependencyList(record.devDependencies, "dev"),
-    ...toDependencyList(record.optionalDependencies, "dev"),
-  ]
-  const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : fallbackName
-
-  const problems: ManifestProblem[] = []
-  const pnpm = typeof record.pnpm === "object" && record.pnpm !== null ? (record.pnpm as Record<string, unknown>) : {}
-  const unsupported: [string, unknown][] = [
-    ["overrides", record.overrides],
-    ["pnpm.overrides", pnpm.overrides],
-    ["pnpm.patchedDependencies", pnpm.patchedDependencies],
-    ["resolutions", record.resolutions],
-  ]
-  for (const [field, value] of unsupported) {
-    if (value !== undefined && value !== null) {
-      problems.push({ where: field, reason: "not supported" })
-    }
-  }
+  const dependencies = DEPENDENCY_FIELDS.flatMap(([field, kind]) => toDependencyList(record[field], kind))
   if (dependencies.length === 0) {
-    problems.push({ where: "dependencies", reason: "lists no dependency to update" })
+    throw new ManifestPreviewError("no-dependency")
   }
-  for (const dep of dependencies) {
-    if (SOURCE_PREFIXES.some((prefix) => dep.version.startsWith(prefix))) {
-      problems.push({ where: `${dep.name} ${dep.version}`, reason: "only npm registry versions are supported" })
-    } else if (!EXACT_VERSION.test(dep.version)) {
-      problems.push({ where: `${dep.name} ${dep.version}`, reason: "version must be exact, such as 1.2.3" })
-    }
-  }
+  const name = typeof record.name === "string" && record.name.trim() ? record.name.trim() : fallbackName
+  const total = figure(dependencies.length)
 
-  return { name, dependencies, problems }
+  // A name the registry cannot hold is off npm too; the server refuses it on its own line.
+  const offNpm = dependencies.filter(
+    (dep) => dep.name.length > MAX_NAME_LENGTH || !PACKAGE_NAME.test(dep.name) || SOURCE_PREFIXES.some((prefix) => dep.version.startsWith(prefix)),
+  )
+  const ranges = dependencies.filter((dep) => !offNpm.includes(dep) && !EXACT_VERSION.test(dep.version))
+  const example = ranges.map((dep) => /\d+\.\d+\.\d+/.exec(dep.version)?.[0]).find(Boolean) ?? "1.2.3"
+
+  // The server refuses each of these fields when present, even empty or null.
+  const pnpm = typeof record.pnpm === "object" && record.pnpm !== null ? (record.pnpm as Record<string, unknown>) : {}
+  const unsupported = (
+    [
+      ["overrides", record.overrides],
+      ["pnpm.overrides", pnpm.overrides],
+      ["pnpm.patchedDependencies", pnpm.patchedDependencies],
+      ["resolutions", record.resolutions],
+    ] as const
+  ).filter(([, value]) => value !== undefined)
+  const listed = DEPENDENCY_FIELDS.map(([field]) => field).filter((field) => toDependencyList(record[field], "prod").length > 0)
+
+  const checks: ManifestCheck[] = [
+    {
+      id: "exact",
+      label: "Exact versions",
+      passed: ranges.length === 0,
+      evidence: ranges.length === 0 ? `${total} of ${total} pinned` : `${figure(ranges.length)} of ${total} ${ranges.length === 1 ? "is a range" : "are ranges"}`,
+      fix: `Write the version you run, such as ${example}.`,
+      offenders: ranges.map(({ name, version }) => ({ name, value: version })),
+    },
+    {
+      id: "registry",
+      label: "Registry only",
+      passed: offNpm.length === 0,
+      evidence: offNpm.length === 0 ? `${total} of ${total} on npm` : `${figure(offNpm.length)} of ${total} off npm`,
+      fix: "This instance fetches from npm only; use a published version for each.",
+      offenders: offNpm.map(({ name, version }) => ({ name, value: version })),
+    },
+    {
+      id: "fields",
+      label: "Supported fields",
+      passed: unsupported.length === 0,
+      evidence: unsupported.length === 0 ? listed.join(" · ") : `${figure(unsupported.length)} ${unsupported.length === 1 ? "field" : "fields"} not supported`,
+      fix: `This instance resolves without overrides; remove ${unsupported.length === 1 ? "the field" : "these fields"}.`,
+      offenders: unsupported.map(([field, value]) => ({ name: field, value: fieldValue(value) })),
+    },
+  ]
+
+  return { name, dependencies, checks }
+}
+
+/** The checks that fail, in the order the block shows them. */
+export function failingChecks(preview: ManifestPreview): ManifestCheck[] {
+  return preview.checks.filter((check) => !check.passed)
+}
+
+// An unsupported field read back by its keys (the packages it overrides), else as written.
+function fieldValue(value: unknown): string {
+  const keys = typeof value === "object" && value !== null && !Array.isArray(value) ? Object.keys(value) : []
+  return keys.length > 0 ? keys.join(", ") : JSON.stringify(value)
 }
 
 function toDependencyList(value: unknown, kind: "prod" | "dev"): ManifestDependency[] {
