@@ -99,18 +99,15 @@ func run(addr, root string, log *slog.Logger) error {
 	log.Info("tools", "trivy_installed", installed)
 
 	// The trivy binary is reached through the "current" symlink, so
-	// ActivateTrivy repoints it without this ever being reconstructed.
-	// pnpm has no such symlink: this pins the default target's version, so
-	// a project whose own target names another pnpm version still runs this
-	// one, a known limit of the fixed constructor jobs.NewService takes.
-	target := st.Settings().Target
+	// ActivateTrivy repoints it without this ever being reconstructed. Each
+	// analysis runs the pnpm its project's target names.
 	asUser := toolsCredential()
-	log.Info("child processes", "runs_as_tools_account", asUser != nil, "pnpm", target.PnpmVer)
+	log.Info("child processes", "runs_as_tools_account", asUser != nil, "default_pnpm", st.Settings().Target.PnpmVer)
 	if status, err := os.ReadFile("/proc/self/status"); asUser != nil && err == nil && noNewPrivs(string(status)) {
 		log.Error("child processes cannot switch to the tools account: the container runs with no-new-privileges, so every analysis and the Trivy database install fail; set security_opt: [no-new-privileges=false], which also overrides a daemon.json default")
 	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
-	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "tools", "pnpm", target.PnpmVer, "package", "bin", "pnpm.cjs"), filepath.Join(root, "cache", "pnpm"), asUser)
+	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "cache", "pnpm"), asUser)
 	registry := newRegistryClient(toolsManager.NPMRegistry)
 
 	queue := jobs.NewQueue(log)

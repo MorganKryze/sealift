@@ -1071,7 +1071,10 @@ brand: {name: Harbor}
 	}
 	var pnpm []string
 	for line := range strings.Lines(logs.String()) {
-		var entry struct{ Msg, Pnpm string }
+		var entry struct {
+			Msg  string
+			Pnpm string `json:"default_pnpm"`
+		}
 		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "child processes" {
 			pnpm = append(pnpm, entry.Pnpm)
 		}

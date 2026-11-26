@@ -25,7 +25,8 @@ type Pnpm interface {
 
 // ResolveInput is a resolution request. Dir is a temporary directory the
 // caller owns; Resolve writes the manifest and workspace file into it and
-// reads pnpm-lock.yaml back from it.
+// reads pnpm-lock.yaml back from it. PnpmCJS is the entry point of the
+// pnpm Target names, <pnpm dir>/package/bin/pnpm.cjs, run through node.
 //
 // MinReleaseAgeDays above zero holds every package back to releases at
 // least that old. The exact versions the manifest pins stay exempt: the
@@ -33,6 +34,7 @@ type Pnpm interface {
 // version, so the same package elsewhere in the tree still waits.
 type ResolveInput struct {
 	Dir               string
+	PnpmCJS           string
 	Manifest          []byte
 	Target            store.Target
 	MinReleaseAgeDays int
@@ -47,17 +49,14 @@ type ResolveResult struct {
 // PnpmCLI resolves dependencies by running the pnpm CLI through Node.js,
 // the packaging pnpm ships.
 type PnpmCLI struct {
-	pnpmCJS  string
 	cacheDir string
 	asUser   *Credential
 }
 
-// NewPnpmCLI builds a PnpmCLI. bin is the path to pnpm's own entry point,
-// <pnpm dir>/package/bin/pnpm.cjs, run through node. cacheDir holds pnpm's
-// content store and registry metadata cache. asUser is nil outside the
-// container.
-func NewPnpmCLI(bin, cacheDir string, asUser *Credential) *PnpmCLI {
-	return &PnpmCLI{pnpmCJS: bin, cacheDir: cacheDir, asUser: asUser}
+// NewPnpmCLI builds a PnpmCLI. cacheDir holds pnpm's content store and
+// registry metadata cache. asUser is nil outside the container.
+func NewPnpmCLI(cacheDir string, asUser *Credential) *PnpmCLI {
+	return &PnpmCLI{cacheDir: cacheDir, asUser: asUser}
 }
 
 // workspaceFile is the subset of pnpm-workspace.yaml that pins a
@@ -81,6 +80,9 @@ type supportedArchitectures struct {
 // lockfile back. The store and cache sit under cacheDir, so resolutions
 // share downloaded metadata across calls.
 func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
+	if in.PnpmCJS == "" {
+		return ResolveResult{}, fmt.Errorf("no pnpm.cjs for pnpm %s", in.Target.PnpmVer)
+	}
 	if err := writeNew(in.Dir, "package.json", in.Manifest); err != nil {
 		return ResolveResult{}, fmt.Errorf("write package.json: %w", err)
 	}
@@ -112,7 +114,7 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 	}
 
 	args := []string{
-		c.pnpmCJS,
+		in.PnpmCJS,
 		"install",
 		"--lockfile-only",
 		"--store-dir", filepath.Join(c.cacheDir, "store"),
