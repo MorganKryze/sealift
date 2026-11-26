@@ -164,14 +164,32 @@ describe("ReasonsBlock", () => {
   it("keeps its explanation inside the window beside the right edge", () => {
     render(<Term id="major-jump" />)
     const button = screen.getByRole("button", { name: "What a major jump is" })
-    const popover = document.getElementById(button.getAttribute("aria-controls") ?? "") as HTMLElement
+    const popover = () => document.getElementById(button.getAttribute("aria-controls") ?? "") as HTMLElement
     vi.spyOn(button, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 100, 32, 32))
     fireEvent.click(button)
-    expect(popover).toHaveAttribute("data-align", "start")
+    expect(popover()).toHaveAttribute("data-align", "start")
     fireEvent.click(button)
     vi.spyOn(button, "getBoundingClientRect").mockReturnValue(new DOMRect(window.innerWidth - 120, 100, 32, 32))
     fireEvent.click(button)
-    expect(popover).toHaveAttribute("data-align", "end")
+    expect(popover()).toHaveAttribute("data-align", "end")
+  })
+
+  it("opens its explanation outside the block that holds it, and Tab still reaches Read more", () => {
+    render(
+      <div style={{ overflow: "hidden" }} data-testid="block">
+        <Term id="cve" />
+      </div>,
+    )
+    const button = screen.getByRole("button", { name: "What a CVE is" })
+    fireEvent.click(button)
+    const popover = document.getElementById(button.getAttribute("aria-controls") ?? "") as HTMLElement
+    expect(screen.getByTestId("block")).not.toContainElement(popover)
+    expect(popover.parentElement).toBe(document.body)
+    button.focus()
+    fireEvent.keyDown(button, { key: "Tab" })
+    expect(within(popover).getByRole("link", { name: "Read more" })).toHaveFocus()
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Tab", shiftKey: true })
+    expect(button).toHaveFocus()
   })
 
   it("links each term to its docs section with no opener and no referrer", () => {

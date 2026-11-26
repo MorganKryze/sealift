@@ -500,6 +500,31 @@ function sidebarReach() {
 
 // Loads one page and returns what the gate fails on: axe, overflow and small targets, plus what the
 // caller adds through `extra`. `prepare` runs before the page loads, `ready` once its data arrived.
+// Runs in the page: each open Term popover must show whole, inside the window and under no ancestor
+// that clips its overflow.
+const termsWhole = () => {
+  const found = []
+  for (const button of document.querySelectorAll("button[aria-expanded=true][aria-controls]")) {
+    const popover = document.getElementById(button.getAttribute("aria-controls"))
+    if (!popover || popover.hidden || !popover.querySelector("a")) continue
+    const box = popover.getBoundingClientRect()
+    const name = button.getAttribute("aria-label")
+    if (box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight) {
+      found.push(`${name}: popover leaves the window`)
+      continue
+    }
+    for (let up = popover.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up)
+      if (style.overflowX === "visible" && style.overflowY === "visible") continue
+      const clip = up.getBoundingClientRect()
+      if (box.left < clip.left - 0.5 || box.top < clip.top - 0.5 || box.right > clip.right + 0.5 || box.bottom > clip.bottom + 0.5) {
+        found.push(`${name}: popover clipped by ${up.tagName.toLowerCase()}.${[...up.classList].slice(0, 3).join(".")}`)
+      }
+    }
+  }
+  return found
+}
+
 async function inspect(page, { where, capture, url, width, theme, prepare, ready, extra }) {
   const failures = []
   await page.setViewportSize({ width, height: 800 })
@@ -525,6 +550,7 @@ async function inspect(page, { where, capture, url, width, theme, prepare, ready
   const sidebar = await page.evaluate(sidebarReach)
   if (sidebar) failures.push(`${where} · nav[aria-label=Places]: ${sidebar}`)
   const found = await page.evaluate(measure, { controls: CONTROLS, exceptions: UI.exceptions, target: UI.target })
+  for (const t of await page.evaluate(termsWhole)) failures.push(`${where} · ${t}`)
   for (const s of found.overflow) failures.push(`${where} · ${s}: overflows the page horizontally`)
   for (const t of found.targets) {
     failures.push(`${where} · ${t.selector}: target under ${UI.target} × ${UI.target} CSS px (${t.size})`)

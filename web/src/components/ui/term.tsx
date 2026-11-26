@@ -1,5 +1,6 @@
 import { Info } from "lucide-react"
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react"
+import { createPortal } from "react-dom"
 
 import { cn } from "@/lib/utils"
 
@@ -49,29 +50,69 @@ const TERMS: Record<TermId, { name: string; text: string }> = {
 /**
  * An info button beside a term, opening two sentences and a link to its docs section. A disclosure, not a
  * dialog: the focus stays on the button until Tab moves into the link. Escape, a second press or a press
- * outside closes it and gives the focus back to the button.
+ * outside closes it and gives the focus back to the button. The popover renders at the end of its dialog, or
+ * of the body outside one, placed from the button, so no block that clips its overflow cuts it.
  */
 export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | "below" }) {
   const term = TERMS[id]
   const [open, setOpen] = useState(false)
-  // How far left the popover moves from its button so it ends 16 px inside the window, as a panel puts a
-  // term near the right edge.
-  const [shift, setShift] = useState(0)
   const [side, setSide] = useState<"above" | "below">("below")
+  const [align, setAlign] = useState<"start" | "end">("start")
+  const [place, setPlace] = useState<CSSProperties>({ left: 0, top: 0, visibility: "hidden" })
   const popoverId = useId()
   const wrapper = useRef<HTMLSpanElement>(null)
   const button = useRef<HTMLButtonElement>(null)
+  const popover = useRef<HTMLSpanElement>(null)
+  const link = useRef<HTMLAnchorElement>(null)
+  // Inside a dialog the popover stays in it, so the dialog's focus trap and outside press keep working.
+  const [host, setHost] = useState<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const position = () => {
+      const node = popover.current
+      if (!button.current || !node) return
+      const rect = button.current.getBoundingClientRect()
+      const width = Math.min(POPOVER_WIDTH, window.innerWidth - 32)
+      const shift = Math.max(16 - rect.left, Math.min(0, window.innerWidth - 16 - width - rect.left))
+      const where = termSide(prefer, rect, window.innerHeight)
+      // A transformed host, such as a sliding panel, moves where fixed positions start: measure its origin.
+      const box = node.getBoundingClientRect()
+      const origin = { left: box.left - (parseFloat(node.style.left) || 0), top: box.top - (parseFloat(node.style.top) || 0) }
+      const top = where === "above" ? rect.top - 4 - node.offsetHeight : rect.bottom + 4
+      setSide(where)
+      setAlign(shift < 0 ? "end" : "start")
+      setPlace({ left: rect.left + shift - origin.left, top: top - origin.top })
+    }
+    position()
+    window.addEventListener("resize", position)
+    window.addEventListener("scroll", position, true)
+    return () => {
+      window.removeEventListener("resize", position)
+      window.removeEventListener("scroll", position, true)
+    }
+  }, [open, prefer])
 
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: PointerEvent) => {
-      if (wrapper.current?.contains(event.target as Node)) return
+      const target = event.target as Node
+      if (wrapper.current?.contains(target) || popover.current?.contains(target)) return
       setOpen(false)
       button.current?.focus()
     }
     document.addEventListener("pointerdown", onPointerDown)
     return () => document.removeEventListener("pointerdown", onPointerDown)
   }, [open])
+
+  // The popover sits away from its button in the page, so Tab is carried by hand: the button to Read more,
+  // Read more to whatever follows the button, Shift+Tab back to the button.
+  const after = () => {
+    const root = host ?? document.body
+    const all = [...root.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])')]
+    const order = all.filter((el) => !popover.current?.contains(el) && el.offsetParent !== null)
+    return order[order.indexOf(button.current as HTMLElement) + 1]
+  }
 
   return (
     <span
@@ -94,13 +135,16 @@ export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | 
         aria-controls={popoverId}
         onClick={() => {
           if (!open && button.current) {
-            const width = Math.min(POPOVER_WIDTH, window.innerWidth - 32)
-            const rect = button.current.getBoundingClientRect()
-            const left = rect.left
-            setSide(termSide(prefer, rect, window.innerHeight))
-            setShift(Math.max(16 - left, Math.min(0, window.innerWidth - 16 - width - left)))
+            setHost(button.current.closest<HTMLElement>("[role=dialog]"))
+            setPlace({ left: 0, top: 0, visibility: "hidden" })
           }
           setOpen(!open)
+        }}
+        onKeyDown={(event) => {
+          if (open && event.key === "Tab" && !event.shiftKey && link.current) {
+            event.preventDefault()
+            link.current.focus()
+          }
         }}
         className={cn(
           "inline-grid size-8 flex-none place-items-center rounded-lg text-muted transition-colors duration-150 max-sm:size-11",
@@ -110,26 +154,39 @@ export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | 
       >
         <Info aria-hidden="true" className="size-4" />
       </button>
-      <span
-        id={popoverId}
-        hidden={!open}
-        data-align={shift < 0 ? "end" : "start"}
-        data-side={side}
-        style={{ left: shift }}
-        className={cn(
-          side === "above" ? "bottom-full mb-1" : "top-full mt-1",
-          "animate-fade absolute z-30 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none",
-        )}
-      >
-        {open ? (
-          <>
+      {open ? (
+        createPortal(
+          <span
+            ref={popover}
+            id={popoverId}
+            data-align={align}
+            data-side={side}
+            style={{ position: "fixed", ...place }}
+            className="animate-fade z-60 block w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none"
+          >
             <span className="block">{term.text}</span>
-            <a href={TERM_DOCS[id]} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex min-h-8 items-center font-medium text-ink underline">
+            <a
+              ref={link}
+              href={TERM_DOCS[id]}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-flex min-h-8 items-center font-medium text-ink underline"
+              onKeyDown={(event) => {
+                if (event.key !== "Tab") return
+                const next = event.shiftKey ? button.current : after()
+                if (!next) return
+                event.preventDefault()
+                next.focus()
+              }}
+            >
               Read more
             </a>
-          </>
-        ) : null}
-      </span>
+          </span>,
+          host ?? document.body,
+        )
+      ) : (
+        <span id={popoverId} hidden />
+      )}
     </span>
   )
 }
