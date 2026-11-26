@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -1133,4 +1135,107 @@ func TestGetImportServesThePipReport(t *testing.T) {
 		close(r.release)
 		waitEnded(t, r.store, id)
 	})
+}
+
+func TestGetImportAnswersTheCrossingAnAttemptKept(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+	imp, err := r.store.Create("alice",
+		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey)},
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey)},
+		&imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey)}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.store.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	crossing := &importer.Crossing{Project: "web-portal", SealedAt: "2026-11-25T09:00:00Z", Packages: 1, Review: &importer.CrossingReview{
+		Updated: 5, CVEsBefore: [5]int{1, 4, 6, 2, 0}, CVEsAfter: &[5]int{0, 1, 3, 1, 0}, Carried: 2, Jumps: 3,
+	}}
+	rep := importer.Report{Outcome: importer.OutcomeComplete, Packages: []importer.Result{}, Crossing: crossing}
+	if err := r.store.Finish("alice", imp.ID, 1, rep, nil); err != nil {
+		t.Fatal(err)
+	}
+	check := func(where string, got *Crossing) {
+		t.Helper()
+		if got == nil || got.Project == nil || *got.Project != "web-portal" || got.SealedAt != crossing.SealedAt || got.Packages != 1 {
+			t.Fatalf("%s: crossing %+v, want web-portal sealed %s", where, got, crossing.SealedAt)
+		}
+		rv := got.Review
+		if rv == nil || rv.Updated != 5 || rv.Carried != 2 || rv.Jumps != 3 || fmt.Sprint(rv.CvesBefore) != "[1 4 6 2 0]" || rv.CvesAfter == nil || fmt.Sprint(*rv.CvesAfter) != "[0 1 3 1 0]" {
+			t.Errorf("%s: review %+v, want the figures the attempt kept", where, rv)
+		}
+	}
+	check("getImport", importOf(t, r.get("/api/imports/"+imp.ID, "t"), http.StatusOK).Attempts[0].Report.Crossing)
+	list := listOfImports(t, r.get("/api/imports", "t"))
+	if len(list.Imports) != 1 {
+		t.Fatalf("imports %+v", list.Imports)
+	}
+	check("listImports", list.Imports[0].Attempts[0].Report.Crossing)
+}
+
+// answer070 is a 0.7.0 record's import as 0.7.0's getImport answered it.
+const answer070 = `{
+  "id": "20261123T141500Z-0c7e5a19",
+  "createdAt": "2026-11-23T14:15:00Z",
+  "archive": {"key": "packages/pip/data-tools/packages_pip.tar.gz", "etag": "\"6f1ed002ab5595859014ebf0951522d9\"", "size": 81920},
+  "manifest": {"key": "packages/pip/data-tools/manifest.json", "etag": "\"1f3870be274f6c49b3e31a0c6728957f\"", "size": 1342},
+  "signature": {"key": "packages/pip/data-tools/manifest.json.sig", "etag": "\"c4ca4238a0b923820dcc509a6f75849b\"", "size": 214},
+  "expectedSha256": "",
+  "outcome": "complete",
+  "archiveRemoved": true,
+  "attempts": [{
+    "n": 1, "status": "ended", "queuedAt": "2026-11-23T14:15:00Z", "startedAt": "2026-11-23T14:15:01Z", "endedAt": "2026-11-23T14:15:09Z", "outcome": "complete",
+    "report": {
+      "outcome": "complete", "reason": "", "unencrypted": false, "importVersion": "0.7.0",
+      "archive": {"file": "packages_pip.tar.gz", "sha256": "8c2574892063f995fdf756bce07f46c1a5193e54cd52837ed91e32008ccf41ac", "size": 81920},
+      "toolVersion": "0.7.0", "analysisId": "20261123T140210Z", "ecosystem": "pip",
+      "target": {"os": "linux", "cpu": "x86_64", "libc": "", "node": "", "pnpmVer": "", "python": "3.11.2", "glibc": "2.28"},
+      "nexus": {"url": "https://nexus.example:8443", "repository": "pypi-hosted"},
+      "counts": {"published": 1, "present": 1, "failed": 0},
+      "packages": [
+        {"name": "six", "version": "1.16.0", "file": "six-1.16.0-py2.py3-none-any.whl", "state": "published", "reason": "", "note": ""},
+        {"name": "idna", "version": "3.10", "file": "idna-3.10-py3-none-any.whl", "state": "present", "reason": "", "note": ""}
+      ],
+      "archiveChecked": true,
+      "publicKeySha256": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+    },
+    "removal": {"removed": true, "reason": ""}
+  }]
+}`
+
+func TestGetImportKeepsEveryField070Answered(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	var record map[string]any
+	if err := json.Unmarshal([]byte(answer070), &record); err != nil {
+		t.Fatal(err)
+	}
+	// The record 0.7.0 wrote: the answer's fields, its format and its user,
+	// without what the answer derives.
+	record["formatVersion"], record["user"] = 1, "alice"
+	delete(record, "outcome")
+	delete(record, "archiveRemoved")
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(r.data, "alice", "20261123T141500Z-0c7e5a19")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "import.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got, want any
+	if err := json.Unmarshal(r.get("/api/imports/20261123T141500Z-0c7e5a19", "t").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(answer070), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		g, _ := json.Marshal(got)
+		t.Errorf("the answer to a 0.7.0 record differs from 0.7.0's:\n%s", g)
+	}
 }

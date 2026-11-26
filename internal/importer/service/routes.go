@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/importer/token"
 	"github.com/MorganKryze/sealift/internal/store/imports"
@@ -54,9 +53,10 @@ type Handlers struct {
 	importVersion string
 	// startMu makes the duplicate check and the creation of an import one step.
 	startMu sync.Mutex
-	// marks holds the ecosystem read from each manifest, by bucket, key and ETag.
+	// marks holds the check of each folder's manifest and signature, by
+	// bucket, both keys and both ETags.
 	marksMu sync.Mutex
-	marks   map[string]archive.Ecosystem
+	marks   map[string]folderCheck
 }
 
 // New builds the handlers.
