@@ -34,6 +34,31 @@ func dropControl(s string) string {
 	}, s)
 }
 
+// droppedKinds names, in order, the kinds of character dropControl would
+// drop from s that an operator may want to know a database carried:
+// "bidi" for a bidirectional control, "control" for a control character
+// that is not whitespace. Other format characters, such as the word
+// joiner real descriptions hold, are left out.
+func droppedKinds(s string) []string {
+	var bidi, control bool
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Bidi_Control, r):
+			bidi = true
+		case unicode.IsControl(r) && !unicode.IsSpace(r):
+			control = true
+		}
+	}
+	var kinds []string
+	if bidi {
+		kinds = append(kinds, "bidi")
+	}
+	if control {
+		kinds = append(kinds, "control")
+	}
+	return kinds
+}
+
 // advisoryText drops s's control and format characters and folds its
 // whitespace to single spaces, then cleans it as a failure cause is
 // cleaned. The cause cleaning runs last because a format character inside

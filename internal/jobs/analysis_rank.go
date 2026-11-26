@@ -94,6 +94,7 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 // wording of an id wins and the same report always gives the same table.
 func (r *run) setAdvisories(index rank.Index) {
 	table := map[string]Advisory{}
+	seen := map[string]bool{}
 	add := func(cves []CVE) {
 		for _, c := range cves {
 			if _, ok := table[c.ID]; ok {
@@ -101,6 +102,10 @@ func (r *run) setAdvisories(index rank.Index) {
 			}
 			for _, f := range index[c.Package] {
 				if f.ID == c.ID {
+					if !seen[c.ID] {
+						seen[c.ID] = true
+						r.logDropped(f)
+					}
 					addAdvisory(table, r.root, f)
 					break
 				}
@@ -115,6 +120,18 @@ func (r *run) setAdvisories(index rank.Index) {
 	}
 	if len(table) > 0 {
 		r.result.Advisories = table
+	}
+}
+
+// logDropped logs the kinds of character the cleaning drops from f's
+// title and description, never the text: an id whose wording carries an
+// escape or a bidi control is worth a look in the database.
+func (r *run) logDropped(f rank.Finding) {
+	if !rank.ValidID(f.ID) {
+		return
+	}
+	if kinds := droppedKinds(f.Title + f.Description); len(kinds) > 0 {
+		r.log(f.ID + ": advisory text dropped " + strings.Join(kinds, ", ") + " characters")
 	}
 }
 

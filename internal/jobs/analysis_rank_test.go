@@ -616,3 +616,29 @@ func TestRankResultMarshalsAdvisoriesAsTheContractNamesThem(t *testing.T) {
 		t.Errorf("a result that names no CVE carries no advisories key: %s", raw)
 	}
 }
+
+func TestRankLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
+	index := rank.NewIndex([]rank.Finding{
+		{ID: "CVE-2026-00004", Package: "express", Version: "4.17.1", Severity: rank.High, Title: "secret\x1b[31m wording \u202Eevil", Description: "a\x00b"},
+		{ID: "CVE-2026-00005", Package: "express", Version: "4.17.1", Severity: rank.Low, Title: "word\u2060joiner\tand tab"},
+	})
+	r := newRankRun(t, policy.DefaultReview())
+	var lines []string
+	r.emit = func(e Event) {
+		if e.Kind == "log" {
+			var d logData
+			if err := json.Unmarshal(e.Data, &d); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			lines = append(lines, d.Line)
+		}
+	}
+	d, outcomes := fakeDependency("express", "4.17.1", fakeVersion{version: "4.17.1", published: longAgo})
+	if err := r.stepRank([]depInfo{d}, outcomes, index); err != nil {
+		t.Fatalf("stepRank: %v", err)
+	}
+	want := []string{"CVE-2026-00004: advisory text dropped bidi, control characters"}
+	if !slices.Equal(lines, want) {
+		t.Errorf("log = %q, want %q", lines, want)
+	}
+}
