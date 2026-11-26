@@ -113,6 +113,14 @@ type Store struct {
 func Open(root string) (*Store, error) {
 	syscall.Umask(0o002)
 
+	// A resolve that a crash interrupted leaves its working directory behind,
+	// with an .npmrc that names the registry and its credentials. No resolve
+	// runs before Open returns, so the whole directory can go.
+	resolveDir := filepath.Join(root, "cache", "resolve")
+	if err := os.RemoveAll(resolveDir); err != nil {
+		return nil, fmt.Errorf("store: sweep %s: %w", resolveDir, err)
+	}
+
 	dirs := []struct {
 		path string
 		mode os.FileMode
