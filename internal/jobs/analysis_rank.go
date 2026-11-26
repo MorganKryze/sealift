@@ -264,7 +264,7 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		}
 		if warning := peerWarning(r.projectOutput, output); warning != "" {
 			r.log("pnpm: " + output)
-			r.result.Warnings = append(r.result.Warnings, warning)
+			r.warn(warning)
 		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
 		if perr != nil {

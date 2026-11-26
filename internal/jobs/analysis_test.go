@@ -1388,3 +1388,56 @@ func TestAnalysis_WarningsAndEvidenceNameDataPathsRelative(t *testing.T) {
 		}
 	}
 }
+
+// credentialPnpm fails bar@2.1.0 with an error naming a registry URL that
+// carries a user and password.
+type credentialPnpm struct{ fakePnpm }
+
+func (f *credentialPnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	var doc struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(in.Manifest, &doc); err == nil && doc.Dependencies["bar"] == "2.1.0" {
+		return runner.ResolveResult{}, errors.New("GET http://alice:s3cret@host/bar: 401")
+	}
+	return f.fakePnpm.Resolve(ctx, in)
+}
+
+func TestAnalysis_UnresolvableEvidenceHoldsNoURLCredentials(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"bar":"2.0.0"}}`)
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     &credentialPnpm{},
+		Trivy:    &fakeTrivy{},
+		Registry: &npm.Client{Registry: registryServer(t, map[string]string{"bar": barDoc}).URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var result Result
+	if err := st.ReadJSON(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "ranking.json"), &result); err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	found := false
+	for _, d := range result.Dependencies {
+		for _, c := range d.Candidates {
+			for _, s := range c.Signals {
+				if s.Name != string(rank.Unresolvable) {
+					continue
+				}
+				found = true
+				if strings.Contains(s.Evidence, "alice") || strings.Contains(s.Evidence, "s3cret") {
+					t.Errorf("%s@%s's evidence %q holds the URL's credentials", d.Name, c.Version, s.Evidence)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no unresolvable candidate in the result")
+	}
+}

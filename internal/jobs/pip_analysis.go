@@ -384,7 +384,7 @@ func (r *pipRun) stepScan() error {
 			outsideFindings += n
 		}
 		if len(outside) > 0 {
-			result.Warnings = append(result.Warnings, outsideWarning(outsideFindings, outside))
+			result.Warnings = append(result.Warnings, causeText(r.root, outsideWarning(outsideFindings, outside)))
 		}
 		return r.a.Store.WriteJSON(r.resultPath(), result)
 	})
