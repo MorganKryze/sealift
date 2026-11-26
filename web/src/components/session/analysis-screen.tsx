@@ -182,7 +182,7 @@ export function AnalysisScreen({ projectId, project, analysis, onChanged, onNavi
   const running = analysis.state === "running"
   const live = queued || running
   const events = useJobEvents(analysis.id, live, onChanged)
-  const steps = sessionSteps({ project, current: "analysis", onNavigate: onNavigateStep })
+  const steps = sessionSteps({ project, analysis, current: "analysis", onNavigate: onNavigateStep })
 
   // Only an analysis seen running here opens its Review on its own; one that ended before stays readable.
   const sawLive = useRef(live)

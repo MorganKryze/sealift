@@ -37,7 +37,7 @@ interface ExportScreenProps {
  * one reads Sealed once its manifest.json reads.
  */
 export function ExportScreen({ project, analysis, relatedExport, previousArchive, onChanged, onNavigateStep }: ExportScreenProps) {
-  const steps = sessionSteps({ project, current: "export", onNavigate: onNavigateStep })
+  const steps = sessionSteps({ project, analysis, current: "export", onNavigate: onNavigateStep })
 
   let body: ReactNode
   if (!relatedExport) {

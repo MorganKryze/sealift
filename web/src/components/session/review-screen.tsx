@@ -106,7 +106,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
   const refusal =
     sealError?.status === 400 && sealError.problem?.title === "invalid export reasons" ? (sealError.problem.detail ?? undefined) : undefined
 
-  const steps = sessionSteps({ project, current: "review", onNavigate: onNavigateStep })
+  const steps = sessionSteps({ project, analysis, current: "review", onNavigate: onNavigateStep })
 
   if (!result) {
     return (

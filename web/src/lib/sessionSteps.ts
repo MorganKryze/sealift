@@ -1,4 +1,4 @@
-import type { Project } from "@/api/projects"
+import type { Analysis, Project } from "@/api/projects"
 import { stepBarStep, type StepBarStep, type StepId, type StepStatus } from "@/components/step-bar"
 import { latestByDate } from "@/lib/utils"
 
@@ -8,6 +8,8 @@ interface SessionStepsOptions {
   project: Project
   /** The step the caller is rendering: flagged current, never a link to itself. */
   current: StepId
+  /** The analysis the screen shows (`?analysis=`); the latest one when the screen names none. */
+  analysis?: Analysis
   onNavigate: (step: StepId) => void
 }
 
@@ -20,8 +22,8 @@ interface SessionStepsOptions {
  * client-only state on the home screen), but everything reached after it
  * is a real step this session's project data can still show.
  */
-export function sessionSteps({ project, current, onNavigate }: SessionStepsOptions): StepBarStep[] {
-  const analysis = latestByDate(project.analyses)
+export function sessionSteps({ project, analysis: shown, current, onNavigate }: SessionStepsOptions): StepBarStep[] {
+  const analysis = shown ?? latestByDate(project.analyses)
   const relatedExport = analysis
     ? latestByDate(project.exports?.filter((candidate) => candidate.analysisId === analysis.id))
     : undefined
