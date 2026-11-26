@@ -58,6 +58,21 @@ type Queue struct {
 	wake  chan struct{}
 }
 
+// putBack returns an attempt a cancel took out of the queue to its place at,
+// so a cancel whose end was not stored leaves it runnable.
+func (q *Queue) putBack(user, id string, at int) {
+	q.mu.Lock()
+	if q.ctx.Err() == nil {
+		at = min(at, len(q.items))
+		q.items = append(q.items[:at:at], append([]queued{{user, id}}, q.items[at:]...)...)
+	}
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
 // NewQueue starts the queue's worker.
 func NewQueue(s *Store, run RunFunc, log *slog.Logger) *Queue {
 	ctx, stop := context.WithCancel(context.Background())
@@ -121,26 +136,27 @@ const (
 
 // cancel takes the attempt of user and id out of the queue, or stops its
 // run when it is the one running.
-func (q *Queue) cancel(user, id string) cancelResult {
+// at is the attempt's place in the queue when it is taken out.
+func (q *Queue) cancel(user, id string) (_ cancelResult, at int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for i, it := range q.items {
 		if it.user == user && it.id == id {
 			q.items = append(q.items[:i:i], q.items[i+1:]...)
-			return cancelTaken
+			return cancelTaken, i
 		}
 	}
 	if c := q.now; c != nil && c.user == user && c.id == id {
 		if c.returned {
-			return cancelTooLate
+			return cancelTooLate, 0
 		}
 		if !c.cancelled {
 			c.cancelled = true
 			close(c.cancel)
 		}
-		return cancelStopping
+		return cancelStopping, 0
 	}
-	return cancelUnknown
+	return cancelUnknown, 0
 }
 
 func (q *Queue) loop() {
@@ -356,14 +372,20 @@ func (s *Store) Cancel(user, id string) (Import, error) {
 	q := s.queue
 	s.mu.Unlock()
 	if q != nil {
-		switch q.cancel(user, id) {
+		switch res, at := q.cancel(user, id); res {
 		case cancelStopping:
 			return s.Get(user, id)
 		case cancelTooLate:
 			return Import{}, ErrEnded
+		case cancelTaken:
+			imp, err := s.cancelQueued(user, id)
+			if err != nil {
+				q.putBack(user, id, at)
+			}
+			return imp, err
 		}
 	}
-	// Taken out of the queue, or held by none: nothing else starts it now.
+	// Held by no queue: nothing else starts it now.
 	return s.cancelQueued(user, id)
 }
 

@@ -711,6 +711,35 @@ func recordReadOnly(t *testing.T, s *Store, imp Import) func() {
 	return restore
 }
 
+func TestQueueCancelThatCannotBeStoredLeavesTheAttemptQueued(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	running, waiting := newImport(t, s, "alice"), newImport(t, s, "alice")
+	started, release := make(chan string, 2), make(chan struct{})
+	q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+		<-release
+		return completeReport(), nil
+	})
+	q.Submit(running.User, running.ID)
+	q.Submit(waiting.User, waiting.ID)
+	waitFor(t, started, "the first run")
+	restore := recordReadOnly(t, s, waiting)
+	if _, err := s.Cancel(waiting.User, waiting.ID); err == nil {
+		t.Fatal("the cancel answered no error though its end was not stored")
+	}
+	if n, queued := s.Ahead(waiting.User, waiting.ID); !queued || n != 1 {
+		t.Errorf("after the failed cancel: ahead %d queued %v, want 1 true", n, queued)
+	}
+	restore()
+	close(release)
+	if id := waitFor(t, started, "the second run"); id != waiting.ID {
+		t.Errorf("%s ran, want %s", id, waiting.ID)
+	}
+	q.Close()
+	if got, _ := s.Get(waiting.User, waiting.ID); got.Outcome() != importer.OutcomeComplete {
+		t.Errorf("outcome %q, want complete", got.Outcome())
+	}
+}
+
 // blockingHandler holds the logging of one message until release closes.
 type blockingHandler struct {
 	slog.Handler
