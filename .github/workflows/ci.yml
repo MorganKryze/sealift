@@ -30,7 +30,8 @@ jobs:
       - name: go mod tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
       # The sums come from golangci-lint-2.15.0-checksums.txt. Pinning them
-      # here also catches a release asset replaced after the fact.
+      # here also catches a release asset replaced after the fact. Dependabot
+      # does not bump this step: a new version changes VERSION and both sums.
       - name: install golangci-lint
         env:
           VERSION: 2.15.0
@@ -47,7 +48,10 @@ jobs:
           cd "$RUNNER_TEMP"
           curl -fsSL --retry 3 -o "$name.tar.gz" "$url/$name.tar.gz"
           curl -fsSL --retry 3 -o checksums.txt "$url/golangci-lint-$VERSION-checksums.txt"
-          grep -qx "$sum  $name.tar.gz" checksums.txt
+          grep -qxF "$sum  $name.tar.gz" checksums.txt || {
+            echo "the pinned sum for $name is not in the release checksums" >&2
+            exit 1
+          }
           echo "$sum  $name.tar.gz" | sha256sum -c -
           tar -xzf "$name.tar.gz"
           echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"

@@ -120,7 +120,7 @@ The diagram leaves out three packages and some edges to keep it readable:
 | Node | 22 | `engines` in `web/package.json` |
 | pnpm | 12.3.4 | `packageManager` in `web/package.json`; `corepack enable` selects it |
 | [just](https://just.systems) | any | `justfile` |
-| golangci-lint | 2.15 | `ci.yml` pins v2.15.0; `.golangci.yml` is its config |
+| golangci-lint | 2.15 | `ci.yml` pins v2.15.0 and the sha256 of its linux tarballs: a new version changes `VERSION`, `SHA256_AMD64` and `SHA256_ARM64` there; `.golangci.yml` is its config |
 | Docker | any with buildx | the image, the end-to-end test and the lab |
 | Trivy | on your `PATH` | the integration tests only |
 | Chromium for Playwright | `pnpm -C web exec playwright install chromium` | the browser gate only |
