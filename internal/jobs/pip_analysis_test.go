@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -1001,6 +1002,25 @@ func TestPipScanWarnsOnAStaleDatabase(t *testing.T) {
 	res, _ := readPipResult(t, st, a)
 	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "could not refresh the vulnerability database: registry unreachable") {
 		t.Errorf("warnings = %q, want the failed database refresh", res.Warnings)
+	}
+}
+
+// TestPipScanWarningNamesDataPathsRelative proves a failed database
+// refresh whose error names a file under the data directory stores the
+// warning with that file's path inside it.
+func TestPipScanWarningNamesDataPathsRelative(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2"))
+	a.Trivy = &cannedTrivy{report: pipTrivyReport(), updateErr: &fs.PathError{Op: "open", Path: filepath.Join(st.Root(), "tools", "trivy", "db", "metadata.json"), Err: fs.ErrPermission}}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, _ := readPipResult(t, st, a)
+	want := "could not refresh the vulnerability database: open tools/trivy/db/metadata.json: permission denied"
+	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], want) {
+		t.Errorf("warnings = %q, want one starting %q", res.Warnings, want)
 	}
 }
 

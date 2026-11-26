@@ -76,7 +76,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - A project whose target names another pnpm version than the default target resolves with that pnpm. It used to download that version, then resolve with the default target's pnpm.
 - pnpm resolves through `SEALIFT_NPM_REGISTRY`. It used to resolve through the public registry unless `NPM_CONFIG_REGISTRY` named the mirror too. `NPM_CONFIG_REGISTRY` no longer reaches pnpm: remove it from your deployment.
 - A request with a method an `/api` route does not serve, such as `DELETE /api/instance`, answers 405 with an `Allow` header naming the methods it serves. It used to answer 404. An unknown `/api` path answers 404 as Problem Details, in JSON like every other API error.
-- A failure cause, on screen and in the API, names a file in the data volume by its path inside the volume, such as `private/signing-key.pem`. Some causes used to carry the server's full path. The server log keeps the full error: it gets one warning per failed job, with the job's id and kind.
+- A failure cause, an analysis warning and the evidence of a candidate that does not resolve, on screen and in the API, name a file in the data volume by its path inside the volume, such as `private/signing-key.pem`. Some of them used to carry the server's full path. The server log keeps the full error: it gets one warning per failed job, with the job's id and kind.
 
 ### Security
 
@@ -85,7 +85,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.
 - The policy's logo must be a regular PNG or SVG file of at most 256 KiB, and is served with a `Content-Security-Policy` that blocks scripts and `X-Content-Type-Options: nosniff`. A contact address must be `https:` or `mailto:`, and brand text with a control character is refused.
 - An analysis refuses an npm package document over 256 MiB and names the package, where it used to read a document of any size into memory. A request to the npm registry gives up after 5 minutes, so a registry that stops answering mid-response can no longer hold an analysis forever.
-- A failed download from a registry whose `SEALIFT_NPM_REGISTRY` URL carries a user and password no longer stores them in the job's cause, on screen and in the API, or writes them to the server log.
+- A failed download or package lookup from a registry whose `SEALIFT_NPM_REGISTRY` URL carries a user and password no longer stores them in the job's cause or in an analysis warning, on screen and in the API. The server log no longer gets them either.
 
 ## [0.7.0] - 2026-11-23
 

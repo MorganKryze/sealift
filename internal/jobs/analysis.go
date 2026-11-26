@@ -255,6 +255,12 @@ type run struct {
 	projectOutput string
 }
 
+// warn records msg as one of the result's warnings, cleaned as a failure
+// cause is: a warning often quotes an error.
+func (r *run) warn(msg string) {
+	r.result.Warnings = append(r.result.Warnings, causeText(r.root, msg))
+}
+
 // runStep runs fn, emits exactly one "step" event for name and records its
 // timing in status.json, regardless of whether fn succeeds.
 func (l *stepLog) runStep(name string, fn func() error) error {
