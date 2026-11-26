@@ -754,6 +754,51 @@ func TestAttemptKeepsTheCrossingAndTheReviewsFigures(t *testing.T) {
 			t.Errorf("crossing %+v, review %+v, want %+v, review %+v", rep.Crossing, reviewOf(rep.Crossing), want, want.Review)
 		}
 	})
+	// A review whose project scan was never read has no after count. The
+	// report keeps it absent, so no reader takes it for zero CVEs.
+	noAfter := func() map[string]any {
+		review := crossingReviewDoc()
+		review["cves"] = map[string]any{"before": []any{1, 4, 6, 2, 0}}
+		return review
+	}
+	checkNoAfter := func(t *testing.T, rep Report) {
+		t.Helper()
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := wantCrossingReview()
+		want.CVEsAfter = nil
+		if got := reviewOf(rep.Crossing); !reflect.DeepEqual(got, want) {
+			t.Errorf("review %+v, after %v, want %+v with no after count", got, afterOf(got), want)
+		}
+		b, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"cvesAfter"`) {
+			t.Errorf("the report names an after count the review lacks: %s", b)
+		}
+	}
+	t.Run("npm, a review with no after count", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		addReview(t, r.opts.Manifest, noAfter())
+		checkNoAfter(t, r.runAttempt(t, r.attemptOf(t)))
+	})
+	t.Run("pip, a review with no after count", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, noAfter())
+		rep, _ := p.attempt(t, archive.Pip)
+		checkNoAfter(t, rep)
+	})
+}
+
+// afterOf is r's after count, nil when r or its count is.
+func afterOf(r *CrossingReview) *[5]int {
+	if r == nil {
+		return nil
+	}
+	return r.CVEsAfter
 }
 
 // reviewOf is c's review, nil when c is.
