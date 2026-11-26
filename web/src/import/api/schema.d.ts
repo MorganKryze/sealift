@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Add an attempt to an import
-         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again. With no packages it may upload any package, and nothing carries over from an earlier attempt. With packages it uploads only those files; every other package is read from Nexus and never uploaded, and one Nexus lacks stays failed with the kind and reason the latest attempt recorded. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. 400 when packages names anything but failed packages of the latest attempt, or one twice; the answer repeats none of them and nothing changes. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again. With no packages it may upload any package, and nothing carries over from an earlier attempt. With packages it uploads only those files; every other package is read from Nexus and never uploaded, and one Nexus lacks stays failed with the kind and reason the latest attempt recorded. A package the latest attempt published or found in Nexus, and that Nexus has lost since, fails with the kind nexus and a new reason. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. 400 when packages names anything but failed packages of the latest attempt, or one twice; the answer repeats none of them and nothing changes. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
          */
         post: operations["retryImport"];
         delete?: never;
@@ -113,7 +113,7 @@ export interface paths {
         put?: never;
         /**
          * Cancel the latest attempt of an import
-         * @description A queued attempt leaves the queue and ends cancelled at once. A running attempt stops before its next package and ends cancelled; its packages not reached fail with the kind interrupted. Every package already in Nexus stays there, and a cancelled attempt removes nothing from MinIO. An attempt that ended every package before the cancel keeps the outcome it ends with. A cancelled import takes a retry and blocks a new start of its archive like an incomplete one. 409 once the latest attempt has ended. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         * @description A queued attempt leaves the queue and ends cancelled at once. A running attempt stops before its next package and ends cancelled; its packages not reached fail with the kind interrupted. Every package already in Nexus stays there, and a cancelled attempt removes nothing from MinIO. An attempt that ended every package before the cancel keeps the outcome it ends with. A cancelled import takes a retry and blocks a new start of its archive like an incomplete one. 409 once the latest attempt has ended, or for a running attempt no queue of this service holds. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
          */
         post: operations["cancelImport"];
         delete?: never;
@@ -579,7 +579,7 @@ export interface operations {
                     "application/json": components["schemas"]["Import"];
                 };
             };
-            /** @description The latest attempt has ended */
+            /** @description The latest attempt has ended, or it runs where this service cannot stop it */
             409: {
                 headers: {
                     [name: string]: unknown;

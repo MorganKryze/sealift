@@ -138,7 +138,9 @@ paths:
         packages it may upload any package, and nothing carries over from an
         earlier attempt. With packages it uploads only those files; every other
         package is read from Nexus and never uploaded, and one Nexus lacks
-        stays failed with the kind and reason the latest attempt recorded.
+        stays failed with the kind and reason the latest attempt recorded. A
+        package the latest attempt published or found in Nexus, and that Nexus
+        has lost since, fails with the kind nexus and a new reason.
         Accepted whatever the last outcome was, while no attempt is queued or
         running and the archive is still in MinIO. 409 otherwise. 400 when
         packages names anything but failed packages of the latest attempt, or
@@ -188,7 +190,7 @@ paths:
         An attempt that ended every package before the cancel keeps the outcome
         it ends with. A cancelled import takes a retry and blocks a new start
         of its archive like an incomplete one. 409 once the latest attempt has
-        ended. Another user's id answers 404 like a missing one. The guard
+        ended, or for a running attempt no queue of this service holds. Another user's id answers 404 like a missing one. The guard
         against cross-site requests is the one of startImport.
       parameters:
         - name: importId
@@ -211,7 +213,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Import"
         "409":
-          description: The latest attempt has ended
+          description: The latest attempt has ended, or it runs where this service cannot stop it
           content:
             application/problem+json:
               schema:
