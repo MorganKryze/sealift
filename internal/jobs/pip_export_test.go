@@ -1141,6 +1141,67 @@ func TestPipExportTwiceGivesTheSameSha256(t *testing.T) {
 	}
 }
 
+func TestPipExportIgnoresTheAnalysisAdvisories(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	for _, p := range pipExportSet {
+		ix.Add(piptest.Dist{Name: p.Name, Version: p.Version, Tag: "py3-none-any", Uploaded: released})
+	}
+	f := runScannedPipAnalysis(t, ix.URL, "requests==2.32.3\n", pipExportSet,
+		pipTrivyReport([5]string{"requests", "2.32.3", "CVE-2024-47081", "MEDIUM", "2.32.4"}))
+	path := filepath.Join(f.ref.Dir, "pip-result.json")
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(readFile(t, path), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	var archives, manifests [2][]byte
+	for i, keep := range []bool{false, true} {
+		delete(doc, "advisories")
+		if keep {
+			table := map[string]Advisory{"CVE-2024-47081": {
+				Title:     "requests: <b>a title</b> the export never quotes",
+				Summary:   "Requests may leak `.netrc` credentials. See [the advisory](https://example.com).",
+				Published: "2025-06-09T19:15:23Z",
+			}}
+			var err error
+			if doc["advisories"], err = json.Marshal(table); err != nil {
+				t.Fatal(err)
+			}
+		}
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o664); err != nil {
+			t.Fatal(err)
+		}
+		var result PipResult
+		if err := json.Unmarshal(readFile(t, path), &result); err != nil {
+			t.Fatal(err)
+		}
+		if keep != (len(result.Advisories) == 1) {
+			t.Fatalf("export %d reads advisories %+v, want them only on the second export", i, result.Advisories)
+		}
+		e := f.newPipExport(t)
+		e.Analysis.Result = result
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		archives[i] = readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile))
+		manifest := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+		if !createdAtLine.Match(manifest) {
+			t.Fatalf("export %d: manifest.json has no createdAt line:\n%s", i, manifest)
+		}
+		manifests[i] = createdAtLine.ReplaceAll(manifest, nil)
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("the archive's bytes changed with the analysis' advisories")
+	}
+	if !bytes.Equal(manifests[0], manifests[1]) {
+		t.Errorf("manifest.json changed with the analysis' advisories:\n%s\nthen\n%s", manifests[0], manifests[1])
+	}
+}
+
 func TestPipExportNeverReadsAWheelsContent(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	var file string
