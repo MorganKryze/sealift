@@ -46,12 +46,14 @@ func (a *PipAnalysis) ProjectID() string { return a.Project.ID }
 // PipResult is what a pip analysis writes to pip-result.json, and what the
 // API returns as pipResult. Field names match the contract's schemas.
 type PipResult struct {
-	Target     store.PipTarget     `json:"target"`
-	Files      []string            `json:"files"`    // every requirements file the set was resolved from
-	Packages   []PipPackage        `json:"packages"` // sorted by normalized name
-	Blocking   []PipBlocking       `json:"blocking"`
-	Warnings   []string            `json:"warnings"`
-	Advisories map[string]Advisory `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
+	Target     store.PipTarget      `json:"target"`
+	Files      []string             `json:"files"`    // every requirements file the set was resolved from
+	Packages   []PipPackage         `json:"packages"` // sorted by normalized name
+	Blocking   []PipBlocking        `json:"blocking"`
+	Warnings   []string             `json:"warnings"`
+	Advisories map[string]Advisory  `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
+	Previous   *PipPreviousCrossing `json:"previous,omitempty"`   // absent when none reads, and before crossings were compared
+	Removed    []PipRemoved         `json:"removed,omitempty"`    // the previous crossing's packages the set no longer holds
 }
 
 // PipPackage is one package of the resolved set. A done analysis may hold
@@ -64,6 +66,32 @@ type PipPackage struct {
 	Wheel    *PipWheel    `json:"wheel,omitempty"`    // absent until chosen, and for a blocked package
 	CVEs     []PipFinding `json:"cves"`               // sorted by severity, then id
 	Yanked   *PipYanked   `json:"yanked,omitempty"`   // absent when the index keeps the release
+	Previous *PipPrevious `json:"previous,omitempty"` // absent for a new package and with no previous crossing
+}
+
+// PipPrevious is a package as the previous crossing held it.
+type PipPrevious struct {
+	Version   string       `json:"version"`
+	CVEs      []PipFinding `json:"cves"` // at that version, from this analysis's scan
+	MajorJump bool         `json:"majorJump"`
+}
+
+// PipPreviousCrossing names the export a pip analysis compares its set
+// with.
+type PipPreviousCrossing struct {
+	ProjectID   string    `json:"projectId"`
+	ProjectName string    `json:"projectName"`
+	ExportID    string    `json:"exportId"`
+	AnalysisID  string    `json:"analysisId"`
+	SealedAt    time.Time `json:"sealedAt"`
+}
+
+// PipRemoved is a package of the previous crossing the set no longer
+// holds.
+type PipRemoved struct {
+	Name    string       `json:"name"`
+	Version string       `json:"version"`
+	CVEs    []PipFinding `json:"cves"` // at that version, from this analysis's scan
 }
 
 // PipPlace is a line of a requirements file that pins a package.
@@ -112,7 +140,8 @@ const shownProblems = 3
 type pipRun struct {
 	stepLog
 	a          *PipAnalysis
-	start      time.Time
+	createdAt  time.Time // when the run started
+	start      time.Time // createdAt to the second
 	set        pip.Set
 	files      []string  // the project's file names, in upload order
 	pins       []pip.Pin // the pins the target installs
@@ -156,7 +185,7 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
-	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
+	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, createdAt: createdAt, start: createdAt.Truncate(time.Second)}
 	uvVersion, trivyVersion, trivyDBDate := "", "", time.Time{}
 	defer func() {
 		state := store.Done
@@ -362,14 +391,20 @@ func (r *pipRun) stepResolve() error {
 	})
 }
 
-// stepScan scans the resolved set with Trivy, keeping the report as
-// project.trivy.json, and writes pip-result.json. A scan failure stops the
-// job, so a done analysis never stands for a scan that did not run.
+// stepScan scans the resolved set with Trivy, together with each version
+// the previous crossing held, keeping the report as project.trivy.json,
+// and writes pip-result.json. A scan failure stops the job, so a done
+// analysis never stands for a scan that did not run.
 func (r *pipRun) stepScan() error {
 	return r.runStep("scan", func() error {
-		components := make([]sbom.Component, 0, len(r.resolved))
-		for _, p := range r.resolved {
-			components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
+		previous, earlier := r.previousCrossing()
+		components := make([]sbom.Component, 0, len(r.resolved)+len(earlier))
+		scanned := map[string]bool{}
+		for _, p := range slices.Concat(r.resolved, earlier) {
+			if key := p.Name + "@" + p.Version; !scanned[key] {
+				scanned[key] = true
+				components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
+			}
 		}
 		findings, err := scanComponents(r.ctx, r.a.Trivy, components, filepath.Join(r.a.Dir, "project.trivy.json"))
 		if err != nil {
@@ -390,9 +425,19 @@ func (r *pipRun) stepScan() error {
 			Packages: make([]PipPackage, 0, len(r.resolved)),
 			Blocking: sortedBlocking(r.blocking),
 			Warnings: nonNil(r.warnings),
+			Previous: previous,
 		}
 		advisories := map[string]Advisory{}
+		findingsOf := func(name, version string) []PipFinding {
+			return pipFindingsOf(r.root, index.Set([]string{name + "@" + version}), advisories, r.logDropped)
+		}
+		earlierVersion := make(map[string]string, len(earlier))
 		matched := map[string]bool{}
+		for _, p := range earlier {
+			earlierVersion[p.Name] = p.Version
+			matched[p.Name+"@"+p.Version] = true
+		}
+		current := make(map[string]bool, len(r.resolved))
 		for _, p := range r.resolved {
 			key := p.Name + "@" + p.Version
 			matched[key] = true
@@ -401,7 +446,7 @@ func (r *pipRun) stepScan() error {
 				Version:  p.Version,
 				Files:    nonNil(r.set.FilesOf(p.Name)),
 				PinnedAt: r.placesOf(p.Name),
-				CVEs:     pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
+				CVEs:     findingsOf(p.Name, p.Version),
 			}
 			if w, ok := r.wheels[p.Name]; ok {
 				pkg.Wheel = &w
@@ -409,7 +454,16 @@ func (r *pipRun) stepScan() error {
 			if y, ok := r.yanked[p.Name]; ok {
 				pkg.Yanked = &y
 			}
+			if v, ok := earlierVersion[p.Name]; ok {
+				pkg.Previous = &PipPrevious{Version: v, CVEs: findingsOf(p.Name, v), MajorJump: pipMajorJump(v, p.Version)}
+			}
+			current[p.Name] = true
 			result.Packages = append(result.Packages, pkg)
+		}
+		for _, p := range earlier {
+			if !current[p.Name] {
+				result.Removed = append(result.Removed, PipRemoved{Name: p.Name, Version: p.Version, CVEs: findingsOf(p.Name, p.Version)})
+			}
 		}
 		if len(advisories) > 0 {
 			result.Advisories = advisories
@@ -431,6 +485,27 @@ func (r *pipRun) stepScan() error {
 		}
 		return r.a.Store.WriteJSON(r.resultPath(), result)
 	})
+}
+
+// previousCrossing finds the set this analysis compares with, sorted by
+// name, and logs what it found. One that does not read adds a warning and
+// counts as none.
+func (r *pipRun) previousCrossing() (*PipPreviousCrossing, []runner.Resolved) {
+	previous, earlier, err := previousCrossing(r.a.Store, r.a.Project, r.createdAt)
+	switch {
+	case err != nil:
+		r.log(causeText(r.root, err.Error()))
+		r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf(
+			"The previous crossing %s could not be read, so nothing is compared", cleanName(strings.TrimSpace(r.a.Project.Name)))))
+		return nil, nil
+	case previous == nil:
+		r.log("no previous crossing: no pip project of this name has a done export from before this analysis")
+		return nil, nil
+	}
+	r.log(fmt.Sprintf("previous crossing: export %s of project %s, %d %s", previous.ExportID, previous.ProjectID,
+		len(earlier), plural(len(earlier), "package", "packages")))
+	slices.SortStableFunc(earlier, func(a, b runner.Resolved) int { return strings.Compare(a.Name, b.Name) })
+	return previous, earlier
 }
 
 // outsideWarning tells how many findings matched no package of the set,

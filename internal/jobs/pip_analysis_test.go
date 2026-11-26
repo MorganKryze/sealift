@@ -630,6 +630,29 @@ func TestPipAnalysisRecordsWhereEachPinIs(t *testing.T) {
 	}
 }
 
+func TestNoPreviousCrossingRecordsNone(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	set := resolved("requests", "2.32.3")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+	for _, key := range []string{`"previous"`, `"removed"`} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("pip-result.json = %s, holds %s, want it absent", raw, key)
+		}
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings = %q, want none", res.Warnings)
+	}
+	if log := pipLog(t, a); !strings.Contains(log, "no previous crossing") {
+		t.Errorf("log = %q, want a line saying there is no previous crossing", log)
+	}
+}
+
 func TestPipScanReportsFixingVersions(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
 		reqFile("requirements.txt", "Jinja2==3.1.2\nrequests==2.32.3\n"))

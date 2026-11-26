@@ -118,10 +118,10 @@ A pip analysis runs these steps:
 | --- | --- |
 | `validate` | Reads the project's files again and copies them into the analysis. |
 | `prepare-tools` | Installs the target's uv from the package index, held to the minimum release age, and refreshes the Trivy database. |
-| `check-pins` | Reads the index page of every requirement the target installs. It fails when a requirement has no wheel the target can install, or none its `--hash` options list, and names every such requirement. |
+| `check-pins` | Reads the index page of every requirement the target installs, and records each one with no wheel the target can install, or none its `--hash` options list, in `blocking`. `resolve` leaves its line out, and it joins the set at its version, without a wheel. |
 | `resolve` | Resolves every file together with uv, at the target's exact Python version and platform, with `--no-build`, and writes `project/requirements.lock`. The files' pins keep their versions; every other package is held to the minimum release age. |
-| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256. It reads index pages only and downloads no file. For a package no file pins, it chooses among the files uploaded before the minimum release age, as uv does. A wheel added later to an older release, or a file with no upload date, is never recorded. |
-| `scan` | Scans the set for known CVEs with Trivy. |
+| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256 and upload time. A package with none stays in the set without a wheel and joins `blocking`. It reads index pages only and downloads no file. For a package no file pins, it chooses among the files uploaded before the minimum release age, as uv does. A wheel added later to an older release, or a file with no upload date, is never recorded. |
+| `scan` | Scans the set and each version the previous crossing held for known CVEs, in one Trivy run. |
 
 A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in place of `pnpmVersion`:
 
@@ -129,16 +129,14 @@ A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in
 | --- | --- |
 | `target` | The target the set was resolved for. |
 | `files` | The requirements files the set comes from. |
-| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). `cves[].title` stays beside `advisories`. |
+| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `pinnedAt` (each `file` and `line` that pins it), `wheel` (`file`, `url`, `sha256`, `size`, and `uploadedAt` in UTC when the index gives one), `cves` (`id`, `severity`, `fixedVersions`, `title`), `yanked` (`reason`, empty when the index gives none) for a release the index has yanked, and `previous` (`version`, `cves` and `majorJump`) for a package the previous crossing held. `cves[].title` stays beside `advisories`. |
 | `advisories` | The same table as an npm analysis's `advisories`, by CVE id, for every id a package's `cves` names. An analysis written by sealift 0.7.0 has none. |
-| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
-| `warnings` | A yanked release with the index's reason, a pin uploaded within the minimum release age, a database that could not be refreshed, and findings Trivy reported for packages outside the set. |
+| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind`, `detail` and `pinnedAt`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
+| `previous` | The previous crossing: `projectId`, `projectName`, `exportId`, `analysisId` and `sealedAt`. It is the latest done export, created before the analysis started, of a pip project with the same name, trimmed and compared without case, this project included. |
+| `removed` | Each package of the previous crossing that the set no longer holds: `name`, `version` and `cves`. |
+| `warnings` | A pin uploaded within the minimum release age, a database that could not be refreshed, findings Trivy reported for packages outside the set, and a previous crossing that could not be read. |
 
-An analysis that stops on packages with no wheel fails at `check-pins`, `resolve` or `choose-wheels`, and still carries `pipResult`: `blocking` lists every such package and `packages` is empty.
-
-```json
-{"message":"2 packages have no wheel the target can install: docopt==0.6.2 (requirements.txt): source distribution only; pywin32==306 (requirements-win.txt): wheels for other platforms only","step":"check-pins"}
-```
+A done pip analysis may carry a non-empty `blocking`: each package in it stays in `packages` without a `wheel`, and the export refuses the set. An analysis fails on a package with no wheel only when uv itself names it, at `resolve`, since uv then gives no set: `pipResult` lists every package known to block, and `packages` is empty. With no previous crossing, `previous` and `removed` are absent. An analysis written by sealift 0.7.0 has no `pinnedAt`, `yanked`, `uploadedAt`, `previous` or `removed`, and names a yanked release in `warnings`.
 
 uv stops at the first package with no usable wheel, so such a package that no file pins shows alone. A second one behind it shows at the next analysis.
 
