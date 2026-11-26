@@ -157,8 +157,12 @@ func writeBounded(b *strings.Builder, v any) {
 		b.WriteByte('}')
 	case nil:
 		b.WriteString("null")
-	default:
+	case bool, int, int64, uint64, float64:
 		fmt.Fprint(b, x)
+	default:
+		// A kind yaml does not give today, such as a map with keys that are
+		// not strings, is named rather than printed whole.
+		b.WriteString("?")
 	}
 }
 

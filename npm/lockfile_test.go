@@ -164,6 +164,14 @@ func TestParseLockfileRefusesAnAliasBomb(t *testing.T) {
 
 // One large value aliased from every package is walked up to 64 bytes per
 // package, never copied whole.
+func TestWriteBoundedNamesAnUnknownKind(t *testing.T) {
+	var b strings.Builder
+	writeBounded(&b, []any{map[any]any{1: strings.Repeat("x", 1<<20)}})
+	if b.String() != "[?]" {
+		t.Errorf("got %q, want [?]", b.String())
+	}
+}
+
 func TestParseLockfileReadsALargeAliasedValueCheaply(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("lockfileVersion: '9.0'\nbig: &s ['" + strings.Repeat("x", 1<<20) + "']\npackages:\n")
