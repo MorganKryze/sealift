@@ -135,9 +135,9 @@ function FileRow({ file, last }: { file: RequirementsFilePreview; last: boolean 
         <div className="animate-fade px-4 pb-4">
           <ul aria-label={`Pins in ${file.name}`} className="grid grid-cols-1 gap-x-7 sm:grid-cols-3">
             {shown.map((pin, i) => (
-              <li key={`${pin.name}:${i}`} className="flex min-h-8 min-w-0 flex-wrap items-baseline justify-between gap-x-3 border-b border-rule py-1.5 text-[13px]">
+              <li key={`${pin.name}:${i}`} className="grid min-h-8 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 border-b border-rule py-1.5 text-[13px]">
                 <span className="min-w-0 text-ink [overflow-wrap:anywhere]">{pin.name}</span>
-                <span className="ml-auto min-w-0 text-right font-mono text-xs text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pin.version}</span>
+                <span className="min-w-0 text-right font-mono text-xs text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pin.version}</span>
               </li>
             ))}
           </ul>
@@ -238,9 +238,9 @@ function UnpinnedLines({ shown, total }: { shown: RequirementsLine[]; total: Req
             {shown
               .filter((line) => line.file === file)
               .map((line) => (
-                <li key={line.line} className="flex min-h-8 min-w-0 flex-wrap items-baseline justify-between gap-x-3 border-b border-warn-line/50 py-1.5 text-[13px]">
+                <li key={line.line} className="grid min-h-8 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-x-3 border-b border-warn-line/50 py-1.5 text-[13px]">
                   <span className="min-w-0 text-ink [overflow-wrap:anywhere]">{line.name}</span>
-                  <span className="ml-auto min-w-0 text-right font-mono text-xs font-semibold text-warn [font-variant-ligatures:none] [overflow-wrap:anywhere]">{line.value}</span>
+                  <span className="min-w-0 text-right font-mono text-xs font-semibold text-warn [font-variant-ligatures:none] [overflow-wrap:anywhere]">{line.value}</span>
                 </li>
               ))}
           </ul>
