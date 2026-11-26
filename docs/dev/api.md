@@ -199,7 +199,15 @@ A done export signs the reasons into the `review` of `manifest.json`. [Archive f
 
 ### pip exports
 
-A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body is `{"selection":{}}`; a selection that names a package answers 400, since the set is the analysis's. 409 when the analysis is not done, lists no package, or holds a package with no recorded wheel. A refused request creates no export.
+A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body holds an empty selection and the reasons the set needs: `{"selection":{},"reasons":[...]}`. The server checks the request against the stored analysis and the policy of its start, in this order, and a refused request creates no export:
+
+1. 400 when the selection names a package, since the set is the analysis's.
+2. 409 when the analysis is not done or lists no package.
+3. 409 when a package has no recorded wheel, or `blocking` names it. The detail counts and names them, such as `jobs: 1 package has no wheel for the target, so the set cannot cross: <name> <version>`.
+4. 409 when a refuse rule applies, whatever the reasons.
+5. 400 when the reasons fall short, as [Reasons of a pip export](#reasons-of-a-pip-export) lists.
+
+A queued pip export runs these steps:
 
 | Step | What it does |
 | --- | --- |
@@ -211,6 +219,44 @@ A pip export carries every package of the analysis, each with the wheel the anal
 A done pip export holds `packages_pip.tar.gz`, `manifest.json` (format version 3), `manifest.json.sig`, `report.trivy.json`, `report.cdx.json`, `findings.csv` and `summary.md`. [Archive format](archive-format.md#manifestjson-of-a-pip-export) describes the manifest. The same analysis exported twice gives the same archive sha256.
 
 Downloaded wheels stay in the shared cache `cache/wheels/`, named by their sha256, so a second export of the same set downloads nothing. In ephemeral mode, erasing a project empties `cache/wheels/` with the other shared caches.
+
+#### Reasons of a pip export
+
+A pip set asks one reason per package for each of three cases: `major-jump` for a package that left the major the previous crossing held, `cve-without-fix` for its CVEs that no version fixes, and `yanked` for a release its index yanked. A reason names one package in `dependencies`, compared in its normalized form, and its `text` follows the rule of [Reasons](#reasons). An analysis with no previous crossing asks no `major-jump` reason, and one written by sealift 0.7.0 asks no `yanked` reason either.
+
+```json
+{
+  "selection": {},
+  "reasons": [
+    {"kind": "major-jump", "dependencies": ["django"], "text": "Our tests pass on Django 5."},
+    {"kind": "yanked", "dependencies": ["idna"], "text": "Only the metadata was wrong."}
+  ]
+}
+```
+
+A shortfall answers 400 with the title `invalid export reasons` and one problem per shortfall in `detail`, joined by `; `. A problem names packages, versions and CVE ids, and a reason by its position and kind, never by its text:
+
+| Problem | When |
+| --- | --- |
+| `<name> <from> to <to> is a major jump and needs a reason` | The package left the previous crossing's major and no `major-jump` reason names it |
+| `<name> <version> keeps <ids>, which no version fixes, and needs a reason` | The package keeps a CVE without fix and no `cve-without-fix` reason names it |
+| `<name> <version> is yanked on the index and needs a reason` | The index yanked the release and no `yanked` reason names it |
+| `reason 2 (yanked) covers nothing the set needs: <name> needs no such reason` | The package needs no reason of that kind |
+| `reason 3 (major-jump) repeats the reason for <name>` | An earlier reason of the same kind names the package |
+| `reason 1 (yanked) names a package the analysis does not hold` | A name the set does not list |
+| `reason 1 (yanked) names no package` | The reason's `dependencies` is empty. Two names or more read `names 2 packages, and a pip reason covers one` |
+| `reason 1 (cve-without-fix): the reason is empty` | The text breaks the reason rule |
+| `reason 1 has an unknown kind` | `kind` is none of the three |
+
+Under `refuse`, a rule answers 409 whatever the reasons. The detail follows `jobs: ` with one part per rule that applies, joined by `; `. Each part names up to 3 packages, then `and <n> more`:
+
+| Rule | Part of the detail |
+| --- | --- |
+| `review.majorJump` | `review.majorJump is refuse: <name> <from> to <to> is a major jump and cannot cross` |
+| `review.cveWithoutFix` | `review.cveWithoutFix is refuse: <name> <version> keeps <ids>, which no version fixes, and cannot cross` |
+| `review.yanked` | `review.yanked is refuse: <name> <version> is yanked on the index and cannot cross` |
+
+A done pip export signs the reasons into the `review` of `manifest.json`. [Archive format](archive-format.md#manifestjson-of-a-pip-export) describes it.
 
 ## Settings
 

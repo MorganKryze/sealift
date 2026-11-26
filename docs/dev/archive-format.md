@@ -336,7 +336,22 @@ The digests in this example are made up and match no published wheel.
 | `packages[].sha256` | The hex sha256 the package index published for the wheel |
 | `packages[].shippedSha512` | Hex sha512 of the file under `out/`, the same bytes as `sha256` |
 
-The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. A pip manifest may carry a `review` read by the rules of [The review](#the-review), with pip's names and versions. A pip export writes none. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+
+A pip export writes a `review`, read by the rules of [The review](#the-review), with pip's normalized names and versions. It compares the set with the previous crossing the analysis recorded, and reads nothing else:
+
+| Field | What a pip export writes |
+| --- | --- |
+| `cves.before` | The CVE counts of the previous crossing's set, as the analysis scanned it, the packages that left included. With no previous crossing, the counts of `cves.after` |
+| `cves.after` | The CVE counts of the set, each id counted once at its most serious severity |
+| `updates[]` | Each package whose version moved inside its major since the previous crossing |
+| `kept[]` | Empty: the export carries the set as the analysis resolved it |
+| `jumps[]` | One entry per package that left its major since the previous crossing, with no `family` |
+| `left[]` | Every CVE the set keeps |
+| `yanked[]` | Each release of the set its index yanked |
+| `unchanged` | The packages the previous crossing held at the same version. 0 with no previous crossing, since nothing was compared |
+
+A package new since the previous crossing counts in neither `updates` nor `unchanged`. An analysis written by sealift 0.7.0 recorded no previous crossing, so its export signs a review that compares nothing.
 
 ## Telling the formats apart
 
