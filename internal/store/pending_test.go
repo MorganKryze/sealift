@@ -295,6 +295,7 @@ func TestNewDirTakesTheNextCounterOfItsSecond(t *testing.T) {
 		{"counter taken", []string{"20261126T001927Z", "20261126T001927Z-000001"}, "20261126T001927Z-000002"},
 		{"pending counter taken", []string{"20261126T001927Z", "20261126T001927Z-000002.tmp"}, "20261126T001927Z-000003"},
 		{"older random suffix", []string{"20261126T001927Z", "20261126T001927Z-f3a9c1"}, "20261126T001927Z-f3a9c2"},
+		{"last counter left", []string{"20261126T001927Z", "20261126T001927Z-fffffe"}, "20261126T001927Z-ffffff"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -313,5 +314,24 @@ func TestNewDirTakesTheNextCounterOfItsSecond(t *testing.T) {
 				t.Fatalf("NewDir id = %q, want %q", p.ID(), tc.want)
 			}
 		})
+	}
+}
+
+func TestNewDirRefusesASecondPastItsLastCounter(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z", "")
+	writeAnalysisDir(t, s, "20261126T001927Z-ffffff", "")
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	if p, err := s.NewDir("analyses", "proj-1"); err == nil {
+		t.Fatalf("NewDir id = %q, want an error once ffffff is taken", p.ID())
+	}
+	entries, err := os.ReadDir(filepath.Join(s.Root(), "projects", "proj-1", "analyses"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("analyses dir holds %d entries, want the 2 written before", len(entries))
 	}
 }
