@@ -102,8 +102,8 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if err != nil {
 		return nil, err
 	}
-	// Every match is read, newest first: records made in one second have no
-	// reliable order, so a refused import must not hide an unfinished one.
+	// Every match is read, newest first, so a newer refused import does not
+	// hide an older unfinished one.
 	for _, imp := range existing {
 		// A replaced manifest or signature makes another import: a refusal for it must not block the objects now in MinIO.
 		if imp.Archive.Key != archive.Key || imp.Archive.ETag != archive.ETag || imp.Manifest.ETag != manifest.ETag || sigOf(imp).ETag != signature.ETag {
@@ -273,7 +273,7 @@ func recorded(imp imports.Import) []recordedObject {
 // its attempt so no record waits for a restart's sweep.
 func (h *Handlers) stopping(user, id string) problem {
 	if err := h.store.Abandon(user, id, "the service was stopping and did not run this attempt"); err != nil {
-		h.log.Error("could not end an attempt that will not run", "id", id, "error", cleanText(err.Error()))
+		h.log.Error("could not end an attempt that will not run", "user", user, "id", id, "error", cleanText(err.Error()))
 	}
 	return problem{status: 503, body: newProblem(503, "Service stopping", "the service is stopping and takes no new work")}
 }
@@ -390,7 +390,7 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 	}
 	work, err := os.MkdirTemp(dir, "run-")
 	if err != nil {
-		h.log.Error("could not make a working directory", "id", imp.ID, "error", cleanText(err.Error()))
+		h.log.Error("could not make a working directory", "user", imp.User, "id", imp.ID, "error", cleanText(err.Error()))
 		return h.stopped(imp, importer.OutcomeRefused, "could not check the archive: no working directory"), nil
 	}
 	defer os.RemoveAll(work)

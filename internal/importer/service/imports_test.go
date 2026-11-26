@@ -843,18 +843,11 @@ func TestStartBlocksBehindAnyUnfinishedMatch(t *testing.T) {
 			r := newImportRig(t, rigOptions{})
 			r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
 			blocking := seedImport(t, r, unfinished)
-			// Records made in one second sort by their random ids, so add
-			// refused ones until a refused import is the newest match.
-			for range 64 {
-				if list, err := r.store.List("alice"); err != nil {
-					t.Fatal(err)
-				} else if list[0].Outcome() == importer.OutcomeRefused {
-					break
-				}
-				seedImport(t, r, importer.OutcomeRefused)
-			}
-			if list, _ := r.store.List("alice"); list[0].Outcome() != importer.OutcomeRefused || list[0].ID == blocking.ID {
-				t.Fatalf("no refused import came first: %v", list[0].Outcome())
+			refused := seedImport(t, r, importer.OutcomeRefused)
+			if list, err := r.store.List("alice"); err != nil {
+				t.Fatal(err)
+			} else if list[0].ID != refused.ID {
+				t.Fatalf("newest match %s (%s), want the refused %s", list[0].ID, list[0].Outcome(), refused.ID)
 			}
 
 			rec := r.start("t", archiveKey)
