@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/rank"
 )
@@ -73,6 +74,7 @@ type PipSummary struct {
 	RemainingCritical         []rank.Finding
 	RemainingHigh             []rank.Finding
 	Warnings                  []string
+	Yanked                    []archive.ReviewYanked // the yanked releases the archive carries, as its review signs them
 	ArchiveSize               int64
 	ArchiveSHA256             string
 	PackageCount              int
@@ -113,6 +115,17 @@ func WritePipSummary(w io.Writer, s PipSummary) error {
 	}
 	fmt.Fprintln(ew)
 
+	// A set with none leaves the section out: an analysis of sealift 0.7.0
+	// recorded no yanked mark, and its warnings name what it found.
+	if len(s.Yanked) > 0 {
+		fmt.Fprintln(ew, "## Yanked releases")
+		fmt.Fprintln(ew)
+		for _, y := range s.Yanked {
+			fmt.Fprintln(ew, yankedLine(y))
+		}
+		fmt.Fprintln(ew)
+	}
+
 	fmt.Fprintln(ew, "## Warnings from the analysis")
 	fmt.Fprintln(ew)
 	writeItems(ew, s.Warnings)
@@ -134,6 +147,16 @@ func writeItems(w io.Writer, items []string) {
 	for _, item := range items {
 		fmt.Fprintf(w, "- %s\n", oneLine(item))
 	}
+}
+
+// yankedLine names a yanked release with the index's reason, when it gave
+// one, and the reason given for carrying it.
+func yankedLine(y archive.ReviewYanked) string {
+	line := fmt.Sprintf("- %s==%s is yanked on the index", y.Dependency, y.Version)
+	if y.IndexReason != "" {
+		line += " (" + y.IndexReason + ")"
+	}
+	return oneLine(line + ". Reason given: " + y.Reason)
 }
 
 // pipFindingLine describes one finding with the versions that fix it.

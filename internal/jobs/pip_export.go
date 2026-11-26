@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/MorganKryze/sealift/archive"
-	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/report"
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -49,38 +48,6 @@ type pipRefusal struct {
 func (e *pipRefusal) Error() string        { return e.text }
 func (e *pipRefusal) Is(target error) bool { return target == e.class }
 
-// pipNoFixRefusal words the refusal of a pip set holding a CVE no version
-// fixes under review.cveWithoutFix: refuse, nil when it holds none. Pip
-// asks no reason yet, so only the refusal applies.
-func pipNoFixRefusal(r PipResult, p policy.Review) error {
-	if p.CVEWithoutFix != policy.Refuse {
-		return nil
-	}
-	var keeps []string
-	for _, pkg := range r.Packages {
-		var ids []string
-		for _, c := range pkg.CVEs {
-			if !slices.ContainsFunc(c.FixedVersions, func(v string) bool { return strings.TrimSpace(v) != "" }) && !slices.Contains(ids, c.ID) {
-				ids = append(ids, c.ID)
-			}
-		}
-		if len(ids) > 0 {
-			keeps = append(keeps, fmt.Sprintf("%s %s keeps %s", pkg.Name, pkg.Version, andList(ids)))
-		}
-	}
-	if len(keeps) == 0 {
-		return nil
-	}
-	shown := keeps
-	if len(shown) > shownProblems {
-		shown = append(slices.Clone(shown[:shownProblems]), fmt.Sprintf("%d more", len(keeps)-shownProblems))
-	}
-	return &pipRefusal{
-		text:  "jobs: review.cveWithoutFix is refuse: " + strings.Join(shown, "; ") + ", which no version fixes, so the set cannot cross",
-		class: ErrPipNotExportable,
-	}
-}
-
 // PipAnalysisRef points a pip export at the analysis it exports.
 type PipAnalysisRef struct {
 	ID     string
@@ -90,7 +57,8 @@ type PipAnalysisRef struct {
 
 // PipExport packs the wheels a pip analysis recorded. It downloads each
 // from the URL the analysis recorded, checked against its sha256, and
-// never reads an index page: the set is the analysis's.
+// never reads an index page or another analysis: the set and the previous
+// crossing are the analysis's.
 type PipExport struct {
 	Store    *store.Store
 	Index    *pip.Client // downloads only
@@ -98,6 +66,7 @@ type PipExport struct {
 	Project  store.Project
 	Settings store.Settings
 	Analysis PipAnalysisRef
+	Reasons  []Reason // as CheckPipReasons accepted them; the signed review carries them
 	Dir, ID  string
 
 	beforeArchive func() // a test's hook between the download and archive steps
@@ -199,14 +168,18 @@ const pipArchiveDir = "out/"
 var wheelSha256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // packageList is the first step: the analysis's set as it recorded it,
-// refused when a package has no wheel or when the import would refuse the
-// archive. Every name, file and sha256 is checked here, before any path
+// refused when a package has no wheel, the analysis blocked one, or the
+// import would refuse the archive. Every name, file and sha256 is checked here, before any path
 // joins them.
 func (e *PipExport) packageList(emit func(Event)) ([]PipPackage, error) {
 	start := time.Now()
 	emitStep(emit, "package-list", store.Running, 0)
 	pkgs := e.Analysis.Result.Packages
-	if err := checkPipSet(pkgs); err != nil {
+	err := checkPipSet(pkgs)
+	if b := e.Analysis.Result.Blocking; err == nil && len(b) > 0 {
+		err = fmt.Errorf("jobs: %s==%s has no wheel for the target", b[0].Name, b[0].Version)
+	}
+	if err != nil {
 		emitFailedStep(emit, "package-list", time.Since(start), err)
 		return nil, err
 	}
@@ -743,6 +716,7 @@ func (e *PipExport) writeSummary(findings []rank.Finding, wheels []pipWheelFile,
 		InArchive:         rank.VectorOf(rank.Index{"export": findings}.Set([]string{"export"})),
 		RemainingCritical: critical, RemainingHigh: high,
 		Warnings:    e.Analysis.Result.Warnings,
+		Yanked:      PipReviewOf(e.Analysis.Result, e.Reasons).Yanked,
 		ArchiveSize: arch.Size, ArchiveSHA256: arch.SHA256, PackageCount: len(wheels),
 	}
 	out, err := createNew(filepath.Join(e.Dir, "summary.md"))
@@ -759,9 +733,14 @@ func (e *PipExport) writeSummary(findings []rank.Finding, wheels []pipWheelFile,
 	return nil
 }
 
-// writeManifest writes manifest.json, with the analysis's target and set,
-// and its signature with key.
+// writeManifest writes manifest.json, with the analysis's target, set and
+// review, and its signature with key. The review is checked as the import
+// reads it first, so an export never signs one the import would keep out.
 func (e *PipExport) writeManifest(wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {
+	review := PipReviewOf(e.Analysis.Result, e.Reasons)
+	if err := archive.CheckReview(review, archive.Pip); err != nil {
+		return fmt.Errorf("jobs: the review would not read at import: %w", err)
+	}
 	entries := make([]report.WheelEntry, len(wheels))
 	for i, w := range wheels {
 		entries[i] = report.WheelEntry{
@@ -778,6 +757,7 @@ func (e *PipExport) writeManifest(wheels []pipWheelFile, arch report.ArchiveMani
 		Target:        e.Analysis.Result.Target,
 		Archive:       arch,
 		Packages:      entries,
+		Review:        &review,
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {

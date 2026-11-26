@@ -331,14 +331,12 @@ func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (
 
 // queuePipExport is QueueExport for a pip project: the export carries the
 // analysis's whole set, so it takes no selection, and every package needs
-// the wheel the analysis chose. A refusal reserves nothing.
+// the wheel the analysis chose. It then applies the refuse rules, then
+// checks the reasons, all against the stored analysis and the rules of
+// the server's start. A refusal reserves nothing.
 func (s *Service) queuePipExport(project store.Project, analysisID string, req ExportRequest) (store.ExportInfo, error) {
 	if len(req.Selection) > 0 {
 		return store.ExportInfo{}, ErrPipSelection
-	}
-	if len(req.Reasons) > 0 {
-		// Pip writes no review yet: a reason sent here would be lost.
-		return store.ExportInfo{}, &pipRefusal{text: "jobs: a pip export takes no reasons: its set carries no review yet", class: ErrPipSelection}
 	}
 	analysisInfo, err := s.store.AnalysisInfo(project.ID, analysisID)
 	if err != nil {
@@ -354,17 +352,14 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 	if len(result.Packages) == 0 {
 		return store.ExportInfo{}, fmt.Errorf("%w: analysis %s lists no package", ErrPipNotExportable, analysisID)
 	}
-	missing := 0
-	for _, p := range result.Packages {
-		if p.Wheel == nil {
-			missing++
-		}
-	}
-	if missing > 0 {
-		return store.ExportInfo{}, fmt.Errorf("%w: %d of %d packages %s no wheel", ErrPipNotExportable, missing, len(result.Packages), plural(missing, "has", "have"))
-	}
-	if err := pipNoFixRefusal(result, s.Review); err != nil {
+	if err := pipBlockedRefusal(result); err != nil {
 		return store.ExportInfo{}, err
+	}
+	if err := pipRefusals(result, s.Review); err != nil {
+		return store.ExportInfo{}, err
+	}
+	if problems := CheckPipReasons(result, req.Reasons); len(problems) > 0 {
+		return store.ExportInfo{}, &ErrInvalidReasons{Problems: problems}
 	}
 	s.mu.Lock()
 	index := s.index
@@ -384,6 +379,7 @@ func (s *Service) queuePipExport(project store.Project, analysisID string, req E
 		Project:  project,
 		Settings: s.store.Settings(),
 		Analysis: PipAnalysisRef{ID: analysisID, Dir: filepath.Join(project.Dir, "analyses", analysisID), Result: result},
+		Reasons:  req.Reasons,
 		Dir:      pending.Path(),
 		ID:       pending.ID(),
 	}

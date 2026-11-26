@@ -22,6 +22,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Three review rules in the policy file: `review.proposeOtherMajors`, `review.majorJump` and `review.cveWithoutFix`. By default, proposals stay in their line and a jump or a CVE without fix needs a reason; `refuse` stops such an export whatever its reason. [Settings](docs/settings.md#review-rules) lists them.
 - An info button explains CVE, a severity and major jump where each first appears on a screen, in two sentences with a link to its section of [How sealift chooses](docs/how-sealift-chooses.md#terms).
 - An analysis answer carries `advisories`: for each CVE id it lists, the title, a short summary and the publication date from the Trivy report, for npm and pip. An analysis from an earlier release answers without them.
+- `review.yanked` in the policy file: by default, a pip export that carries a release its index yanked needs a reason for it, and `refuse` stops such an export whatever its reason. `GET /api/instance` and the Instance page report it. [Settings](docs/settings.md#review-rules) lists it.
 
 ### Changed
 
@@ -42,7 +43,9 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The `major-jump` signal follows the line below 1.0.0: 0.18.0 to 0.19.0 carries it, with the evidence `leaves 0.18.x`.
 - A reason may hold the no-break spaces of French and CJK typography (U+00A0, U+202F, U+3000), on the review screen and in the signed review.
 - A name listed twice, one entry in a family and one jumping alone, asks one reason for its jumps.
-- Under `review.cveWithoutFix: refuse`, a pip export whose set holds a CVE with no fix is refused with 409. A pip export sent with reasons is refused with 400.
+- A pip export asks one reason per package for a major jump since the previous crossing, a CVE that no version fixes and a yanked release. An export that lacks one, or sends a reason that repeats another or covers nothing, gets a 400 that names each. An API client that exported such a set without reasons now gets that 400. Under `refuse`, each rule stops such a set with a 409 that names its packages, whatever reasons it holds.
+- The signed `manifest.json` of a pip export carries its review: CVE totals before and after, each changed pin, each major jump with its reason, each CVE the set keeps with its fixing versions or its reason, the unchanged count, and each yanked release with the index's reason and the one given. `summary.md` lists the yanked releases the archive carries. The archive's bytes stay the same whatever the reasons.
+- A pip package with no wheel for the target is listed in a done analysis instead of failing it, and that analysis's export is refused with a 409 that names each such package.
 - With the project tree, the CVEs with no fix in the packages its lockfile holds, transitive ones included, go through the same check as a selection. A package no dependency's own scan names counts for each direct dependency whose tree in the lockfile holds it, and the review lists its CVE under that dependency. A package the lockfile places under no direct dependency refuses the export.
 - An export request holds at most 10,000 reasons, 10,000 selected dependencies and 10,000 dependencies per reason, each name at most 214 bytes; a request past a bound gets a 400 that names it. A JSON request body over 16 MiB, or a project upload over 41 MiB, gets a 413, and a body that is neither JSON nor a multipart upload gets a 415.
 - A CVE's fixing versions longer than 256 bytes are shortened at a version boundary in the signed review, instead of failing the export. The Trivy report in the archive keeps the full list.
