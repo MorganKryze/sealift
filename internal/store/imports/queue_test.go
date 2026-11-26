@@ -484,10 +484,14 @@ func TestQueueCancel(t *testing.T) {
 		s, _ := openStore(t, testRoot(t))
 		imp := newImport(t, s, "alice")
 		started, inRun, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+		removed := false
 		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
 			close(inRun)
 			<-release
-			return completeReport(), nil
+			return completeReport(), func(context.Context) *Removal {
+				removed = true
+				return &Removal{Removed: true}
+			}
 		})
 		q.Submit(imp.User, imp.ID)
 		waitFor(t, inRun, "the run")
@@ -498,9 +502,10 @@ func TestQueueCancel(t *testing.T) {
 			}
 		}
 		close(release)
+		waitStored(t, s, imp)
 		q.Close()
-		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete {
-			t.Errorf("outcome %q, want complete", got.Outcome())
+		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete || !removed || !got.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", got.Outcome(), removed)
 		}
 	})
 

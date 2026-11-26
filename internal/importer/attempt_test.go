@@ -1024,3 +1024,24 @@ func (c *cancelInFlight) Upload(ctx context.Context, file string, r io.Reader) e
 	}
 	return ctx.Err()
 }
+
+func TestRetryOfOneCauseReportsAnUnlistedPackageLiveAsItEnds(t *testing.T) {
+	r := newRunFixture(t)
+	r.serveUploads()
+	a := r.attemptOf(t)
+	a.Only = map[string]bool{"left-pad-1.3.0.tgz": true}
+	a.Before = map[string]Result{}
+	ended := map[string]Result{}
+	a.Progress.Ended = func(_ int, res Result) { ended[res.Name] = res }
+	rep := r.runAttempt(t, a)
+	z, ok := ended["@scope/zeta"]
+	if !ok {
+		t.Fatalf("zeta never ended through the progress; report %+v", rep.Packages)
+	}
+	if z.State != Failed || z.Kind != KindNexus || z.Reason != reasonNotInNexus {
+		t.Errorf("zeta as it ended = %+v, want failed as nexus with %q", z, reasonNotInNexus)
+	}
+	if l := ended["left-pad"]; l.State != Published {
+		t.Errorf("left-pad as it ended = %+v, want published", l)
+	}
+}
