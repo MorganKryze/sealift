@@ -380,3 +380,32 @@ func TestNewDirNeverGivesAFreedIDAgainInItsSecond(t *testing.T) {
 		t.Fatalf("NewDir after a discard = %q, want 20261126T001927Z-000003", p.ID())
 	}
 }
+
+func TestNewDirCountsPastASecondHoldingOnlySuffixedIDs(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z-000003", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261126T001927Z-00000a", `{"state":"done"}`)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-00000b" {
+		t.Fatalf("NewDir id = %q, want 20261126T001927Z-00000b", p.ID())
+	}
+	if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	if len(infos) != 3 || infos[0].ID != p.ID() {
+		t.Fatalf("Analyses() = %+v, want %q first", infos, p.ID())
+	}
+}
