@@ -450,7 +450,7 @@ func scanComponents(ctx context.Context, trivy runner.Trivy, components []sbom.C
 	return readTrivyReport(outPath, trivyReportLimit)
 }
 
-// trivyReportLimit bounds the Trivy report a pip scan reads. A finding
+// trivyReportLimit bounds the Trivy report an npm or pip scan reads. A finding
 // takes about 4 KiB of it, so this holds some 16,000 findings.
 const trivyReportLimit = 64 << 20
 
