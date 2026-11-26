@@ -559,6 +559,34 @@ func TestRankWritesAnAdvisoryForAnIdOnlyACandidateNames(t *testing.T) {
 	}
 }
 
+func TestRankStoresAdvisoryPathsRelativeToTheDataDirectory(t *testing.T) {
+	r := newRankRun(t, policy.DefaultReview())
+	r.root = r.a.Store.Root()
+	key := filepath.Join("private", "signing-key.pem")
+	index := rank.NewIndex([]rank.Finding{{
+		ID: "CVE-2026-00003", Package: "axios", Version: "1.7.9", Severity: rank.High,
+		Title:       "axios: reads " + filepath.Join(r.root, key),
+		Description: "A crafted URL makes axios read " + filepath.Join(r.root, key) + ".",
+	}})
+	rankAll(t, r, index, func() (depInfo, []candidateOutcome) { return fakeDependency("axios", "1.7.9") })
+
+	raw, err := os.ReadFile(filepath.Join(r.a.Dir, "candidates.json"))
+	if err != nil {
+		t.Fatalf("read candidates.json: %v", err)
+	}
+	var written Result
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := Advisory{Title: "axios: reads " + key, Summary: "A crafted URL makes axios read " + key + "."}
+	if got := written.Advisories["CVE-2026-00003"]; got != want {
+		t.Errorf("candidates.json advisory = %+v, want %+v", got, want)
+	}
+	if strings.Contains(string(raw), r.root) {
+		t.Errorf("candidates.json names the data directory: %s", raw)
+	}
+}
+
 func TestRankResultMarshalsAdvisoriesAsTheContractNamesThem(t *testing.T) {
 	index := rank.NewIndex([]rank.Finding{{
 		ID: "CVE-2025-58754", Package: "axios", Version: "1.7.9", Severity: rank.High,
