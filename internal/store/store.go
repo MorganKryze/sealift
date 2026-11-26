@@ -99,7 +99,17 @@ type Store struct {
 	// purge that a job in flight put off.
 	purgeMu      sync.RWMutex
 	purgePending bool
+
+	// givenMu guards given: for each job directory parent and second, the
+	// highest counter NewDir handed out, the bare stamp counting as 0. A
+	// delete or a discard frees an id on disk while the queue may still
+	// hold it, so NewDir never hands out the same id twice in a process.
+	givenMu sync.Mutex
+	given   map[givenKey]int64
 }
+
+// givenKey names one second of one job directory parent.
+type givenKey struct{ parent, base string }
 
 // Open creates the data volume layout under root when it is missing, then
 // reads private/settings.json if an older release left one, then loads

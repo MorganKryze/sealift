@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -319,5 +320,25 @@ func TestJobCreatedAt(t *testing.T) {
 		} else if err == nil {
 			t.Errorf("JobCreatedAt(%q) = %v, want an error", tt.id, got)
 		}
+	}
+}
+
+func TestAnalysesWithRandomSuffixesListBySecond(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261123T100001Z", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261123T100000Z-f3a9c1", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261123T100002Z-0b2e7d", `{"state":"done"}`)
+
+	got, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	var ids []string
+	for _, info := range got {
+		ids = append(ids, info.ID)
+	}
+	want := []string{"20261123T100002Z-0b2e7d", "20261123T100001Z", "20261123T100000Z-f3a9c1"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("Analyses() ids = %v, want %v", ids, want)
 	}
 }
