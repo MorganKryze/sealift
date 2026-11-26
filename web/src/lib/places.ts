@@ -14,8 +14,8 @@ export const ONLINE_INSTANCE: Place = { to: "/instance", label: "Instance", icon
 
 /**
  * The breadcrumb for a path of the connected side. Once the project has loaded, its page reads the
- * project's name and a crossing, at its own address or an earlier session's, reads the name of the
- * crossing its link opens, else the latest one; a plain string is taken as the name.
+ * project's name and a crossing reads the name of the crossing its link opens, else the latest one;
+ * a plain string is taken as the name.
  */
 export function onlineCrumbs(pathname: string, project?: string | Pick<Project, "name" | "analyses">, analysisId?: string): Crumb[] {
   const name = typeof project === "string" ? project : project?.name
@@ -23,7 +23,7 @@ export function onlineCrumbs(pathname: string, project?: string | Pick<Project, 
   if (pathname === "/update") return [{ label: "Home", to: "/" }, { label: "Update" }]
   if (pathname === "/projects") return [{ label: "Projects" }]
   if (pathname.startsWith("/projects/")) return [{ label: "Projects", to: "/projects" }, { label: name ?? "Project" }]
-  if (pathname.startsWith("/crossings/") || pathname.startsWith("/sessions/")) {
+  if (pathname.startsWith("/crossings/")) {
     const analyses = typeof project === "object" ? (project.analyses ?? []) : []
     const shown = shownAnalysis(analyses, analysisId)
     return [{ label: "Home", to: "/" }, { label: shown && name ? crossingName(name, shown, analyses) : (name ?? "Crossing") }]

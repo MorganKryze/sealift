@@ -158,7 +158,7 @@ function QueuedAnalysis({ analysis, cancel }: { analysis: Analysis; cancel: Canc
                 </div>
               </div>
               <Button asChild variant="outline">
-                <Link to="/sessions/$sessionId" params={{ sessionId: running.projectId }} aria-label={`Open ${running.name}`}>
+                <Link to="/crossings/$projectId" params={{ projectId: running.projectId }} aria-label={`Open ${running.name}`}>
                   Open
                 </Link>
               </Button>
