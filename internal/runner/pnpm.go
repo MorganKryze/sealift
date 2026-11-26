@@ -50,13 +50,19 @@ type ResolveResult struct {
 // the packaging pnpm ships.
 type PnpmCLI struct {
 	cacheDir string
+	registry string
 	asUser   *Credential
 }
 
 // NewPnpmCLI builds a PnpmCLI. cacheDir holds pnpm's content store and
-// registry metadata cache. asUser is nil outside the container.
-func NewPnpmCLI(cacheDir string, asUser *Credential) *PnpmCLI {
-	return &PnpmCLI{cacheDir: cacheDir, asUser: asUser}
+// registry metadata cache. registry is the npm registry pnpm resolves
+// through, npm.DefaultRegistry when empty. asUser is nil outside the
+// container.
+func NewPnpmCLI(cacheDir, registry string, asUser *Credential) *PnpmCLI {
+	if registry == "" {
+		registry = npm.DefaultRegistry
+	}
+	return &PnpmCLI{cacheDir: cacheDir, registry: registry, asUser: asUser}
 }
 
 // workspaceFile is the subset of pnpm-workspace.yaml that pins a
@@ -75,10 +81,14 @@ type supportedArchitectures struct {
 	Libc []string `yaml:"libc,omitempty"`
 }
 
-// Resolve writes the manifest and a pnpm-workspace.yaml pinned to
-// in.Target, runs "pnpm install --lockfile-only" and reads the resulting
-// lockfile back. The store and cache sit under cacheDir, so resolutions
-// share downloaded metadata across calls.
+// Resolve writes the manifest, a pnpm-workspace.yaml pinned to in.Target
+// and an .npmrc naming the registry, runs "pnpm install --lockfile-only"
+// and reads the resulting lockfile back. The store and cache sit under
+// cacheDir, so resolutions share downloaded metadata across calls.
+//
+// The registry goes in the project's .npmrc, which every pnpm version
+// reads, and stays off the command line, where any account can read a
+// password the URL carries.
 func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
 	if in.PnpmCJS == "" {
 		return ResolveResult{}, fmt.Errorf("no pnpm.cjs for pnpm %s", in.Target.PnpmVer)
@@ -111,6 +121,9 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 	}
 	if err := writeNew(in.Dir, "pnpm-workspace.yaml", wsBytes); err != nil {
 		return ResolveResult{}, fmt.Errorf("write pnpm-workspace.yaml: %w", err)
+	}
+	if err := writeNew(in.Dir, ".npmrc", []byte("registry="+c.registry+"\n")); err != nil {
+		return ResolveResult{}, fmt.Errorf("write .npmrc: %w", err)
 	}
 
 	args := []string{

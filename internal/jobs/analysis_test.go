@@ -1014,7 +1014,7 @@ func TestAnalysisCopiesNoLinkedLockfile(t *testing.T) {
 	a := &Analysis{
 		Store:    st,
 		Tools:    newTestToolsManager(t, st),
-		Pnpm:     runner.NewPnpmCLI(t.TempDir(), nil),
+		Pnpm:     runner.NewPnpmCLI(t.TempDir(), "", nil),
 		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
 		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
 		Project:  proj,
@@ -1070,7 +1070,7 @@ func TestAnalysisRunsThePnpmOfTheProjectTarget(t *testing.T) {
 	a := &Analysis{
 		Store:    st,
 		Tools:    mgr,
-		Pnpm:     runner.NewPnpmCLI(t.TempDir(), nil),
+		Pnpm:     runner.NewPnpmCLI(t.TempDir(), "", nil),
 		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
 		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
 		Project:  proj,

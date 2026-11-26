@@ -70,7 +70,7 @@ func TestPnpmResolvesThreeDependencyProject(t *testing.T) {
 
 	projectDir := t.TempDir()
 	cacheDir := filepath.Join(dataDir, "cache", "pnpm")
-	cli := NewPnpmCLI(cacheDir, nil)
+	cli := NewPnpmCLI(cacheDir, "", nil)
 
 	res, err := cli.Resolve(ctx, ResolveInput{Dir: projectDir, PnpmCJS: pnpmBin, Manifest: []byte(threeDepManifest), Target: testTarget()})
 	if err != nil {

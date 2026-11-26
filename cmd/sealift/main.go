@@ -107,7 +107,7 @@ func run(addr, root string, log *slog.Logger) error {
 		log.Error("child processes cannot switch to the tools account: the container runs with no-new-privileges, so every analysis and the Trivy database install fail; set security_opt: [no-new-privileges=false], which also overrides a daemon.json default")
 	}
 	trivyRunner := runner.NewTrivyCLI(filepath.Join(root, "tools", "trivy", "current", "trivy"), filepath.Join(root, "trivy-cache"), asUser)
-	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "cache", "pnpm"), asUser)
+	pnpmRunner := runner.NewPnpmCLI(filepath.Join(root, "cache", "pnpm"), toolsManager.NPMRegistry, asUser)
 	registry := newRegistryClient(toolsManager.NPMRegistry)
 
 	queue := jobs.NewQueue(log)
@@ -289,8 +289,8 @@ func newRegistryClient(registry string) *npm.Client {
 // SEALIFT_GITHUB_TOKEN, when set, authenticates those lookups.
 // SEALIFT_PIP_INDEX names the package index uv comes from, under
 // tools.ParseIndexURL's rules. SEALIFT_NPM_REGISTRY names the registry pnpm
-// comes from, and the analyses' registry client reads it from the manager,
-// under tools.ParseRegistryURL's rules; SEALIFT_ALLOW_HTTP_REGISTRY=true
+// comes from and resolves through, and the analyses' registry client reads
+// it from the manager, under tools.ParseRegistryURL's rules; SEALIFT_ALLOW_HTTP_REGISTRY=true
 // lets it be plain http off loopback. Empty keeps npm.DefaultRegistry. The
 // end-to-end test (test/e2e) sets it to a local Verdaccio that mirrors the
 // public registry through an uplink, so it can publish a package sealift's

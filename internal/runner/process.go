@@ -58,6 +58,8 @@ func (b *syncBuffer) String() string {
 // and the settings pnpm, node and Trivy read from their own prefixed
 // variables. Everything else stays behind, notably SEALIFT_GITHUB_TOKEN: a
 // poisoned pnpm or Trivy release harvests the environment it is given.
+// The registry variables stay behind too: pnpm would rank them above the
+// .npmrc that names SEALIFT_NPM_REGISTRY.
 var (
 	childEnvNames = map[string]bool{
 		"PATH": true, "HOME": true, "TMPDIR": true, "TZ": true, "LANG": true,
@@ -66,6 +68,7 @@ var (
 		"http_proxy": true, "https_proxy": true, "no_proxy": true,
 	}
 	childEnvPrefixes = []string{"LC_", "NPM_CONFIG_", "npm_config_", "PNPM_", "NODE_", "TRIVY_"}
+	childEnvDropped  = []string{"npm_config_registry", "pnpm_config_registry"}
 )
 
 // childEnv returns the allowed part of the server's environment.
@@ -76,6 +79,9 @@ func childEnv() []string {
 		allowed := childEnvNames[name]
 		for _, prefix := range childEnvPrefixes {
 			allowed = allowed || strings.HasPrefix(name, prefix)
+		}
+		for _, dropped := range childEnvDropped {
+			allowed = allowed && !strings.EqualFold(name, dropped)
 		}
 		if allowed {
 			env = append(env, kv)
