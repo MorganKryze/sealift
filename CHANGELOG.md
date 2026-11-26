@@ -70,6 +70,8 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
 - An analysis that fails before its first step, for example when sealift cannot write its log, shows the cause under What went wrong. It used to show Analysis stopped with nothing under it.
 - On the home screen, a past session whose analysis or export waits in the queue reads Waiting for another job. It used to read Analysing or Exporting.
+- A project whose target names another pnpm version than the default target resolves with that pnpm. It used to download that version, then resolve with the default target's pnpm.
+- pnpm resolves through `SEALIFT_NPM_REGISTRY`. It used to resolve through the public registry unless `NPM_CONFIG_REGISTRY` named the mirror too. `NPM_CONFIG_REGISTRY` no longer reaches pnpm: remove it from your deployment.
 - A request with a method an `/api` route does not serve, such as `DELETE /api/instance`, answers 405 with an `Allow` header naming the methods it serves. It used to answer 404. An unknown `/api` path answers 404 as Problem Details, in JSON like every other API error.
 
 ### Security

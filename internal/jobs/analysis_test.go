@@ -1014,7 +1014,7 @@ func TestAnalysisCopiesNoLinkedLockfile(t *testing.T) {
 	a := &Analysis{
 		Store:    st,
 		Tools:    newTestToolsManager(t, st),
-		Pnpm:     runner.NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil),
+		Pnpm:     runner.NewPnpmCLI(t.TempDir(), "", nil),
 		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
 		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
 		Project:  proj,
@@ -1039,6 +1039,61 @@ func TestAnalysisCopiesNoLinkedLockfile(t *testing.T) {
 		}
 	}
 	assertNowhere(t, st.Root(), secret)
+}
+
+// A project whose target names another pnpm than the default target runs
+// that pnpm for every resolution, never the default one.
+func TestAnalysisRunsThePnpmOfTheProjectTarget(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0"}}`)
+	mgr := newTestToolsManager(t, st)
+	ran := filepath.Join(t.TempDir(), "ran.txt")
+	lock := "lockfileVersion: '9.0'\npackages:\n  foo@1.0.0:\n    resolution: {integrity: sha512-" + strings.Repeat("A", 86) + "==}\n"
+	const other = "9.15.9"
+	for _, version := range []string{st.Settings().Target.PnpmVer, other} {
+		bin := filepath.Join(st.Root(), "tools", "pnpm", version, "package", "bin", "pnpm.cjs")
+		if err := os.MkdirAll(filepath.Dir(bin), 0o770); err != nil {
+			t.Fatal(err)
+		}
+		script := "echo " + version + " >> '" + ran + "'\nprintf '%s' \"" + lock + "\" > pnpm-lock.yaml\n"
+		if err := os.WriteFile(bin, []byte(script), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node := t.TempDir()
+	if err := os.WriteFile(filepath.Join(node, "node"), []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", node+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	proj.Target.PnpmVer = other
+	registry := registryServer(t, map[string]string{"foo": fooDoc})
+	a := &Analysis{
+		Store:    st,
+		Tools:    mgr,
+		Pnpm:     runner.NewPnpmCLI(t.TempDir(), "", nil),
+		Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+		Registry: &npm.Client{Registry: registry.URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got, err := os.ReadFile(ran)
+	if err != nil {
+		t.Fatalf("no pnpm ran: %v", err)
+	}
+	lines := strings.Fields(string(got))
+	if len(lines) == 0 {
+		t.Fatal("no pnpm ran")
+	}
+	for _, v := range lines {
+		if v != other {
+			t.Fatalf("pnpm versions that ran = %q, want only %s", lines, other)
+		}
+	}
 }
 
 // lockSwap answers the resolutions match picks with lock instead.

@@ -31,6 +31,8 @@ type Analysis struct {
 	Review   policy.Review
 	Dir      string // the pending analyses/<id> directory
 	ID       string
+
+	pnpmCJS string // the pnpm of Project.Target, once prepare-tools installed it
 }
 
 // Result is what an analysis writes to candidates.json and ranking.json, and

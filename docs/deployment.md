@@ -137,15 +137,14 @@ sealift needs HTTPS to these hosts, at start and for each analysis and export. A
 
 Once the pinned Trivy is on the volume, sealift asks GitHub nothing more, a restart included.
 
-To resolve and download packages through an npm mirror, set both variables to its URL:
+To resolve and download packages through an npm mirror, set `SEALIFT_NPM_REGISTRY` to its URL:
 
 ```yaml
     environment:
       SEALIFT_NPM_REGISTRY: https://npm-mirror.example.internal
-      NPM_CONFIG_REGISTRY: https://npm-mirror.example.internal
 ```
 
-`SEALIFT_NPM_REGISTRY` is where sealift reads package metadata and downloads pnpm; `NPM_CONFIG_REGISTRY` is where pnpm resolves and downloads. pnpm and every package are checked against the integrity this registry publishes, so it must be an `https` URL, or `http` on `localhost`, `127.0.0.1` or `::1`. The URL may carry credentials; sealift keeps them out of logs and errors.
+sealift reads package metadata from that registry and downloads pnpm and every package from it, and pnpm resolves through it. sealift writes the URL into an `.npmrc` beside each resolution, never on pnpm's command line. An `NPM_CONFIG_REGISTRY` in the container's environment does not reach pnpm. pnpm and every package are checked against the integrity this registry publishes, so it must be an `https` URL, or `http` on `localhost`, `127.0.0.1` or `::1`. The URL may carry credentials; sealift keeps them out of logs and errors.
 
 A plain `http` mirror on another host needs `SEALIFT_ALLOW_HTTP_REGISTRY: "true"` as well. Without it, sealift refuses to start; with it, sealift starts and logs a warning that names the variable. Anyone on the network path to that mirror can then change pnpm or a package.
 
