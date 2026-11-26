@@ -8,7 +8,7 @@ import { getSigningKey } from "@/api/settings"
 import { Fingerprint } from "@/components/fingerprint/fingerprint"
 import { useBrand } from "@/components/frame/brand"
 import { Button } from "@/components/ui/button"
-import { readSeal, type SealFigures } from "@/lib/crossings"
+import { cveNote, readSeal, type SealFigures } from "@/lib/crossings"
 import { formatBytes } from "@/lib/utils"
 
 // The order a reader takes them in: the summary first, the raw scanner output last.
@@ -215,7 +215,7 @@ export function CrossingFiles({ project, exported, downloadAllPrimary = false, o
           <ul>
             {reports.map((name) => (
               <li key={name} className="border-b border-rule px-4 py-2.5 last:border-b-0">
-                <FileRow icon={REPORTS[name]?.icon ?? FileText} name={name} note={REPORTS[name]?.note}>
+                <FileRow icon={REPORTS[name]?.icon ?? FileText} name={name} note={name === "summary.md" ? cveNote(seal.data?.figures) : REPORTS[name]?.note}>
                   <Button type="button" variant="outline" size="sm" aria-label={`Open ${name}`} onClick={() => void openReport(name)}>
                     <Eye aria-hidden="true" />
                     Open

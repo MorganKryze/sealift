@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { Analysis, Export } from "@/api/projects"
-import { byName, crossingDay, crossingName, crossingState, readSeal } from "@/lib/crossings"
+import { byName, crossingDay, crossingName, crossingState, cveNote, readSeal } from "@/lib/crossings"
 
 const NOW = new Date(2026, 10, 25, 12, 0)
 const local = (month: number, day: number, hour = 10, minute = 0, year = 2026) => new Date(year, month - 1, day, hour, minute).toISOString()
@@ -91,6 +91,20 @@ describe("crossing states", () => {
 })
 
 describe("readSeal", () => {
+  it("reads the known CVEs before and after from the manifest's review", async () => {
+    vi.stubGlobal("fetch", (url: string) =>
+      url.endsWith("/manifest.json")
+        ? answer({ archive: { sha256: SHA }, review: { cves: { before: [1, 4, 10, 10, 0], after: [0, 0, 1, 1, 0] } } })
+        : answer({ publicKeySha256: KEY }),
+    )
+    const { figures } = await readSeal("web-portal", "20261120T102000Z")
+    expect(figures.cves).toEqual({ before: 25, after: 2 })
+    expect(cveNote(figures)).toBe("known CVEs 25 → 2")
+    expect(cveNote({})).toBe("known CVEs before and after")
+    expect(cveNote({ cves: { before: 25 } })).toBe("known CVEs before and after")
+  })
+
+
   it("reads the archive's sha256 and the signature's key from the seal files", async () => {
     const fetch = vi.fn((url: string) =>
       url.endsWith("/manifest.json")

@@ -64,6 +64,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 interface SealManifest {
   archive?: { sha256?: unknown; size?: unknown }
   packages?: unknown
+  review?: { cves?: { before?: unknown; after?: unknown } }
 }
 interface SealSignature {
   publicKeySha256?: unknown
@@ -73,6 +74,20 @@ interface SealSignature {
 export interface SealFigures {
   packages?: number
   size?: number
+  /** Known CVEs over every severity, before the crossing and in what it ships. */
+  cves?: { before: number; after?: number }
+}
+
+const total = (value: unknown) => {
+  if (!Array.isArray(value)) return undefined
+  const counts = value.map(count)
+  return counts.every((c) => c !== undefined) ? counts.reduce<number>((sum, c) => sum + (c ?? 0), 0) : undefined
+}
+
+/** summary.md's note: the known CVEs as figures when manifest.json holds both, in words otherwise. */
+export function cveNote(figures: SealFigures | undefined): string {
+  const cves = figures?.cves
+  return cves && cves.after !== undefined ? `known CVEs ${cves.before} → ${cves.after}` : "known CVEs before and after"
 }
 
 const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined)
@@ -102,6 +117,11 @@ export async function readSeal(projectId: string, exportId: string): Promise<{ a
   if (packages !== undefined) figures.packages = packages
   const size = count(manifest.archive?.size)
   if (size !== undefined) figures.size = size
+  const before = total(manifest.review?.cves?.before)
+  if (before !== undefined) {
+    const after = total(manifest.review?.cves?.after)
+    figures.cves = after === undefined ? { before } : { before, after }
+  }
   return { archiveSha256, keySha256, figures }
 }
 
