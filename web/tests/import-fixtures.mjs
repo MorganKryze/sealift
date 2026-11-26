@@ -1,7 +1,7 @@
 // Fixtures for the import role in the browser gate: a realm's key set, a fake MinIO, a settings file,
 // a token per user and the import records of every state the screens draw. The server under test is
 // the shipped binary with its token check on; nothing here switches that check off.
-import { createHash, createSign, generateKeyPairSync } from "node:crypto"
+import { createHash, createSign, generateKeyPairSync, sign } from "node:crypto"
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { join } from "node:path"
@@ -25,6 +25,9 @@ const todayStamp = () => {
   const at = new Date(Math.max(Date.now() - 10 * 60_000, midnight.getTime()))
   return at.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")
 }
+
+// The worst case's project names, 40 characters with their last letter.
+const WORST = "procurement-supplier-onboarding-portal-"
 
 // One id per state alice's records show. The gate's routes name them.
 export const IDS = {
@@ -54,6 +57,11 @@ export const IMPORT = {
     // The home: alice has archives to import, refusals, failed imports, a running one and one done today.
     { path: "/", user: "alice", ready: "Done today" },
     { path: "/", user: "alice", open: { role: "button", name: "Show all", exact: false, opens: { role: "link", name: "Open 2026-10-31-regenerated" } }, ready: "Done today" },
+    // One compliant archive, its chip open on its checks.
+    { path: "/", user: "gina", open: { role: "button", name: "Compliant", opens: { role: "list", name: "3 checks passed" } }, ready: "Needs you" },
+    // The worst case: 16 crossings with 40-character names, closed, then all shown.
+    { path: "/", user: "erin", ready: "Needs you" },
+    { path: "/", user: "erin", open: { role: "button", name: "Show all", exact: false, opens: { role: "link", name: `Import ${WORST}a` } }, ready: "Needs you" },
     { path: "/", user: "bob", ready: "No archive in user-bob/packages/npm/ or packages/pip/" },
     { path: "/", user: "dave", ready: "Imports already started go on." },
     { path: "/", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
@@ -96,8 +104,11 @@ export const IMPORT = {
   ],
 }
 
-// The trusted key's sha256, set once the run's key is generated: the reports the store writes carry it.
+// The trusted key and its sha256, set once the run's key is generated: the reports the store writes
+// carry the sha256, and the listed manifests are signed with the key.
 let trustedKeySha = ""
+let trustedKey
+let otherKey
 const sha = (text) => createHash("sha256").update(text).digest("hex")
 const iso = (id) => {
   const [stamp] = id.split("-")
@@ -250,39 +261,108 @@ function listing(bucket, prefix, objects, truncated = false) {
   return `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>${bucket}</Name><Prefix>${xml(prefix)}</Prefix><KeyCount>${objects.length}</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>${truncated}</IsTruncated>${items}</ListBucketResult>`
 }
 
+const tag = (body) => `"${sha(body).slice(0, 32)}"`
+
+// A manifest as the connected side seals it: an archive of size bytes, three packages, and a review
+// naming project when one is given (a 0.7.0 export carries none).
+function manifestFor(eco, size, createdAt, project) {
+  const packages = [0, 1, 2].map((i) => {
+    const name = `package-${i}`
+    const digest = createHash("sha512").update(name).digest()
+    return eco === "pip"
+      ? { name, version: "1.0.0", file: `${name.replace("-", "_")}-1.0.0-py3-none-any.whl`, sha256: sha(name), shippedSha512: digest.toString("hex") }
+      : { name, version: "1.0.0", file: `${name}-1.0.0.tgz`, originalIntegrity: `sha512-${digest.toString("base64")}`, shippedSha512: digest.toString("hex"), publishConfigStripped: false }
+  })
+  const target = eco === "pip" ? { python: "3.11.2", os: "linux", cpu: "x86_64", glibc: "2.28", uvVer: "0.9.2" } : { os: "linux", cpu: "x64", libc: "glibc", node: "22.17.1", pnpmVer: "10.34.5" }
+  const doc = { formatVersion: eco === "pip" ? 3 : 2, ...(eco === "pip" ? { ecosystem: "pip" } : {}), toolVersion: "0.8.0", analysisId: "20261125T085500Z", createdAt, target, archive: { sha256: sha(`archive${size}`), size }, packages }
+  if (project) doc.review = { project, cves: { before: [0, 1, 0, 0, 0] } }
+  return Buffer.from(JSON.stringify(doc))
+}
+
+const signatureFile = (signed, key, keySha) => Buffer.from(`${JSON.stringify({ algorithm: "ed25519", publicKeySha256: keySha, signature: sign(null, signed, key.privateKey).toString("base64") }, null, 2)}\n`)
+
+// Gives each listed manifest and signature its bytes, sealed as the connected side does: the usual
+// archive names its project, and a few folders keep each way a check fails.
+function seal(objects) {
+  for (const m of objects.filter((o) => o.key.endsWith("/manifest.json"))) {
+    const folder = m.key.slice(0, -"manifest.json".length)
+    const archive = objects.find((o) => o.key.startsWith(folder) && o.key.endsWith(".tar.gz") && !o.key.slice(folder.length).includes("/"))
+    const sig = objects.find((o) => o.key === `${folder}manifest.json.sig`)
+    const name = folder.split("/").at(-2)
+    const project = name.replace(/^\d{4}-\d{2}-\d{2}-/, "").slice(0, 40)
+    const eco = folder.startsWith(PIP_FOLDER) ? "pip" : "npm"
+    const at = m.modified ?? "2026-11-06T08:00:00.000Z"
+    // A 0.7.0 export carries no review; another folder states a size its archive does not have.
+    const body = manifestFor(eco, (archive?.size ?? 1) + (name === "2026-11-05-reports" ? 1 : 0), at, name === "2026-11-02-payments" ? "" : project)
+    Object.assign(m, { body, size: body.length, etag: tag(body) })
+    if (!sig) continue
+    // Signed by a regenerated key, or signed over other bytes.
+    const sigBody = name === "2026-10-31-regenerated" ? signatureFile(body, otherKey, otherKey.sha) : signatureFile(name === "2026-11-01-portal" ? Buffer.concat([body, Buffer.from(" ")]) : body, trustedKey, trustedKeySha)
+    Object.assign(sig, { body: sigBody, size: sigBody.length, etag: tag(sigBody) })
+  }
+  return objects
+}
+
+// Sixteen crossings of one user, two of them the same project on the same day.
+function worstObjects() {
+  const objects = []
+  for (let i = 0; i < 16; i++) {
+    const project = `${WORST}${String.fromCharCode(97 + Math.min(i, 14))}`
+    const day = String(Math.min(5 + i, 19)).padStart(2, "0")
+    // The last folder repeats the project before it; its name is cut back to the same 40 characters.
+    const folder = `${FOLDER}2026-11-${day}-${project}${i === 15 ? "-again" : ""}/`
+    const modified = `2026-11-${day}T${i === 15 ? "15" : "09"}:00:00.000Z`
+    objects.push({ key: `${folder}${ARCHIVE}`, etag: tag(folder), size: 4_000_000 + i * 1000, modified })
+    objects.push({ key: `${folder}manifest.json`, modified }, { key: `${folder}manifest.json.sig`, modified })
+  }
+  return seal(objects)
+}
+
 const s3Error = (code, message) => `<?xml version="1.0" encoding="UTF-8"?><Error><Code>${code}</Code><Message>${message}</Message></Error>`
+
+// What alice's bucket holds, its manifests and signatures with their bytes.
+function aliceObjects() {
+  const objects = aliceRecords()
+    .filter((r) => r.id !== IDS.completeRemoved && r.id !== IDS.pipComplete && r.id !== IDS.completeToday)
+    .flatMap((r) => [r.archive, r.manifest, r.signature].filter(Boolean).map((o) => ({ ...o, modified: `${iso(r.id).slice(0, -1)}.000Z` })))
+  const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
+  // Archives the service cannot import, one for each rule, and a 200-character folder.
+  upload("2026-11-06-new-export/", ARCHIVE, 4_200_000)
+  upload("2026-11-06-new-export/", "manifest.json", 1_100)
+  upload("2026-11-06-new-export/", "manifest.json.sig", 400)
+  upload("2026-10-28-two-archives/", "first.tar.gz", 3_000_000, "2026-10-28T08:00:00.000Z")
+  upload("2026-10-28-two-archives/", "second.tar.gz", 3_100_000, "2026-10-28T08:01:00.000Z")
+  upload("2026-10-28-two-archives/", "manifest.json", 900, "2026-10-28T08:02:00.000Z")
+  upload("2026-10-28-two-archives/", "manifest.json.sig", 400, "2026-10-28T08:02:00.000Z")
+  upload("2026-10-27-no-manifest/", ARCHIVE, 2_900_000, "2026-10-27T08:00:00.000Z")
+  upload("2026-10-26/too/deep/", ARCHIVE, 2_800_000, "2026-10-26T08:00:00.000Z")
+  const wide = `${"w".repeat(200)}/`
+  upload(wide, ARCHIVE, 2_700_000, "2026-10-25T08:00:00.000Z")
+  upload(wide, "manifest.json", 800, "2026-10-25T08:00:00.000Z")
+  upload(wide, "manifest.json.sig", 400, "2026-10-25T08:00:00.000Z")
+  // A pip export not imported yet: its archive, its manifest and its signature.
+  const pip = (name, size) => objects.push({ key: `${PIP_FOLDER}2026-11-20-data-tools/${name}`, etag: `"${sha(`pip${name}`).slice(0, 32)}"`, size, modified: "2026-11-20T08:00:00.000Z" })
+  pip(PIP_ARCHIVE, 81_920)
+  pip("manifest.json", 1_342)
+  pip("manifest.json.sig", 214)
+  return seal(objects)
+}
+
+// Each user's objects, for the reads of one object.
+const objectsOf = (bucket) => ({ "user-alice": aliceObjects, "user-erin": worstObjects, "user-gina": () => worstObjects().slice(0, 3) })[bucket]?.() ?? []
 
 // What each user's bucket answers for a prefix: alice lists her archives in both folders, bob empty
 // folders, carol has no bucket, dave's MinIO fails, frank lists nothing.
 function minioAnswer(bucket, prefix) {
   switch (bucket) {
     case "user-alice": {
-      const objects = aliceRecords()
-        .filter((r) => r.id !== IDS.completeRemoved && r.id !== IDS.pipComplete && r.id !== IDS.completeToday)
-        .flatMap((r) => [r.archive, r.manifest, r.signature].filter(Boolean).map((o) => ({ ...o, modified: `${iso(r.id).slice(0, -1)}.000Z` })))
-      const upload = (folder, name, size, modified = "2026-11-06T08:00:00.000Z") => objects.push({ key: `${FOLDER}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified })
-      // Archives the service cannot import, one for each rule, and a 200-character folder.
-      upload("2026-11-06-new-export/", ARCHIVE, 4_200_000)
-      upload("2026-11-06-new-export/", "manifest.json", 1_100)
-      upload("2026-11-06-new-export/", "manifest.json.sig", 400)
-      upload("2026-10-28-two-archives/", "first.tar.gz", 3_000_000, "2026-10-28T08:00:00.000Z")
-      upload("2026-10-28-two-archives/", "second.tar.gz", 3_100_000, "2026-10-28T08:01:00.000Z")
-      upload("2026-10-28-two-archives/", "manifest.json", 900, "2026-10-28T08:02:00.000Z")
-      upload("2026-10-28-two-archives/", "manifest.json.sig", 400, "2026-10-28T08:02:00.000Z")
-      upload("2026-10-27-no-manifest/", ARCHIVE, 2_900_000, "2026-10-27T08:00:00.000Z")
-      upload("2026-10-26/too/deep/", ARCHIVE, 2_800_000, "2026-10-26T08:00:00.000Z")
-      const wide = `${"w".repeat(200)}/`
-      upload(wide, ARCHIVE, 2_700_000, "2026-10-25T08:00:00.000Z")
-      upload(wide, "manifest.json", 800, "2026-10-25T08:00:00.000Z")
-      upload(wide, "manifest.json.sig", 400, "2026-10-25T08:00:00.000Z")
-      // A pip export not imported yet: its archive, its manifest and its signature.
-      const pip = (name, size) => objects.push({ key: `${PIP_FOLDER}2026-11-20-data-tools/${name}`, etag: `"${sha(`pip${name}`).slice(0, 32)}"`, size, modified: "2026-11-20T08:00:00.000Z" })
-      pip(PIP_ARCHIVE, 81_920)
-      pip("manifest.json", 1_342)
-      pip("manifest.json.sig", 214)
+      const objects = aliceObjects()
       const mine = objects.filter((o) => o.key.startsWith(prefix))
       return [200, listing(bucket, prefix, mine, prefix === FOLDER)]
     }
+    case "user-erin":
+    case "user-gina":
+      return [200, listing(bucket, prefix, objectsOf(bucket).filter((o) => o.key.startsWith(prefix)))]
     case "user-bob":
     case "user-frank":
       return [200, listing(bucket, prefix, [])]
@@ -320,6 +400,16 @@ export async function startImportFixtures(dir) {
   const minio = createServer((req, res) => {
     const url = new URL(req.url, "http://127.0.0.1")
     const bucket = url.pathname.replace(/^\//, "").split("/")[0]
+    const key = decodeURIComponent(url.pathname.replace(/^\/[^/]+\//, ""))
+    const object = req.method === "GET" && !url.search ? objectsOf(bucket).find((o) => o.key === key && o.body) : undefined
+    if (object) {
+      if (req.headers["if-match"] !== undefined && req.headers["if-match"] !== object.etag) {
+        res.writeHead(412, { "Content-Type": "application/xml" }).end(s3Error("PreconditionFailed", "At least one of the pre-conditions you specified did not hold"))
+        return
+      }
+      res.writeHead(200, { "Content-Length": object.body.length, ETag: object.etag, "Last-Modified": new Date(object.modified).toUTCString() }).end(object.body)
+      return
+    }
     if (req.method !== "GET" || url.searchParams.get("list-type") !== "2") {
       res.writeHead(405, { "Content-Type": "application/xml" }).end(s3Error("MethodNotAllowed", "only listings are served"))
       return
@@ -334,8 +424,11 @@ export async function startImportFixtures(dir) {
   mkdirSync(dir, { recursive: true })
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), `${text}\n`)
   // The trusted key is generated per run: the gate holds no fixed key.
-  const trusted = generateKeyPairSync("ed25519").publicKey
+  trustedKey = generateKeyPairSync("ed25519")
+  const trusted = trustedKey.publicKey
   trustedKeySha = sha(trusted.export({ type: "spki", format: "der" }))
+  otherKey = generateKeyPairSync("ed25519")
+  otherKey.sha = sha(otherKey.publicKey.export({ type: "spki", format: "der" }))
   writeFileSync(join(dir, "public-key.pem"), trusted.export({ type: "spki", format: "pem" }))
   const settings = join(dir, "settings.yaml")
   writeFileSync(
