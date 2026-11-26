@@ -477,30 +477,34 @@ func newTestHandlersWithTrivy(t *testing.T, q *jobs.Queue) *Handlers {
 	return NewHandlers(st, svc, tm)
 }
 
-// waitForExportState polls GetExport until it reports one of wantStates
-// or the deadline passes.
-func waitForExportState(t *testing.T, srv *httptest.Server, projectID, exportID string, wantStates ...State) Export {
+// waitForExportState waits for the export's end, then reads it through
+// GetExport and fails the test unless its state is one of wantStates.
+func waitForExportState(t *testing.T, h *Handlers, srv *httptest.Server, projectID, exportID string, wantStates ...State) Export {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/projects/%s/exports/%s", srv.URL, projectID, exportID))
-		if err == nil {
-			var e Export
-			if json.NewDecoder(resp.Body).Decode(&e) == nil {
-				resp.Body.Close()
-				for _, want := range wantStates {
-					if e.State == want {
-						return e
-					}
-				}
-			} else {
-				resp.Body.Close()
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+	waitForTerminalState(t, h, projectID, "export", exportID)
+	var e Export
+	getEnded(t, fmt.Sprintf("%s/api/projects/%s/exports/%s", srv.URL, projectID, exportID), &e)
+	if !slices.Contains(wantStates, e.State) {
+		t.Fatalf("export %s ended %s, want one of %v", exportID, e.State, wantStates)
 	}
-	t.Fatalf("export %s never reached %v in time", exportID, wantStates)
-	return Export{}
+	return e
+}
+
+// getEnded decodes the 200 answer of a GET on a job that has ended.
+func getEnded(t *testing.T, url string, into any) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET %s = %d, body: %s", url, resp.StatusCode, data)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(into); err != nil {
+		t.Fatalf("decode %s: %v", url, err)
+	}
 }
 
 // TestQueueExportMultiVersionSelectionReachesTheJobWithBoth selects two
@@ -564,7 +568,7 @@ func TestQueueExportMultiVersionSelectionReachesTheJobWithBoth(t *testing.T) {
 		t.Fatalf("decode queued export: %v", err)
 	}
 
-	final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed)
+	final := waitForExportState(t, h, srv, project.Id, queued.Id, Done, Failed)
 	if final.State != Done {
 		t.Fatalf("export state = %q, want %q: both selected versions of left-pad should resolve with their stub lockfiles", final.State, Done)
 	}
@@ -640,7 +644,7 @@ func TestQueueExportFailureIsVisibleAfterItEnds(t *testing.T) {
 		t.Fatalf("decode queued export: %v", err)
 	}
 
-	final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed)
+	final := waitForExportState(t, h, srv, project.Id, queued.Id, Done, Failed)
 	if final.State != Failed {
 		t.Fatalf("export state = %q, want %q: the registry is unroutable", final.State, Failed)
 	}
@@ -1417,53 +1421,56 @@ func TestGetAnalysisLog(t *testing.T) {
 	}
 }
 
-// waitForTerminalState polls Service.LiveState until id is no longer
-// tracked under projectID and kind, meaning Service's finalizer goroutine
-// has already reacted to its "end" event and stopped touching its
-// directory. A test that races a queued job against its own t.TempDir
-// cleanup needs this: the finalizer keeps writing after the job itself
-// returns.
+// jobHangLimit bounds a wait on a job's end. A wall-clock deadline close
+// to a job's usual run time fails on a loaded runner while the job still
+// ends well, so this one only catches a job that never ends.
+const jobHangLimit = 30 * time.Second
+
+// waitForTerminalState waits until Service no longer tracks id under
+// projectID and kind: its finalizer has committed the job's directory and
+// stopped touching it, which a test racing a queued job against its own
+// t.TempDir cleanup needs. Each event wakes a recheck, the job's "end"
+// event among them; a slow tick covers an event dropped for a full
+// subscriber channel.
 func waitForTerminalState(t *testing.T, h *Handlers, projectID, kind, id string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, _, ok := h.Service.LiveState(projectID, kind, id); !ok {
+	events, unsubscribe := h.Service.Subscribe()
+	defer unsubscribe()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	hang := time.After(jobHangLimit)
+	for {
+		state, _, tracked := h.Service.LiveState(projectID, kind, id)
+		if !tracked {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case <-tick.C:
+		case <-hang:
+			t.Fatalf("%s %s still %s after %s", kind, id, state, jobHangLimit)
+		}
 	}
-	t.Fatalf("job %s was still tracked after the deadline", id)
 }
 
-// waitForState polls GetAnalysis until it reports one of wantStates or the
-// deadline passes, so a test can watch a real, fake-tool-backed analysis
-// reach a terminal state without hardcoding a sleep.
-func waitForState(t *testing.T, srv *httptest.Server, projectID, analysisID string, wantStates ...State) Analysis {
+// waitForState waits for the analysis's end, then reads it through
+// GetAnalysis and fails the test unless its state is one of wantStates.
+func waitForState(t *testing.T, h *Handlers, srv *httptest.Server, projectID, analysisID string, wantStates ...State) Analysis {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(fmt.Sprintf("%s/api/projects/%s/analyses/%s", srv.URL, projectID, analysisID))
-		if err == nil {
-			var a Analysis
-			if json.NewDecoder(resp.Body).Decode(&a) == nil {
-				resp.Body.Close()
-				for _, want := range wantStates {
-					if a.State == want {
-						return a
-					}
-				}
-			} else {
-				resp.Body.Close()
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+	waitForTerminalState(t, h, projectID, "analysis", analysisID)
+	var a Analysis
+	getEnded(t, fmt.Sprintf("%s/api/projects/%s/analyses/%s", srv.URL, projectID, analysisID), &a)
+	if !slices.Contains(wantStates, a.State) {
+		t.Fatalf("analysis %s ended %s, want one of %v", analysisID, a.State, wantStates)
 	}
-	t.Fatalf("analysis %s never reached %v in time", analysisID, wantStates)
-	return Analysis{}
+	return a
 }
 
 func TestQueueAndGetAnalysisReachesATerminalState(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, h := newTestServer(t)
 	project, resp := createProject(t, srv, `{"name":"left-pad","dependencies":{"left-pad":"1.3.0"}}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("CreateProject status = %d", resp.StatusCode)
@@ -1474,7 +1481,7 @@ func TestQueueAndGetAnalysisReachesATerminalState(t *testing.T) {
 	// report, so this analysis cannot reach done; it still must reach a
 	// terminal state instead of hanging, and Service's finalizer must not
 	// leave a stray .tmp directory behind once it does.
-	final := waitForState(t, srv, project.Id, analysisID, Failed, Done)
+	final := waitForState(t, h, srv, project.Id, analysisID, Failed, Done)
 	if final.Id != analysisID {
 		t.Fatalf("final analysis id = %q, want %q", final.Id, analysisID)
 	}
@@ -2207,15 +2214,6 @@ func postExport(t *testing.T, srv *httptest.Server, projectID, analysisID, body 
 	return resp.StatusCode, data
 }
 
-// waitForEnd reads events until the job with storeID ends.
-func waitForEnd(events <-chan jobs.Event, storeID string) {
-	for e := range events {
-		if e.Kind == "end" && e.StoreID == storeID {
-			return
-		}
-	}
-}
-
 func TestQueueExportForAPipProject(t *testing.T) {
 	q := jobs.NewQueue(nil)
 	h := newTestHandlersWithTrivy(t, q)
@@ -2235,13 +2233,11 @@ func TestQueueExportForAPipProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, unsubscribe := h.Service.Subscribe()
-	defer unsubscribe()
 	analysis, err := h.Service.QueueAnalysis(project.ID)
 	if err != nil {
 		t.Fatalf("QueueAnalysis: %v", err)
 	}
-	waitForEnd(events, analysis.ID)
+	waitForTerminalState(t, h, project.ID, "analysis", analysis.ID)
 	if info, err := h.Store.AnalysisInfo(project.ID, analysis.ID); err != nil || info.State != store.Done {
 		t.Fatalf("analysis = %+v, %v; want done", info, err)
 	}
@@ -2259,9 +2255,7 @@ func TestQueueExportForAPipProject(t *testing.T) {
 	if err := json.Unmarshal(body, &queued); err != nil {
 		t.Fatal(err)
 	}
-	waitForEnd(events, queued.Id)
-	waitForTerminalState(t, h, project.ID, "export", queued.Id)
-	done := waitForExportState(t, srv, project.ID, queued.Id, Done, Failed, Cancelled)
+	done := waitForExportState(t, h, srv, project.ID, queued.Id, Done, Failed, Cancelled)
 	if done.State != Done || done.Files == nil || !slices.Contains(*done.Files, "packages_pip.tar.gz") {
 		t.Fatalf("export = %+v, want done with packages_pip.tar.gz", done)
 	}
@@ -2722,7 +2716,7 @@ func TestQueueExportAcceptsTheReasonsItNeeds(t *testing.T) {
 	if err := json.NewDecoder(resp2.Body).Decode(&queued); err != nil {
 		t.Fatal(err)
 	}
-	if final := waitForExportState(t, srv, project.Id, queued.Id, Done, Failed); final.State != Done {
+	if final := waitForExportState(t, h, srv, project.Id, queued.Id, Done, Failed); final.State != Done {
 		t.Fatalf("export state = %q, want %q", final.State, Done)
 	}
 

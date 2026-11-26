@@ -665,19 +665,38 @@ func mustCreateProject(t *testing.T, st *store.Store) store.Project {
 	return p
 }
 
-// waitForTerminal polls LiveState until Service is no longer tracking id
-// under project and kind, meaning the finalizer has already reacted to
-// its "end" event.
+// jobHangLimit bounds a wait on a job's end. A wall-clock deadline close
+// to a job's usual run time fails on a loaded runner while the job still
+// ends well, so this one only catches a job that never ends.
+const jobHangLimit = 30 * time.Second
+
+// waitForTerminal waits until Service no longer tracks id under project
+// and kind, meaning the finalizer has already committed the job's
+// directory. Each event wakes a recheck, the job's "end" event among
+// them; a slow tick covers an event dropped for a full subscriber
+// channel.
 func waitForTerminal(t *testing.T, svc *Service, projectID, kind, id string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, _, ok := svc.LiveState(projectID, kind, id); !ok {
+	events, unsubscribe := svc.Subscribe()
+	defer unsubscribe()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	hang := time.After(jobHangLimit)
+	for {
+		state, _, tracked := svc.LiveState(projectID, kind, id)
+		if !tracked {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case <-tick.C:
+		case <-hang:
+			t.Fatalf("%s %s still %s after %s", kind, id, state, jobHangLimit)
+		}
 	}
-	t.Fatalf("job %s was still tracked after the deadline", id)
 }
 
 // storeIDJob is a fakeJob that knows its store directory id, as Analysis
