@@ -121,8 +121,8 @@ func (s *Store) DeleteAnalysis(projectID, id string) error {
 }
 
 // jobInfos lists every committed directory under projects/<projectID>/<kind>,
-// newest first (IDs are UTC timestamps, so a descending string sort orders
-// them correctly).
+// newest first. IDs are UTC timestamps, and NewDir counts up the suffix of
+// jobs that share a second, so a descending string sort orders them.
 func (s *Store) jobInfos(projectID, kind string) ([]AnalysisInfo, error) {
 	if err := validID(projectID); err != nil {
 		return nil, err

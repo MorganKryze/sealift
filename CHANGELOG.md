@@ -68,6 +68,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - Cancelling an export still waiting in the queue keeps it as Export cancelled, with Start the export again. Before, the session dropped it without a word.
 - An analysis or an export waiting for another job reads Waiting for another job, with no step in progress and no package counters, instead of looking like the running one.
 - A second analysis or export of one project queued in the same second stays in the session's history and opens by its link. It used to vanish once it ended, and opening it answered an error.
+- Analyses or exports of one project queued in the same second list in the order they were queued. With three or more, they used to list in a random order, so a session could show an older analysis as its latest.
 - An analysis that fails before its first step, for example when sealift cannot write its log, shows the cause under What went wrong. It used to show Analysis stopped with nothing under it.
 - On the home screen, a past session whose analysis or export waits in the queue reads Waiting for another job. It used to read Analysing or Exporting.
 - A project whose target names another pnpm version than the default target resolves with that pnpm. It used to download that version, then resolve with the default target's pnpm.

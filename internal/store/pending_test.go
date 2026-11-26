@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -163,5 +165,330 @@ func TestWriteJSONReadJSONRoundTripAtNestedPath(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("ReadJSON = %+v, want %+v", got, want)
+	}
+}
+
+func TestJobsOfOneSecondListInCreationOrder(t *testing.T) {
+	for _, kind := range []string{"analyses", "exports"} {
+		t.Run(kind, func(t *testing.T) {
+			s := openTestStore(t)
+			fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+			defer stubNow(func() time.Time { return fixed })()
+
+			var created []string
+			for range 5 {
+				p, err := s.NewDir(kind, "proj-1")
+				if err != nil {
+					t.Fatalf("NewDir: %v", err)
+				}
+				if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+					t.Fatalf("write status.json: %v", err)
+				}
+				if err := p.Commit(); err != nil {
+					t.Fatalf("Commit: %v", err)
+				}
+				created = append(created, p.ID())
+			}
+
+			var listed []string
+			if kind == "analyses" {
+				infos, err := s.Analyses("proj-1")
+				if err != nil {
+					t.Fatalf("Analyses: %v", err)
+				}
+				for _, info := range infos {
+					listed = append(listed, info.ID)
+				}
+			} else {
+				infos, err := s.Exports("proj-1")
+				if err != nil {
+					t.Fatalf("Exports: %v", err)
+				}
+				for _, info := range infos {
+					listed = append(listed, info.ID)
+				}
+			}
+
+			want := slices.Clone(created)
+			slices.Reverse(want)
+			if !slices.Equal(listed, want) {
+				t.Fatalf("listed = %v, want the creation order %v newest first", listed, want)
+			}
+			if listed[0] != created[len(created)-1] {
+				t.Errorf("latest = %q, want the last created %q", listed[0], created[len(created)-1])
+			}
+		})
+	}
+}
+
+func TestNewDirAfterAnOlderRandomSuffixSortsLater(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261126T001927Z-f3a9c1", `{"state":"done"}`)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := JobCreatedAt(p.ID()); err != nil {
+		t.Fatalf("JobCreatedAt(%q): %v", p.ID(), err)
+	}
+
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	if len(infos) != 3 || infos[0].ID != p.ID() {
+		t.Fatalf("Analyses() = %+v, want %q first", infos, p.ID())
+	}
+}
+
+func TestNewDirGivesConcurrentJobsOfOneSecondDistinctIDs(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	const jobs = 8
+	ids := make([]string, jobs)
+	errs := make([]error, jobs)
+	var wg sync.WaitGroup
+	for i := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := s.NewDir("analyses", "proj-1")
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			ids[i] = p.ID()
+		}()
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool)
+	for i, id := range ids {
+		if errs[i] != nil {
+			t.Fatalf("NewDir: %v", errs[i])
+		}
+		if seen[id] {
+			t.Fatalf("ids = %v, want each one distinct", ids)
+		}
+		seen[id] = true
+	}
+}
+
+func TestNewDirTakesTheNextCounterOfItsSecond(t *testing.T) {
+	cases := []struct {
+		name     string
+		existing []string
+		want     string
+	}{
+		{"free second", nil, "20261126T001927Z"},
+		{"other seconds only", []string{"20261126T001926Z-000005", "20261126T001928Z"}, "20261126T001927Z"},
+		{"bare stamp taken", []string{"20261126T001927Z"}, "20261126T001927Z-000001"},
+		{"counter taken", []string{"20261126T001927Z", "20261126T001927Z-000001"}, "20261126T001927Z-000002"},
+		{"pending counter taken", []string{"20261126T001927Z", "20261126T001927Z-000002.tmp"}, "20261126T001927Z-000003"},
+		{"older random suffix", []string{"20261126T001927Z", "20261126T001927Z-f3a9c1"}, "20261126T001927Z-f3a9c2"},
+		{"last counter left", []string{"20261126T001927Z", "20261126T001927Z-fffffe"}, "20261126T001927Z-ffffff"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTestStore(t)
+			for _, id := range tc.existing {
+				writeAnalysisDir(t, s, id, "")
+			}
+			fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+			defer stubNow(func() time.Time { return fixed })()
+
+			p, err := s.NewDir("analyses", "proj-1")
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+			if p.ID() != tc.want {
+				t.Fatalf("NewDir id = %q, want %q", p.ID(), tc.want)
+			}
+		})
+	}
+}
+
+func TestNewDirRefusesASecondPastItsLastCounter(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z", "")
+	writeAnalysisDir(t, s, "20261126T001927Z-ffffff", "")
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	if p, err := s.NewDir("analyses", "proj-1"); err == nil {
+		t.Fatalf("NewDir id = %q, want an error once ffffff is taken", p.ID())
+	}
+	entries, err := os.ReadDir(filepath.Join(s.Root(), "projects", "proj-1", "analyses"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("analyses dir holds %d entries, want the 2 written before", len(entries))
+	}
+}
+
+func TestNewDirNeverGivesAFreedIDAgainInItsSecond(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	var ids []string
+	for range 2 {
+		p, err := s.NewDir("analyses", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		ids = append(ids, p.ID())
+	}
+	if ids[1] != "20261126T001927Z-000001" {
+		t.Fatalf("second id = %q, want 20261126T001927Z-000001", ids[1])
+	}
+	if err := s.DeleteAnalysis("proj-1", ids[1]); err != nil {
+		t.Fatalf("DeleteAnalysis: %v", err)
+	}
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000002" {
+		t.Fatalf("NewDir after a delete = %q, want 20261126T001927Z-000002", p.ID())
+	}
+	if err := p.Discard(); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	p, err = s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000003" {
+		t.Fatalf("NewDir after a discard = %q, want 20261126T001927Z-000003", p.ID())
+	}
+}
+
+func TestNewDirCountsPastASecondHoldingOnlySuffixedIDs(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z-000003", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261126T001927Z-00000a", `{"state":"done"}`)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-00000b" {
+		t.Fatalf("NewDir id = %q, want 20261126T001927Z-00000b", p.ID())
+	}
+	if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+		t.Fatalf("write status.json: %v", err)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	if len(infos) != 3 || infos[0].ID != p.ID() {
+		t.Fatalf("Analyses() = %+v, want %q first", infos, p.ID())
+	}
+}
+
+func TestNewDirSkipsAnIDCommittedBetweenItsScanAndMkdir(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+	parent := filepath.Join(s.Root(), "projects", "proj-1", "analyses")
+	raced := false
+	orig := beforeMkdir
+	beforeMkdir = func(final string) {
+		if !raced {
+			raced = true
+			if err := os.Mkdir(final, dirMode); err != nil {
+				t.Errorf("commit the racing job: %v", err)
+			}
+		}
+	}
+	defer func() { beforeMkdir = orig }()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000001" {
+		t.Fatalf("NewDir id = %q, want 20261126T001927Z-000001", p.ID())
+	}
+	if _, err := os.Stat(filepath.Join(parent, "20261126T001927Z.tmp")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat the raced id's .tmp: %v, want it removed", err)
+	}
+}
+
+func TestNewDirOfAnEarlierSecondKeepsALaterSecondsMark(t *testing.T) {
+	s := openTestStore(t)
+	now := mustParseTime(t, "2026-11-26T00:19:28Z")
+	defer stubNow(func() time.Time { return now })()
+
+	for range 2 {
+		p, err := s.NewDir("analyses", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+	if err := s.DeleteAnalysis("proj-1", "20261126T001928Z-000001"); err != nil {
+		t.Fatalf("DeleteAnalysis: %v", err)
+	}
+	now = mustParseTime(t, "2026-11-26T00:19:27Z")
+	if _, err := s.NewDir("analyses", "proj-1"); err != nil {
+		t.Fatalf("NewDir of the earlier second: %v", err)
+	}
+	now = mustParseTime(t, "2026-11-26T00:19:28Z")
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001928Z-000002" {
+		t.Fatalf("NewDir id = %q, want 20261126T001928Z-000002", p.ID())
+	}
+}
+
+func TestNewDirKeepsOneMarkPerParent(t *testing.T) {
+	s := openTestStore(t)
+	now := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return now })()
+
+	for range 4 {
+		for _, kind := range []string{"analyses", "exports"} {
+			for _, project := range []string{"proj-1", "proj-2"} {
+				if _, err := s.NewDir(kind, project); err != nil {
+					t.Fatalf("NewDir: %v", err)
+				}
+			}
+		}
+		now = now.Add(time.Second)
+	}
+	if len(s.given) != 4 {
+		t.Fatalf("len(given) = %d, want 4, one per parent", len(s.given))
 	}
 }
