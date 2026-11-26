@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -163,5 +165,120 @@ func TestWriteJSONReadJSONRoundTripAtNestedPath(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("ReadJSON = %+v, want %+v", got, want)
+	}
+}
+
+func TestJobsOfOneSecondListInCreationOrder(t *testing.T) {
+	for _, kind := range []string{"analyses", "exports"} {
+		t.Run(kind, func(t *testing.T) {
+			s := openTestStore(t)
+			fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+			defer stubNow(func() time.Time { return fixed })()
+
+			var created []string
+			for range 5 {
+				p, err := s.NewDir(kind, "proj-1")
+				if err != nil {
+					t.Fatalf("NewDir: %v", err)
+				}
+				if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+					t.Fatalf("write status.json: %v", err)
+				}
+				if err := p.Commit(); err != nil {
+					t.Fatalf("Commit: %v", err)
+				}
+				created = append(created, p.ID())
+			}
+
+			var listed []string
+			if kind == "analyses" {
+				infos, err := s.Analyses("proj-1")
+				if err != nil {
+					t.Fatalf("Analyses: %v", err)
+				}
+				for _, info := range infos {
+					listed = append(listed, info.ID)
+				}
+			} else {
+				infos, err := s.Exports("proj-1")
+				if err != nil {
+					t.Fatalf("Exports: %v", err)
+				}
+				for _, info := range infos {
+					listed = append(listed, info.ID)
+				}
+			}
+
+			want := slices.Clone(created)
+			slices.Reverse(want)
+			if !slices.Equal(listed, want) {
+				t.Fatalf("listed = %v, want the creation order %v newest first", listed, want)
+			}
+			if listed[0] != created[len(created)-1] {
+				t.Errorf("latest = %q, want the last created %q", listed[0], created[len(created)-1])
+			}
+		})
+	}
+}
+
+func TestNewDirAfterAnOlderRandomSuffixSortsLater(t *testing.T) {
+	s := openTestStore(t)
+	writeAnalysisDir(t, s, "20261126T001927Z", `{"state":"done"}`)
+	writeAnalysisDir(t, s, "20261126T001927Z-f3a9c1", `{"state":"done"}`)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := JobCreatedAt(p.ID()); err != nil {
+		t.Fatalf("JobCreatedAt(%q): %v", p.ID(), err)
+	}
+
+	infos, err := s.Analyses("proj-1")
+	if err != nil {
+		t.Fatalf("Analyses: %v", err)
+	}
+	if len(infos) != 3 || infos[0].ID != p.ID() {
+		t.Fatalf("Analyses() = %+v, want %q first", infos, p.ID())
+	}
+}
+
+func TestNewDirGivesConcurrentJobsOfOneSecondDistinctIDs(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	const jobs = 8
+	ids := make([]string, jobs)
+	errs := make([]error, jobs)
+	var wg sync.WaitGroup
+	for i := range jobs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := s.NewDir("analyses", "proj-1")
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			ids[i] = p.ID()
+		}()
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool)
+	for i, id := range ids {
+		if errs[i] != nil {
+			t.Fatalf("NewDir: %v", errs[i])
+		}
+		if seen[id] {
+			t.Fatalf("ids = %v, want each one distinct", ids)
+		}
+		seen[id] = true
 	}
 }
