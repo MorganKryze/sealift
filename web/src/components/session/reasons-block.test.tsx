@@ -152,6 +152,9 @@ describe("ReasonsBlock", () => {
     fireEvent.keyDown(button, { key: " " })
     fireEvent.click(button)
     expect(button).toHaveAttribute("aria-expanded", "true")
+    // The focus sits in the popover first, so only the outside press can bring it back.
+    screen.getByRole("link", { name: "Read more" }).focus()
+    expect(button).not.toHaveFocus()
     fireEvent.pointerDown(screen.getByText("Outside"))
     expect(button).toHaveAttribute("aria-expanded", "false")
     expect(button).toHaveFocus()
