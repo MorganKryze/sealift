@@ -334,6 +334,7 @@ func TestCauseDropsOnlyTheDataDirectory(t *testing.T) {
 		{"every path under the root", "/data/", "rename /data/a.tmp /data/a: exists", "rename a.tmp a: exists"},
 		{"a sibling of the root", "/data", "open /data2/x: denied", "open /data2/x: denied"},
 		{"no root", "", "open /data/x: denied", "open /data/x: denied"},
+		{"registry credentials", "/data", "GET http://alice:s3cret@nexus/x.tgz: 503", "GET http://nexus/x.tgz: 503"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

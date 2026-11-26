@@ -84,6 +84,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.
 - The policy's logo must be a regular PNG or SVG file of at most 256 KiB, and is served with a `Content-Security-Policy` that blocks scripts and `X-Content-Type-Options: nosniff`. A contact address must be `https:` or `mailto:`, and brand text with a control character is refused.
 - An analysis refuses an npm package document over 256 MiB and names the package, where it used to read a document of any size into memory. A request to the npm registry gives up after 5 minutes, so a registry that stops answering mid-response can no longer hold an analysis forever.
+- A failed download from a registry whose `SEALIFT_NPM_REGISTRY` URL carries a user and password no longer stores them in the job's cause, on screen and in the API, or writes them to the server log.
 
 ## [0.7.0] - 2026-11-23
 

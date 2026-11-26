@@ -1,11 +1,13 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -716,4 +718,34 @@ func TestQueue_CloseDrains(t *testing.T) {
 
 	// Close is safe to call again.
 	q.Close()
+}
+
+// A failed job's error may quote a registry URL with its credentials; the
+// log line the queue writes for it keeps the error but not them.
+func TestFailedJobLogLineNamesNoURLCredentials(t *testing.T) {
+	var logged bytes.Buffer
+	var mu sync.Mutex
+	q := NewQueue(slog.New(slog.NewTextHandler(&lockedWriter{w: &logged, mu: &mu}, nil)))
+	job := &fakeJob{kind: "export", run: func(context.Context, func(Event)) error {
+		return errors.New("download demo@1.0.0: GET http://alice:s3cret@nexus/demo.tgz: 503")
+	}}
+	t.Cleanup(q.Close)
+	if _, err := q.Submit(job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	var out string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		mu.Lock()
+		out = logged.String()
+		mu.Unlock()
+		if strings.Contains(out, "job finished") {
+			break
+		}
+	}
+	if !strings.Contains(out, "http://nexus/demo.tgz: 503") {
+		t.Errorf("log lacks the error without credentials:\n%s", out)
+	}
+	if strings.Contains(out, "s3cret") || strings.Contains(out, "alice") {
+		t.Errorf("log names the registry credentials:\n%s", out)
+	}
 }

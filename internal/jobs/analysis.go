@@ -148,10 +148,10 @@ type stepData struct {
 
 // cause is err's message as a job records it for a client, in status.json
 // and in a step event: a path under the data directory root reads relative
-// to it, whatever kind of error named the path. The server log keeps err
-// as it is.
+// to it, whatever kind of error named the path, and a URL carries no
+// credentials. The server log keeps the paths.
 func cause(root string, err error) string {
-	msg := err.Error()
+	msg := runner.StripURLCredentials(err.Error())
 	if root == "" {
 		return msg
 	}

@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
@@ -354,7 +355,7 @@ func (q *Queue) run() {
 		q.mu.Unlock()
 
 		if state == store.Failed {
-			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "error", err)
+			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "error", runner.StripURLCredentials(err.Error()))
 		}
 
 		// Called before the event below, and unlocked: a hook that

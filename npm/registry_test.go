@@ -357,3 +357,26 @@ func TestDownloadFileRefusesATarballOverTheBound(t *testing.T) {
 		})
 	}
 }
+
+// A registry URL may carry the credentials a mirror needs; a failed
+// download's error ends up in a job's stored cause and in the server log,
+// so it must name the registry without them.
+func TestDownloadErrorNamesNoRegistryCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	withCreds := strings.Replace(srv.URL, "http://", "http://alice:s3cret@", 1)
+	path := filepath.Join(t.TempDir(), "demo.tgz")
+
+	_, err := testClient(withCreds).DownloadFile(context.Background(), "demo", "1.0.0", sriOf([]byte("x")), path)
+	if err == nil {
+		t.Fatal("DownloadFile: want an error from a 503")
+	}
+	if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "alice") {
+		t.Errorf("error %q names the registry credentials", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error %q lacks the status", err)
+	}
+}
