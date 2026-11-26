@@ -15,6 +15,11 @@ import (
 // code never reassigns it.
 var nowFunc = time.Now
 
+// beforeMkdir runs between the scan that picks an id and the Mkdir of its
+// .tmp directory. Tests override it to commit that id from outside first;
+// production code never reassigns it.
+var beforeMkdir = func(string) {}
+
 // Pending is an analysis or export directory being written under a .tmp
 // name. Commit publishes it atomically; Discard removes it and everything
 // under it.
@@ -71,6 +76,7 @@ func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
 		}
 		final := filepath.Join(parent, id)
 		tmp := final + ".tmp"
+		beforeMkdir(final)
 		if err := os.Mkdir(tmp, dirMode); err != nil {
 			if os.IsExist(err) {
 				continue

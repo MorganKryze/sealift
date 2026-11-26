@@ -409,3 +409,32 @@ func TestNewDirCountsPastASecondHoldingOnlySuffixedIDs(t *testing.T) {
 		t.Fatalf("Analyses() = %+v, want %q first", infos, p.ID())
 	}
 }
+
+func TestNewDirSkipsAnIDCommittedBetweenItsScanAndMkdir(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+	parent := filepath.Join(s.Root(), "projects", "proj-1", "analyses")
+	raced := false
+	orig := beforeMkdir
+	beforeMkdir = func(final string) {
+		if !raced {
+			raced = true
+			if err := os.Mkdir(final, dirMode); err != nil {
+				t.Errorf("commit the racing job: %v", err)
+			}
+		}
+	}
+	defer func() { beforeMkdir = orig }()
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000001" {
+		t.Fatalf("NewDir id = %q, want 20261126T001927Z-000001", p.ID())
+	}
+	if _, err := os.Stat(filepath.Join(parent, "20261126T001927Z.tmp")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat the raced id's .tmp: %v, want it removed", err)
+	}
+}
