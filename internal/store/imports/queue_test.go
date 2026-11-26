@@ -551,3 +551,79 @@ func TestQueueCancel(t *testing.T) {
 		}
 	})
 }
+
+// An id is unique per user only, so two users' imports can share one: a
+// cancel or a rank reaches the attempt of the user who asks, never another's.
+func TestQueueKeepsEachUserToTheirOwnImport(t *testing.T) {
+	// sharedID returns alice's and bob's first imports, created in one second.
+	sharedID := func(t *testing.T) (*Store, Import, Import) {
+		t.Helper()
+		s := openStoreInOneSecond(t, testRoot(t))
+		alice, bob := createFor(t, s, "alice"), createFor(t, s, "bob")
+		if alice.ID != bob.ID {
+			t.Fatalf("ids %s and %s, want one id for both", alice.ID, bob.ID)
+		}
+		return s, alice, bob
+	}
+	t.Run("ranks and cancels the queued attempt of the user who asks", func(t *testing.T) {
+		s, alice, bob := sharedID(t)
+		running := createFor(t, s, "alice")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		for _, imp := range []Import{running, alice, bob} {
+			q.Submit(imp.User, imp.ID)
+		}
+		waitFor(t, started, "the first run")
+		if n, queued := s.Ahead(bob.User, bob.ID); n != 2 || !queued {
+			t.Errorf("bob's rank: ahead %d queued %v, want 2 true", n, queued)
+		}
+		if _, err := s.Cancel(bob.User, bob.ID); err != nil {
+			t.Fatal(err)
+		}
+		if n, queued := s.Ahead(alice.User, alice.ID); n != 1 || !queued {
+			t.Errorf("bob's cancel moved alice's attempt: ahead %d queued %v, want 1 true", n, queued)
+		}
+		close(release)
+		if id := waitFor(t, started, "the second run"); id != alice.ID {
+			t.Errorf("import %s ran second, want alice's", id)
+		}
+		q.Close()
+		a, _ := s.Get(alice.User, alice.ID)
+		b, _ := s.Get(bob.User, bob.ID)
+		if a.Outcome() != importer.OutcomeComplete || b.Outcome() != OutcomeCancelled || b.Attempts[0].StartedAt != nil {
+			t.Errorf("alice's import %q, bob's %q started %v", a.Outcome(), b.Outcome(), b.Attempts[0].StartedAt)
+		}
+	})
+	t.Run("leaves another user's running attempt of the same id alone", func(t *testing.T) {
+		s, alice, bob := sharedID(t)
+		if _, _, err := s.Begin(bob.User, bob.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Finish(bob.User, bob.ID, 1, completeReport(), nil); err != nil {
+			t.Fatal(err)
+		}
+		started, release := make(chan string, 1), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			select {
+			case <-release:
+				return completeReport(), nil
+			case <-p.Cancelled:
+			case <-ctx.Done():
+			}
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, nil
+		})
+		q.Submit(alice.User, alice.ID)
+		waitFor(t, started, "alice's run")
+		if _, err := s.Cancel(bob.User, bob.ID); !errors.Is(err, ErrEnded) {
+			t.Errorf("bob's cancel of his ended import: err = %v, want ErrEnded", err)
+		}
+		close(release)
+		q.Close()
+		if a, _ := s.Get(alice.User, alice.ID); a.Outcome() != importer.OutcomeComplete {
+			t.Errorf("bob's cancel reached alice's run: alice's import reads %q", a.Outcome())
+		}
+	})
+}
