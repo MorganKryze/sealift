@@ -95,6 +95,9 @@ func (e *Export) Kind() string { return "export" }
 // StoreID names the job by its store directory id, which the client uses.
 func (e *Export) StoreID() string { return e.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (e *Export) ProjectID() string { return e.Project.ID }
+
 // exportStatusFile is the on-disk shape of a failed or cancelled export's
 // status.json: enough for store.readExportInfo to report the same state,
 // analysis id and first-failed-step cause a reader gets for an analysis.

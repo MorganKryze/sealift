@@ -41,6 +41,9 @@ func (a *PipAnalysis) Kind() string { return "analysis" }
 // StoreID names the job by its store directory id, which the client uses.
 func (a *PipAnalysis) StoreID() string { return a.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (a *PipAnalysis) ProjectID() string { return a.Project.ID }
+
 // PipResult is what a pip analysis writes to pip-result.json, and what the
 // API returns as pipResult. Field names match the contract's schemas.
 type PipResult struct {

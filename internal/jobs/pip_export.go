@@ -109,6 +109,9 @@ func (e *PipExport) Kind() string { return "export" }
 // StoreID names the job by its store directory id, which the client uses.
 func (e *PipExport) StoreID() string { return e.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (e *PipExport) ProjectID() string { return e.Project.ID }
+
 // Run packs the analysis's wheels: package-list, download, archive and
 // reports. A failed or cancelled run keeps only status.json, as Export's
 // does; a done run leaves its directory for Service to commit.

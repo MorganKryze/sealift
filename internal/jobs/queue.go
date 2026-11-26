@@ -72,6 +72,19 @@ func storeIDOf(j Job) string {
 	return ""
 }
 
+// projectIdentified is a job that knows the project it runs for, which
+// the queue names in a failed job's log line.
+type projectIdentified interface {
+	ProjectID() string
+}
+
+func projectIDOf(j Job) string {
+	if p, ok := j.(projectIdentified); ok {
+		return p.ProjectID()
+	}
+	return ""
+}
+
 type entry struct {
 	id  string
 	job Job
@@ -355,7 +368,7 @@ func (q *Queue) run() {
 		q.mu.Unlock()
 
 		if state == store.Failed {
-			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "error", runner.StripURLCredentials(err.Error()))
+			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "project", projectIDOf(next.job), "error", runner.StripURLCredentials(err.Error()))
 		}
 
 		// Called before the event below, and unlocked: a hook that

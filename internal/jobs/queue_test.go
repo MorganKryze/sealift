@@ -749,3 +749,49 @@ func TestFailedJobLogLineNamesNoURLCredentials(t *testing.T) {
 		t.Errorf("log names the registry credentials:\n%s", out)
 	}
 }
+
+type projectJob struct {
+	fakeJob
+	project string
+}
+
+func (j *projectJob) ProjectID() string { return j.project }
+
+// The log line of a failed job names its project, so an operator finds
+// which project's job failed without matching ids.
+func TestFailedJobLogLineNamesItsProject(t *testing.T) {
+	var logged bytes.Buffer
+	var mu sync.Mutex
+	q := NewQueue(slog.New(slog.NewTextHandler(&lockedWriter{w: &logged, mu: &mu}, nil)))
+	t.Cleanup(q.Close)
+	job := &projectJob{fakeJob: fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+		return errors.New("boom")
+	}}, project: "p-42"}
+	if _, err := q.Submit(job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	var out string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		mu.Lock()
+		out = logged.String()
+		mu.Unlock()
+		if strings.Contains(out, "job finished") {
+			break
+		}
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "job failed") && strings.Contains(l, "project=p-42") {
+			return
+		}
+	}
+	t.Errorf("no job failed line names project=p-42:\n%s", out)
+}
+
+func TestJobsNameTheirProject(t *testing.T) {
+	p := store.Project{ID: "p-1"}
+	for _, j := range []Job{&Analysis{Project: p}, &Export{Project: p}, &PipAnalysis{Project: p}, &PipExport{Project: p}} {
+		if got := projectIDOf(j); got != "p-1" {
+			t.Errorf("projectIDOf(%T) = %q, want p-1", j, got)
+		}
+	}
+}

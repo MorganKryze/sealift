@@ -107,6 +107,9 @@ func (a *Analysis) Kind() string { return "analysis" }
 // StoreID names the job by its store directory id, which the client uses.
 func (a *Analysis) StoreID() string { return a.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (a *Analysis) ProjectID() string { return a.Project.ID }
+
 // statusFile is the on-disk shape of status.json: state, step timings, tool
 // versions, the vulnerability database's date and the target. The queue,
 // not this job, has the last word on the final state of a job (it tells
