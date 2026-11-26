@@ -151,9 +151,10 @@ type Sweep struct {
 // than idle. deleteProject answers ErrBusy for a project whose job was
 // queued since the sweep looked, and that project stays. A project it
 // cannot read or delete is counted and skipped, so one bad entry never
-// stops the others. It then empties the caches when the instance is idle
-// and either no project remains or a purge was put off.
-func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, hasJob func(projectID string) bool, deleteProject func(id string) error) Sweep {
+// stops the others. It then calls purgeIfIdle when no project remains or
+// a purge was put off. The job service passes its own PurgeIfIdle, which
+// holds off new jobs during the purge.
+func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, hasJob func(projectID string) bool, deleteProject func(id string) error, purgeIfIdle func() (bool, error)) Sweep {
 	var r Sweep
 	root := filepath.Join(s.root, "projects")
 	projects, err := os.ReadDir(root)
@@ -190,7 +191,7 @@ func (s *Store) SweepEphemeral(idle time.Duration, now time.Time, hasJob func(pr
 		}
 	}
 	if remaining == 0 || s.isPurgePending() {
-		purged, err := s.PurgeIfIdle(hasJob)
+		purged, err := purgeIfIdle()
 		if err != nil {
 			r.Failed++
 		}

@@ -112,6 +112,14 @@ type Service struct {
 	// projectLocks holds a lock per project while one of its jobs is
 	// being queued or the project deleted (see DeleteProject).
 	projectLocks map[string]*projectLock
+	// queueing is held for reading while a job is queued, from NewDir to
+	// its tracking, and for writing while the shared caches are purged
+	// (see PurgeIfIdle), so no job is queued between the purge's check
+	// and its removal.
+	queueing sync.RWMutex
+	// afterNewDir, when set by a test, runs once a queued job has its
+	// directory and before the service tracks it.
+	afterNewDir func()
 }
 
 // NewService builds a Service and registers it as the queue's finalize
@@ -152,6 +160,8 @@ func (s *Service) SetPip(uv runner.Uv, index *pip.Client) {
 func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 	unlock := s.lockProject(projectID)
 	defer unlock()
+	s.queueing.RLock()
+	defer s.queueing.RUnlock()
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.AnalysisInfo{}, err
@@ -167,6 +177,9 @@ func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
 	pending, err := s.store.NewDir("analyses", projectID)
 	if err != nil {
 		return store.AnalysisInfo{}, err
+	}
+	if s.afterNewDir != nil {
+		s.afterNewDir()
 	}
 
 	// A job the queue drops while still queued never runs, so nothing else
@@ -250,6 +263,8 @@ func (s *Service) seedPending(pending *store.Pending, createdAt time.Time, proje
 func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (store.ExportInfo, error) {
 	unlock := s.lockProject(projectID)
 	defer unlock()
+	s.queueing.RLock()
+	defer s.queueing.RUnlock()
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.ExportInfo{}, err
