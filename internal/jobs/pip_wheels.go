@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -21,10 +23,11 @@ func platformOfPip(t store.PipTarget) pip.Platform {
 }
 
 // stepCheckPins reads the index page of every requirement the target
-// installs and refuses the analysis, before uv runs, when one of them has
-// no wheel the target can install or none its hashes list. uv stops at the
-// first such package, so sealift names them all itself. A constraint is
-// left to choose-wheels: it installs only when something requires it.
+// installs, before uv runs, and records each one with no wheel the target
+// can install or none its hashes list. uv stops at the first such package,
+// so sealift finds them all itself; stepResolve leaves their lines out of
+// uv's input. A constraint is left to choose-wheels: it installs only when
+// something requires it.
 func (r *pipRun) stepCheckPins() error {
 	return r.runStep("check-pins", func() error {
 		r.pins = r.targetPins()
@@ -41,20 +44,20 @@ func (r *pipRun) stepCheckPins() error {
 		if err != nil {
 			return err
 		}
-		var blocking []PipBlocking
 		for _, c := range choices {
 			if c.blocking != nil {
-				blocking = append(blocking, *c.blocking)
+				r.block(*c.blocking)
 			}
 		}
-		return r.refuse(blocking)
+		return nil
 	})
 }
 
 // stepChooseWheels records, for every package of the resolved set, the
-// wheel the target's installer prefers, with the index's sha256. A yanked
-// wheel, or a pin's wheel uploaded within the minimum release age, gets a
-// warning.
+// wheel the target's installer prefers, with the index's sha256, its upload
+// time and whether the index has yanked it. A package with none stays in
+// the set without a wheel and joins blocking. A pin's wheel uploaded within
+// the minimum release age gets a warning.
 func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 	return r.runStep("choose-wheels", func() error {
 		choices, err := r.chooseWheels("choose-wheels", resolved)
@@ -63,35 +66,67 @@ func (r *pipRun) stepChooseWheels(resolved []runner.Resolved) error {
 		}
 		days := r.a.Settings.MinReleaseAgeDays
 		cut := r.releaseCut()
-		var blocking []PipBlocking
 		r.wheels = make(map[string]PipWheel, len(choices))
+		r.yanked = map[string]PipYanked{}
 		for i, c := range choices {
 			pkg := resolved[i]
 			if c.blocking != nil {
-				blocking = append(blocking, *c.blocking)
+				if !r.blocked(pkg.Name) {
+					r.block(*c.blocking)
+				}
 				continue
 			}
 			f := c.file
-			r.wheels[pkg.Name] = PipWheel{File: f.Filename, URL: f.URL, Sha256: f.Sha256, Size: f.Size}
+			w := PipWheel{File: f.Filename, URL: f.URL, Sha256: f.Sha256, Size: f.Size}
+			if !f.UploadTime.IsZero() {
+				uploaded := f.UploadTime.UTC()
+				w.UploadedAt = &uploaded
+			}
+			r.wheels[pkg.Name] = w
 			if f.Yanked {
-				reason := strings.TrimSpace(cleanText(f.YankedReason, yankedReasonLimit))
-				if reason == "" {
-					reason = "no reason given"
-				}
-				r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf("%s==%s is yanked on the index: %s", pkg.Name, pkg.Version, reason)))
+				r.yanked[pkg.Name] = PipYanked{Reason: yankedReason(r.root, f.YankedReason)}
 			}
 			if f.UploadTime.After(cut) {
 				r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf("%s==%s was uploaded on %s, within the %d-day minimum release age",
 					pkg.Name, pkg.Version, f.UploadTime.UTC().Format(time.DateOnly), days)))
 			}
 		}
-		return r.refuse(blocking)
+		return nil
 	})
 }
 
-// yankedReasonLimit bounds, in runes, the yank reason a warning quotes from
-// the index.
+// yankedReasonLimit bounds, in runes, the yank reason recorded from the
+// index.
 const yankedReasonLimit = 200
+
+// yankedReason cleans the index's reason for a yanked release, which comes
+// from outside: each whitespace character turns into a space, every other
+// character a signed reason may not hold is dropped, credentials and data
+// paths go as in a cause, and the rest is trimmed and cut to
+// yankedReasonLimit runes. It is empty when the index gives no reason.
+func yankedReason(root, s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case reasonRune(r):
+			return r
+		case unicode.IsSpace(r):
+			return ' '
+		}
+		return -1
+	}, s)
+	s = strings.TrimSpace(causeText(root, s))
+	if runes := []rune(s); len(runes) > yankedReasonLimit {
+		s = strings.TrimSpace(string(runes[:yankedReasonLimit]))
+	}
+	return s
+}
+
+// reasonRune reports whether a signed reason may hold r, as the archive's
+// reason rule reads it: a printable character or one of three no-break
+// spaces.
+func reasonRune(r rune) bool {
+	return unicode.IsPrint(r) || r == '\u00a0' || r == '\u202f' || r == '\u3000'
+}
 
 // wheelChoice is the wheel chosen for one package, or why there is none.
 type wheelChoice struct {
@@ -229,30 +264,38 @@ func (r *pipRun) hashesOf(key string) []string {
 	return nil
 }
 
-// refuse fails the step when blocking names a package, after it logs each
-// one and writes pip-result.json, so the result lists every package even
-// where the failure names only the first few.
-func (r *pipRun) refuse(blocking []PipBlocking) error {
-	if len(blocking) == 0 {
-		return nil
-	}
-	shown := make([]string, 0, shownProblems)
-	for i, b := range blocking {
-		line := r.describeBlocking(b)
-		r.log(line)
-		if i < shownProblems {
-			shown = append(shown, line)
+// block records b, with the places that pin its package, and logs it.
+func (r *pipRun) block(b PipBlocking) {
+	b.PinnedAt = r.placesOf(b.Name)
+	r.log(r.describeBlocking(b))
+	r.blocking = append(r.blocking, b)
+}
+
+// blocked reports whether blocking already holds the package name.
+func (r *pipRun) blocked(name string) bool {
+	return slices.ContainsFunc(r.blocking, func(b PipBlocking) bool { return b.Name == name })
+}
+
+// placesOf lists each file and line that pins key, sorted by file then
+// line, or nil when no pin names it.
+func (r *pipRun) placesOf(key string) []PipPlace {
+	var places []PipPlace
+	for _, p := range slices.Concat(r.set.Requirements, r.set.Constraints) {
+		if p.Key == key {
+			places = append(places, PipPlace{File: p.File, Line: p.Line})
 		}
 	}
-	if err := r.writeFailedResult(blocking); err != nil {
-		return err
-	}
-	msg := fmt.Sprintf("%d %s no wheel the target can install: %s", len(blocking),
-		plural(len(blocking), "package has", "packages have"), strings.Join(shown, "; "))
-	if len(blocking) > shownProblems {
-		msg += "; the result lists every one"
-	}
-	return errors.New(msg)
+	slices.SortFunc(places, func(a, b PipPlace) int {
+		return cmp.Or(strings.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line))
+	})
+	return places
+}
+
+// sortedBlocking returns blocking sorted by name, never nil.
+func sortedBlocking(blocking []PipBlocking) []PipBlocking {
+	sorted := slices.Clone(nonNil(blocking))
+	slices.SortStableFunc(sorted, func(a, b PipBlocking) int { return strings.Compare(a.Name, b.Name) })
+	return sorted
 }
 
 // describeBlocking names a blocked package, the files that pin it, and why.
@@ -272,7 +315,7 @@ func (r *pipRun) writeFailedResult(blocking []PipBlocking) error {
 		Target:   r.a.Project.PipTarget,
 		Files:    nonNil(r.files),
 		Packages: []PipPackage{},
-		Blocking: blocking,
+		Blocking: sortedBlocking(blocking),
 		Warnings: nonNil(r.warnings),
 	}
 	return r.a.Store.WriteJSON(r.resultPath(), result)

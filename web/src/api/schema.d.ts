@@ -731,16 +731,19 @@ export interface components {
             /** @description Sorted by name */
             members: string[];
         };
-        /** @description What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. */
+        /** @description What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. A done analysis may hold a package without a wheel and a non-empty blocking list, which no export takes. Every field an analysis from 0.7.0 lacks is absent from its answer, never read as empty or false. */
         PipAnalysisResult: {
             target: components["schemas"]["PipTarget"];
             /** @description Every requirements file the set was resolved from */
             files: string[];
             /** @description The resolved set, sorted by normalized name */
             packages: components["schemas"]["PipPackage"][];
-            /** @description Packages with no wheel the target can install */
+            /** @description Packages with no wheel the target can install. A done analysis lists each of them in packages too, without a wheel; a failed one lists no package. */
             blocking: components["schemas"]["PipBlocking"][];
             warnings: string[];
+            previous?: components["schemas"]["PipPreviousCrossing"];
+            /** @description Each package of the previous crossing that this set no longer holds, sorted by name. Absent with no previous crossing, and when no package left. */
+            removed?: components["schemas"]["PipRemoved"][];
             /** @description What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date. */
             advisories?: {
                 [key: string]: components["schemas"]["Advisory"];
@@ -757,11 +760,59 @@ export interface components {
             version: string;
             /** @description The project files that pin it, empty for a transitive package */
             files: string[];
+            /** @description Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded. */
+            pinnedAt?: components["schemas"]["PipPlace"][];
             wheel?: components["schemas"]["PipWheel"];
             /** @description Sorted by severity, then id */
             cves: components["schemas"]["PipFinding"][];
+            yanked?: components["schemas"]["PipYanked"];
+            previous?: components["schemas"]["PipPrevious"];
         };
-        /** @description The wheel chosen for a package, as the index lists it */
+        /** @description A line of a requirements file that pins a package */
+        PipPlace: {
+            /** @example requirements.txt */
+            file: string;
+            /**
+             * @description 1 for the first line
+             * @example 3
+             */
+            line: number;
+        };
+        /** @description The chosen file is yanked on the index: its publisher withdrew it. Absent when the index keeps the release, and from an analysis written before the mark was recorded, whose warnings may name the release instead. */
+        PipYanked: {
+            /** @description The index's reason, plain text that a client renders as text. Kept to printable characters and cut to 200 code points. Empty when the index gives none. */
+            reason: string;
+        };
+        /** @description The package as the previous crossing held it. Absent for a package new since then, and when the analysis records no previous crossing. */
+        PipPrevious: {
+            /** @example 3.1.2 */
+            version: string;
+            /** @description Its findings at that version, from this analysis's own scan, sorted by severity, then id */
+            cves: components["schemas"]["PipFinding"][];
+            /** @description The first release segment, epoch first, differs between that version and this one. A segment of 1000 or more, as in a calendar version, never counts. */
+            majorJump: boolean;
+        };
+        /** @description The latest done export, created before this analysis started, of a pip project with the same name, trimmed and compared without case, this project included. Absent when there is none, when it could not be read, and from an analysis written before crossings were compared. */
+        PipPreviousCrossing: {
+            projectId: string;
+            projectName: string;
+            exportId: string;
+            analysisId: string;
+            /**
+             * Format: date-time
+             * @description When that export was created
+             */
+            sealedAt: string;
+        };
+        /** @description A package of the previous crossing that the set no longer holds */
+        PipRemoved: {
+            name: string;
+            /** @description Its version in the previous crossing */
+            version: string;
+            /** @description Its findings at that version, from this analysis's own scan, sorted by severity, then id */
+            cves: components["schemas"]["PipFinding"][];
+        };
+        /** @description The wheel chosen for a package, as the index lists it. A package of a done analysis may have none: its blocking entry says why, and no export takes the set. */
         PipWheel: {
             file: string;
             url: string;
@@ -772,6 +823,11 @@ export interface components {
              * @description Bytes
              */
             size: number;
+            /**
+             * Format: date-time
+             * @description When the index says the file was uploaded, in UTC. Absent when the index gives none, and from an analysis written before upload times were recorded.
+             */
+            uploadedAt?: string;
         };
         /** @description One known vulnerability of a pip package */
         PipFinding: {
@@ -787,13 +843,15 @@ export interface components {
             /** @description Trivy's title, plain text that a client renders as text, never as HTML or Markdown. A newer analysis stores it cleaned and cut to 200 code points. An analysis from 0.7.0 stores it as Trivy gave it. */
             title?: string;
         };
-        /** @description A package the target cannot install from a wheel */
+        /** @description A package the target cannot install from a wheel. A done analysis may hold one: the package stays in its set without a wheel, and no export takes the set. */
         PipBlocking: {
             name: string;
             version: string;
             /** @enum {string} */
             kind: "source-only" | "other-platforms" | "no-files" | "hash-mismatch";
             detail: string;
+            /** @description Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded. */
+            pinnedAt?: components["schemas"]["PipPlace"][];
         };
         /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
         ExportRequest: {

@@ -2,68 +2,91 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/piptest"
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
-func TestCheckPinsNamesEveryBlockedPin(t *testing.T) {
+func TestCheckPinsRecordsEveryBlockedPinAndGoesOn(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	ix.Add(piptest.Dist{Name: "docopt", Version: "0.6.2"})
 	ix.Add(piptest.Dist{Name: "pywin32", Version: "306", Tag: "cp311-cp311-win_amd64"})
-	ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
+	requests := ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
 	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget,
 		reqFile("requirements.txt", "docopt==0.6.2\nrequests==2.32.3\n"),
-		reqFile("requirements-win.txt", "pywin32==306\n"))
-	uv := &fakeUv{lock: "x==1\n", set: resolved("docopt", "0.6.2", "pywin32", "306", "requests", "2.32.3")}
+		reqFile("requirements-win.txt", "# windows only\npywin32==306\n"))
+	uv := &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3")}
 	a.Uv = uv
+	trivy := &cannedTrivy{report: pipTrivyReport()}
+	a.Trivy = trivy
 
-	if err := a.Run(context.Background(), func(Event) {}); err == nil {
-		t.Fatal("Run succeeded, want check-pins to refuse docopt and pywin32")
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	status, _ := readStatus(t, st, a)
-	if want := []string{"validate:done", "prepare-tools:done", "check-pins:failed"}; !slices.Equal(stepNames(status.Steps), want) {
+	if status.State != store.Done {
+		t.Errorf("state = %q, want done", status.State)
+	}
+	want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:done", "scan:done"}
+	if !slices.Equal(stepNames(status.Steps), want) {
 		t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
 	}
-	if n := len(uv.Calls()); n != 0 {
-		t.Errorf("uv ran %d times, want 0", n)
+	calls := uv.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("uv ran %d times, want once", len(calls))
 	}
-	msg := status.Steps[2].Error
+	if in := string(calls[0].Requirements); !strings.Contains(in, "requests==2.32.3") || strings.Contains(in, "docopt") || strings.Contains(in, "pywin32") {
+		t.Errorf("uv read %q, want requests alone: the blocked lines stay out", in)
+	}
+	log := pipLog(t, a)
 	for _, want := range []string{
 		"docopt==0.6.2 (requirements.txt): source distribution only",
 		"pywin32==306 (requirements-win.txt): wheels for other platforms only",
 	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("check-pins error = %q, want %q", msg, want)
+		if !strings.Contains(log, want) {
+			t.Errorf("log = %q, want %q", log, want)
 		}
-	}
-	if strings.Contains(msg, "requests") {
-		t.Errorf("check-pins error = %q, names requests, which has a wheel", msg)
 	}
 
 	res, _ := readPipResult(t, st, a)
-	want := []PipBlocking{
-		{Name: "docopt", Version: "0.6.2", Kind: "source-only", Detail: "source distribution only"},
-		{Name: "pywin32", Version: "306", Kind: "other-platforms", Detail: "wheels for other platforms only"},
+	wantBlocking := []PipBlocking{
+		{Name: "docopt", Version: "0.6.2", Kind: "source-only", Detail: "source distribution only",
+			PinnedAt: []PipPlace{{File: "requirements.txt", Line: 1}}},
+		{Name: "pywin32", Version: "306", Kind: "other-platforms", Detail: "wheels for other platforms only",
+			PinnedAt: []PipPlace{{File: "requirements-win.txt", Line: 2}}},
 	}
-	if !slices.Equal(res.Blocking, want) {
-		t.Errorf("blocking = %+v, want %+v", res.Blocking, want)
+	if !reflect.DeepEqual(res.Blocking, wantBlocking) {
+		t.Errorf("blocking = %+v, want %+v", res.Blocking, wantBlocking)
 	}
-	if res.Packages == nil || len(res.Packages) != 0 {
-		t.Errorf("packages = %#v, want an empty list: nothing was resolved", res.Packages)
+	if got := packageNames(res.Packages); !slices.Equal(got, []string{"docopt", "pywin32", "requests"}) {
+		t.Fatalf("packages = %v, want docopt, pywin32 and requests", got)
+	}
+	for _, p := range res.Packages {
+		switch {
+		case p.Name == "requests" && (p.Wheel == nil || p.Wheel.File != requests.Filename):
+			t.Errorf("requests wheel = %+v, want %s", p.Wheel, requests.Filename)
+		case p.Name != "requests" && p.Wheel != nil:
+			t.Errorf("%s wheel = %+v, want none: the target cannot install it", p.Name, p.Wheel)
+		}
+	}
+	if got, want := scannedPurls(t, trivy), []string{"pkg:pypi/docopt@0.6.2", "pkg:pypi/pywin32@306", "pkg:pypi/requests@2.32.3"}; !slices.Equal(got, want) {
+		t.Errorf("scanned purls = %v, want %v", got, want)
 	}
 }
 
-func TestCheckPinsRefusesHashMismatch(t *testing.T) {
+func TestCheckPinsRecordsAHashMismatchAndGoesOn(t *testing.T) {
 	ix := piptest.NewIndex(t)
 	generic := ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
 	native := ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "cp311-cp311-manylinux_2_17_x86_64"})
@@ -71,7 +94,7 @@ func TestCheckPinsRefusesHashMismatch(t *testing.T) {
 	cases := []struct {
 		name     string
 		hashes   []string
-		wantFile string // the recorded wheel; empty when check-pins refuses
+		wantFile string // the recorded wheel; empty when check-pins blocks the pin
 	}{
 		{"hashes listing no wheel", []string{other}, ""},
 		{"hashes listing the preferred wheel", []string{native.Sha256}, native.Filename},
@@ -84,34 +107,46 @@ func TestCheckPinsRefusesHashMismatch(t *testing.T) {
 				line += " --hash=sha256:" + h
 			}
 			a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", line+"\n"))
-			uv := &fakeUv{lock: "requests==2.32.3\n", set: resolved("requests", "2.32.3")}
+			uv := &fakeUv{lock: "x==1\n"}
+			if c.wantFile != "" {
+				uv.set = resolved("requests", "2.32.3")
+			}
 			a.Uv = uv
 
-			err := a.Run(context.Background(), func(Event) {})
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 			status, _ := readStatus(t, st, a)
+			if status.State != store.Done {
+				t.Errorf("state = %q, want done", status.State)
+			}
 			res, _ := readPipResult(t, st, a)
+			if len(res.Packages) != 1 || res.Packages[0].Name != "requests" {
+				t.Fatalf("packages = %+v, want requests", res.Packages)
+			}
 			if c.wantFile != "" {
-				if err != nil {
-					t.Fatalf("Run: %v", err)
+				if w := res.Packages[0].Wheel; w == nil || w.File != c.wantFile {
+					t.Errorf("wheel = %+v, want %s recorded", w, c.wantFile)
 				}
-				if len(res.Packages) != 1 || res.Packages[0].Wheel == nil || res.Packages[0].Wheel.File != c.wantFile {
-					t.Errorf("packages = %+v, want %s recorded", res.Packages, c.wantFile)
+				if len(res.Blocking) != 0 {
+					t.Errorf("blocking = %+v, want none", res.Blocking)
 				}
 				return
 			}
-			if err == nil || len(status.Steps) != 3 || status.Steps[2].Name != "check-pins" {
-				t.Fatalf("Run = %v, steps %v, want check-pins failed", err, stepNames(status.Steps))
+			if w := res.Packages[0].Wheel; w != nil {
+				t.Errorf("wheel = %+v, want none: no wheel matches the hashes", w)
 			}
-			for _, want := range []string{"requests==2.32.3 (requirements.txt)", "requirements.txt", native.Filename} {
-				if !strings.Contains(status.Steps[2].Error, want) {
-					t.Errorf("check-pins error = %q, want %q", status.Steps[2].Error, want)
+			log := pipLog(t, a)
+			for _, want := range []string{"requests==2.32.3 (requirements.txt)", "the --hash options in requirements.txt", native.Filename} {
+				if !strings.Contains(log, want) {
+					t.Errorf("log = %q, want %q", log, want)
 				}
 			}
 			if len(res.Blocking) != 1 || res.Blocking[0].Kind != "hash-mismatch" || res.Blocking[0].Name != "requests" {
 				t.Errorf("blocking = %+v, want requests as a hash mismatch", res.Blocking)
 			}
-			if n := len(uv.Calls()); n != 0 {
-				t.Errorf("uv ran %d times, want 0", n)
+			if calls := uv.Calls(); len(calls) != 1 || strings.Contains(string(calls[0].Requirements), "requests") {
+				t.Errorf("uv calls = %+v, want one, with the blocked line left out", calls)
 			}
 		})
 	}
@@ -165,7 +200,7 @@ func TestBlockingFromUvOutput(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := blockingFromUv(c.output)
-			if ok != c.ok || got != c.want {
+			if ok != c.ok || !reflect.DeepEqual(got, c.want) {
 				t.Errorf("blockingFromUv = %+v, %v; want %+v, %v", got, ok, c.want, c.ok)
 			}
 		})
@@ -189,8 +224,47 @@ func TestPipAnalysisRecordsTheBlockingPackageUvNames(t *testing.T) {
 	}
 	res, _ := readPipResult(t, st, a)
 	want := []PipBlocking{{Name: "eps", Version: "1.0.0", Kind: "source-only", Detail: "source distribution only"}}
-	if !slices.Equal(res.Blocking, want) {
+	if !reflect.DeepEqual(res.Blocking, want) {
 		t.Errorf("blocking = %+v, want %+v", res.Blocking, want)
+	}
+}
+
+// uv gives no set when it stops on a package with no wheel, so nothing can
+// be scanned: the analysis fails, and its result lists every package known
+// to block, the pins check-pins found included, and no package.
+func TestResolverBlockingStillFailsTheAnalysis(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+	ix.Add(piptest.Dist{Name: "docopt", Version: "0.6.2"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "docopt==0.6.2\nomega==1.0.0\n"))
+	output := "error: No solution found when resolving dependencies\n" +
+		"  cause: Because eps==1.0.0 has no usable wheels and all versions of omega depend on eps==1.0.0, we can conclude that all versions of omega cannot be used.\n"
+	a.Uv = &fakeUv{output: output, err: errors.New("uv pip compile: No solution found when resolving dependencies: exit status 1")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err == nil {
+		t.Fatal("Run succeeded, want the resolve failure")
+	}
+	status, _ := readStatus(t, st, a)
+	if status.State != store.Failed {
+		t.Errorf("state = %q, want failed", status.State)
+	}
+	if want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:failed"}; !slices.Equal(stepNames(status.Steps), want) {
+		t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
+	}
+	if log := pipLog(t, a); !strings.Contains(log, "eps==1.0.0: source distribution only") {
+		t.Errorf("log = %q, want it to name eps", log)
+	}
+	res, _ := readPipResult(t, st, a)
+	want := []PipBlocking{
+		{Name: "docopt", Version: "0.6.2", Kind: "source-only", Detail: "source distribution only",
+			PinnedAt: []PipPlace{{File: "requirements.txt", Line: 1}}},
+		{Name: "eps", Version: "1.0.0", Kind: "source-only", Detail: "source distribution only"},
+	}
+	if !reflect.DeepEqual(res.Blocking, want) {
+		t.Errorf("blocking = %+v, want %+v", res.Blocking, want)
+	}
+	if res.Packages == nil || len(res.Packages) != 0 {
+		t.Errorf("packages = %#v, want an empty list: nothing was scanned", res.Packages)
 	}
 }
 
@@ -205,7 +279,7 @@ func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {
 	cases := []struct {
 		name     string
 		hashes   []string
-		wantFile string // the recorded wheel; empty when choose-wheels refuses
+		wantFile string // the recorded wheel; empty when choose-wheels blocks eps
 	}{
 		{"hashes listing no wheel", []string{other}, ""},
 		{"hashes listing only a less preferred wheel", []string{generic.Sha256, other}, generic.Filename},
@@ -221,69 +295,67 @@ func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {
 				reqFile("constraints.txt", line+"\n"))
 			a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0")}
 
-			err := a.Run(context.Background(), func(Event) {})
-			status, _ := readStatus(t, st, a)
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 			res, _ := readPipResult(t, st, a)
+			i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
+			if i < 0 {
+				t.Fatalf("packages = %+v, want eps", res.Packages)
+			}
 			if c.wantFile != "" {
-				if err != nil {
-					t.Fatalf("Run: %v", err)
-				}
-				i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
-				if i < 0 || res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
+				if res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
 					t.Errorf("packages = %+v, want eps recorded as %s", res.Packages, c.wantFile)
 				}
 				return
 			}
-			want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
-			if err == nil || !slices.Equal(stepNames(status.Steps), want) {
-				t.Fatalf("Run = %v, steps %v, want %v", err, stepNames(status.Steps), want)
+			if w := res.Packages[i].Wheel; w != nil {
+				t.Errorf("eps wheel = %+v, want none: no wheel matches the hashes", w)
 			}
+			log := pipLog(t, a)
 			for _, want := range []string{"eps==1.0.0 (constraints.txt)", "the --hash options in constraints.txt", native.Filename} {
-				if !strings.Contains(status.Steps[4].Error, want) {
-					t.Errorf("choose-wheels error = %q, want %q", status.Steps[4].Error, want)
+				if !strings.Contains(log, want) {
+					t.Errorf("log = %q, want %q", log, want)
 				}
 			}
-			if len(res.Blocking) != 1 || res.Blocking[0].Kind != "hash-mismatch" || res.Blocking[0].Name != "eps" {
-				t.Errorf("blocking = %+v, want eps as a hash mismatch", res.Blocking)
-			}
-			if len(res.Packages) != 0 {
-				t.Errorf("packages = %+v, want none: nothing was scanned", res.Packages)
+			if len(res.Blocking) != 1 || res.Blocking[0].Kind != "hash-mismatch" || res.Blocking[0].Name != "eps" ||
+				!reflect.DeepEqual(res.Blocking[0].PinnedAt, []PipPlace{{File: "constraints.txt", Line: 1}}) {
+				t.Errorf("blocking = %+v, want eps as a hash mismatch pinned at constraints.txt line 1", res.Blocking)
 			}
 		})
 	}
 }
 
 // uv resolves against every file the index lists, so a transitive package
-// can reach the set with no wheel the target installs. The analysis must
-// fail on it, never finish with a package that has no wheel.
-func TestChooseWheelsNamesEveryBlockedPackage(t *testing.T) {
+// can reach the set with no wheel the target installs. It stays in the set
+// without a wheel and in blocking, and the analysis goes on.
+func TestChooseWheelsKeepsABlockedPackageWithoutAWheel(t *testing.T) {
 	ix := piptest.NewIndex(t)
-	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+	omega := ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
 	ix.Add(piptest.Dist{Name: "eps", Version: "1.0.0", Uploaded: released})
 	ix.Add(piptest.Dist{Name: "zeta", Version: "2.0.0", Tag: "cp311-cp311-win_amd64", Uploaded: released})
 	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "omega==1.0.0\n"))
 	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0", "theta", "3.0.0", "zeta", "2.0.0")}
 
-	if err := a.Run(context.Background(), func(Event) {}); err == nil {
-		t.Fatal("Run succeeded, want choose-wheels to refuse eps, theta and zeta")
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	status, _ := readStatus(t, st, a)
-	if status.State != store.Failed {
-		t.Errorf("state = %q, want failed", status.State)
+	if status.State != store.Done {
+		t.Errorf("state = %q, want done", status.State)
 	}
-	want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
+	want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:done", "scan:done"}
 	if !slices.Equal(stepNames(status.Steps), want) {
 		t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
 	}
-	msg := status.Steps[4].Error
+	log := pipLog(t, a)
 	for _, want := range []string{
-		"3 packages have no wheel the target can install",
 		"eps==1.0.0: source distribution only",
 		"theta==3.0.0: no files on the index",
 		"zeta==2.0.0: wheels for other platforms only",
 	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("choose-wheels error = %q, want %q", msg, want)
+		if !strings.Contains(log, want) {
+			t.Errorf("log = %q, want %q", log, want)
 		}
 	}
 	res, _ := readPipResult(t, st, a)
@@ -292,11 +364,19 @@ func TestChooseWheelsNamesEveryBlockedPackage(t *testing.T) {
 		{Name: "theta", Version: "3.0.0", Kind: "no-files", Detail: "no files on the index"},
 		{Name: "zeta", Version: "2.0.0", Kind: "other-platforms", Detail: "wheels for other platforms only"},
 	}
-	if !slices.Equal(res.Blocking, wantBlocking) {
+	if !reflect.DeepEqual(res.Blocking, wantBlocking) {
 		t.Errorf("blocking = %+v, want %+v", res.Blocking, wantBlocking)
 	}
-	if res.Packages == nil || len(res.Packages) != 0 {
-		t.Errorf("packages = %#v, want an empty list: nothing was scanned", res.Packages)
+	if got := packageNames(res.Packages); !slices.Equal(got, []string{"eps", "omega", "theta", "zeta"}) {
+		t.Fatalf("packages = %v, want every package of the set", got)
+	}
+	for _, p := range res.Packages {
+		switch {
+		case p.Name == "omega" && (p.Wheel == nil || p.Wheel.File != omega.Filename):
+			t.Errorf("omega wheel = %+v, want %s", p.Wheel, omega.Filename)
+		case p.Name != "omega" && p.Wheel != nil:
+			t.Errorf("%s wheel = %+v, want none", p.Name, p.Wheel)
+		}
 	}
 }
 
@@ -354,14 +434,14 @@ func TestPipAnalysisRecordsOneWheelPerPackage(t *testing.T) {
 	}
 	res, _ := readPipResult(t, st, a)
 	want := map[string]PipWheel{
-		"certifi": {File: certifi.Filename, URL: certifi.URL, Sha256: certifi.Sha256, Size: certifi.Size},
+		"certifi": {File: certifi.Filename, URL: certifi.URL, Sha256: certifi.Sha256, Size: certifi.Size, UploadedAt: &released},
 		"numpy":   {File: native.Filename, URL: native.URL, Sha256: native.Sha256, Size: native.Size},
 	}
 	if len(res.Packages) != 2 {
 		t.Fatalf("packages = %+v, want certifi and numpy", res.Packages)
 	}
 	for _, p := range res.Packages {
-		if p.Wheel == nil || *p.Wheel != want[p.Name] {
+		if p.Wheel == nil || !reflect.DeepEqual(*p.Wheel, want[p.Name]) {
 			t.Errorf("%s wheel = %+v, want %+v", p.Name, p.Wheel, want[p.Name])
 		}
 	}
@@ -373,19 +453,21 @@ func TestPipAnalysisRecordsOneWheelPerPackage(t *testing.T) {
 	}
 }
 
-func TestYankedPinWarnsWithReason(t *testing.T) {
+func TestPipAnalysisMarksAYankedReleaseWithACleanReason(t *testing.T) {
 	cases := []struct {
 		name   string
 		yanked string
 		want   string
 	}{
-		{"with a reason", "broken connection pool", "redis==5.0.8 is yanked on the index: broken connection pool"},
-		{"with no reason", "-", "redis==5.0.8 is yanked on the index: no reason given"},
-		{"with only a line feed as the reason", "\n", "redis==5.0.8 is yanked on the index: no reason given"},
-		{"with only a carriage return as the reason", "\r", "redis==5.0.8 is yanked on the index: no reason given"},
-		{"with only a tab as the reason", "\t", "redis==5.0.8 is yanked on the index: no reason given"},
-		{"with control characters in the reason", "bad\u202e\x1b[31m pool", "redis==5.0.8 is yanked on the index: bad[31m pool"},
-		{"with a URL carrying credentials in the reason", "moved to http://alice:s3cret@host/", "redis==5.0.8 is yanked on the index: moved to http://host/"},
+		{"with a reason", "broken connection pool", "broken connection pool"},
+		{"with no reason", "-", ""},
+		{"with only a line feed as the reason", "\n", ""},
+		{"with only a tab as the reason", "\t", ""},
+		{"with control characters in the reason", "bad\u202e\x1b[31m pool", "bad[31m pool"},
+		{"with a line separator in the reason", "first line\u2028second line", "first line second line"},
+		{"with no-break spaces in the reason", "see\u00a0issue\u202f12\u3000now", "see\u00a0issue\u202f12\u3000now"},
+		{"with a URL carrying credentials in the reason", "moved to http://alice:s3cret@host/", "moved to http://host/"},
+		{"with a reason of 300 characters", strings.Repeat("x", 300), strings.Repeat("x", 200)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -398,10 +480,68 @@ func TestYankedPinWarnsWithReason(t *testing.T) {
 				t.Fatalf("Run: %v", err)
 			}
 			res, _ := readPipResult(t, st, a)
-			if !slices.Equal(res.Warnings, []string{c.want}) {
-				t.Errorf("warnings = %q, want %q", res.Warnings, c.want)
+			if len(res.Packages) != 1 || res.Packages[0].Yanked == nil {
+				t.Fatalf("packages = %+v, want redis marked yanked", res.Packages)
+			}
+			got := res.Packages[0].Yanked.Reason
+			if got != c.want {
+				t.Errorf("yanked reason = %q, want %q", got, c.want)
+			}
+			if got != "" {
+				if err := archive.CheckReason(got); err != nil {
+					t.Errorf("archive.CheckReason(%q) = %v, want the import to accept it", got, err)
+				}
 			}
 		})
+	}
+}
+
+// The mark on the package replaces the sentence a yanked release used to
+// add to the warnings, and a release the index keeps carries no mark.
+func TestPipAnalysisWritesNoYankedWarning(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "redis", Version: "5.0.8", Tag: "py3-none-any", Yanked: "broken connection pool"})
+	ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "redis==5.0.8\nrequests==2.32.3\n"))
+	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("redis", "5.0.8", "requests", "2.32.3")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings = %q, want none", res.Warnings)
+	}
+	if len(res.Packages) != 2 || res.Packages[0].Yanked == nil || res.Packages[1].Yanked != nil {
+		t.Fatalf("packages = %+v, want redis marked yanked and requests not", res.Packages)
+	}
+	if n := strings.Count(string(raw), `"yanked"`); n != 1 {
+		t.Errorf("pip-result.json = %s, holds %d yanked keys, want 1", raw, n)
+	}
+}
+
+func TestPipAnalysisRecordsTheWheelUploadTime(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "delta", Version: "2.0.0", Tag: "py3-none-any", Uploaded: released})
+	ix.Add(piptest.Dist{Name: "omega", Version: "1.0.0", Tag: "py3-none-any"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "delta==2.0.0\nomega==1.0.0\n"))
+	a.Uv = &fakeUv{lock: "x==1\n", set: resolved("delta", "2.0.0", "omega", "1.0.0")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+	if len(res.Packages) != 2 || res.Packages[0].Wheel == nil || res.Packages[1].Wheel == nil {
+		t.Fatalf("packages = %+v, want delta and omega with a wheel each", res.Packages)
+	}
+	if got := res.Packages[0].Wheel.UploadedAt; got == nil || !got.Equal(released) || got.Location() != time.UTC {
+		t.Errorf("delta uploadedAt = %v, want %v in UTC", got, released)
+	}
+	if got := res.Packages[1].Wheel.UploadedAt; got != nil {
+		t.Errorf("omega uploadedAt = %v, want absent: the index gives none", got)
+	}
+	if n := strings.Count(string(raw), `"uploadedAt"`); n != 1 {
+		t.Errorf("pip-result.json = %s, holds %d uploadedAt keys, want 1", raw, n)
 	}
 }
 
@@ -446,7 +586,7 @@ func TestChooseWheelsHoldsUnpinnedPackagesToTheReleaseAge(t *testing.T) {
 		name        string
 		constraint  string // constraints.txt, empty for none
 		dists       []piptest.Dist
-		wantFile    string // the recorded wheel; empty when choose-wheels refuses
+		wantFile    string // the recorded wheel; empty when choose-wheels blocks eps
 		wantWarning []string
 		wantBlock   PipBlocking
 	}{
@@ -512,15 +652,16 @@ func TestChooseWheelsHoldsUnpinnedPackagesToTheReleaseAge(t *testing.T) {
 			a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, files...)
 			a.Uv = &fakeUv{lock: "x==1\n", set: resolved("eps", "1.0.0", "omega", "1.0.0")}
 
-			err := a.Run(context.Background(), func(Event) {})
-			status, _ := readStatus(t, st, a)
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 			res, _ := readPipResult(t, st, a)
+			i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
+			if i < 0 {
+				t.Fatalf("packages = %+v, want eps", res.Packages)
+			}
 			if c.wantFile != "" {
-				if err != nil {
-					t.Fatalf("Run: %v", err)
-				}
-				i := slices.IndexFunc(res.Packages, func(p PipPackage) bool { return p.Name == "eps" })
-				if i < 0 || res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
+				if res.Packages[i].Wheel == nil || res.Packages[i].Wheel.File != c.wantFile {
 					t.Errorf("packages = %+v, want eps recorded as %s", res.Packages, c.wantFile)
 				}
 				if !slices.Equal(res.Warnings, c.wantWarning) {
@@ -528,14 +669,13 @@ func TestChooseWheelsHoldsUnpinnedPackagesToTheReleaseAge(t *testing.T) {
 				}
 				return
 			}
-			want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:done", "choose-wheels:failed"}
-			if err == nil || !slices.Equal(stepNames(status.Steps), want) {
-				t.Fatalf("Run = %v, steps %v, want %v", err, stepNames(status.Steps), want)
+			if w := res.Packages[i].Wheel; w != nil {
+				t.Errorf("eps wheel = %+v, want none", w)
 			}
-			if !strings.Contains(status.Steps[4].Error, "eps==1.0.0: "+c.wantBlock.Detail) {
-				t.Errorf("choose-wheels error = %q, want %q", status.Steps[4].Error, c.wantBlock.Detail)
+			if log := pipLog(t, a); !strings.Contains(log, "eps==1.0.0: "+c.wantBlock.Detail) {
+				t.Errorf("log = %q, want %q", log, c.wantBlock.Detail)
 			}
-			if !slices.Equal(res.Blocking, []PipBlocking{c.wantBlock}) {
+			if !reflect.DeepEqual(res.Blocking, []PipBlocking{c.wantBlock}) {
 				t.Errorf("blocking = %+v, want %+v", res.Blocking, c.wantBlock)
 			}
 		})
@@ -575,7 +715,7 @@ func TestCheckPinsReportsWhatTheIndexAnswers(t *testing.T) {
 	cases := []struct {
 		name    string
 		status  int
-		wantErr string
+		want    string // in the log for a blocked pin, in the step's error otherwise
 		blocked bool
 	}{
 		{"a project the index does not know", http.StatusNotFound, "requests==2.32.3 (requirements.txt): no files on the index", true},
@@ -589,20 +729,60 @@ func TestCheckPinsReportsWhatTheIndexAnswers(t *testing.T) {
 			uv := &fakeUv{}
 			a.Uv = uv
 
-			if err := a.Run(context.Background(), func(Event) {}); err == nil {
+			err := a.Run(context.Background(), func(Event) {})
+			status, _ := readStatus(t, st, a)
+			_, serr := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json"))
+			if c.blocked {
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				if log := pipLog(t, a); !strings.Contains(log, c.want) {
+					t.Errorf("log = %q, want %q", log, c.want)
+				}
+				if serr != nil {
+					t.Errorf("pip-result.json: %v, want it written", serr)
+				}
+				return
+			}
+			if err == nil {
 				t.Fatal("Run succeeded, want check-pins to fail")
 			}
-			status, _ := readStatus(t, st, a)
-			if len(status.Steps) != 3 || !strings.Contains(status.Steps[2].Error, c.wantErr) {
-				t.Errorf("steps = %+v, want check-pins failing with %q", status.Steps, c.wantErr)
+			if len(status.Steps) != 3 || !strings.Contains(status.Steps[2].Error, c.want) {
+				t.Errorf("steps = %+v, want check-pins failing with %q", status.Steps, c.want)
 			}
 			if n := len(uv.Calls()); n != 0 {
 				t.Errorf("uv ran %d times, want 0", n)
 			}
-			_, err := os.Stat(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "pip-result.json"))
-			if c.blocked != (err == nil) {
-				t.Errorf("pip-result.json present = %v, want %v", err == nil, c.blocked)
+			if serr == nil {
+				t.Error("pip-result.json written, want none: the index never answered")
 			}
 		})
 	}
+}
+
+// packageNames lists the names of pkgs in order.
+func packageNames(pkgs []PipPackage) []string {
+	names := make([]string, len(pkgs))
+	for i, p := range pkgs {
+		names[i] = p.Name
+	}
+	return names
+}
+
+// scannedPurls lists the package URLs of the SBOM trivy scanned last.
+func scannedPurls(t *testing.T, trivy *cannedTrivy) []string {
+	t.Helper()
+	var doc struct {
+		Components []struct {
+			PURL string `json:"purl"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(trivy.sbom, &doc); err != nil {
+		t.Fatalf("decode the scanned SBOM: %v", err)
+	}
+	purls := make([]string, len(doc.Components))
+	for i, c := range doc.Components {
+		purls[i] = c.PURL
+	}
+	return purls
 }

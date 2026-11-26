@@ -54,21 +54,36 @@ type PipResult struct {
 	Advisories map[string]Advisory `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
 }
 
-// PipPackage is one package of the resolved set.
+// PipPackage is one package of the resolved set. A done analysis may hold
+// a package without a wheel, which blocking names and no export takes.
 type PipPackage struct {
-	Name    string       `json:"name"`
-	Version string       `json:"version"`
-	Files   []string     `json:"files"`           // project files that pin it, empty for a transitive package
-	Wheel   *PipWheel    `json:"wheel,omitempty"` // absent until chosen, and for a blocked package
-	CVEs    []PipFinding `json:"cves"`            // sorted by severity, then id
+	Name     string       `json:"name"`
+	Version  string       `json:"version"`
+	Files    []string     `json:"files"`              // project files that pin it, empty for a transitive package
+	PinnedAt []PipPlace   `json:"pinnedAt,omitempty"` // the set's pins; absent for a transitive package and before places were recorded
+	Wheel    *PipWheel    `json:"wheel,omitempty"`    // absent until chosen, and for a blocked package
+	CVEs     []PipFinding `json:"cves"`               // sorted by severity, then id
+	Yanked   *PipYanked   `json:"yanked,omitempty"`   // absent when the index keeps the release
+}
+
+// PipPlace is a line of a requirements file that pins a package.
+type PipPlace struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
+// PipYanked marks a package whose chosen file the index has yanked.
+type PipYanked struct {
+	Reason string `json:"reason"` // empty when the index gives none
 }
 
 // PipWheel is the wheel chosen for a package, as the index lists it.
 type PipWheel struct {
-	File   string `json:"file"`
-	URL    string `json:"url"`
-	Sha256 string `json:"sha256"`
-	Size   int64  `json:"size"`
+	File       string     `json:"file"`
+	URL        string     `json:"url"`
+	Sha256     string     `json:"sha256"`
+	Size       int64      `json:"size"`
+	UploadedAt *time.Time `json:"uploadedAt,omitempty"` // in UTC; absent when the index gives none
 }
 
 // PipFinding is one known vulnerability of a package.
@@ -81,10 +96,11 @@ type PipFinding struct {
 
 // PipBlocking is a package the target cannot install from a wheel.
 type PipBlocking struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Kind    string `json:"kind"` // source-only, other-platforms, no-files, hash-mismatch
-	Detail  string `json:"detail"`
+	Name     string     `json:"name"`
+	Version  string     `json:"version"`
+	Kind     string     `json:"kind"` // source-only, other-platforms, no-files, hash-mismatch
+	Detail   string     `json:"detail"`
+	PinnedAt []PipPlace `json:"pinnedAt,omitempty"` // absent for a transitive package
 }
 
 // shownProblems bounds the items a failure or a warning names: requirements
@@ -101,9 +117,11 @@ type pipRun struct {
 	files      []string  // the project's file names, in upload order
 	pins       []pip.Pin // the pins the target installs
 	uvBin      string
-	resolved   []runner.Resolved
+	resolved   []runner.Resolved          // with each blocked pin at its version
 	indexFiles map[string][]pip.IndexFile // by name@version, each page read once
 	wheels     map[string]PipWheel        // by normalized name
+	yanked     map[string]PipYanked       // by normalized name
+	blocking   []PipBlocking              // every package with no wheel the target can install
 	warnings   []string
 }
 
@@ -116,10 +134,11 @@ func (r *pipRun) releaseCut() time.Time {
 	return r.start.Add(-time.Duration(r.a.Settings.MinReleaseAgeDays) * 24 * time.Hour)
 }
 
-// Run validates the project's files, installs the target's uv, checks
-// that every pin has a wheel, resolves the files together, records one
-// wheel per package and scans the set. Like the npm analysis, it always commits the
-// pending directory, so a failed or cancelled run keeps its log.
+// Run validates the project's files, installs the target's uv, records
+// each pin with no wheel, resolves the other lines together, records one
+// wheel per package, or blocking where there is none, and scans the whole
+// set. Like the npm analysis, it always commits the pending directory, so
+// a failed or cancelled run keeps its log.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
@@ -271,10 +290,13 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 	return trivyVersion, dbDate, err
 }
 
-// stepResolve resolves every file together with uv and writes
-// project/requirements.lock. Every package is held to the minimum release
-// age, except those the target's pins fix. When uv names a package with no
-// wheel the target can install, pip-result.json records it.
+// stepResolve resolves every file together with uv, leaving out the lines
+// of the pins check-pins blocked, and writes project/requirements.lock.
+// Every package is held to the minimum release age, except those the
+// target's pins fix. Each blocked pin then joins the set at its version,
+// without a wheel. When uv itself names a package with no wheel the target
+// can install, it gives no set: the step fails, and pip-result.json records
+// every package known to block.
 func (r *pipRun) stepResolve() error {
 	return r.runStep("resolve", func() error {
 		dir, err := r.a.Store.NewResolveDir()
@@ -283,16 +305,20 @@ func (r *pipRun) stepResolve() error {
 		}
 		defer os.RemoveAll(dir)
 
+		input := r.set
+		input.Requirements = slices.DeleteFunc(slices.Clone(r.set.Requirements), func(p pip.Pin) bool { return r.blocked(p.Key) })
 		exempt := make([]string, 0, len(r.pins))
 		for _, p := range r.pins {
-			exempt = append(exempt, p.Key)
+			if !r.blocked(p.Key) {
+				exempt = append(exempt, p.Key)
+			}
 		}
 		slices.Sort(exempt)
 		res, err := r.a.Uv.Compile(r.ctx, runner.CompileInput{
 			Bin:          r.uvBin,
 			Dir:          dir,
-			Requirements: r.set.RequirementsIn(),
-			Constraints:  r.set.ConstraintsTxt(),
+			Requirements: input.RequirementsIn(),
+			Constraints:  input.ConstraintsTxt(),
 			Target:       r.a.Project.PipTarget,
 			Index:        r.a.Index.Index,
 			ExcludeNewer: r.releaseCut(),
@@ -306,8 +332,10 @@ func (r *pipRun) stepResolve() error {
 		}
 		if err != nil {
 			if b, ok := blockingFromUv(res.Output); ok {
-				r.log(r.describeBlocking(b))
-				if werr := r.writeFailedResult([]PipBlocking{b}); werr != nil {
+				if !r.blocked(b.Name) {
+					r.block(b)
+				}
+				if werr := r.writeFailedResult(r.blocking); werr != nil {
 					err = errors.Join(err, werr)
 				}
 			}
@@ -316,10 +344,17 @@ func (r *pipRun) stepResolve() error {
 			}
 			return err
 		}
-		if err := r.checkPins(res.Set, r.pins); err != nil {
+		set := slices.Clone(res.Set)
+		for _, b := range r.blocking {
+			if !slices.ContainsFunc(set, func(p runner.Resolved) bool { return p.Name == b.Name }) {
+				set = append(set, runner.Resolved{Name: b.Name, Version: b.Version})
+			}
+		}
+		slices.SortStableFunc(set, func(a, b runner.Resolved) int { return strings.Compare(a.Name, b.Name) })
+		if err := r.checkPins(set, r.pins); err != nil {
 			return err
 		}
-		r.resolved = res.Set
+		r.resolved = set
 		if err := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); err != nil {
 			return err
 		}
@@ -353,7 +388,7 @@ func (r *pipRun) stepScan() error {
 			Target:   r.a.Project.PipTarget,
 			Files:    nonNil(r.files),
 			Packages: make([]PipPackage, 0, len(r.resolved)),
-			Blocking: []PipBlocking{},
+			Blocking: sortedBlocking(r.blocking),
 			Warnings: nonNil(r.warnings),
 		}
 		advisories := map[string]Advisory{}
@@ -362,13 +397,17 @@ func (r *pipRun) stepScan() error {
 			key := p.Name + "@" + p.Version
 			matched[key] = true
 			pkg := PipPackage{
-				Name:    p.Name,
-				Version: p.Version,
-				Files:   nonNil(r.set.FilesOf(p.Name)),
-				CVEs:    pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
+				Name:     p.Name,
+				Version:  p.Version,
+				Files:    nonNil(r.set.FilesOf(p.Name)),
+				PinnedAt: r.placesOf(p.Name),
+				CVEs:     pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
 			}
 			if w, ok := r.wheels[p.Name]; ok {
 				pkg.Wheel = &w
+			}
+			if y, ok := r.yanked[p.Name]; ok {
+				pkg.Yanked = &y
 			}
 			result.Packages = append(result.Packages, pkg)
 		}
