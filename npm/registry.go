@@ -77,8 +77,13 @@ func (v VersionMeta) HasProvenance() bool {
 }
 
 // Engines maps an engine name to its version range. Old packages publish an
-// array instead; it decodes to no ranges. A value that is neither a string nor
-// null is dropped and the other ranges are kept; a null value reads as "".
+// array instead; it decodes to no ranges. A null value reads as "". Another
+// value that is not a string is dropped and the other ranges are kept, except
+// under node: a value other than 0 or false reads as "not a string: " and its
+// JSON, cut to 64 bytes, a range no Node satisfies: pnpm 10 and 11 match no
+// Node against such a value and skip 0 and false as they skip null. pnpm 12
+// skips every value that is not a string; sealift cannot run pnpm 12 today,
+// since its package has no bin/pnpm.cjs, so revisit this if it ever does.
 type Engines map[string]string
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -92,10 +97,24 @@ func (e *Engines) UnmarshalJSON(b []byte) error {
 		var r string
 		if json.Unmarshal(value, &r) == nil {
 			m[name] = r
+		} else if name == "node" && !zeroOrFalse(value) {
+			var text bytes.Buffer
+			_ = json.Compact(&text, value)
+			t := text.String()
+			if len(t) > 64 {
+				t = strings.ToValidUTF8(t[:64], "")
+			}
+			m[name] = "not a string: " + t
 		}
 	}
 	*e = m
 	return nil
+}
+
+func zeroOrFalse(value json.RawMessage) bool {
+	var n float64
+	var b bool
+	return json.Unmarshal(value, &n) == nil && n == 0 || json.Unmarshal(value, &b) == nil && !b
 }
 
 // Deprecation holds a deprecation message. A value that is not a string

@@ -25,7 +25,8 @@ type Pnpm interface {
 
 // ResolveInput is a resolution request. Dir is a temporary directory the
 // caller owns; Resolve writes the manifest and workspace file into it and
-// reads pnpm-lock.yaml back from it.
+// reads pnpm-lock.yaml back from it. PnpmCJS is the entry point of the
+// pnpm Target names, <pnpm dir>/package/bin/pnpm.cjs, run through node.
 //
 // MinReleaseAgeDays above zero holds every package back to releases at
 // least that old. The exact versions the manifest pins stay exempt: the
@@ -33,6 +34,7 @@ type Pnpm interface {
 // version, so the same package elsewhere in the tree still waits.
 type ResolveInput struct {
 	Dir               string
+	PnpmCJS           string
 	Manifest          []byte
 	Target            store.Target
 	MinReleaseAgeDays int
@@ -47,18 +49,24 @@ type ResolveResult struct {
 // PnpmCLI resolves dependencies by running the pnpm CLI through Node.js,
 // the packaging pnpm ships.
 type PnpmCLI struct {
-	pnpmCJS  string
 	cacheDir string
+	registry string
 	asUser   *Credential
 }
 
-// NewPnpmCLI builds a PnpmCLI. bin is the path to pnpm's own entry point,
-// <pnpm dir>/package/bin/pnpm.cjs, run through node. cacheDir holds pnpm's
-// content store and registry metadata cache. asUser is nil outside the
+// NewPnpmCLI builds a PnpmCLI. cacheDir holds pnpm's content store and
+// registry metadata cache. registry is the npm registry pnpm resolves
+// through, npm.DefaultRegistry when empty. asUser is nil outside the
 // container.
-func NewPnpmCLI(bin, cacheDir string, asUser *Credential) *PnpmCLI {
-	return &PnpmCLI{pnpmCJS: bin, cacheDir: cacheDir, asUser: asUser}
+func NewPnpmCLI(cacheDir, registry string, asUser *Credential) *PnpmCLI {
+	if registry == "" {
+		registry = npm.DefaultRegistry
+	}
+	return &PnpmCLI{cacheDir: cacheDir, registry: registry, asUser: asUser}
 }
+
+// Registry returns the npm registry c resolves through.
+func (c *PnpmCLI) Registry() string { return c.registry }
 
 // workspaceFile is the subset of pnpm-workspace.yaml that pins a
 // resolution to a target: the Node version engines checks run against, and
@@ -76,11 +84,18 @@ type supportedArchitectures struct {
 	Libc []string `yaml:"libc,omitempty"`
 }
 
-// Resolve writes the manifest and a pnpm-workspace.yaml pinned to
-// in.Target, runs "pnpm install --lockfile-only" and reads the resulting
-// lockfile back. The store and cache sit under cacheDir, so resolutions
-// share downloaded metadata across calls.
+// Resolve writes the manifest, a pnpm-workspace.yaml pinned to in.Target
+// and an .npmrc naming the registry, runs "pnpm install --lockfile-only"
+// and reads the resulting lockfile back. The store and cache sit under
+// cacheDir, so resolutions share downloaded metadata across calls.
+//
+// The registry goes in the project's .npmrc, which every pnpm version
+// reads, and stays off the command line, where any account can read a
+// password the URL carries.
 func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, error) {
+	if in.PnpmCJS == "" {
+		return ResolveResult{}, fmt.Errorf("no pnpm.cjs for pnpm %s", in.Target.PnpmVer)
+	}
 	if err := writeNew(in.Dir, "package.json", in.Manifest); err != nil {
 		return ResolveResult{}, fmt.Errorf("write package.json: %w", err)
 	}
@@ -110,9 +125,12 @@ func (c *PnpmCLI) Resolve(ctx context.Context, in ResolveInput) (ResolveResult, 
 	if err := writeNew(in.Dir, "pnpm-workspace.yaml", wsBytes); err != nil {
 		return ResolveResult{}, fmt.Errorf("write pnpm-workspace.yaml: %w", err)
 	}
+	if err := writeNew(in.Dir, ".npmrc", []byte("registry="+c.registry+"\n")); err != nil {
+		return ResolveResult{}, fmt.Errorf("write .npmrc: %w", err)
+	}
 
 	args := []string{
-		c.pnpmCJS,
+		in.PnpmCJS,
 		"install",
 		"--lockfile-only",
 		"--store-dir", filepath.Join(c.cacheDir, "store"),

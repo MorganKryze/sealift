@@ -53,9 +53,11 @@ func formatProblem(p npm.Problem) string {
 // the job; a database update failure on a stale database only warns.
 func (r *run) stepPrepareTools() (trivyVersion string, dbDate time.Time, err error) {
 	err = r.runStep("prepare-tools", func() error {
-		if _, perr := r.a.Tools.EnsurePnpm(r.ctx, r.a.Project.Target.PnpmVer); perr != nil {
+		bin, perr := r.a.Tools.EnsurePnpm(r.ctx, r.a.Project.Target.PnpmVer)
+		if perr != nil {
 			return fmt.Errorf("install pnpm %s: %w", r.a.Project.Target.PnpmVer, perr)
 		}
+		r.a.pnpmCJS = bin
 		if state, serr := r.a.Tools.TrivyState(r.ctx); serr == nil {
 			trivyVersion, dbDate = state.Active, state.DBDate
 		}

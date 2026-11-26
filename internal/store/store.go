@@ -99,7 +99,17 @@ type Store struct {
 	// purge that a job in flight put off.
 	purgeMu      sync.RWMutex
 	purgePending bool
+
+	// givenMu guards given: for each job directory parent and second, the
+	// highest counter NewDir handed out, the bare stamp counting as 0. A
+	// delete or a discard frees an id on disk while the queue may still
+	// hold it, so NewDir never hands out the same id twice in a process.
+	givenMu sync.Mutex
+	given   map[givenKey]int64
 }
+
+// givenKey names one second of one job directory parent.
+type givenKey struct{ parent, base string }
 
 // Open creates the data volume layout under root when it is missing, then
 // reads private/settings.json if an older release left one, then loads
@@ -112,6 +122,14 @@ type Store struct {
 // and caches outside private/.
 func Open(root string) (*Store, error) {
 	syscall.Umask(0o002)
+
+	// A resolve that a crash interrupted leaves its working directory behind,
+	// with an .npmrc that names the registry and its credentials. No resolve
+	// runs before Open returns, so the whole directory can go.
+	resolveDir := filepath.Join(root, "cache", "resolve")
+	if err := os.RemoveAll(resolveDir); err != nil {
+		return nil, fmt.Errorf("store: sweep %s: %w", resolveDir, err)
+	}
 
 	dirs := []struct {
 		path string

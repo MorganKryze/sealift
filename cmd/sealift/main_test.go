@@ -28,6 +28,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/api"
 	"github.com/MorganKryze/sealift/internal/jobs"
 	"github.com/MorganKryze/sealift/internal/policy"
+	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
@@ -1071,7 +1072,10 @@ brand: {name: Harbor}
 	}
 	var pnpm []string
 	for line := range strings.Lines(logs.String()) {
-		var entry struct{ Msg, Pnpm string }
+		var entry struct {
+			Msg  string
+			Pnpm string `json:"default_pnpm"`
+		}
 		if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "child processes" {
 			pnpm = append(pnpm, entry.Pnpm)
 		}
@@ -1315,6 +1319,28 @@ func TestRegistryClientTimesOut(t *testing.T) {
 	}
 	if c.HTTP == nil || c.HTTP.Timeout <= 0 {
 		t.Fatalf("HTTP = %+v, want a client with a timeout", c.HTTP)
+	}
+}
+
+// The pnpm runner resolves through the registry SEALIFT_NPM_REGISTRY names,
+// so a resolution never falls back to the public registry. startRun points
+// the variable at a local stand-in.
+func TestRunHandsThePnpmRunnerTheConfiguredRegistry(t *testing.T) {
+	runners := make(chan *runner.PnpmCLI, 1)
+	onPnpmReady = func(p *runner.PnpmCLI) { runners <- p }
+	defer func() { onPnpmReady = nil }()
+
+	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop()
+	want := os.Getenv("SEALIFT_NPM_REGISTRY")
+
+	select {
+	case p := <-runners:
+		if got := p.Registry(); want == "" || got != want {
+			t.Errorf("the pnpm runner resolves through %q, want %q", got, want)
+		}
+	default:
+		t.Fatal("run never handed over its pnpm runner")
 	}
 }
 

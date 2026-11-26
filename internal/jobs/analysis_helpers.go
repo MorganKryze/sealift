@@ -86,7 +86,7 @@ func (a *Analysis) resolve(ctx context.Context, manifest []byte) ([]byte, string
 		return nil, "", err
 	}
 	defer os.RemoveAll(dir)
-	res, err := a.Pnpm.Resolve(ctx, runner.ResolveInput{Dir: dir, Manifest: manifest, Target: a.Project.Target, MinReleaseAgeDays: a.Settings.MinReleaseAgeDays})
+	res, err := a.Pnpm.Resolve(ctx, runner.ResolveInput{Dir: dir, PnpmCJS: a.pnpmCJS, Manifest: manifest, Target: a.Project.Target, MinReleaseAgeDays: a.Settings.MinReleaseAgeDays})
 	if err != nil {
 		return nil, res.Output, err
 	}

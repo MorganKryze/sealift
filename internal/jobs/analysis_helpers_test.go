@@ -180,7 +180,7 @@ func TestFactsOfReadsNodeBesideAnEngineThatIsNotAString(t *testing.T) {
 		wantCompatible bool
 	}{
 		{name: "node range beside a number", engines: `{"node": ">=99", "npm": 7}`, wantRange: ">=99", wantCompatible: false},
-		{name: "only value is not a string", engines: `{"node": 18}`, wantRange: "", wantCompatible: true},
+		{name: "node range beside an npm object", engines: `{"node": ">=18", "npm": {"min": 9}}`, wantRange: ">=18", wantCompatible: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var meta npm.VersionMeta
@@ -190,6 +190,48 @@ func TestFactsOfReadsNodeBesideAnEngineThatIsNotAString(t *testing.T) {
 			f := factsOf("1.0.0", meta, npm.Packument{}, target)
 			if f.NodeRange != tc.wantRange || f.NodeCompatible != tc.wantCompatible {
 				t.Errorf("NodeRange = %q, NodeCompatible = %v; want %q, %v", f.NodeRange, f.NodeCompatible, tc.wantRange, tc.wantCompatible)
+			}
+		})
+	}
+}
+
+func TestFactsOfFlagsANodeEngineThatIsNotAString(t *testing.T) {
+	const doc = `{
+	  "name": "pkg",
+	  "versions": {
+	    "1.0.0": {"version": "1.0.0", "engines": {"node": ">=18"}},
+	    "1.1.0": {"version": "1.1.0", "engines": {"node": 18}},
+	    "1.2.0": {"version": "1.2.0", "engines": {"node": {"x": 1}}},
+	    "1.3.0": {"version": "1.3.0", "engines": {"node": [">=18"]}},
+	    "1.4.0": {"version": "1.4.0", "engines": {"node": null}},
+	    "1.5.0": {"version": "1.5.0", "engines": {"node": ">=99"}},
+	    "1.6.0": {"version": "1.6.0", "engines": {"node": 0}},
+	    "1.7.0": {"version": "1.7.0", "engines": {"node": false}}
+	  }
+	}`
+	var pk npm.Packument
+	if err := json.Unmarshal([]byte(doc), &pk); err != nil {
+		t.Fatal(err)
+	}
+	target := store.Target{Node: "18.20.4"}
+	policy := rank.Policy{TargetNode: target.Node}
+	current := factsOf("1.0.0", pk.Versions["1.0.0"], pk, target)
+	// pnpm skips an engines.node that is null, 0 or false, as it skips one
+	// that is absent or empty, so those set no constraint.
+	for version, wantMismatch := range map[string]bool{
+		"1.0.0": false, "1.1.0": true, "1.2.0": true, "1.3.0": true, "1.4.0": false, "1.5.0": true,
+		"1.6.0": false, "1.7.0": false,
+	} {
+		t.Run(version, func(t *testing.T) {
+			f := factsOf(version, pk.Versions[version], pk, target)
+			mismatch := false
+			for _, h := range rank.Signals(current, f, policy) {
+				if h.Signal == rank.NodeMismatch {
+					mismatch = true
+				}
+			}
+			if mismatch != wantMismatch || f.NodeCompatible == wantMismatch {
+				t.Errorf("node mismatch = %v, NodeCompatible = %v, NodeRange = %q; want mismatch %v", mismatch, f.NodeCompatible, f.NodeRange, wantMismatch)
 			}
 		})
 	}

@@ -40,8 +40,8 @@ echo "resolution done"
 	target := store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}
 	pnpmCJS := "/opt/tools/pnpm/10.34.5/package/bin/pnpm.cjs"
 
-	cli := NewPnpmCLI(pnpmCJS, cacheDir, nil)
-	result, err := cli.Resolve(context.Background(), ResolveInput{Dir: workDir, Manifest: manifest, Target: target})
+	cli := NewPnpmCLI(cacheDir, "", nil)
+	result, err := cli.Resolve(context.Background(), ResolveInput{Dir: workDir, PnpmCJS: pnpmCJS, Manifest: manifest, Target: target})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -104,8 +104,8 @@ exit 1
 	manifest := []byte(`{"name":"probe","version":"0.0.0","dependencies":{"left-pad":"99.0.0"}}`)
 	target := store.Target{OS: "linux", CPU: "x64", Libc: "glibc", Node: "22.17.1", PnpmVer: "10.34.5"}
 
-	cli := NewPnpmCLI("/opt/tools/pnpm/10.34.5/package/bin/pnpm.cjs", cacheDir, nil)
-	result, err := cli.Resolve(context.Background(), ResolveInput{Dir: workDir, Manifest: manifest, Target: target})
+	cli := NewPnpmCLI(cacheDir, "", nil)
+	result, err := cli.Resolve(context.Background(), ResolveInput{Dir: workDir, PnpmCJS: "/opt/tools/pnpm/10.34.5/package/bin/pnpm.cjs", Manifest: manifest, Target: target})
 	if err == nil {
 		t.Fatal("Resolve: want error, got nil")
 	}
@@ -120,17 +120,110 @@ exit 1
 	}
 }
 
+// A resolution runs the pnpm its input names, so a project whose target
+// names another pnpm version runs that version.
+func TestPnpmCLI_Resolve_RunsThePnpmOfItsInput(t *testing.T) {
+	captureDir := t.TempDir()
+	t.Setenv("NODE_CAPTURE_DIR", captureDir)
+	installFakeNode(t, `echo "$1" >> "$NODE_CAPTURE_DIR/ran.txt"
+printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml
+`)
+	cli := NewPnpmCLI(t.TempDir(), "", nil)
+	for _, bin := range []string{"/data/tools/pnpm/10.34.5/package/bin/pnpm.cjs", "/data/tools/pnpm/9.15.9/package/bin/pnpm.cjs"} {
+		if _, err := cli.Resolve(context.Background(), ResolveInput{Dir: t.TempDir(), PnpmCJS: bin, Manifest: []byte(`{"name":"probe"}`), Target: probeTarget}); err != nil {
+			t.Fatalf("Resolve with %s: %v", bin, err)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(captureDir, "ran.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/data/tools/pnpm/10.34.5/package/bin/pnpm.cjs\n/data/tools/pnpm/9.15.9/package/bin/pnpm.cjs\n"; string(got) != want {
+		t.Errorf("node ran %q, want %q", got, want)
+	}
+}
+
+// pnpm resolves through the registry sealift was started with, and an
+// NPM_CONFIG_REGISTRY in the server's environment no longer reaches it to
+// override that.
+func TestPnpmCLI_Resolve_UsesTheConfiguredRegistry(t *testing.T) {
+	for _, tc := range []struct{ name, registry, want string }{
+		{"configured", "https://alice:s3cr3t@npm-mirror.example.internal/", "registry=https://alice:s3cr3t@npm-mirror.example.internal/\n"},
+		{"default", "", "registry=https://registry.npmjs.org\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"NPM_CONFIG_REGISTRY", "npm_config_registry", "PNPM_CONFIG_REGISTRY", "pnpm_config_registry", "npm_config_@acme:registry", "NPM_CONFIG_@ACME:REGISTRY", "pnpm_config_@acme:registry"} {
+				t.Setenv(name, "http://127.0.0.1:9/decoy")
+			}
+			userconfig := filepath.Join(t.TempDir(), "decoy-npmrc")
+			if err := os.WriteFile(userconfig, []byte("@acme:registry=http://127.0.0.1:9/decoy\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig", "PNPM_CONFIG_USERCONFIG"} {
+				t.Setenv(name, userconfig)
+			}
+			captureDir := t.TempDir()
+			t.Setenv("NODE_CAPTURE_DIR", captureDir)
+			installFakeNode(t, `cp .npmrc "$NODE_CAPTURE_DIR/npmrc"
+env > "$NODE_CAPTURE_DIR/env.txt"
+printf '%s\n' "$@" > "$NODE_CAPTURE_DIR/args.txt"
+printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml
+`)
+			res, err := NewPnpmCLI(t.TempDir(), tc.registry, nil).Resolve(context.Background(), ResolveInput{Dir: t.TempDir(), PnpmCJS: "/fake/pnpm.cjs", Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			npmrc, err := os.ReadFile(filepath.Join(captureDir, "npmrc"))
+			if err != nil {
+				t.Fatalf("pnpm found no .npmrc: %v", err)
+			}
+			if string(npmrc) != tc.want {
+				t.Errorf(".npmrc = %q, want %q", npmrc, tc.want)
+			}
+			for _, file := range []string{"env.txt", "args.txt"} {
+				got, err := os.ReadFile(filepath.Join(captureDir, file))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(got), "decoy") {
+					t.Errorf("%s carries the server's registry variable:\n%s", file, got)
+				}
+				if strings.Contains(string(got), "s3cr3t") {
+					t.Errorf("%s carries the registry's password:\n%s", file, got)
+				}
+			}
+			if strings.Contains(res.Output, "s3cr3t") {
+				t.Errorf("Output %q carries the registry's password", res.Output)
+			}
+		})
+	}
+}
+
+func TestPnpmCLI_Resolve_RefusesAnInputWithNoPnpm(t *testing.T) {
+	captureDir := t.TempDir()
+	t.Setenv("NODE_CAPTURE_DIR", captureDir)
+	installFakeNode(t, `touch "$NODE_CAPTURE_DIR/ran"
+`)
+	_, err := NewPnpmCLI(t.TempDir(), "", nil).Resolve(context.Background(), ResolveInput{Dir: t.TempDir(), Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+	if err == nil || err.Error() != "no pnpm.cjs for pnpm 10.34.5" {
+		t.Errorf("Resolve error = %v, want the missing pnpm named", err)
+	}
+	if _, serr := os.Stat(filepath.Join(captureDir, "ran")); serr == nil {
+		t.Error("node ran with no pnpm to run")
+	}
+}
+
 func TestPnpmCLI_Resolve_WritesTheReleaseAge(t *testing.T) {
 	installFakeNode(t, `printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml
 `)
 	target := store.Target{OS: "linux", CPU: "x64", Node: "22.17.1", PnpmVer: "10.34.5"}
 	manifest := []byte(`{"dependencies":{"b":"1.0.0"},"devDependencies":{"a":"1.0.0"},"peerDependencies":{"b":"1.0.0","c":"^2.0.0"}}`)
-	cli := NewPnpmCLI("/opt/pnpm.cjs", t.TempDir(), nil)
+	cli := NewPnpmCLI(t.TempDir(), "", nil)
 
 	read := func(days int) string {
 		t.Helper()
 		dir := t.TempDir()
-		if _, err := cli.Resolve(context.Background(), ResolveInput{Dir: dir, Manifest: manifest, Target: target, MinReleaseAgeDays: days}); err != nil {
+		if _, err := cli.Resolve(context.Background(), ResolveInput{Dir: dir, PnpmCJS: "/opt/pnpm.cjs", Manifest: manifest, Target: target, MinReleaseAgeDays: days}); err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
 		ws, err := os.ReadFile(filepath.Join(dir, "pnpm-workspace.yaml"))
@@ -233,8 +326,8 @@ func TestPnpmCLI_Resolve_ReadsNoLockfileButARegularOne(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			secretPath, secret := plantSecret(t)
 			installFakeNode(t, strings.ReplaceAll(body, "SECRET", "'"+secretPath+"'")+"\n")
-			res, err := NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil).Resolve(context.Background(),
-				ResolveInput{Dir: t.TempDir(), Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+			res, err := NewPnpmCLI(t.TempDir(), "", nil).Resolve(context.Background(),
+				ResolveInput{Dir: t.TempDir(), PnpmCJS: "/fake/pnpm.cjs", Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
 			if err == nil {
 				t.Fatalf("Resolve read the lockfile (%d bytes), want it refused", len(res.Lockfile))
 			}
@@ -254,7 +347,7 @@ func TestPnpmCLI_Resolve_ReadsNoLockfileButARegularOne(t *testing.T) {
 }
 
 func TestPnpmCLI_Resolve_WritesNoInputThroughALink(t *testing.T) {
-	for _, name := range []string{"package.json", "pnpm-workspace.yaml"} {
+	for _, name := range []string{"package.json", "pnpm-workspace.yaml", ".npmrc"} {
 		t.Run(name, func(t *testing.T) {
 			victim, held := plantSecret(t)
 			dir := t.TempDir()
@@ -262,8 +355,8 @@ func TestPnpmCLI_Resolve_WritesNoInputThroughALink(t *testing.T) {
 				t.Fatal(err)
 			}
 			installFakeNode(t, `printf 'lockfileVersion: "9.0"\n' > pnpm-lock.yaml`+"\n")
-			_, err := NewPnpmCLI("/fake/pnpm.cjs", t.TempDir(), nil).Resolve(context.Background(),
-				ResolveInput{Dir: dir, Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
+			_, err := NewPnpmCLI(t.TempDir(), "", nil).Resolve(context.Background(),
+				ResolveInput{Dir: dir, PnpmCJS: "/fake/pnpm.cjs", Manifest: []byte(`{"name":"probe"}`), Target: probeTarget})
 			if err == nil {
 				t.Error("Resolve succeeded, want the write refused")
 			}

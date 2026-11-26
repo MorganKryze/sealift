@@ -1,8 +1,8 @@
 services:
   # Stands in for the public npm registry: sealift resolves and downloads
-  # through it (SEALIFT_NPM_REGISTRY, NPM_CONFIG_REGISTRY below), so the
-  # local fixture package can be published here and be resolvable to
-  # sealift's own analysis and export.
+  # through it (SEALIFT_NPM_REGISTRY below), so the local fixture package
+  # can be published here and be resolvable to sealift's own analysis and
+  # export.
   registry:
     image: verdaccio/verdaccio:5
     volumes:
@@ -35,7 +35,6 @@ services:
     environment:
       SEALIFT_NPM_REGISTRY: http://registry:4873
       SEALIFT_ALLOW_HTTP_REGISTRY: "true"
-      NPM_CONFIG_REGISTRY: http://registry:4873
       # Lifts GitHub's anonymous rate limit for the Trivy release lookup.
       SEALIFT_GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:

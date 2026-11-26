@@ -87,7 +87,7 @@ The system the projects run on, on the air-gapped side. pnpm resolves for it, so
 
 ### pnpm
 
-`pnpm` is the pnpm version every npm session resolves with, as an exact version. sealift downloads it at start from the npm registry and checks it against the integrity the registry publishes.
+`pnpm` is the default pnpm version, as an exact version: an npm session resolves with it unless its project's target names another. sealift downloads it at start from the npm registry and checks it against the integrity the registry publishes.
 
 ### Python target
 

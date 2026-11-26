@@ -850,3 +850,31 @@ func TestOpenSweepsStaleTemporaryFilesInPrivate(t *testing.T) {
 		t.Errorf("the sweep removed %s: %v", kept, err)
 	}
 }
+
+// A crash mid-resolve leaves its working directory in cache/resolve, with
+// an .npmrc that holds the registry URL and its credentials; the next start
+// removes it whatever the mode and keeps cache/resolve itself.
+func TestOpenSweepsLeftoverResolveDirs(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := s.NewResolveDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".npmrc"), []byte("registry=https://alice:s3cr3t@mirror.example/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s survived the start: %v", dir, err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "cache", "resolve")); err != nil || !info.IsDir() {
+		t.Errorf("cache/resolve is gone after the start: %v", err)
+	}
+}
