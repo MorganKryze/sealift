@@ -484,6 +484,9 @@ type LogData struct {
 
 // PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
 type PipAnalysisResult struct {
+	// Advisories What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date.
+	Advisories *map[string]Advisory `json:"advisories,omitempty"`
+
 	// Blocking Packages with no wheel the target can install
 	Blocking []PipBlocking `json:"blocking"`
 

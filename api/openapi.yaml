@@ -1245,6 +1245,19 @@ components:
           type: array
           items:
             type: string
+        advisories:
+          type: object
+          description: >-
+            What each CVE id that the packages' cves lists name does, keyed
+            by id, from the Trivy report. Absent from an analysis written
+            before advisories were kept, and when no CVE has a title, a
+            description or a date.
+          propertyNames:
+            type: string
+            maxLength: 64
+            pattern: "^[A-Z]+-[A-Za-z0-9-]+$"
+          additionalProperties:
+            $ref: "#/components/schemas/Advisory"
       required:
         - target
         - files

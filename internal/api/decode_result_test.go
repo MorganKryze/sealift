@@ -215,6 +215,52 @@ func TestDecodeKeepsAdvisories(t *testing.T) {
 	}
 }
 
+// pip070 is a pip-result.json as sealift 0.7.0 wrote it: no advisories,
+// and each title as Trivy gave it, before titles were cleaned and bounded.
+var pip070 = `{
+  "target": {"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"},
+  "files": ["requirements.txt"],
+  "packages": [
+    {"name":"jinja2","version":"3.1.2","files":["requirements.txt"],
+     "wheel":{"file":"jinja2-3.1.2-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/jinja2-3.1.2-py3-none-any.whl","sha256":"6088930bfe239f0e6710546ab9c19c9ef35e29792895fed6e6e31a023a182a61","size":133101},
+     "cves": [
+       {"id":"CVE-2024-22195","severity":"MEDIUM","fixedVersions":["3.1.3"],"title":"jinja2: \u001b[0mHTML attribute injection` + strings.Repeat(" when passing user input", 10) + `"}
+     ]},
+    {"name":"markupsafe","version":"3.0.2","files":[],"cves":[]}
+  ],
+  "blocking": [],
+  "warnings": []
+}`
+
+func TestDecodeA070PipResultHasNoAdvisories(t *testing.T) {
+	result, ok := decodePipResult(json.RawMessage(pip070))
+	if !ok {
+		t.Fatal("decodePipResult rejected a 0.7.0 pip analysis")
+	}
+	if result.Advisories != nil {
+		t.Errorf("Advisories = %+v, want absent", *result.Advisories)
+	}
+	if len(result.Packages) != 2 || len(result.Packages[0].Cves) != 1 {
+		t.Fatalf("packages = %+v, want jinja2 with one CVE and markupsafe", result.Packages)
+	}
+	want := "jinja2: \x1b[0mHTML attribute injection" + strings.Repeat(" when passing user input", 10)
+	if got := result.Packages[0].Cves[0].Title; got == nil || *got != want {
+		t.Errorf("title = %v, want it as stored: %q", got, want)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), `"advisories"`) {
+		t.Errorf("the answer for a 0.7.0 pip analysis carries advisories: %s", encoded)
+	}
+	for _, field := range []string{`"target":{`, `"files":["requirements.txt"]`, `"fixedVersions":["3.1.3"]`, `"blocking":[]`, `"warnings":[]`, `"cves":[]`, `"sha256":"6088930b`} {
+		if !strings.Contains(string(encoded), field) {
+			t.Errorf("the answer = %s, want it to hold %s as stored", encoded, field)
+		}
+	}
+}
+
 func TestStatusForAnUnreachableReleaseSourceIsBadGateway(t *testing.T) {
 	if got := statusFor(fmt.Errorf("wrapped: %w", tools.ErrReleaseSourceUnavailable)); got != http.StatusBadGateway {
 		t.Fatalf("statusFor = %d, want %d", got, http.StatusBadGateway)

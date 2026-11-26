@@ -741,6 +741,10 @@ export interface components {
             /** @description Packages with no wheel the target can install */
             blocking: components["schemas"]["PipBlocking"][];
             warnings: string[];
+            /** @description What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date. */
+            advisories?: {
+                [key: string]: components["schemas"]["Advisory"];
+            };
         };
         /** @description One package of a pip analysis' set */
         PipPackage: {

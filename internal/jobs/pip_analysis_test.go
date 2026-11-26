@@ -717,7 +717,7 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		t.Fatal(err)
 	}
-	if keys := slices.Sorted(maps.Keys(top)); !slices.Equal(keys, []string{"blocking", "files", "packages", "target", "warnings"}) {
+	if keys := slices.Sorted(maps.Keys(top)); !slices.Equal(keys, []string{"advisories", "blocking", "files", "packages", "target", "warnings"}) {
 		t.Errorf("pip-result.json keys = %v", keys)
 	}
 	if string(top["blocking"]) != "[]" {
@@ -817,7 +817,7 @@ func TestPipScanWarnsOnFindingsOutsideTheSet(t *testing.T) {
 		{"a name with control characters, cut to its bound", [][5]string{
 			{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"},
 			{"evil\u202e\n" + strings.Repeat("x", 300), "1.0", "CVE-2024-00001", "LOW", ""},
-		}, []string{"1 Trivy finding matched no package of the resolved set: evil" + strings.Repeat("x", shownNameLimit-4) + "..."}, []string{"\u202e", "\n", strings.Repeat("x", shownNameLimit)}},
+		}, []string{"1 Trivy finding matched no package of the resolved set: evil " + strings.Repeat("x", shownNameLimit-5) + "..."}, []string{"\u202e", "\n", strings.Repeat("x", shownNameLimit)}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1051,5 +1051,79 @@ func TestPipAnalysisNeverWritesThroughALink(t *testing.T) {
 				t.Errorf("the link's target now holds %d bytes (%v), want it untouched", len(got), err)
 			}
 		})
+	}
+}
+
+func TestPipAnalysisAnswersAnAdvisoryForEveryCVEId(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2", "markupsafe", "3.0.2"))
+	vulns := []string{
+		`{"VulnerabilityID":"CVE-2024-22195","PkgName":"Jinja2","InstalledVersion":"3.1.2","Severity":"MEDIUM","FixedVersion":"3.1.3",` +
+			`"Title":"jinja2: HTML attribute injection when passing user input as keys to xmlattr filter",` +
+			`"Description":"Jinja is an extensible templating engine. The xmlattr filter accepts keys containing spaces.\n\nSee the upstream advisory.",` +
+			`"PublishedDate":"2024-01-11T03:15:11.137Z"}`,
+		`{"VulnerabilityID":"CVE-2024-56326","PkgName":"Jinja2","InstalledVersion":"3.1.2","Severity":"HIGH","FixedVersion":"3.1.5",` +
+			`"Title":"jinja2: Jinja has a sandbox breakout through indirect reference to format method"}`,
+		// The same id on a later package of the result, worded otherwise.
+		`{"VulnerabilityID":"CVE-2024-22195","PkgName":"markupsafe","InstalledVersion":"3.0.2","Severity":"MEDIUM","FixedVersion":"",` +
+			`"Title":"markupsafe: a later wording","Description":"A later description."}`,
+		// No title, description or date: nothing to answer.
+		`{"VulnerabilityID":"CVE-2024-00007","PkgName":"markupsafe","InstalledVersion":"3.0.2","Severity":"LOW","FixedVersion":""}`,
+		// A package outside the set: no cves list names the id.
+		`{"VulnerabilityID":"CVE-2024-00008","PkgName":"flask","InstalledVersion":"3.0.0","Severity":"LOW","FixedVersion":"","Title":"flask: outside"}`,
+	}
+	a.Trivy = &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Target":"project.trivy.json.cdx.json","Class":"lang-pkgs","Type":"python-pkg","Vulnerabilities":[` + strings.Join(vulns, ",") + `]}]}`}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+
+	want := map[string]Advisory{
+		"CVE-2024-22195": {
+			Title:     "jinja2: HTML attribute injection when passing user input as keys to xmlattr filter",
+			Summary:   "Jinja is an extensible templating engine. The xmlattr filter accepts keys containing spaces.",
+			Published: "2024-01-11T03:15:11Z",
+		},
+		"CVE-2024-56326": {Title: "jinja2: Jinja has a sandbox breakout through indirect reference to format method"},
+	}
+	if !maps.Equal(res.Advisories, want) {
+		t.Errorf("advisories = %+v, want %+v", res.Advisories, want)
+	}
+	for _, p := range res.Packages {
+		for _, c := range p.CVEs {
+			if _, ok := res.Advisories[c.ID]; !ok && c.ID != "CVE-2024-00007" {
+				t.Errorf("%s names %s, but the table holds no advisory for it", p.Name, c.ID)
+			}
+		}
+	}
+	if !strings.Contains(string(compactJSON(t, raw)), `"advisories":{"CVE-2024-22195":{"title":`) {
+		t.Errorf("pip-result.json = %s, want an advisories object keyed by id", raw)
+	}
+}
+
+func TestPipFindingTitleIsCleanedAndBounded(t *testing.T) {
+	root := t.TempDir()
+	title := "jinja2: \x1b[0mcafé " + strings.Repeat("sandbox ", 30) + "end"
+	if n := len([]rune(title)); n != 260 {
+		t.Fatalf("the title holds %d code points, want 260", n)
+	}
+	set := map[string]rank.Finding{"CVE-2024-56326": {ID: "CVE-2024-56326", Severity: rank.High, Title: title}}
+	advisories := map[string]Advisory{}
+
+	findings := pipFindingsOf(root, set, advisories)
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one", findings)
+	}
+	if got, want := findings[0].Title, advisoryTitle(root, title); got != want {
+		t.Errorf("title = %q, want %q", got, want)
+	}
+	if got := findings[0].Title; strings.ContainsRune(got, '\x1b') || len([]rune(got)) > advisoryTitleLimit {
+		t.Errorf("title = %q, want no escape and at most %d code points", got, advisoryTitleLimit)
+	}
+	if got := advisories["CVE-2024-56326"].Title; got != findings[0].Title {
+		t.Errorf("advisory title = %q, want the finding's %q", got, findings[0].Title)
 	}
 }
