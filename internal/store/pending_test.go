@@ -438,3 +438,57 @@ func TestNewDirSkipsAnIDCommittedBetweenItsScanAndMkdir(t *testing.T) {
 		t.Fatalf("stat the raced id's .tmp: %v, want it removed", err)
 	}
 }
+
+func TestNewDirOfAnEarlierSecondKeepsALaterSecondsMark(t *testing.T) {
+	s := openTestStore(t)
+	now := mustParseTime(t, "2026-11-26T00:19:28Z")
+	defer stubNow(func() time.Time { return now })()
+
+	for range 2 {
+		p, err := s.NewDir("analyses", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+	if err := s.DeleteAnalysis("proj-1", "20261126T001928Z-000001"); err != nil {
+		t.Fatalf("DeleteAnalysis: %v", err)
+	}
+	now = mustParseTime(t, "2026-11-26T00:19:27Z")
+	if _, err := s.NewDir("analyses", "proj-1"); err != nil {
+		t.Fatalf("NewDir of the earlier second: %v", err)
+	}
+	now = mustParseTime(t, "2026-11-26T00:19:28Z")
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001928Z-000002" {
+		t.Fatalf("NewDir id = %q, want 20261126T001928Z-000002", p.ID())
+	}
+}
+
+func TestNewDirKeepsOneMarkPerParent(t *testing.T) {
+	s := openTestStore(t)
+	now := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return now })()
+
+	for range 4 {
+		for _, kind := range []string{"analyses", "exports"} {
+			for _, project := range []string{"proj-1", "proj-2"} {
+				if _, err := s.NewDir(kind, project); err != nil {
+					t.Fatalf("NewDir: %v", err)
+				}
+			}
+		}
+		now = now.Add(time.Second)
+	}
+	if len(s.given) != 4 {
+		t.Fatalf("len(given) = %d, want 4, one per parent", len(s.given))
+	}
+}

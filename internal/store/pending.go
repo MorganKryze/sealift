@@ -54,12 +54,15 @@ func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
 		return nil, fmt.Errorf("store: create %s: %w", parent, err)
 	}
 
-	base := nowFunc().UTC().Format(analysisIDLayout)
-	key := givenKey{parent, base}
+	// The second is read under the lock, so calls take the lock in time
+	// order and pruning past seconds never drops a later second's mark.
 	s.givenMu.Lock()
 	defer s.givenMu.Unlock()
+	base := nowFunc().UTC().Format(analysisIDLayout)
+	key := givenKey{parent, base}
+	// The fixed layout sorts by time.
 	for k := range s.given {
-		if k.base != base {
+		if k.base < base {
 			delete(s.given, k)
 		}
 	}
