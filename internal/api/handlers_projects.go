@@ -331,9 +331,10 @@ func (h *Handlers) GetProject(_ context.Context, req GetProjectRequestObject) (G
 	return GetProject200JSONResponse(resp), nil
 }
 
-// DeleteProject removes a project directory and everything under it.
+// DeleteProject removes a project directory and everything under it,
+// refusing with 409 while one of its jobs is queued or running.
 func (h *Handlers) DeleteProject(_ context.Context, req DeleteProjectRequestObject) (DeleteProjectResponseObject, error) {
-	if err := h.Store.DeleteProject(req.ProjectId); err != nil {
+	if err := h.Service.DeleteProject(req.ProjectId); err != nil {
 		return DeleteProjectdefaultApplicationProblemPlusJSONResponse(autoProblem("delete project", err)), nil
 	}
 	if h.Ephemeral > 0 {

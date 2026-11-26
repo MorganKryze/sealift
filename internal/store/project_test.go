@@ -104,7 +104,7 @@ func TestProjectCRUD(t *testing.T) {
 		t.Fatalf("Target.Node = %q, want %q", updated.Target.Node, "20.0.0")
 	}
 
-	if err := s.DeleteProject(p.ID); err != nil {
+	if err := s.DeleteProjectUnguarded(p.ID); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	}
 	if _, err := s.Project(p.ID); !errors.Is(err, ErrNotFound) {
@@ -170,7 +170,7 @@ func TestProjectNotFound(t *testing.T) {
 	if err := s.SetProjectTarget("missing", Target{OS: "linux", CPU: "x64", Node: "22.17.1", PnpmVer: "10.34.5"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetProjectTarget(\"missing\", ...): err = %v, want ErrNotFound", err)
 	}
-	if err := s.DeleteProject("missing"); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteProjectUnguarded("missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"missing\"): err = %v, want ErrNotFound", err)
 	}
 }
@@ -186,7 +186,7 @@ func TestProjectMethodsRefuseIDsThatEscapeTheDataVolume(t *testing.T) {
 		if err := s.SetProjectTarget(id, target); !errors.Is(err, ErrNotFound) {
 			t.Errorf("SetProjectTarget(%q, ...): err = %v, want ErrNotFound", id, err)
 		}
-		if err := s.DeleteProject(id); !errors.Is(err, ErrNotFound) {
+		if err := s.DeleteProjectUnguarded(id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("DeleteProject(%q): err = %v, want ErrNotFound", id, err)
 		}
 	}
@@ -196,7 +196,7 @@ func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	s := openTestStore(t)
 	settingsPath := writeSettings070(t, s.Root())
 
-	if err := s.DeleteProject("../private"); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteProjectUnguarded("../private"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteProject(\"../private\"): err = %v, want ErrNotFound", err)
 	}
 	if _, err := os.Stat(settingsPath); err != nil {
@@ -204,35 +204,24 @@ func TestDeleteProjectEscapeAttemptLeavesPrivateSettingsInPlace(t *testing.T) {
 	}
 }
 
-func TestDeleteProjectRefusesWhileAJobWrites(t *testing.T) {
+// The store does not judge whether a job is live: a directory a job left
+// behind goes with the rest of the project.
+func TestDeleteProjectRemovesALeftoverJobDirectory(t *testing.T) {
 	for _, kind := range []string{"analyses", "exports"} {
 		t.Run(kind, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "data[1]")
-			s, err := Open(root)
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
+			s := openTestStore(t)
 			project, err := s.CreateProject("left-pad", []byte(`{"name":"left-pad"}`))
 			if err != nil {
 				t.Fatalf("CreateProject: %v", err)
 			}
-			pending, err := s.NewDir(kind, project.ID)
-			if err != nil {
+			if _, err := s.NewDir(kind, project.ID); err != nil {
 				t.Fatalf("NewDir: %v", err)
 			}
-
-			if err := s.DeleteProject(project.ID); !errors.Is(err, ErrBusy) {
-				t.Fatalf("DeleteProject with a pending job: err = %v, want ErrBusy", err)
+			if err := s.DeleteProjectUnguarded(project.ID); err != nil {
+				t.Fatalf("DeleteProject with a leftover directory: %v", err)
 			}
-			if _, err := s.Project(project.ID); err != nil {
-				t.Fatalf("project after a refused delete: %v", err)
-			}
-
-			if err := pending.Commit(); err != nil {
-				t.Fatalf("Commit: %v", err)
-			}
-			if err := s.DeleteProject(project.ID); err != nil {
-				t.Fatalf("DeleteProject after the job committed: %v", err)
+			if _, err := os.Stat(project.Dir); !os.IsNotExist(err) {
+				t.Fatalf("project directory after the delete: err = %v, want it gone", err)
 			}
 		})
 	}

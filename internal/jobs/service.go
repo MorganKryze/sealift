@@ -109,6 +109,9 @@ type Service struct {
 	byQueueID   map[string]*trackedJob
 	byJobKey    map[jobKey]*trackedJob
 	byProjectID map[string]*trackedJob // the one job Service is tracking for a project, queued or running
+	// projectLocks holds a lock per project while one of its jobs is
+	// being queued or the project deleted (see DeleteProject).
+	projectLocks map[string]*projectLock
 }
 
 // NewService builds a Service and registers it as the queue's finalize
@@ -118,15 +121,16 @@ type Service struct {
 // could make the queue drop.
 func NewService(st *store.Store, q *Queue, tm *tools.Manager, pnpm runner.Pnpm, trivy runner.Trivy, reg *npm.Client) *Service {
 	s := &Service{
-		store:       st,
-		queue:       q,
-		tools:       tm,
-		pnpm:        pnpm,
-		trivy:       trivy,
-		reg:         reg,
-		byQueueID:   make(map[string]*trackedJob),
-		byJobKey:    make(map[jobKey]*trackedJob),
-		byProjectID: make(map[string]*trackedJob),
+		store:        st,
+		queue:        q,
+		tools:        tm,
+		pnpm:         pnpm,
+		trivy:        trivy,
+		reg:          reg,
+		byQueueID:    make(map[string]*trackedJob),
+		byJobKey:     make(map[jobKey]*trackedJob),
+		byProjectID:  make(map[string]*trackedJob),
+		projectLocks: make(map[string]*projectLock),
 	}
 	q.SetFinalizer(s.finalize)
 	return s
@@ -146,6 +150,8 @@ func (s *Service) SetPip(uv runner.Uv, index *pip.Client) {
 // committing that directory, on every path including failure and
 // cancellation.
 func (s *Service) QueueAnalysis(projectID string) (store.AnalysisInfo, error) {
+	unlock := s.lockProject(projectID)
+	defer unlock()
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.AnalysisInfo{}, err
@@ -242,6 +248,8 @@ func (s *Service) seedPending(pending *store.Pending, createdAt time.Time, proje
 // export leaves a successful run's directory for Service's finalizer to
 // commit.
 func (s *Service) QueueExport(projectID, analysisID string, req ExportRequest) (store.ExportInfo, error) {
+	unlock := s.lockProject(projectID)
+	defer unlock()
 	project, err := s.store.Project(projectID)
 	if err != nil {
 		return store.ExportInfo{}, err
