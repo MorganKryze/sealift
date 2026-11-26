@@ -290,8 +290,9 @@ func TestPipReviewOfCountsBeforeAndAfter(t *testing.T) {
 		if got.CVEs.After == nil || got.CVEs.Before != *got.CVEs.After || got.CVEs.Before != after {
 			t.Errorf("cves = %+v, want before equal to after, %v", got.CVEs, after)
 		}
-		if len(got.Updates) != 0 || len(got.Jumps) != 0 || got.Unchanged != len(r.Packages) {
-			t.Errorf("updates %v, jumps %v, unchanged %d; want none, none and %d", got.Updates, got.Jumps, got.Unchanged, len(r.Packages))
+		// No comparison ran, so no package counts as unchanged.
+		if len(got.Updates) != 0 || len(got.Jumps) != 0 || got.Unchanged != 0 {
+			t.Errorf("updates %v, jumps %v, unchanged %d; want none of each", got.Updates, got.Jumps, got.Unchanged)
 		}
 	})
 

@@ -2180,6 +2180,27 @@ func TestPipExportSignsItsReview(t *testing.T) {
 			t.Errorf("manifest.json was written: %v", err)
 		}
 	})
+
+	t.Run("a first crossing signs no package as unchanged", func(t *testing.T) {
+		e := f.newPipExport(t)
+		if e.Analysis.Result.Previous != nil {
+			t.Fatalf("the fixture records a previous crossing: %+v", e.Analysis.Result.Previous)
+		}
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		m, err := archive.ParsePipManifest(readFile(t, filepath.Join(e.Dir, "manifest.json")))
+		if err != nil || m.Review == nil {
+			t.Fatalf("ParsePipManifest = %v, review %v (%q)", err, m.Review, m.ReviewProblem)
+		}
+		r := *m.Review
+		if r.Unchanged != 0 || len(r.Updates) != 0 || len(r.Jumps) != 0 {
+			t.Errorf("unchanged %d, updates %v, jumps %v; want none of each, since no comparison ran", r.Unchanged, r.Updates, r.Jumps)
+		}
+		if r.CVEs.After == nil || r.CVEs.Before != *r.CVEs.After {
+			t.Errorf("cves = %+v, want before equal to after", r.CVEs)
+		}
+	})
 }
 
 func TestPipExportSummaryLeavesOutYankedReleasesWhenNoneCrosses(t *testing.T) {

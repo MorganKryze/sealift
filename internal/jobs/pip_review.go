@@ -224,8 +224,8 @@ func pipBlockedRefusal(r PipResult) error {
 // crossing it equals cves.after. A pin that moved inside its major is an
 // update and one that moved across it a jump; every CVE the set keeps is
 // left. A package the previous crossing held at the same version is
-// unchanged, and so is every package when there is no previous crossing.
-// Names are normalized, as the manifest's packages are.
+// unchanged; with no previous crossing none is, since nothing was
+// compared. Names are normalized, as the manifest's packages are.
 func PipReviewOf(r PipResult, reasons []Reason) archive.Review {
 	asks := pipAsksOf(r)
 	covered, _ := pipCover(asks, reasons)
@@ -249,10 +249,9 @@ func PipReviewOf(r PipResult, reasons []Reason) archive.Review {
 		cves := pipCVEs(p.CVEs)
 		after = append(after, cves...)
 		switch prev := p.Previous; {
-		case r.Previous == nil:
-			review.Unchanged++
-		case prev == nil:
-			// New since the previous crossing: no earlier CVEs, no move.
+		case r.Previous == nil, prev == nil:
+			// No comparison for this package: a first crossing, or a
+			// package new since the previous one. No earlier CVEs, no move.
 		default:
 			earlier := pipCVEs(prev.CVEs)
 			before = append(before, earlier...)
