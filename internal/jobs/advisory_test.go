@@ -78,6 +78,30 @@ func TestAdvisorySummaryCutsAtAWordWhenNoSentenceEndFits(t *testing.T) {
 	}
 }
 
+func TestAdvisoryCutLeavesRoomForTheEllipsisAtTheLimit(t *testing.T) {
+	// The second word ends two code points short of the limit: with "..."
+	// after it, the text would pass the limit by one, so the cut falls
+	// after the first word.
+	title := strings.Repeat("x", 99) + " " + strings.Repeat("é", 98) + " " + strings.Repeat("z", 40)
+	summary := strings.Repeat("a", 249) + " " + strings.Repeat("b", 248) + " " + strings.Repeat("c", 40)
+	for _, c := range []struct {
+		name  string
+		got   string
+		want  string
+		limit int
+	}{
+		{"title", advisoryTitle("", title), strings.Repeat("x", 99) + "...", advisoryTitleLimit},
+		{"summary", advisorySummary("", summary), strings.Repeat("a", 249) + "...", advisorySummaryLimit},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+		if n := utf8.RuneCountInString(c.got); n > c.limit {
+			t.Errorf("%s holds %d code points, want at most %d", c.name, n, c.limit)
+		}
+	}
+}
+
 func TestAdvisorySummarySkipsMarkdownHeadings(t *testing.T) {
 	for _, description := range []string{
 		"### Impact\n\nThe parser reads a\nwhole line.\n\n### Patches\n\nFixed in 2.0.",
