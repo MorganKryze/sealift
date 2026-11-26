@@ -519,8 +519,10 @@ type PipFinding struct {
 	Id            string   `json:"id"`
 
 	// Severity As Trivy prints it, upper case
-	Severity string  `json:"severity"`
-	Title    *string `json:"title,omitempty"`
+	Severity string `json:"severity"`
+
+	// Title Trivy's title, plain text that a client renders as text, never as HTML or Markdown. A newer analysis stores it cleaned and cut to 200 code points. An analysis from 0.7.0 stores it as Trivy gave it.
+	Title *string `json:"title,omitempty"`
 }
 
 // PipPackage One package of a pip analysis' set

@@ -784,6 +784,7 @@ export interface components {
             severity: string;
             /** @description The versions that fix it, as Trivy lists them, empty when none is known */
             fixedVersions: string[];
+            /** @description Trivy's title, plain text that a client renders as text, never as HTML or Markdown. A newer analysis stores it cleaned and cut to 200 code points. An analysis from 0.7.0 stores it as Trivy gave it. */
             title?: string;
         };
         /** @description A package the target cannot install from a wheel */

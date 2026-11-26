@@ -1330,6 +1330,10 @@ components:
             type: string
         title:
           type: string
+          description: >-
+            Trivy's title, plain text that a client renders as text, never as
+            HTML or Markdown. A newer analysis stores it cleaned and cut to 200
+            code points. An analysis from 0.7.0 stores it as Trivy gave it.
       required:
         - id
         - severity
