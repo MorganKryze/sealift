@@ -61,7 +61,7 @@ export function StepBar({ steps }: StepBarProps) {
                 step.status === "available" && "border-field text-ink",
                 step.status === "upcoming" && "border-rule-2 text-muted",
                 step.status === "cancelled" && "border-[1.5px] border-dotted border-muted text-muted",
-                step.current && (step.status === "upcoming" || step.status === "available" || step.status === "running") && "border-ink bg-ink text-bg",
+                step.current && (step.status === "upcoming" || step.status === "available") && "border-ink bg-ink text-bg",
               )}
             >
               {step.status === "done" ? (
