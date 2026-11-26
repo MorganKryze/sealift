@@ -268,6 +268,63 @@ func TestResolverBlockingStillFailsTheAnalysis(t *testing.T) {
 	}
 }
 
+// A step that fails after check-pins blocked a pin still leaves a result
+// naming it, so the failure does not hide what the files must change.
+func TestAFailedAnalysisStillRecordsEachBlockedPin(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "docopt", Version: "0.6.2"})
+	ix.Add(piptest.Dist{Name: "requests", Version: "2.32.3", Tag: "py3-none-any"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/urllib3/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		ix.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	conflict := "error: No solution found when resolving dependencies\n" +
+		"  cause: Because requests==2.32.3 depends on idna<4 and you require idna==4.0, we can conclude that your requirements are unsatisfiable.\n"
+	cases := []struct {
+		name   string
+		uv     *fakeUv
+		trivy  *cannedTrivy // nil keeps the default
+		failed string
+	}{
+		{"a resolution conflict", &fakeUv{output: conflict, err: errors.New("uv pip compile: No solution found when resolving dependencies: exit status 1")}, nil, "resolve"},
+		{"an index error on a resolved package", &fakeUv{lock: "x==1\n", set: resolved("requests", "2.32.3", "urllib3", "2.2.3")}, nil, "choose-wheels"},
+		{"a scan failure", &fakeUv{lock: "x==1\n", set: resolved("requests", "2.32.3")}, &cannedTrivy{scanErr: errors.New("exit status 1")}, "scan"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, st := newPipAnalysis(t, srv.URL+"/simple/", store.DefaultPipTarget, reqFile("requirements.txt", "docopt==0.6.2\nrequests==2.32.3\n"))
+			a.Uv = c.uv
+			if c.trivy != nil {
+				a.Trivy = c.trivy
+			}
+
+			if err := a.Run(context.Background(), func(Event) {}); err == nil {
+				t.Fatalf("Run succeeded, want %s to fail", c.failed)
+			}
+			status, _ := readStatus(t, st, a)
+			if status.State != store.Failed {
+				t.Errorf("state = %q, want failed", status.State)
+			}
+			if got := stepNames(status.Steps); len(got) == 0 || got[len(got)-1] != c.failed+":failed" {
+				t.Fatalf("steps = %v, want %s failing last", got, c.failed)
+			}
+			res, _ := readPipResult(t, st, a)
+			want := []PipBlocking{{Name: "docopt", Version: "0.6.2", Kind: "source-only", Detail: "source distribution only",
+				PinnedAt: []PipPlace{{File: "requirements.txt", Line: 1}}}}
+			if !reflect.DeepEqual(res.Blocking, want) {
+				t.Errorf("blocking = %+v, want %+v", res.Blocking, want)
+			}
+			if res.Packages == nil || len(res.Packages) != 0 {
+				t.Errorf("packages = %#v, want an empty list: no scan stands behind them", res.Packages)
+			}
+		})
+	}
+}
+
 // uv never sees a constraint's --hash options, so choose-wheels is the only
 // step that holds a constraint reaching the set to them.
 func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {

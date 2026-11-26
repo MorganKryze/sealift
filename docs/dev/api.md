@@ -136,7 +136,7 @@ A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in
 | `removed` | Each package of the previous crossing that the set no longer holds: `name`, `version` and `cves`. |
 | `warnings` | A pin uploaded within the minimum release age, a database that could not be refreshed, findings Trivy reported for packages outside the set, and a previous crossing that could not be read. |
 
-A done pip analysis may carry a non-empty `blocking`: each package in it stays in `packages` without a `wheel`, and the export refuses the set. An analysis fails on a package with no wheel only when uv itself names it, at `resolve`, since uv then gives no set: `pipResult` lists every package known to block, and `packages` is empty. With no previous crossing, `previous` and `removed` are absent. An analysis written by sealift 0.7.0 has no `pinnedAt`, `yanked`, `uploadedAt`, `previous` or `removed`, and names a yanked release in `warnings`.
+A done pip analysis may carry a non-empty `blocking`: each package in it stays in `packages` without a `wheel`, and the export refuses the set. An analysis fails on a package with no wheel only when uv itself names it, at `resolve`, since uv then gives no set. A pip analysis that fails after finding a package with no wheel still carries `pipResult`: `blocking` lists every such package, and `packages` is empty. With no previous crossing, `previous` and `removed` are absent. An analysis written by sealift 0.7.0 has no `pinnedAt`, `yanked`, `uploadedAt`, `previous` or `removed`, and names a yanked release in `warnings`.
 
 uv stops at the first package with no usable wheel, so such a package that no file pins shows alone. A second one behind it shows at the next analysis.
 

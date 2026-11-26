@@ -167,7 +167,9 @@ func (r *pipRun) releaseCut() time.Time {
 // each pin with no wheel, resolves the other lines together, records one
 // wheel per package, or blocking where there is none, and scans the whole
 // set. Like the npm analysis, it always commits the pending directory, so
-// a failed or cancelled run keeps its log.
+// a failed or cancelled run keeps its log. A run that fails after a
+// package was found with no wheel still writes pip-result.json, listing
+// every such package and no other, so the failure never hides one.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
@@ -219,6 +221,19 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err := r.stepCheckPins(); err != nil {
 		return err
 	}
+	if err := r.resolveAndScan(); err != nil {
+		if len(r.blocking) > 0 && ctx.Err() == nil {
+			if werr := r.writeFailedResult(r.blocking); werr != nil {
+				err = errors.Join(err, werr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// resolveAndScan runs the steps after check-pins.
+func (r *pipRun) resolveAndScan() error {
 	if err := r.stepResolve(); err != nil {
 		return err
 	}
@@ -324,8 +339,8 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 // Every package is held to the minimum release age, except those the
 // target's pins fix. Each blocked pin then joins the set at its version,
 // without a wheel. When uv itself names a package with no wheel the target
-// can install, it gives no set: the step fails, and pip-result.json records
-// every package known to block.
+// can install, it gives no set: the step fails, and the package joins
+// blocking.
 func (r *pipRun) stepResolve() error {
 	return r.runStep("resolve", func() error {
 		dir, err := r.a.Store.NewResolveDir()
@@ -360,13 +375,8 @@ func (r *pipRun) stepResolve() error {
 			}
 		}
 		if err != nil {
-			if b, ok := blockingFromUv(res.Output); ok {
-				if !r.blocked(b.Name) {
-					r.block(b)
-				}
-				if werr := r.writeFailedResult(r.blocking); werr != nil {
-					err = errors.Join(err, werr)
-				}
+			if b, ok := blockingFromUv(res.Output); ok && !r.blocked(b.Name) {
+				r.block(b)
 			}
 			if named := r.pinsNamedIn(err.Error()); named != "" {
 				return fmt.Errorf("%w; pinned by %s", err, named)

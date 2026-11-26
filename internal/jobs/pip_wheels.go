@@ -307,9 +307,9 @@ func (r *pipRun) describeBlocking(b PipBlocking) string {
 	return name + ": " + b.Detail
 }
 
-// writeFailedResult writes pip-result.json for an analysis that stops on
-// blocking packages. It lists no package: none was scanned, so no list
-// can read as a clean scan.
+// writeFailedResult writes pip-result.json for an analysis that fails
+// after finding blocking packages. It lists no package: no scan stands
+// behind them, so no list can read as a clean scan.
 func (r *pipRun) writeFailedResult(blocking []PipBlocking) error {
 	result := PipResult{
 		Target:   r.a.Project.PipTarget,
