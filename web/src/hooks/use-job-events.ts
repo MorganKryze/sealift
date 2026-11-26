@@ -5,6 +5,7 @@ import {
   initialAnalysisEventsState,
   type AnalysisEventsState,
   type EventKind,
+  type JobAction,
   type JobEvent,
 } from "@/lib/analysisEvents"
 
@@ -15,13 +16,15 @@ const eventKinds: EventKind[] = ["step", "progress", "candidate", "log", "end"]
 
 /**
  * Subscribes to the single job queue's event stream while active, folding
- * events into the reducer. The queue runs one job at a time but the stream
- * is global, so events belonging to a different job are ignored: storeId
+ * events into the reducer, and starts the state again on each connection.
+ * The queue runs one job at a time but the stream is global, so events
+ * belonging to a different job are ignored: storeId
  * is the directory id this hook was called with, not the queue id the
  * server assigns per submission.
  */
 export function useJobEvents(analysisId: string, active: boolean, onEnd: () => void): AnalysisEventsState {
-  const [state, dispatch] = useReducer(analysisEventsReducer, initialAnalysisEventsState)
+  // Each line takes the time it is received, so the reducer's clock stays at its default.
+  const [state, dispatch] = useReducer((current: AnalysisEventsState, action: JobAction) => analysisEventsReducer(current, action), initialAnalysisEventsState)
   const onEndRef = useRef(onEnd)
 
   useEffect(() => {
@@ -46,6 +49,13 @@ export function useJobEvents(analysisId: string, active: boolean, onEnd: () => v
       }
     }
 
+    // Each connection, the first and every reconnect, replays the job so far: the state starts again
+    // on open, so a replayed line is never shown twice.
+    function restart() {
+      dispatch({ kind: "reset" })
+    }
+
+    source.addEventListener("open", restart)
     for (const kind of eventKinds) {
       source.addEventListener(kind, handle)
     }
@@ -57,6 +67,7 @@ export function useJobEvents(analysisId: string, active: boolean, onEnd: () => v
     // export queries covers whatever a reconnect still misses.
 
     return () => {
+      source.removeEventListener("open", restart)
       for (const kind of eventKinds) {
         source.removeEventListener(kind, handle)
       }

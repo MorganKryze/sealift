@@ -324,7 +324,7 @@ describe("the session pages' actions", () => {
     expect(exportCancel.querySelector("svg")).not.toBeNull()
   })
 
-  it("links a tools failure to Instance", () => {
+  it("offers Retry for a tools failure and names its first line", () => {
     withClient(
       <AnalysisScreen
         projectId="p1"
@@ -335,8 +335,9 @@ describe("the session pages' actions", () => {
       />,
     )
 
-    expect(screen.getByRole("link", { name: "Open Instance" })).toHaveAttribute("href", "/instance")
-    expect(screen.getByRole("link", { name: "Choose another file" })).toHaveAttribute("href", "/update")
+    expect(screen.getByText("trivy: exit status 1")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Open Instance" })).toBeNull()
   })
 
   it("ends a failure's action row with its primary at the right", () => {

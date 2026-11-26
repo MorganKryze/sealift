@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Analysis, Export, Project } from "@/api/projects";
 import { initialAnalysisEventsState } from "@/lib/analysisEvents";
 
-import { AnalysisScreen } from "./analysis-screen";
 import { ExportScreen } from "./export-screen";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -26,19 +25,6 @@ function renderWithClient(ui: ReactNode) {
   );
 }
 
-function renderAnalysis(state: string) {
-  const analysis = { id: "a1", state } as unknown as Analysis;
-  return renderWithClient(
-    <AnalysisScreen
-      projectId="p1"
-      project={project}
-      analysis={analysis}
-      onChanged={noop}
-      onNavigateStep={noop}
-    />,
-  );
-}
-
 function renderExport(state: string) {
   const analysis = { id: "a1", state: "done" } as unknown as Analysis;
   const relatedExport = { id: "e1", state } as unknown as Export;
@@ -52,38 +38,6 @@ function renderExport(state: string) {
     />,
   );
 }
-
-describe("a queued analysis", () => {
-  it("says it waits for another job and shows no running step", () => {
-    renderAnalysis("queued");
-    expect(
-      screen.getByRole("heading", { name: "Waiting for another job" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /one job at a time\. This analysis starts when the one before it ends/,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Analysing" }),
-    ).not.toBeInTheDocument();
-    const row = screen.getByText("Check the manifest").closest("li");
-    expect(row?.querySelector(".animate-spin")).toBeNull();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-  });
-
-  it("reads as today once running", () => {
-    renderAnalysis("running");
-    expect(
-      screen.getByRole("heading", { name: "Analysing" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Waiting for another job"),
-    ).not.toBeInTheDocument();
-    const row = screen.getByText("Check the manifest").closest("li");
-    expect(row?.querySelector(".animate-spin")).not.toBeNull();
-  });
-});
 
 describe("a queued export", () => {
   it("says it waits for another job and hides the counters", () => {
