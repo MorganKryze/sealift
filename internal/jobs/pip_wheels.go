@@ -25,9 +25,9 @@ func platformOfPip(t store.PipTarget) pip.Platform {
 // stepCheckPins reads the index page of every requirement the target
 // installs, before uv runs, and records each one with no wheel the target
 // can install or none its hashes list. uv stops at the first such package,
-// so sealift finds them all itself; stepResolve leaves their lines out of
-// uv's input. A constraint is left to choose-wheels: it installs only when
-// something requires it.
+// so sealift finds them all itself; stepResolve gives uv their lines as
+// constraints, which hold each version without requiring it. A constraint
+// is left to choose-wheels: it installs only when something requires it.
 func (r *pipRun) stepCheckPins() error {
 	return r.runStep("check-pins", func() error {
 		r.pins = r.targetPins()

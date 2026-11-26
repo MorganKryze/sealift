@@ -513,7 +513,7 @@ type PipBlocking struct {
 	Kind   PipBlockingKind `json:"kind"`
 	Name   string          `json:"name"`
 
-	// PinnedAt Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded.
+	// PinnedAt Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded.
 	PinnedAt *[]PipPlace `json:"pinnedAt,omitempty"`
 	Version  string      `json:"version"`
 }
@@ -545,7 +545,7 @@ type PipPackage struct {
 	// Name Normalized name
 	Name string `json:"name"`
 
-	// PinnedAt Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded.
+	// PinnedAt Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded.
 	PinnedAt *[]PipPlace `json:"pinnedAt,omitempty"`
 
 	// Previous The package as the previous crossing held it. Absent for a package new since then, and when the analysis records no previous crossing.

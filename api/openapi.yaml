@@ -1299,10 +1299,11 @@ components:
         pinnedAt:
           type: array
           description: >-
-            Each file and line that pins it, sorted by file then line. A line
-            that repeats a pin of the same version, marker and extras counts
-            once, at its first place; a constraint on a required package does
-            not count. Absent for a transitive package and from an analysis
+            Each file and line that pins it, sorted by file then line. A
+            requirement line that repeats the one before it in this order,
+            with the same version, marker and extras, counts once; only the
+            first constraint line of a package counts, and none of a required
+            package. Absent for a transitive package and from an analysis
             written before places were recorded.
           items:
             $ref: "#/components/schemas/PipPlace"
@@ -1504,10 +1505,11 @@ components:
         pinnedAt:
           type: array
           description: >-
-            Each file and line that pins it, sorted by file then line. A line
-            that repeats a pin of the same version, marker and extras counts
-            once, at its first place; a constraint on a required package does
-            not count. Absent for a transitive package and from an analysis
+            Each file and line that pins it, sorted by file then line. A
+            requirement line that repeats the one before it in this order,
+            with the same version, marker and extras, counts once; only the
+            first constraint line of a package counts, and none of a required
+            package. Absent for a transitive package and from an analysis
             written before places were recorded.
           items:
             $ref: "#/components/schemas/PipPlace"

@@ -760,7 +760,7 @@ export interface components {
             version: string;
             /** @description The project files that pin it, empty for a transitive package */
             files: string[];
-            /** @description Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded. */
+            /** @description Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded. */
             pinnedAt?: components["schemas"]["PipPlace"][];
             wheel?: components["schemas"]["PipWheel"];
             /** @description Sorted by severity, then id */
@@ -850,7 +850,7 @@ export interface components {
             /** @enum {string} */
             kind: "source-only" | "other-platforms" | "no-files" | "hash-mismatch";
             detail: string;
-            /** @description Each file and line that pins it, sorted by file then line. A line that repeats a pin of the same version, marker and extras counts once, at its first place; a constraint on a required package does not count. Absent for a transitive package and from an analysis written before places were recorded. */
+            /** @description Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded. */
             pinnedAt?: components["schemas"]["PipPlace"][];
         };
         /** @description A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag. */
