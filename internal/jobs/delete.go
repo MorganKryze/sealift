@@ -48,16 +48,16 @@ func (s *Service) DeleteProject(projectID string) error {
 	defer unlock()
 	// A job stays tracked until its finalizer has committed its directory,
 	// so nothing writes under the project once none is.
-	if s.tracksJobOf(projectID) {
+	if s.HasJob(projectID) {
 		return store.ErrBusy
 	}
 	return s.store.DeleteProjectUnguarded(projectID)
 }
 
-// tracksJobOf reports whether Service tracks a queued or running job of
+// HasJob reports whether Service tracks a queued or running job of
 // projectID. byProjectID holds only the latest one, which a cancel can
 // untrack while an earlier job still runs, so this walks every job.
-func (s *Service) tracksJobOf(projectID string) bool {
+func (s *Service) HasJob(projectID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key := range s.byJobKey {

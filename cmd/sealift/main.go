@@ -382,7 +382,7 @@ func sweepEphemeral(ctx context.Context, st *store.Store, service *jobs.Service,
 			return
 		case now := <-tick.C:
 			// Counts only: an error's text can hold a path that names a package.
-			r := st.SweepEphemeral(idle, now, service.DeleteProject)
+			r := st.SweepEphemeral(idle, now, service.HasJob, service.DeleteProject)
 			if r.Failed > 0 {
 				log.Error("ephemeral sweep could not erase everything", "failed", r.Failed, "deleted_projects", r.Deleted, "caches_emptied", r.Purged)
 			} else if r.Deleted > 0 || r.Purged {
