@@ -80,10 +80,10 @@ func (v VersionMeta) HasProvenance() bool {
 // array instead; it decodes to no ranges. A null value reads as "". Another
 // value that is not a string is dropped and the other ranges are kept, except
 // under node: a value other than 0 or false reads as "not a string: " and its
-// JSON, a range no Node satisfies, as pnpm 10 matches no Node against such a
-// value and skips 0 and false as it skips null. pnpm 12 skips every value that
-// is not a string, so a project whose target runs pnpm 12 sees a node
-// mismatch on a version its pnpm installs.
+// JSON, cut to 64 bytes, a range no Node satisfies: pnpm 10 and 11 match no
+// Node against such a value and skip 0 and false as they skip null. pnpm 12
+// skips every value that is not a string; sealift cannot run pnpm 12 today,
+// since its package has no bin/pnpm.cjs, so revisit this if it ever does.
 type Engines map[string]string
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -100,7 +100,11 @@ func (e *Engines) UnmarshalJSON(b []byte) error {
 		} else if name == "node" && !zeroOrFalse(value) {
 			var text bytes.Buffer
 			_ = json.Compact(&text, value)
-			m[name] = "not a string: " + text.String()
+			t := text.String()
+			if len(t) > 64 {
+				t = strings.ToValidUTF8(t[:64], "")
+			}
+			m[name] = "not a string: " + t
 		}
 	}
 	*e = m

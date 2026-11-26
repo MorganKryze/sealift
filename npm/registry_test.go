@@ -133,6 +133,7 @@ func TestEnginesKeepsTheStringValues(t *testing.T) {
 		{name: "node is a number", doc: `{"node": 18, "npm": ">=9"}`, want: Engines{"node": "not a string: 18", "npm": ">=9"}},
 		{name: "node is an object", doc: `{"node": {"min": 18}}`, want: Engines{"node": `not a string: {"min":18}`}},
 		{name: "node is an array", doc: `{"node": [">=18"]}`, want: Engines{"node": `not a string: [">=18"]`}},
+		{name: "long node value is cut", doc: `{"node": [` + strings.Repeat(`1,`, 100) + `1]}`, want: Engines{"node": "not a string: [" + strings.Repeat("1,", 31) + "1"}},
 		{name: "node is null", doc: `{"node": null, "npm": ">=9"}`, want: Engines{"node": "", "npm": ">=9"}},
 		{name: "node is 0", doc: `{"node": 0, "npm": ">=9"}`, want: Engines{"npm": ">=9"}},
 		{name: "node is false", doc: `{"node": false}`, want: Engines{}},
