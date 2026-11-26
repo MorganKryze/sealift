@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1347,11 +1348,45 @@ func TestCancelImport(t *testing.T) {
 		if p := a.Report.Packages[1]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
 			t.Errorf("the package not reached = %+v", p)
 		}
+		if a.Report.Reason != imports.OutcomeCancelled {
+			t.Errorf("reason %q, want %q", a.Report.Reason, imports.OutcomeCancelled)
+		}
 		if n := r.nexus.uploadCount(); n != 1 {
 			t.Errorf("%d uploads, want 1", n)
 		}
 		if d := r.deletes(); len(d) != 0 {
 			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("names the cancel as the reason of one that lands during the MinIO check", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		checking, release := make(chan struct{}), make(chan struct{})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		var heads atomic.Int32
+		r.minio.hook = func(op, key string) {
+			// The start heads the archive once; the attempt's check comes next.
+			if op == "head" && key == archiveKey && heads.Add(1) == 2 {
+				close(checking)
+				<-release
+			}
+		}
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-checking:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the attempt never checked the archive in MinIO")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		free()
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Report.Reason != imports.OutcomeCancelled || a.Removal != nil {
+			t.Errorf("outcome %q reason %q removal %+v, want cancelled for both", a.Outcome, a.Report.Reason, a.Removal)
+		}
+		if n := r.nexus.uploadCount(); n != 0 {
+			t.Errorf("%d uploads, want none", n)
 		}
 	})
 
