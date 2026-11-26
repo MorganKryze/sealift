@@ -206,3 +206,121 @@ func TestDeleteProjectAndAConcurrentAnalysisNeverOverlap(t *testing.T) {
 	}
 	t.Logf("%d deleted, %d kept", len(deleted), len(kept))
 }
+
+// A cancelled job that was the project's latest leaves an earlier one
+// queued, and that earlier job still keeps the project.
+func TestDeleteProjectRefusesWhileAnEarlierJobOutlivesACancelledOne(t *testing.T) {
+	svc, st := newTestService(t)
+	project := mustCreateProject(t, st)
+	release := holdWorker(t, svc)
+	first, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis(first): %v", err)
+	}
+	second, err := svc.QueueAnalysis(project.ID)
+	if err != nil {
+		t.Fatalf("QueueAnalysis(second): %v", err)
+	}
+	if _, err := svc.Cancel(project.ID, "analysis", second.ID); err != nil {
+		t.Fatalf("Cancel(second): %v", err)
+	}
+	waitForTerminal(t, svc, project.ID, "analysis", second.ID)
+
+	if err := svc.DeleteProject(project.ID); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("DeleteProject with the first analysis still queued = %v, want ErrBusy", err)
+	}
+	release()
+	waitForTerminal(t, svc, project.ID, "analysis", first.ID)
+}
+
+// writeDoneAnalysis gives project a done analysis with nothing to export
+// beyond the project itself, and returns its id.
+func writeDoneAnalysis(t *testing.T, st *store.Store, project store.Project) string {
+	t.Helper()
+	const id = "20260917T101502Z"
+	ranking := `{"target":{"os":"linux","cpu":"x64","libc":"glibc","node":"22.17.1","pnpmVer":"10.34.5"},"before":[0,0,0,0,0],"after":[0,0,0,0,0],"dependencies":[],"warnings":[]}`
+	dir := filepath.Join(st.Root(), "projects", project.ID, "analyses", id)
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"status.json":        `{"state":"done"}`,
+		"ranking.json":       ranking,
+		"project.trivy.json": emptyProjectScan,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o664); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return id
+}
+
+// An export queued at the same moment as the delete either lands first,
+// and the delete answers busy, or finds the project gone. It never
+// recreates the deleted project's directory.
+func TestDeleteProjectAndAConcurrentExportNeverOverlap(t *testing.T) {
+	const rounds = 50
+	svc, st := newTestService(t)
+	release := holdWorker(t, svc)
+
+	type outcome struct {
+		project store.Project
+		queued  store.ExportInfo
+	}
+	var deleted, kept []outcome
+	for round := range rounds {
+		project, err := st.CreateProject(fmt.Sprintf("p%d", round), []byte(`{"name":"p"}`))
+		if err != nil {
+			t.Fatalf("CreateProject: %v", err)
+		}
+		analysisID := writeDoneAnalysis(t, st, project)
+		var (
+			wg                  sync.WaitGroup
+			queued              store.ExportInfo
+			queueErr, deleteErr error
+		)
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			queued, queueErr = svc.QueueExport(project.ID, analysisID, ExportRequest{Selection: map[string][]string{}, IncludeProject: true})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			deleteErr = svc.DeleteProject(project.ID)
+		}()
+		close(start)
+		wg.Wait()
+
+		switch {
+		case deleteErr == nil:
+			if !errors.Is(queueErr, store.ErrNotFound) {
+				t.Fatalf("round %d: the delete went through and QueueExport = (%+v, %v), want ErrNotFound", round, queued, queueErr)
+			}
+			deleted = append(deleted, outcome{project: project})
+		case errors.Is(deleteErr, store.ErrBusy):
+			if queueErr != nil {
+				t.Fatalf("round %d: the delete answered busy and QueueExport = %v, want the export queued", round, queueErr)
+			}
+			kept = append(kept, outcome{project: project, queued: queued})
+		default:
+			t.Fatalf("round %d: DeleteProject = %v, want nil or ErrBusy", round, deleteErr)
+		}
+		if _, err := os.Stat(project.Dir); deleteErr == nil && !os.IsNotExist(err) {
+			t.Fatalf("round %d: project directory after the delete: err = %v, want it gone", round, err)
+		}
+	}
+
+	release()
+	for _, o := range kept {
+		waitForTerminal(t, svc, o.project.ID, "export", o.queued.ID)
+	}
+	for _, o := range deleted {
+		if _, err := os.Stat(o.project.Dir); !os.IsNotExist(err) {
+			t.Errorf("deleted project %s has a directory again: err = %v", o.project.ID, err)
+		}
+	}
+	t.Logf("%d deleted, %d kept", len(deleted), len(kept))
+}
