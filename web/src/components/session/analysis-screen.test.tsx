@@ -234,7 +234,7 @@ describe("a queued analysis", () => {
     expect(within(row).getByText(name)).toBeInTheDocument()
     expect(within(row).getByText("Analysing")).toBeInTheDocument()
     expect(within(row).getByText((_, element) => element?.tagName === "P" && element.textContent === "401 of 486 newer versions tried")).toBeInTheDocument()
-    expect(within(row).getByRole("link", { name: `Open ${name}` })).toHaveAttribute("href", "/sessions/billing-api")
+    expect(within(row).getByRole("link", { name: `Open ${name}` })).toHaveAttribute("href", "/crossings/billing-api")
     expect(vi.mocked(useJobEvents)).toHaveBeenCalledWith(RUNNING_ID, true, expect.any(Function))
     // Nothing has started here: no log and no bar, and Cancel takes it out of the queue.
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument()

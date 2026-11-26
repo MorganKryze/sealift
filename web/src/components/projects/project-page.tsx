@@ -116,8 +116,8 @@ function Crossing({ project, analysis, name, exported, sealed, open, onToggle }:
           </button>
         ) : null}
         <Link
-          to="/sessions/$sessionId/analysis"
-          params={{ sessionId: project.id }}
+          to="/crossings/$projectId"
+          params={{ projectId: project.id }}
           search={{ analysis: analysis.id }}
           aria-label={`Open ${name}`}
           className="grid size-8 flex-none place-items-center rounded-md text-faint transition-colors duration-150 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-hover [@media(hover:hover)_and_(pointer:fine)]:hover:text-ink"

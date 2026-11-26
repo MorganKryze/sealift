@@ -17,16 +17,13 @@ The collection's routes are file-based, in `web/src/routes/`:
 | Route | Screen |
 | --- | --- |
 | `/` | Home: Start a crossing, Needs you and In progress |
-| `/update` | Update a project: the drop zone and the drop preview |
+| `/update` | Update a project: the drop zone and the Check step |
 | `/projects` | Projects, newest crossing first or by name |
 | `/projects/$projectId` | A project and its crossings, To carry and Reports |
 | `/instance` | Instance: readiness, policy, signing key, appearance |
 | `/settings` | Redirects to `/instance`, so an old bookmark lands there |
-| `/sessions/$sessionId` | Redirects to the session's most useful step: export when the latest analysis has an export, finished or not, review after a finished analysis, analysis otherwise |
-| `/sessions/$sessionId/drop` | The manifest the session started from |
-| `/sessions/$sessionId/analysis` | The nine steps, the counter, the failure block |
-| `/sessions/$sessionId/review` | The proposal and the selection |
-| `/sessions/$sessionId/export` | The export progress and the archive |
+| `/crossings/$projectId` | One crossing on the step its state has reached: Analyse while its analysis has not finished, Review once it has, Seal while an export of it runs, failed or finished. A cancelled export returns to Review. `?analysis=<id>` names an analysis that is not the latest; `?step=check` or `?step=review` goes back to Check or Review |
+| `/sessions/<project>`, with `/drop`, `/analysis`, `/review` or `/export` | Redirects, in `__root.tsx`, to `/crossings/<project>` and keeps `?analysis=`. `/drop` adds `?step=check` and `/review` adds `?step=review`, so a bookmark of an earlier session page lands on its crossing |
 
 `WhenReady` wraps the root, so every route shows Preparing this instance until the instance is ready.
 
@@ -42,7 +39,7 @@ The import entry has its own tree in `web/src/import/routes/`, with its generate
 
 The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and a dialog of the import entry is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
 
-A dropped file has no route until the session exists: the drop preview is state on the Update screen, and **Analyse** creates the project.
+A dropped file has no route until the crossing exists: its checks are state on the Update screen, and **Analyse** creates the project.
 
 ## The frame
 
@@ -50,10 +47,10 @@ A dropped file has no route until the session exists: the drop preview is state 
 
 | Role | Places | Crumbs |
 | --- | --- | --- |
-| Online | `ONLINE_PLACES` in `web/src/lib/places.ts`: Home, Projects; `ONLINE_INSTANCE` | `onlineCrumbs`: a session sits under Home and reads its crossing's name, a project under Projects with its name, Update under Home |
+| Online | `ONLINE_PLACES` in `web/src/lib/places.ts`: Home, Projects; `ONLINE_INSTANCE` | `onlineCrumbs`: a crossing sits under Home and reads its name, a project under Projects with its name, Update under Home |
 | Offline | `OFFLINE_PLACES` in `web/src/import/lib/places.ts`: Home, Imports; `OFFLINE_INSTANCE` | `offlineCrumbs`: Choose an archive (`Import`) under Home, an import under Imports |
 
-The current place is the one whose address is the longest start of the path, so a session page lights Home. The Online root passes the instance's `warning`, which draws a mark and a tooltip on Instance. The Offline root passes the signed-in user, drawn as initials (`initials`). The crumb for a project or session reads the same query cache entry as the page, so it costs no request.
+The current place is the one whose address is the longest start of the path, so a crossing lights Home. The Online root passes the instance's `warning`, which draws a mark and a tooltip on Instance. The Offline root passes the signed-in user, drawn as initials (`initials`). The crumb for a project or crossing reads the same query cache entry as the page, so it costs no request.
 
 ## The brand
 
