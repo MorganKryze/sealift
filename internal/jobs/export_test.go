@@ -1728,56 +1728,81 @@ func TestExportDownloadCauseNamesNoDataDirectory(t *testing.T) {
 }
 
 // npm pack names both @scope/gadget@2.1.0 and scope-gadget@2.1.0
-// scope-gadget-2.1.0.tgz. The export names the scoped one apart, and the
-// manifest says which file holds which package.
+// scope-gadget-2.1.0.tgz. The export names the scoped one apart, in
+// stripped/ as in out/, and the manifest says which file holds which
+// package. @scope/gadget always carries a publishConfig.
 func TestExportNamesAScopedPackageApartWhenItsFileNameIsTaken(t *testing.T) {
-	h := newTestHarness(t)
-	twin := makeTarball(t, tarFile{"package/package.json", `{"name":"scope-gadget","version":"2.1.0"}`})
-	h.extra = map[string][]byte{"/scope-gadget/-/scope-gadget-2.1.0.tgz": twin}
-	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
-	h.buildAnalysis(analysisDir)
-	writeLockfile(t, filepath.Join(analysisDir, "project", "pnpm-lock.yaml"),
-		npm.LockPackage{Name: "helper", Version: "3.0.0", Integrity: sriOf(h.helper)},
-		npm.LockPackage{Name: "scope-gadget", Version: "2.1.0", Integrity: sriOf(twin)})
+	tests := []struct {
+		name     string
+		twinJSON string
+		stripped bool
+	}{
+		{"the twin ships as published", `{"name":"scope-gadget","version":"2.1.0"}`, false},
+		{"the twin carries a publishConfig too", `{"name":"scope-gadget","version":"2.1.0","publishConfig":{"access":"public"}}`, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHarness(t)
+			twin := makeTarball(t, tarFile{"package/package.json", tc.twinJSON})
+			h.extra = map[string][]byte{"/scope-gadget/-/scope-gadget-2.1.0.tgz": twin}
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			writeLockfile(t, filepath.Join(analysisDir, "project", "pnpm-lock.yaml"),
+				npm.LockPackage{Name: "helper", Version: "3.0.0", Integrity: sriOf(h.helper)},
+				npm.LockPackage{Name: "scope-gadget", Version: "2.1.0", Integrity: sriOf(twin)})
 
-	exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
-	if err := h.newExport(t, analysisDir, exportDir, true).Run(context.Background(), noopEmit); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			if err := h.newExport(t, analysisDir, exportDir, true).Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 
-	data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries := readArchive(t, data)
-	if got := entries["out/scope-gadget-2.1.0.tgz"]; got != string(twin) {
-		t.Errorf("out/scope-gadget-2.1.0.tgz does not hold scope-gadget; have %v", exportArchiveKeys(entries))
-	}
-	scoped, ok := entries["out/scope~gadget-2.1.0.tgz"]
-	if !ok {
-		t.Fatalf("archive has no out/scope~gadget-2.1.0.tgz; have %v", exportArchiveKeys(entries))
-	}
-	if got := readGadgetManifest(t, scoped); got["name"] != "@scope/gadget" || got["version"] != "2.1.0" {
-		t.Errorf("out/scope~gadget-2.1.0.tgz holds %v, want @scope/gadget 2.1.0", got)
-	}
-	if _, ok := entries["out/scope-gadget-2.2.0.tgz"]; !ok {
-		t.Errorf("@scope/gadget 2.2.0 collides with nothing and lost its name; have %v", exportArchiveKeys(entries))
-	}
+			data, err := os.ReadFile(filepath.Join(exportDir, "packages_npm.tar.gz"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := readArchive(t, data)
+			for file, want := range map[string]string{
+				"out/scope-gadget-2.1.0.tgz": "scope-gadget",
+				"out/scope~gadget-2.1.0.tgz": "@scope/gadget",
+			} {
+				body, ok := entries[file]
+				if !ok {
+					t.Errorf("archive has no %s; have %v", file, exportArchiveKeys(entries))
+					continue
+				}
+				got := readGadgetManifest(t, body)
+				if got["name"] != want || got["version"] != "2.1.0" {
+					t.Errorf("%s holds %v, want %s 2.1.0", file, got, want)
+				}
+				if _, ok := got["publishConfig"]; ok {
+					t.Errorf("%s still has publishConfig", file)
+				}
+			}
+			if !tc.stripped && entries["out/scope-gadget-2.1.0.tgz"] != string(twin) {
+				t.Error("out/scope-gadget-2.1.0.tgz does not hold the twin's bytes as published")
+			}
+			if _, ok := entries["out/scope-gadget-2.2.0.tgz"]; !ok {
+				t.Errorf("@scope/gadget 2.2.0 collides with nothing and lost its name; have %v", exportArchiveKeys(entries))
+			}
 
-	var manifest report.Manifest
-	readJSON(t, filepath.Join(exportDir, "manifest.json"), &manifest)
-	files := map[string]string{}
-	for _, p := range manifest.Packages {
-		files[p.Name+"@"+p.Version] = p.File
-	}
-	for key, want := range map[string]string{
-		"@scope/gadget@2.1.0": "scope~gadget-2.1.0.tgz",
-		"scope-gadget@2.1.0":  "scope-gadget-2.1.0.tgz",
-		"@scope/gadget@2.2.0": "scope-gadget-2.2.0.tgz",
-	} {
-		if files[key] != want {
-			t.Errorf("manifest file of %s = %q, want %q", key, files[key], want)
-		}
+			var manifest report.Manifest
+			readJSON(t, filepath.Join(exportDir, "manifest.json"), &manifest)
+			byKey := map[string]report.PackageEntry{}
+			for _, p := range manifest.Packages {
+				byKey[p.Name+"@"+p.Version] = p
+			}
+			for key, want := range map[string]report.PackageEntry{
+				"@scope/gadget@2.1.0": {File: "scope~gadget-2.1.0.tgz", PublishConfigStripped: true},
+				"scope-gadget@2.1.0":  {File: "scope-gadget-2.1.0.tgz", PublishConfigStripped: tc.stripped},
+				"@scope/gadget@2.2.0": {File: "scope-gadget-2.2.0.tgz", PublishConfigStripped: true},
+			} {
+				got := byKey[key]
+				if got.File != want.File || got.PublishConfigStripped != want.PublishConfigStripped {
+					t.Errorf("manifest entry of %s = file %q, stripped %v; want %q, %v",
+						key, got.File, got.PublishConfigStripped, want.File, want.PublishConfigStripped)
+				}
+			}
+		})
 	}
 }
 
