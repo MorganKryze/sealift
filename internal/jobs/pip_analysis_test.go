@@ -1127,3 +1127,39 @@ func TestPipFindingTitleIsCleanedAndBounded(t *testing.T) {
 		t.Errorf("advisory title = %q, want the finding's %q", got, findings[0].Title)
 	}
 }
+
+// TestPipAnalysisStoresAdvisoryTextWithDataPathsRelative proves a pip
+// analysis stores a finding's title, and its advisory's title and summary,
+// with every path under the data directory relative to it and every URL
+// without its credentials.
+func TestPipAnalysisStoresAdvisoryTextWithDataPathsRelative(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2"))
+	text := "jinja2: reads " + filepath.Join(st.Root(), "projects", "p", "requirements.txt") +
+		" from https://user:secret@index.example/simple"
+	vuln, err := json.Marshal(map[string]string{
+		"VulnerabilityID": "CVE-2024-22195", "PkgName": "Jinja2", "InstalledVersion": "3.1.2", "Severity": "MEDIUM",
+		"Title": text, "Description": text + ".",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Trivy = &cannedTrivy{report: `{"SchemaVersion":2,"Results":[{"Target":"project.trivy.json.cdx.json","Class":"lang-pkgs","Type":"python-pkg","Vulnerabilities":[` + string(vuln) + `]}]}`}
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+
+	want := "jinja2: reads " + filepath.Join("projects", "p", "requirements.txt") + " from https://index.example/simple"
+	if len(res.Packages) != 1 || len(res.Packages[0].CVEs) != 1 || res.Packages[0].CVEs[0].Title != want {
+		t.Errorf("packages = %+v, want one finding titled %q", res.Packages, want)
+	}
+	if got := res.Advisories["CVE-2024-22195"]; got.Title != want || got.Summary != want+"." {
+		t.Errorf("advisory = %+v, want title %q and summary %q", got, want, want+".")
+	}
+	if bytes.Contains(raw, []byte(st.Root())) || bytes.Contains(raw, []byte("secret")) {
+		t.Errorf("pip-result.json = %s, want neither the data directory nor the password", raw)
+	}
+}
