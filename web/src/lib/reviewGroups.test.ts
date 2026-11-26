@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { DependencyResult, Signal } from "@/api/projects"
-import { afterVectorOf, distinctCves, groupDependencies, groupOf, jumpKind, reasonFor } from "@/lib/reviewGroups"
+import { afterVectorOf, cveFix, distinctCves, groupDependencies, groupOf, jumpKind, reasonFor } from "@/lib/reviewGroups"
 
 function candidate(version: string, overrides: Partial<DependencyResult["candidates"][number]> = {}) {
   return {
@@ -46,92 +46,72 @@ describe("jumpKind", () => {
   })
 })
 
+const family = (name: string, members: string[]) => ({ name, members })
+
 describe("groupOf", () => {
-  it("puts a dependency with no best candidate in nothing", () => {
-    const dep = dependency({ vector: [0, 0, 0, 0, 0], best: undefined, candidates: [] })
-    expect(groupOf(dep)).toBe("nothing")
+  it("puts each dependency in one group", () => {
+    const deps = [
+      dependency({ name: "react", current: "18.2.0", jump: "19.2.0", family: "react 19", candidates: [candidate("18.3.1"), candidate("19.2.0", { leavesLine: true })] }),
+      dependency({ name: "react-dom", current: "18.2.0", jump: "19.2.0", family: "react 19", candidates: [candidate("18.3.1"), candidate("19.2.0", { leavesLine: true })] }),
+      dependency({ name: "express", current: "4.17.1", best: "4.21.2", jump: "5.1.0", candidates: [candidate("4.21.2"), candidate("5.1.0", { leavesLine: true })] }),
+      dependency({ name: "lodash", current: "4.17.20", best: "4.17.21", candidates: [candidate("4.17.21")] }),
+      dependency({
+        name: "html-minifier", current: "4.0.0", vector: [0, 1, 0, 0, 0], candidates: [],
+        cves: [{ id: "CVE-2022-37620", severity: "HIGH", package: "html-minifier@4.0.0", fixedIn: "" }],
+      }),
+      dependency({ name: "left-pad", current: "1.3.0", vector: [0, 0, 0, 0, 0], candidates: [] }),
+    ]
+    const selection = { react: ["19.2.0"], "react-dom": ["19.2.0"], express: ["4.21.2"] }
+    const groups = groupDependencies(deps, selection, [family("react 19", ["react", "react-dom"])])
+
+    expect(groups.reasons.map((d) => d.name)).toEqual(["react", "react-dom", "html-minifier"])
+    expect(groups.updated.map((d) => d.name)).toEqual(["express", "lodash"])
+    expect(groups.kept.map((d) => d.name)).toEqual([])
+    expect(groups.unchanged.map((d) => d.name)).toEqual(["left-pad"])
+    const all = Object.values(groups).flat().map((d) => d.name)
+    expect(all.sort()).toEqual(deps.map((d) => d.name).sort())
   })
 
-  it("puts a major jump in decide", () => {
-    const dep = dependency({
-      current: "4.17.1",
-      best: "5.1.0",
-      candidates: [candidate("5.1.0", { signals: [{ name: "major-jump", evidence: "leaves major version 4", blocking: false }] })],
-    })
-    expect(groupOf(dep)).toBe("decide")
+  it("moves a recorded jump to the reasons block", () => {
+    const esbuild = dependency({ name: "esbuild", current: "0.21.5", best: "0.21.5", jump: "0.25.12", candidates: [candidate("0.25.12", { leavesLine: true })] })
+    expect(groupOf(esbuild, undefined, [])).toBe("kept")
+    expect(groupOf(esbuild, ["0.25.12"], [])).toBe("reasons")
   })
 
-  it("puts a 0.x minor jump in decide even with no signal at all", () => {
-    const dep = dependency({
-      current: "0.21.1",
-      best: "0.33.0",
-      candidates: [candidate("0.33.0")],
-    })
-    expect(groupOf(dep)).toBe("decide")
+  it("moves every member of a family that jumps, even one whose own version stays", () => {
+    const react = dependency({ name: "react", current: "18.2.0", jump: "19.2.0", family: "react 19", candidates: [candidate("19.2.0", { leavesLine: true })] })
+    const types = dependency({ name: "@types/react", current: "18.3.12", jump: "19.2.2", family: "react 19", candidates: [candidate("19.2.2", { leavesLine: true })] })
+    const groups = groupDependencies([react, types], { react: ["19.2.0"], "@types/react": [] }, [family("react 19", ["@types/react", "react"])])
+    expect(groups.reasons.map((d) => d.name)).toEqual(["react", "@types/react"])
   })
 
-  it("puts any non-publisher signal in decide", () => {
-    const dep = dependency({
-      current: "4.17.1",
-      best: "4.19.2",
-      candidates: [candidate("4.19.2", { signals: [{ name: "install-script-added", evidence: "runs an install script", blocking: false }] })],
-    })
-    expect(groupOf(dep)).toBe("decide")
+  it("keeps a jump not taken on its major", () => {
+    const express = dependency({ name: "express", current: "4.17.1", jump: "5.1.0", vector: [0, 0, 0, 0, 0], candidates: [candidate("5.1.0", { leavesLine: true })] })
+    expect(groupOf(express, [], [])).toBe("kept")
+    expect(groupOf(express, undefined, [])).toBe("kept")
   })
 
-  it("keeps a publisher-changed candidate in proposed: a grey note, not a warning", () => {
-    const dep = dependency({
-      current: "4.17.20",
-      best: "4.18.1",
-      candidates: [candidate("4.18.1", { signals: [{ name: "publisher-changed", evidence: "published by jdalton", blocking: false }] })],
+  it("reads an analysis with no jump, family or fix", () => {
+    const old = dependency({
+      name: "angular", current: "1.8.3", vector: [0, 1, 10, 0, 0], candidates: [candidate("2.0.0", { leavesLine: true })],
+      cves: [{ id: "CVE-2024-21490", severity: "HIGH" }],
     })
-    expect(groupOf(dep)).toBe("proposed")
+    const plain = dependency({ name: "chalk", current: "4.1.2", vector: [0, 0, 0, 0, 0], candidates: [candidate("5.3.0", { leavesLine: true })] })
+    const groups = groupDependencies([old, plain], {}, [])
+    expect(groups.reasons.map((d) => d.name)).toEqual(["angular"])
+    expect(groups.kept).toEqual([])
+    expect(groups.unchanged.map((d) => d.name)).toEqual(["chalk"])
+    expect(cveFix(old.cves[0])).toEqual({ kind: "unknown" })
+    expect(cveFix({ id: "CVE-2022-37620", severity: "HIGH", fixedIn: " " })).toEqual({ kind: "none" })
+    expect(cveFix({ id: "CVE-2024-29041", severity: "HIGH", fixedIn: "4.19.2, 5.0.0" })).toEqual({ kind: "fixed-in", versions: "4.19.2, 5.0.0" })
   })
 
-  it("puts a plain minor or patch bump with no signal in proposed", () => {
-    const dep = dependency({ current: "7.22.5", best: "7.23.2", candidates: [candidate("7.23.2")] })
-    expect(groupOf(dep)).toBe("proposed")
-  })
-})
-
-describe("groupDependencies", () => {
-  it("matches the demo manifest's grouping: axios and esbuild decide, express, lodash and @babel/traverse proposed", () => {
-    const axios = dependency({
-      name: "axios",
-      current: "0.21.1",
-      best: "0.33.0",
-      candidates: [candidate("0.33.0")],
-    })
-    const express = dependency({
-      name: "express",
-      current: "4.17.1",
-      best: "4.22.3",
-      candidates: [candidate("4.22.3")],
-    })
+  it("keeps a publisher change on an update: a fact, never a reason", () => {
     const lodash = dependency({
-      name: "lodash",
-      current: "4.17.20",
-      best: "4.18.1",
+      name: "lodash", current: "4.17.20", best: "4.18.1",
       candidates: [candidate("4.18.1", { signals: [{ name: "publisher-changed", evidence: "published by jdalton", blocking: false }] })],
     })
-    const babelTraverse = dependency({
-      name: "@babel/traverse",
-      current: "7.22.5",
-      best: "7.23.2",
-      candidates: [candidate("7.23.2")],
-    })
-    const esbuild = dependency({
-      name: "esbuild",
-      current: "0.17.19",
-      best: "0.25.0",
-      candidates: [candidate("0.25.0")],
-    })
-
-    const groups = groupDependencies([axios, express, lodash, babelTraverse, esbuild])
-
-    expect(groups.decide.map((d) => d.name)).toEqual(["axios", "esbuild"])
-    expect(groups.proposed.map((d) => d.name)).toEqual(["express", "lodash", "@babel/traverse"])
-    expect(groups.nothing).toEqual([])
+    expect(groupOf(lodash, undefined, [])).toBe("updated")
   })
 })
 
