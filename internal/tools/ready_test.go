@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -71,6 +72,12 @@ func (d *fakeDB) callCount() int {
 	return d.calls
 }
 
+// bubbleStart is where synctest starts every bubble's clock.
+var bubbleStart = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// monthOldInBubble is a release a month older than a bubble's clock.
+var monthOldInBubble = bubbleStart.Add(-30 * 24 * time.Hour)
+
 // preparation is a Preparer on a fresh volume whose GitHub, npm registry
 // and package index are local fakes, all serving what it asks for.
 type preparation struct {
@@ -99,6 +106,9 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// newPreparation builds a preparation outside the bubble its test runs in:
+// a fake's accept loop waits on the network, and a bubble's clock stops
+// while one of its goroutines does.
 func newPreparation(t *testing.T, uvUploaded time.Time) *preparation {
 	t.Helper()
 	gh := newFakeTrivyRelease(t, false)
@@ -106,12 +116,14 @@ func newPreparation(t *testing.T, uvUploaded time.Time) *preparation {
 		"package/package.json": `{"name":"pnpm","version":"` + preparePnpm + `"}`,
 		"package/bin/pnpm.cjs": "#!/usr/bin/env node\n",
 	})
-	registry, _ := pnpmRegistry(t, map[string][]byte{preparePnpm: tarball})
+	registry, _ := pnpmRegistryAt(t, map[string][]byte{preparePnpm: tarball}, monthOldInBubble)
 	index := newUvIndex(t, uvUploaded)
 
 	root := t.TempDir()
 	logs := &syncBuffer{}
-	m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 14}}, &http.Client{Timeout: 10 * time.Second}, nil)
+	// An idle keep-alive connection would wait on the network for good.
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	m := NewManager(fakeVolume{root: root, settings: store.Settings{MinReleaseAgeDays: 14}}, client, nil)
 	m.GitHubAPI = gh.srv.URL
 	m.NPMRegistry = registry.URL
 	m.PipIndex = index.URL()
@@ -126,6 +138,20 @@ func newPreparation(t *testing.T, uvUploaded time.Time) *preparation {
 	return pr
 }
 
+// inBubble runs f in a synctest bubble under a guard on the real clock.
+// The fakes answer over real sockets, which a bubble does not count as
+// blocked, so a stuck read would stall the bubble's clock for good; the
+// guard panics with every goroutine's stack after thirty real seconds
+// instead of waiting for the package's -timeout.
+func inBubble(t *testing.T, f func(*testing.T)) {
+	t.Helper()
+	guard := time.AfterFunc(30*time.Second, func() {
+		panic(t.Name() + ": the bubble is still running after 30s of real time")
+	})
+	defer guard.Stop()
+	synctest.Test(t, f)
+}
+
 // run starts the preparer and stops it when the test ends.
 func (pr *preparation) run(t *testing.T) {
 	t.Helper()
@@ -136,11 +162,25 @@ func (pr *preparation) run(t *testing.T) {
 }
 
 // waitState polls the preparer until ok holds, and fails the test with the
-// last state after five seconds.
+// last state after five seconds of the bubble's clock. It reads the state
+// only once every other goroutine of the bubble is blocked, so an attempt
+// is never seen halfway through.
 func waitState(t *testing.T, p *Preparer, what string, ok func(Readiness) bool) Readiness {
+	t.Helper()
+	return pollState(t, p, what, ok, synctest.Wait)
+}
+
+// waitStateLive is waitState outside a bubble, on the real clock.
+func waitStateLive(t *testing.T, p *Preparer, what string, ok func(Readiness) bool) Readiness {
+	t.Helper()
+	return pollState(t, p, what, ok, func() {})
+}
+
+func pollState(t *testing.T, p *Preparer, what string, ok func(Readiness) bool, settle func()) Readiness {
 	t.Helper()
 	var r Readiness
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		settle()
 		if r = p.State(); ok(r) {
 			return r
 		}
@@ -161,100 +201,120 @@ func item(r Readiness, name string) Item {
 func isReady(r Readiness) bool { return r.Ready }
 
 func TestPreparerBecomesReadyWhenEveryItemIs(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	if r := pr.p.State(); r.Ready {
-		t.Fatalf("State before Run = %+v, want not ready", r)
-	}
-	pr.run(t)
-	r := waitState(t, pr.p, "ready", isReady)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		if r := pr.p.State(); r.Ready {
+			t.Fatalf("State before Run = %+v, want not ready", r)
+		}
+		pr.run(t)
+		r := waitState(t, pr.p, "ready", isReady)
 
-	want := []Item{
-		{Name: "trivy", Version: trivyTestVersion, State: ItemReady},
-		{Name: "trivy-db", Version: "2026-11-23T06:00:00Z", State: ItemReady},
-		{Name: "signing-key", Version: prepareKey, State: ItemReady},
-		{Name: "pnpm", Version: preparePnpm, State: ItemReady},
-		{Name: "uv", Version: uvTestVersion, State: ItemReady},
-	}
-	if len(r.Items) != len(want) {
-		t.Fatalf("items = %+v, want %+v", r.Items, want)
-	}
-	for i, it := range r.Items {
-		if it != want[i] {
-			t.Errorf("item %d = %+v, want %+v", i, it, want[i])
+		want := []Item{
+			{Name: "trivy", Version: trivyTestVersion, State: ItemReady},
+			{Name: "trivy-db", Version: "2026-11-23T06:00:00Z", State: ItemReady},
+			{Name: "signing-key", Version: prepareKey, State: ItemReady},
+			{Name: "pnpm", Version: preparePnpm, State: ItemReady},
+			{Name: "uv", Version: uvTestVersion, State: ItemReady},
 		}
-	}
-	if r.Warning != "" {
-		t.Errorf("warning = %q, want none", r.Warning)
-	}
-	if ready, missing := pr.m.Ready(); !ready {
-		t.Errorf("the manager still misses %v once the preparer is ready", missing)
-	}
-	for _, path := range []string{"tools/pnpm/" + preparePnpm + "/package/bin/pnpm.cjs", "tools/uv/" + uvTestVersion + "/uv"} {
-		if _, err := os.Stat(filepath.Join(pr.root, path)); err != nil {
-			t.Errorf("%s: %v", path, err)
+		if len(r.Items) != len(want) {
+			t.Fatalf("items = %+v, want %+v", r.Items, want)
 		}
-	}
+		for i, it := range r.Items {
+			if it != want[i] {
+				t.Errorf("item %d = %+v, want %+v", i, it, want[i])
+			}
+		}
+		if r.Warning != "" {
+			t.Errorf("warning = %q, want none", r.Warning)
+		}
+		if ready, missing := pr.m.Ready(); !ready {
+			t.Errorf("the manager still misses %v once the preparer is ready", missing)
+		}
+		for _, path := range []string{"tools/pnpm/" + preparePnpm + "/package/bin/pnpm.cjs", "tools/uv/" + uvTestVersion + "/uv"} {
+			if _, err := os.Stat(filepath.Join(pr.root, path)); err != nil {
+				t.Errorf("%s: %v", path, err)
+			}
+		}
+	})
 }
 
 func TestPreparerKeepsTheCauseAndRetries(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	pr.db.fail = func(call int) error {
-		if call == 1 {
-			return errors.New("database download failed: 429 Too Many Requests")
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.db.fail = func(call int) error {
+			if call == 1 {
+				return errors.New("database download failed: 429 Too Many Requests")
+			}
+			return nil
 		}
-		return nil
-	}
-	pr.db.hold = make(chan struct{})
-	pr.run(t)
+		pr.db.hold = make(chan struct{})
+		pr.run(t)
 
-	start := time.Now()
-	r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
-	db := item(r, "trivy-db")
-	if !strings.Contains(db.Reason, "429 Too Many Requests") {
-		t.Errorf("reason = %q, want the download's cause", db.Reason)
-	}
-	if db.NextTry.Before(start) {
-		t.Errorf("next try = %v, want one after the failure", db.NextTry)
-	}
-	if r.Ready {
-		t.Error("ready while the database failed")
-	}
-	logged := false
-	for line := range strings.Lines(pr.logs.String()) {
-		var entry struct{ Item, Cause string }
-		if json.Unmarshal([]byte(line), &entry) == nil && entry.Item == "trivy-db" && strings.Contains(entry.Cause, "429 Too Many Requests") {
-			logged = true
+		start := time.Now()
+		r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+		seen := time.Now()
+		db := item(r, "trivy-db")
+		if wait := db.NextTry.Sub(seen); wait <= 0 || wait > pr.p.RetryEvery {
+			t.Errorf("next try is %v after the failure was seen, want at most %v", wait, pr.p.RetryEvery)
 		}
-	}
-	if !logged {
-		t.Errorf("no log line names the database's cause:\n%s", pr.logs.String())
-	}
+		time.Sleep(time.Until(db.NextTry) - time.Nanosecond)
+		synctest.Wait()
+		if n := pr.db.callCount(); n != 1 {
+			t.Errorf("database tried %d times just before the retry wait ended, want 1", n)
+		}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		if n := pr.db.callCount(); n != 2 {
+			t.Errorf("database tried %d times once the retry wait ended, want 2", n)
+		}
+		if !strings.Contains(db.Reason, "429 Too Many Requests") {
+			t.Errorf("reason = %q, want the download's cause", db.Reason)
+		}
+		if db.NextTry.Before(start) {
+			t.Errorf("next try = %v, want one after the failure", db.NextTry)
+		}
+		if r.Ready {
+			t.Error("ready while the database failed")
+		}
+		logged := false
+		for line := range strings.Lines(pr.logs.String()) {
+			var entry struct{ Item, Cause string }
+			if json.Unmarshal([]byte(line), &entry) == nil && entry.Item == "trivy-db" && strings.Contains(entry.Cause, "429 Too Many Requests") {
+				logged = true
+			}
+		}
+		if !logged {
+			t.Errorf("no log line names the database's cause:\n%s", pr.logs.String())
+		}
 
-	close(pr.db.hold)
-	waitState(t, pr.p, "ready after the retry", isReady)
-	if n := pr.db.callCount(); n != 2 {
-		t.Errorf("database tried %d times, want 2", n)
-	}
-	if got := item(pr.p.State(), "trivy-db"); got.Reason != "" || !got.NextTry.IsZero() {
-		t.Errorf("ready database = %+v, want no cause and no next try", got)
-	}
+		close(pr.db.hold)
+		waitState(t, pr.p, "ready after the retry", isReady)
+		if n := pr.db.callCount(); n != 2 {
+			t.Errorf("database tried %d times, want 2", n)
+		}
+		if got := item(pr.p.State(), "trivy-db"); got.Reason != "" || !got.NextTry.IsZero() {
+			t.Errorf("ready database = %+v, want no cause and no next try", got)
+		}
+	})
 }
 
 func TestPreparerReadyWithAWarningWhenARefreshFailsOnAnExistingDatabase(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
-	pr.db.fail = func(int) error { return errors.New("connection reset by peer") }
-	pr.run(t)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
+		pr.db.fail = func(int) error { return errors.New("connection reset by peer") }
+		pr.run(t)
 
-	r := waitState(t, pr.p, "ready", isReady)
-	if db := item(r, "trivy-db"); db.State != ItemReady || db.Version != "2026-11-02T06:00:00Z" {
-		t.Errorf("database = %+v, want ready with the existing database's date", db)
-	}
-	for _, part := range []string{"connection reset by peer", "2026-11-02"} {
-		if !strings.Contains(r.Warning, part) {
-			t.Errorf("warning = %q, want it to hold %q", r.Warning, part)
+		r := waitState(t, pr.p, "ready", isReady)
+		if db := item(r, "trivy-db"); db.State != ItemReady || db.Version != "2026-11-02T06:00:00Z" {
+			t.Errorf("database = %+v, want ready with the existing database's date", db)
 		}
-	}
+		for _, part := range []string{"connection reset by peer", "2026-11-02"} {
+			if !strings.Contains(r.Warning, part) {
+				t.Errorf("warning = %q, want it to hold %q", r.Warning, part)
+			}
+		}
+	})
 }
 
 func TestPreparerStaysNotReadyWithoutADatabase(t *testing.T) {
@@ -264,18 +324,20 @@ func TestPreparerStaysNotReadyWithoutADatabase(t *testing.T) {
 	}
 	for name, fail := range cases {
 		t.Run(name, func(t *testing.T) {
-			pr := newPreparation(t, monthOld)
-			db := &noDatabase{fail: fail}
-			pr.p.db = db
-			pr.run(t)
-			waitState(t, pr.p, "three tries", func(Readiness) bool { return db.callCount() >= 3 })
-			r := pr.p.State()
-			if r.Ready {
-				t.Fatalf("ready with no database: %+v", r)
-			}
-			if got := item(r, "trivy-db"); got.State != ItemFailed || got.Reason == "" {
-				t.Errorf("database = %+v, want failed with a cause", got)
-			}
+			pr := newPreparation(t, monthOldInBubble)
+			inBubble(t, func(t *testing.T) {
+				db := &noDatabase{fail: fail}
+				pr.p.db = db
+				pr.run(t)
+				waitState(t, pr.p, "three tries", func(Readiness) bool { return db.callCount() >= 3 })
+				r := pr.p.State()
+				if r.Ready {
+					t.Fatalf("ready with no database: %+v", r)
+				}
+				if got := item(r, "trivy-db"); got.State != ItemFailed || got.Reason == "" {
+					t.Errorf("database = %+v, want failed with a cause", got)
+				}
+			})
 		})
 	}
 }
@@ -307,69 +369,79 @@ func (d *noDatabase) callCount() int {
 
 func TestPreparerCutsAndStripsACause(t *testing.T) {
 	const token = "ghp_plantedTokenValue0123456789"
-	pr := newPreparation(t, monthOld)
-	pr.m.GitHubToken = token
-	cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
-	pr.db.fail = func(int) error { return errors.New(cause) }
-	pr.run(t)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.m.GitHubToken = token
+		cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
+		pr.db.fail = func(int) error { return errors.New(cause) }
+		pr.run(t)
 
-	r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
-	reason := item(r, "trivy-db").Reason
-	if n := utf8.RuneCountInString(reason); n > 300 {
-		t.Errorf("reason holds %d characters, want 300 at most", n)
-	}
-	if !strings.Contains(reason, strings.Repeat("x", 100)+"[31m Bearer [redacted] line break done y") {
-		t.Errorf("reason = %q, want the cause's start, stripped", reason)
-	}
-	if strings.Contains(reason, token) {
-		t.Errorf("reason = %q holds the token", reason)
-	}
-	for _, c := range reason {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			t.Errorf("reason = %q holds the control character %U", reason, c)
+		r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+		reason := item(r, "trivy-db").Reason
+		if n := utf8.RuneCountInString(reason); n > 300 {
+			t.Errorf("reason holds %d characters, want 300 at most", n)
 		}
-	}
-	if strings.Contains(pr.logs.String(), token) {
-		t.Error("the log holds the token")
-	}
+		if !strings.Contains(reason, strings.Repeat("x", 100)+"[31m Bearer [redacted] line break done y") {
+			t.Errorf("reason = %q, want the cause's start, stripped", reason)
+		}
+		if strings.Contains(reason, token) {
+			t.Errorf("reason = %q holds the token", reason)
+		}
+		for _, c := range reason {
+			if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
+				t.Errorf("reason = %q holds the control character %U", reason, c)
+			}
+		}
+		if strings.Contains(pr.logs.String(), token) {
+			t.Error("the log holds the token")
+		}
+	})
 }
 
 func TestPreparerNamesAYoungUvAsTheCause(t *testing.T) {
-	pr := newPreparation(t, time.Now().Add(-24*time.Hour))
-	pr.run(t)
+	pr := newPreparation(t, bubbleStart.Add(-24*time.Hour))
+	inBubble(t, func(t *testing.T) {
+		pr.run(t)
 
-	r := waitState(t, pr.p, "a failed uv", func(r Readiness) bool { return item(r, "uv").State == ItemFailed })
-	reason := item(r, "uv").Reason
-	for _, part := range []string{"uv " + uvTestVersion, "minimum release age of 14 days"} {
-		if !strings.Contains(reason, part) {
-			t.Errorf("reason = %q, want it to hold %q", reason, part)
+		r := waitState(t, pr.p, "a failed uv", func(r Readiness) bool { return item(r, "uv").State == ItemFailed })
+		reason := item(r, "uv").Reason
+		for _, part := range []string{"uv " + uvTestVersion, "minimum release age of 14 days"} {
+			if !strings.Contains(reason, part) {
+				t.Errorf("reason = %q, want it to hold %q", reason, part)
+			}
 		}
-	}
-	r = waitState(t, pr.p, "every other item ready", func(r Readiness) bool {
-		return item(r, "trivy-db").State == ItemReady && item(r, "pnpm").State == ItemReady
+		r = waitState(t, pr.p, "every other item ready", func(r Readiness) bool {
+			return item(r, "trivy-db").State == ItemReady && item(r, "pnpm").State == ItemReady
+		})
+		if r.Ready {
+			t.Error("ready with a uv too young to install")
+		}
 	})
-	if r.Ready {
-		t.Error("ready with a uv too young to install")
-	}
 }
 
 func TestPreparerStopsWithItsContext(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	pr.db.fail = func(int) error { return errors.New("unreachable") }
-	pr.p.RetryEvery = time.Hour
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); pr.p.Run(ctx) }()
-	waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.db.fail = func(int) error { return errors.New("unreachable") }
+		pr.p.RetryEvery = time.Hour
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		done := make(chan struct{})
+		go func() { defer close(done); pr.p.Run(ctx) }()
+		waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
 
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return after its context ended")
-	}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run did not return after its context ended")
+		}
+	})
 }
 
+// TestPreparerRedactsTheRegistryCredentials runs on the real clock: the npm
+// client waits between its tries while holding the manager's lock, and the
+// other installs then wait on a mutex, which stops a bubble's clock.
 func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 	cases := map[string]struct {
 		userinfo string
@@ -389,8 +461,22 @@ func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 			pr.m.NPMRegistry = strings.Replace(failing.URL, "://", "://"+c.userinfo+"@", 1)
 			pr.run(t)
 
-			r := waitState(t, pr.p, "a failed pnpm", func(r Readiness) bool { return item(r, "pnpm").State == ItemFailed })
+			r := waitStateLive(t, pr.p, "a failed pnpm", func(r Readiness) bool { return item(r, "pnpm").State == ItemFailed })
 			reason := item(r, "pnpm").Reason
+			logged := func() bool {
+				for line := range strings.Lines(pr.logs.String()) {
+					var entry struct{ Msg, Item string }
+					if json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "preparation failed, retrying" && entry.Item == "pnpm" {
+						return true
+					}
+				}
+				return false
+			}
+			for deadline := time.Now().Add(5 * time.Second); !logged(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("no log line reports the failed pnpm:\n%s", pr.logs.String())
+				}
+			}
 			if !strings.Contains(reason, "500 Internal Server Error") || !strings.Contains(reason, "[redacted]@127.0.0.1") {
 				t.Errorf("reason = %q, want the registry's answer with its credentials redacted", reason)
 			}
@@ -409,107 +495,113 @@ func TestPreparerRedactsTheRegistryCredentials(t *testing.T) {
 
 func TestPreparerCutsAndStripsARefreshWarning(t *testing.T) {
 	const token = "ghp_plantedTokenValue0123456789"
-	pr := newPreparation(t, monthOld)
-	pr.m.GitHubToken = token
-	plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
-	cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
-	pr.db.fail = func(int) error { return errors.New(cause) }
-	pr.run(t)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.m.GitHubToken = token
+		plantTrivyDB(t, pr.root, time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC))
+		cause := strings.Repeat("x", 100) + "\x1b[31m Bearer " + token + "\x00\x07 line\nbreak \u202edone " + strings.Repeat("y", 2048)
+		pr.db.fail = func(int) error { return errors.New(cause) }
+		pr.run(t)
 
-	r := waitState(t, pr.p, "ready", isReady)
-	if n := utf8.RuneCountInString(r.Warning); n > 300 {
-		t.Errorf("warning holds %d characters, want 300 at most", n)
-	}
-	if !strings.Contains(r.Warning, strings.Repeat("x", 100)+"[31m Bearer [redacted] line break done y") {
-		t.Errorf("warning = %q, want the cause's start, stripped", r.Warning)
-	}
-	for _, c := range r.Warning {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			t.Errorf("warning = %q holds the control character %U", r.Warning, c)
+		r := waitState(t, pr.p, "ready", isReady)
+		if n := utf8.RuneCountInString(r.Warning); n > 300 {
+			t.Errorf("warning holds %d characters, want 300 at most", n)
 		}
-	}
-	logs := pr.logs.String()
-	if strings.Contains(logs, token) {
-		t.Error("the log holds the token")
-	}
-	logged := false
-	for line := range strings.Lines(logs) {
-		var entry struct{ Msg, Cause string }
-		if json.Unmarshal([]byte(line), &entry) != nil || entry.Msg != "vulnerability database not refreshed" {
-			continue
+		if !strings.Contains(r.Warning, strings.Repeat("x", 100)+"[31m Bearer [redacted] line break done y") {
+			t.Errorf("warning = %q, want the cause's start, stripped", r.Warning)
 		}
-		logged = true
-		if entry.Cause != r.Warning {
-			t.Errorf("logged cause = %q, want the warning %q", entry.Cause, r.Warning)
+		for _, c := range r.Warning {
+			if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
+				t.Errorf("warning = %q holds the control character %U", r.Warning, c)
+			}
 		}
-	}
-	if !logged {
-		t.Errorf("no log line reports the failed refresh:\n%s", logs)
-	}
+		logs := pr.logs.String()
+		if strings.Contains(logs, token) {
+			t.Error("the log holds the token")
+		}
+		logged := false
+		for line := range strings.Lines(logs) {
+			var entry struct{ Msg, Cause string }
+			if json.Unmarshal([]byte(line), &entry) != nil || entry.Msg != "vulnerability database not refreshed" {
+				continue
+			}
+			logged = true
+			if entry.Cause != r.Warning {
+				t.Errorf("logged cause = %q, want the warning %q", entry.Cause, r.Warning)
+			}
+		}
+		if !logged {
+			t.Errorf("no log line reports the failed refresh:\n%s", logs)
+		}
+	})
 }
 
 func TestPreparerWaitsForTheSigningKey(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	var mu sync.Mutex
-	asked := 0
-	present := false
-	pr.p.keySHA256 = func() (string, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		asked++
-		if present {
-			return prepareKey, nil
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		var mu sync.Mutex
+		asked := 0
+		present := false
+		pr.p.keySHA256 = func() (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			asked++
+			if present {
+				return prepareKey, nil
+			}
+			return "", nil
 		}
-		return "", nil
-	}
-	pr.run(t)
+		pr.run(t)
 
-	waitState(t, pr.p, "three looks at the key", func(Readiness) bool {
+		waitState(t, pr.p, "three looks at the key", func(Readiness) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return asked >= 3
+		})
+		r := pr.p.State()
+		if r.Ready {
+			t.Fatalf("ready without a signing key: %+v", r)
+		}
+		if key := item(r, "signing-key"); key.State != ItemFailed || key.Reason != "no signing key on the data volume" || key.NextTry.IsZero() {
+			t.Errorf("signing key = %+v, want failed with its cause and a next try", key)
+		}
+		for _, name := range []string{"trivy", "trivy-db", "pnpm", "uv"} {
+			if it := item(r, name); it.State != ItemPreparing {
+				t.Errorf("%s = %+v, want still preparing while the key is missing", name, it)
+			}
+		}
+		if n := pr.db.callCount(); n != 0 {
+			t.Errorf("database downloaded %d times without a signing key, want none", n)
+		}
+		if _, err := os.Stat(filepath.Join(pr.root, "tools")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("tools installed without a signing key (stat: %v)", err)
+		}
+
 		mu.Lock()
-		defer mu.Unlock()
-		return asked >= 3
+		present = true
+		mu.Unlock()
+		waitState(t, pr.p, "ready once the key exists", isReady)
 	})
-	r := pr.p.State()
-	if r.Ready {
-		t.Fatalf("ready without a signing key: %+v", r)
-	}
-	if key := item(r, "signing-key"); key.State != ItemFailed || key.Reason != "no signing key on the data volume" || key.NextTry.IsZero() {
-		t.Errorf("signing key = %+v, want failed with its cause and a next try", key)
-	}
-	for _, name := range []string{"trivy", "trivy-db", "pnpm", "uv"} {
-		if it := item(r, name); it.State != ItemPreparing {
-			t.Errorf("%s = %+v, want still preparing while the key is missing", name, it)
-		}
-	}
-	if n := pr.db.callCount(); n != 0 {
-		t.Errorf("database downloaded %d times without a signing key, want none", n)
-	}
-	if _, err := os.Stat(filepath.Join(pr.root, "tools")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("tools installed without a signing key (stat: %v)", err)
-	}
-
-	mu.Lock()
-	present = true
-	mu.Unlock()
-	waitState(t, pr.p, "ready once the key exists", isReady)
 }
 
 // TestPreparerRetriesAFailedItemAMinuteLater pins the default wait: with
 // RetryEvery left at zero, a failed item's next try is one minute after
 // the failure, read from its state without waiting for it.
 func TestPreparerRetriesAFailedItemAMinuteLater(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	pr.p.RetryEvery = 0
-	pr.db.fail = func(int) error { return errors.New("database download failed: 429 Too Many Requests") }
-	before := time.Now()
-	pr.run(t)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.p.RetryEvery = 0
+		pr.db.fail = func(int) error { return errors.New("database download failed: 429 Too Many Requests") }
+		before := time.Now()
+		pr.run(t)
 
-	r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
-	after := time.Now()
-	next := item(r, "trivy-db").NextTry
-	if next.Before(before.Add(time.Minute)) || next.After(after.Add(time.Minute)) {
-		t.Errorf("next try is %v after the start, want one minute after the failure", next.Sub(before).Round(time.Second))
-	}
+		r := waitState(t, pr.p, "a failed database", func(r Readiness) bool { return item(r, "trivy-db").State == ItemFailed })
+		after := time.Now()
+		next := item(r, "trivy-db").NextTry
+		if next.Before(before.Add(time.Minute)) || next.After(after.Add(time.Minute)) {
+			t.Errorf("next try is %v after the start, want one minute after the failure", next.Sub(before).Round(time.Second))
+		}
+	})
 }
 
 // keyAnswer is what the fake store's SigningKey gives at one moment.
@@ -519,20 +611,22 @@ type keyAnswer struct {
 }
 
 func TestPreparerReadsTheSigningKeyLive(t *testing.T) {
-	pr := newPreparation(t, monthOld)
-	pr.run(t)
-	waitState(t, pr.p, "ready", isReady)
+	pr := newPreparation(t, monthOldInBubble)
+	inBubble(t, func(t *testing.T) {
+		pr.run(t)
+		waitState(t, pr.p, "ready", isReady)
 
-	pr.key.Store(&keyAnswer{sha: "b2" + prepareKey[2:]})
-	if it := item(pr.p.State(), "signing-key"); it.State != ItemReady || it.Version != "b2"+prepareKey[2:] {
-		t.Errorf("signing-key after a regenerate = %+v, want ready with the new sha", it)
-	}
-	pr.key.Store(&keyAnswer{err: errors.New("store: signing key /data/private/signing-key.pem is not a PEM private key")})
-	r := pr.p.State()
-	if it := item(r, "signing-key"); it.State != ItemFailed || !strings.Contains(it.Reason, "not a PEM private key") || it.Version != "" {
-		t.Errorf("signing-key with a broken file = %+v, want failed naming the cause", it)
-	}
-	if r.Ready {
-		t.Error("the instance stays ready with a key file that does not read")
-	}
+		pr.key.Store(&keyAnswer{sha: "b2" + prepareKey[2:]})
+		if it := item(pr.p.State(), "signing-key"); it.State != ItemReady || it.Version != "b2"+prepareKey[2:] {
+			t.Errorf("signing-key after a regenerate = %+v, want ready with the new sha", it)
+		}
+		pr.key.Store(&keyAnswer{err: errors.New("store: signing key /data/private/signing-key.pem is not a PEM private key")})
+		r := pr.p.State()
+		if it := item(r, "signing-key"); it.State != ItemFailed || !strings.Contains(it.Reason, "not a PEM private key") || it.Version != "" {
+			t.Errorf("signing-key with a broken file = %+v, want failed naming the cause", it)
+		}
+		if r.Ready {
+			t.Error("the instance stays ready with a key file that does not read")
+		}
+	})
 }
