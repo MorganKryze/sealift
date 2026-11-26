@@ -74,6 +74,8 @@ type rigOptions struct {
 	publisher func(importer.Publisher) importer.Publisher
 	// removing runs before each removal of an archive, once the attempt's end is stored.
 	removing func()
+	// submitting runs before each attempt reaches the queue.
+	submitting func()
 }
 
 func newImportRig(t *testing.T, o rigOptions) *importRig {
@@ -108,7 +110,12 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 	}
 	r.rig = newRigConfig(t, Config{
 		Verifier: r.verifier, MinIO: r.minio, UnencryptedLinks: o.links,
-		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
+		Store: st, Submit: func(user, id string) bool {
+			if o.submitting != nil {
+				o.submitting()
+			}
+			return r.queue.Submit(user, id)
+		},
 		Settings: settings, NewPublisher: publisher, ImportVersion: "0.3.0",
 	})
 	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
@@ -1454,6 +1461,41 @@ func TestCancelImport(t *testing.T) {
 		}
 		if d := r.deletes(); len(d) != 0 {
 			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("waits for a start to queue its attempt before it cancels", func(t *testing.T) {
+		submitting, release := make(chan struct{}), make(chan struct{})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		r := newImportRig(t, rigOptions{hold: true, submitting: func() {
+			close(submitting)
+			<-release
+		}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		started := make(chan *httptest.ResponseRecorder, 1)
+		go func() { started <- r.start("t", archiveKey) }()
+		select {
+		case <-submitting:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the start never reached the queue")
+		}
+		list, err := r.store.List("alice")
+		if err != nil || len(list) != 1 {
+			t.Fatalf("imports during the start: %v, %v", list, err)
+		}
+		cancelled := make(chan *httptest.ResponseRecorder, 1)
+		go func() { cancelled <- r.cancel("t", list[0].ID) }()
+		select {
+		case rec := <-cancelled:
+			t.Fatalf("the cancel answered %d before the start queued its attempt", rec.Code)
+		case <-time.After(100 * time.Millisecond):
+		}
+		free()
+		importOf(t, <-started, http.StatusAccepted)
+		importOf(t, <-cancelled, http.StatusAccepted)
+		if done := waitEnded(t, r.store, list[0].ID); done.Outcome() != imports.OutcomeCancelled {
+			t.Errorf("outcome %q, want cancelled", done.Outcome())
 		}
 	})
 
