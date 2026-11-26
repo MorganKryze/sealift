@@ -1988,3 +1988,38 @@ func TestPipExportSignsWithTheKeyItStartedWith(t *testing.T) {
 		t.Errorf("the signature does not verify with the key the export began with: %v", err)
 	}
 }
+
+// A step past prepare fails with an error naming a path under the data
+// root; its cause, in the step event and in status.json, names none.
+func TestPipExportDownloadCauseNamesNoDataDirectory(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	root := f.st.Root()
+	if err := os.RemoveAll(filepath.Join(root, "cache", "wheels")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "cache"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "cache", "wheels"), nil, 0o660); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := runPipExport(context.Background(), e)
+	if err == nil || !strings.Contains(err.Error(), root) {
+		t.Fatalf("Run = %v, want an error naming %s", err, root)
+	}
+	last := rec.steps[len(rec.steps)-1]
+	if last.State != string(store.Failed) || last.Error == "" || strings.Contains(last.Error, root) {
+		t.Errorf("last step = %+v, want a cause without %s", last, root)
+	}
+	var status exportStatusFile
+	if err := f.st.ReadJSON(filepath.Join(e.Dir, "status.json"), &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range status.Steps {
+		if strings.Contains(s.Error, root) {
+			t.Errorf("status.json step %+v names %s", s, root)
+		}
+	}
+}

@@ -152,7 +152,12 @@ type stepData struct {
 // to it, whatever kind of error named the path, and a URL carries no
 // credentials. The server log keeps the paths.
 func cause(root string, err error) string {
-	msg := runner.StripURLCredentials(err.Error())
+	return causeText(root, err.Error())
+}
+
+// causeText is cause for an error's message.
+func causeText(root, msg string) string {
+	msg = runner.StripURLCredentials(msg)
 	if root == "" {
 		return msg
 	}
