@@ -73,6 +73,8 @@ export class ProjectUploadError extends Error {
   constructor(
     public readonly status: number,
     public readonly problem: Problem | null,
+    /** The lines a 400 on requirements files names, each with its file, its line when it has one, the line as written and the reason. */
+    public readonly requirements: RequirementsProblem[] = [],
   ) {
     super(problem?.detail ?? problem?.title ?? "Upload failed")
     this.name = "ProjectUploadError"
@@ -89,6 +91,32 @@ export async function createProject(file: File): Promise<Project> {
   body.append("manifest", file)
 
   const response = await send("/api/projects", { method: "POST", body }, (status, problem) => new ProjectUploadError(status, problem))
+
+  return (await response.json()) as Project
+}
+
+/** One problem the server names in a requirements file: `line` and `text` are absent for a problem of the whole file. */
+export interface RequirementsProblem {
+  file: string
+  line?: number
+  text?: string
+  reason: string
+}
+
+/**
+ * Posts a pip project's name and its requirements files, one part per file under its own name. No target is
+ * sent, so the deployment's applies. A 400 that lists problems carries them as requirements problems.
+ */
+export async function createPipProject(name: string, files: File[]): Promise<Project> {
+  const body = new FormData()
+  body.append("ecosystem", "pip")
+  body.append("name", name)
+  for (const file of files) body.append("requirements", file, file.name)
+
+  const response = await send("/api/projects", { method: "POST", body }, (status, problem) => {
+    const requirements = status === 400 ? (problem?.errors ?? []).map(({ field, line, value, reason }) => ({ file: field, line, text: value, reason })) : []
+    return new ProjectUploadError(status, problem, requirements)
+  })
 
   return (await response.json()) as Project
 }

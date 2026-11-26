@@ -1,10 +1,11 @@
 import { Info } from "lucide-react"
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 
+import { useBrand } from "@/components/frame/brand"
 import { cn } from "@/lib/utils"
 
-export type TermId = "cve" | "severity" | "major-jump"
+export type TermId = "cve" | "severity" | "major-jump" | "yanked" | "wheel" | "target"
 
 // Matches the popover's w-72 class.
 const POPOVER_WIDTH = 288
@@ -24,15 +25,26 @@ export function termSide(prefer: "above" | "below", button: { top: number; botto
 }
 
 const DOCS = "https://github.com/MorganKryze/sealift/blob/main/docs/how-sealift-chooses.md"
+const PYTHON_DOCS = "https://github.com/MorganKryze/sealift/blob/main/docs/python.md"
 
 /** Where each term's section of the docs lives: fixed addresses, so no link is built from data. */
-export const TERM_DOCS: Record<TermId, string> = {
+export const TERM_DOCS: Record<"cve" | "severity" | "major-jump", string> = {
   cve: `${DOCS}#known-cves`,
   severity: `${DOCS}#severity`,
   "major-jump": `${DOCS}#major-jump`,
 }
 
-const TERMS: Record<TermId, { name: string; text: string }> = {
+/** The pip terms' sections, on the Python page. */
+export const PIP_TERM_DOCS: Record<"yanked" | "wheel" | "target", string> = {
+  yanked: `${PYTHON_DOCS}#yanked-releases`,
+  wheel: `${PYTHON_DOCS}#wheels`,
+  target: `${PYTHON_DOCS}#the-target`,
+}
+
+const DOCS_OF: Record<TermId, string> = { ...TERM_DOCS, ...PIP_TERM_DOCS }
+
+// The target's text names the deployment's air-gapped side, so it is written where the brand is read.
+const TERMS: Record<TermId, { name: string; text: string | ((offline: string) => string) }> = {
   cve: {
     name: "What a CVE is",
     text: "A CVE is a publicly listed security flaw, named by an id such as CVE-2024-4068. Known CVEs counts the ones the scan found in these versions.",
@@ -45,16 +57,31 @@ const TERMS: Record<TermId, { name: string; text: string }> = {
     name: "What a major jump is",
     text: "A major jump moves a package to a new major version, such as 4.x to 5.x. It may break your code, so it needs a reason.",
   },
+  yanked: {
+    name: "What a yanked release is",
+    text: "The publisher withdrew this release from the index, most often for a bug. pip still installs it when a file pins this exact version, as here.",
+  },
+  wheel: {
+    name: "What a wheel is",
+    text: "A wheel is a package built ahead for one Python version and platform, which pip installs without running any of its code. A source distribution must be built during the install, so none crosses.",
+  },
+  target: {
+    name: "What the target is",
+    text: (offline) => `The Python and system of your ${offline} machines. Each package crosses as the wheel they install.`,
+  },
 }
 
 /**
  * An info button beside a term, opening two sentences and a link to its docs section. A disclosure, not a
  * dialog: the focus stays on the button until Tab moves into the link. Escape, a second press or a press
  * outside closes it and gives the focus back to the button. The popover renders at the end of its dialog, or
- * of the body outside one, placed from the button, so no block that clips its overflow cuts it.
+ * of the body outside one, placed from the button, so no block that clips its overflow cuts it. `children`
+ * follow the text inside the popover, before Read more.
  */
-export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | "below" }) {
+export function Term({ id, prefer = "below", children }: { id: TermId; prefer?: "above" | "below"; children?: ReactNode }) {
   const term = TERMS[id]
+  const brand = useBrand()
+  const text = typeof term.text === "function" ? term.text(brand.offline) : term.text
   const [open, setOpen] = useState(false)
   const [side, setSide] = useState<"above" | "below">("below")
   const [align, setAlign] = useState<"start" | "end">("start")
@@ -164,10 +191,11 @@ export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | 
             style={{ position: "fixed", ...place }}
             className="animate-fade z-60 block w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none"
           >
-            <span className="block">{term.text}</span>
+            <span className="block">{text}</span>
+            {children}
             <a
               ref={link}
-              href={TERM_DOCS[id]}
+              href={DOCS_OF[id]}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-1 inline-flex min-h-8 items-center font-medium text-ink underline"
