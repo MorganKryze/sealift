@@ -272,15 +272,16 @@ func TestReadsTheProjectAReviewCarries(t *testing.T) {
 		"214 bytes":               strings.Repeat("東", 71) + "a",
 		"a name with a no-break":  "Rendu\u00a0PDF",
 		"letters of other script": "東京リアクト",
+		"spaces around a name":    "  pdf-renderer  ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc := reviewDoc("jinja2", "3.1.4", "3.1.6")
 			doc["project"] = project
 			want := wantReview("jinja2", "3.1.4", "3.1.6")
-			want.Project = project
+			want.Project = strings.TrimSpace(project)
 			for eco, got := range parseBoth(t, doc) {
 				if got.problem != "" || !reflect.DeepEqual(got.review, want) {
-					t.Errorf("%s: read %+v, %q, want the project %q", eco, got.review, got.problem, project)
+					t.Errorf("%s: read %+v, %q, want the project %q", eco, got.review, got.problem, want.Project)
 				}
 			}
 			if err := CheckReview(*want, NPM); err != nil {

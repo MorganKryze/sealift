@@ -295,11 +295,11 @@ func checkReview(raw rawReview, rules nameRules) (*Review, string) {
 	return r, ""
 }
 
-// readProject reads the project's name a review carries, or returns "" when
-// it carries none or one that breaks the rule: a string of at most
-// maxProjectBytes, 1 to maxProjectRunes characters once trimmed, of the
-// characters a reason holds. A name that breaks it never keeps the review
-// out.
+// readProject reads the project's name a review carries, trimmed, or
+// returns "" when it carries none or one that breaks the rule: a string of
+// at most maxProjectBytes, 1 to maxProjectRunes characters once trimmed, of
+// the characters a reason holds. A name that breaks it never keeps the
+// review out.
 func readProject(data json.RawMessage) string {
 	var name string
 	if len(data) == 0 || json.Unmarshal(data, &name) != nil || len(name) > maxProjectBytes {
@@ -308,7 +308,8 @@ func readProject(data json.RawMessage) string {
 	if strings.IndexFunc(name, func(r rune) bool { return !reasonRune(r) }) >= 0 {
 		return ""
 	}
-	if n := utf8.RuneCountInString(strings.TrimSpace(name)); n == 0 || n > maxProjectRunes {
+	name = strings.TrimSpace(name)
+	if n := utf8.RuneCountInString(name); n == 0 || n > maxProjectRunes {
 		return ""
 	}
 	return name
