@@ -29,9 +29,34 @@ jobs:
         run: go vet ./...
       - name: go mod tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.15.0
+      # The sums come from golangci-lint-2.15.0-checksums.txt. Pinning them
+      # here also catches a release asset replaced after the fact. Dependabot
+      # does not bump this step: a new version changes VERSION and both sums.
+      - name: install golangci-lint
+        env:
+          VERSION: 2.15.0
+          SHA256_AMD64: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+          SHA256_ARM64: b4d8f17068b35ee6060cc2f69a16fb48740d706fbba81661c318649c114a6998
+        run: |
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64 sum=$SHA256_AMD64 ;;
+            ARM64) arch=arm64 sum=$SHA256_ARM64 ;;
+            *) echo "no pinned golangci-lint for $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          name=golangci-lint-$VERSION-linux-$arch
+          url=https://github.com/golangci/golangci-lint/releases/download/v$VERSION
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$name.tar.gz" "$url/$name.tar.gz"
+          curl -fsSL --retry 3 -o checksums.txt "$url/golangci-lint-$VERSION-checksums.txt"
+          grep -qxF "$sum  $name.tar.gz" checksums.txt || {
+            echo "the pinned sum for $name is not in the release checksums" >&2
+            exit 1
+          }
+          echo "$sum  $name.tar.gz" | sha256sum -c -
+          tar -xzf "$name.tar.gz"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      - name: golangci-lint
+        run: golangci-lint run ./...
       - name: test
         run: go test -race ./...
 
