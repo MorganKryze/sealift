@@ -62,8 +62,7 @@ func (r *run) stepPrepareTools() (trivyVersion string, dbDate time.Time, err err
 			trivyVersion, dbDate = state.Active, state.DBDate
 		}
 		if _, uerr := r.a.Trivy.UpdateDB(r.ctx); uerr != nil {
-			r.result.Warnings = append(r.result.Warnings, fmt.Sprintf(
-				"could not refresh the vulnerability database: %v; using the database from %s", uerr, dbDateLabel(dbDate)))
+			r.warn(fmt.Sprintf("could not refresh the vulnerability database: %v; using the database from %s", uerr, dbDateLabel(dbDate)))
 			r.log(fmt.Sprintf("trivy database update failed: %v", uerr))
 			return nil
 		}

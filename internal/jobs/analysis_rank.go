@@ -74,7 +74,7 @@ func (r *run) stepRank(deps []depInfo, outcomes []candidateOutcome, combinedInde
 			// newer to offer must still serialise it as [].
 			dr := DependencyResult{Name: d.dep.Name, Current: d.dep.Version, CVEs: []CVE{}, Candidates: []Candidate{}}
 			if d.warning != "" {
-				r.result.Warnings = append(r.result.Warnings, d.dep.Name+": "+d.warning)
+				r.warn(d.dep.Name + ": " + d.warning)
 				r.result.Dependencies = append(r.result.Dependencies, dr)
 				continue
 			}
@@ -172,8 +172,7 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		// finding a candidate worse than it. Warn instead of leaving the
 		// dependency looking clean, and propose nothing below. The jump
 		// compares candidates only, so it is still named.
-		r.result.Warnings = append(r.result.Warnings, fmt.Sprintf(
-			"%s: the current version %s does not resolve: %v", d.dep.Name, d.dep.Version, current.err))
+		r.warn(fmt.Sprintf("%s: the current version %s does not resolve: %v", d.dep.Name, d.dep.Version, current.err))
 	} else {
 		keys := keysOf(current.pkgs)
 		dr.Vector = Vector(rank.VectorOf(combinedIndex.Set(keys)))
@@ -199,7 +198,7 @@ func (r *run) rankDependency(dr *DependencyResult, d depInfo, group []candidateO
 		facts.Resolves = o.err == nil
 		hits := rank.Signals(currentFacts, facts, policy)
 		if o.err != nil {
-			hits = append([]rank.Hit{{Signal: rank.Unresolvable, Evidence: o.err.Error()}}, hits...)
+			hits = append([]rank.Hit{{Signal: rank.Unresolvable, Evidence: cause(r.root, o.err)}}, hits...)
 		}
 
 		var vec Vector
@@ -260,12 +259,12 @@ func (r *run) stepCheckCombined(manifest npm.Manifest) {
 		lockRaw, output, err := r.a.resolve(r.ctx, buildFullManifest(manifest, overrides))
 		if err != nil {
 			r.log("pnpm: " + output)
-			r.result.Warnings = append(r.result.Warnings, fmt.Sprintf("the best candidates together do not resolve: %v", err))
+			r.warn(fmt.Sprintf("the best candidates together do not resolve: %v", err))
 			return nil
 		}
 		if warning := peerWarning(r.projectOutput, output); warning != "" {
 			r.log("pnpm: " + output)
-			r.result.Warnings = append(r.result.Warnings, warning)
+			r.warn(warning)
 		}
 		parsed, perr := npm.ParseLockfile(bytes.NewReader(lockRaw))
 		if perr != nil {

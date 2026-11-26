@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/internal/tools"
 	"github.com/MorganKryze/sealift/npm"
+	"github.com/MorganKryze/sealift/rank"
 )
 
 // fakePnpm resolves a manifest without running pnpm: it fabricates a
@@ -114,6 +116,7 @@ type fakeTrivy struct {
 	mu        sync.Mutex
 	db        map[string][]fakeFinding
 	scanCalls int
+	updateErr error
 }
 
 func (f *fakeTrivy) ScanSBOM(_ context.Context, sbomPath, outPath string) (string, error) {
@@ -173,7 +176,7 @@ func (f *fakeTrivy) ConvertToCycloneDX(context.Context, string, string) (string,
 	return "", errors.New("fakeTrivy: ConvertToCycloneDX is not used by the analysis job")
 }
 
-func (f *fakeTrivy) UpdateDB(context.Context) (string, error) { return "", nil }
+func (f *fakeTrivy) UpdateDB(context.Context) (string, error) { return "", f.updateErr }
 
 // newAnalysisProject creates a project directory holding packageJSON and a
 // pending analysis directory to run against it.
@@ -1241,4 +1244,200 @@ func TestAnalysisReadsNoFIFOTheToolsAccountLeft(t *testing.T) {
 			t.Fatalf("mergeTrivyReports = %v, want the report refused", err)
 		}
 	})
+}
+
+// TestAnalysis_WarningDropsRegistryCredentials proves the warning stored
+// for a dependency whose packument fetch fails holds neither the user nor
+// the password of a registry URL that carries them, whether the registry
+// refuses the connection or answers an error status.
+func TestAnalysis_WarningDropsRegistryCredentials(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failing.Close()
+	refused := httptest.NewServer(http.NotFoundHandler())
+	refusedURL := refused.URL
+	refused.Close()
+
+	for _, c := range []struct{ name, registry string }{
+		{"connection refused", refusedURL},
+		{"an error status", failing.URL},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"baz":"1.0.0"}}`)
+			a := &Analysis{
+				Store:    st,
+				Tools:    newTestToolsManager(t, st),
+				Pnpm:     &fakePnpm{},
+				Trivy:    &fakeTrivy{db: map[string][]fakeFinding{}},
+				Registry: &npm.Client{Registry: strings.Replace(c.registry, "://", "://alice:s3cret@", 1), Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+				Project:  proj,
+				Settings: st.Settings(),
+				Dir:      pending.Path(),
+				ID:       pending.ID(),
+			}
+			if err := a.Run(context.Background(), func(Event) {}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			var result Result
+			if err := st.ReadJSON(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "ranking.json"), &result); err != nil {
+				t.Fatalf("read ranking.json: %v", err)
+			}
+			if len(result.Warnings) != 1 || !strings.HasPrefix(result.Warnings[0], "baz: metadata unreachable") {
+				t.Fatalf("Warnings = %q, want baz's unreachable metadata", result.Warnings)
+			}
+			if w := result.Warnings[0]; strings.Contains(w, "alice") || strings.Contains(w, "s3cret") || strings.Contains(w, "@") {
+				t.Errorf("warning = %q, still holds the registry URL's user information", w)
+			}
+		})
+	}
+}
+
+// writeErrorPnpm resolves like fakePnpm, except that each resolution
+// failWrite names stops on a write error naming a file in its resolution
+// directory, under the data directory. A key is name@version for an
+// isolated resolution, and "project:" before it for a whole-project
+// resolution holding that version.
+type writeErrorPnpm struct {
+	fakePnpm
+	failWrite map[string]bool
+}
+
+func (f *writeErrorPnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	var doc struct {
+		Name         string            `json:"name"`
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(in.Manifest, &doc); err == nil {
+		for name, version := range doc.Dependencies {
+			key := name + "@" + version
+			if doc.Name == "project" {
+				key = "project:" + key
+			}
+			if f.failWrite[key] {
+				return runner.ResolveResult{}, &fs.PathError{Op: "write", Path: filepath.Join(in.Dir, "node_modules", ".modules.yaml"), Err: syscall.ENOSPC}
+			}
+		}
+	}
+	return f.fakePnpm.Resolve(ctx, in)
+}
+
+// TestAnalysis_WarningsAndEvidenceNameDataPathsRelative proves every
+// warning and every candidate's evidence built from an error names a file
+// under the data directory by its path inside it: a failed database
+// refresh, a current version that does not resolve, a candidate that does
+// not resolve and a combined resolution that fails.
+func TestAnalysis_WarningsAndEvidenceNameDataPathsRelative(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"foo":"1.0.0","bar":"2.0.0","qux":"1.0.0"}}`)
+	root := st.Root()
+	a := &Analysis{
+		Store: st,
+		Tools: newTestToolsManager(t, st),
+		Pnpm:  &writeErrorPnpm{failWrite: map[string]bool{"bar@2.1.0": true, "qux@1.0.0": true, "project:foo@1.1.0": true}},
+		Trivy: &fakeTrivy{
+			db:        map[string][]fakeFinding{"foo@1.0.0": {{id: "CVE-2020-1", severity: "HIGH", fixed: "1.1.0"}}},
+			updateErr: &fs.PathError{Op: "open", Path: filepath.Join(root, "tools", "trivy", "db", "metadata.json"), Err: fs.ErrPermission},
+		},
+		Registry: &npm.Client{Registry: registryServer(t, map[string]string{"foo": fooDoc, "bar": barDoc, "qux": quxDoc}).URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var result Result
+	if err := st.ReadJSON(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "ranking.json"), &result); err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	for _, want := range []struct{ prefix, path string }{
+		{"could not refresh the vulnerability database: open tools/trivy/db/metadata.json:", ""},
+		{"qux: the current version 1.0.0 does not resolve: write cache/resolve/", "/node_modules/.modules.yaml"},
+		{"the best candidates together do not resolve: write cache/resolve/", "/node_modules/.modules.yaml"},
+	} {
+		i := slices.IndexFunc(result.Warnings, func(w string) bool { return strings.HasPrefix(w, want.prefix) && strings.Contains(w, want.path) })
+		if i < 0 {
+			t.Errorf("Warnings = %q, want one starting %q", result.Warnings, want.prefix)
+		}
+	}
+	for _, w := range result.Warnings {
+		if strings.Contains(w, root) {
+			t.Errorf("warning %q holds the data directory %s", w, root)
+		}
+	}
+
+	var evidence []string
+	for _, d := range result.Dependencies {
+		for _, c := range d.Candidates {
+			for _, s := range c.Signals {
+				if d.Name == "bar" && c.Version == "2.1.0" && s.Name == string(rank.Unresolvable) {
+					evidence = append(evidence, s.Evidence)
+				}
+			}
+		}
+	}
+	if !slices.ContainsFunc(evidence, func(e string) bool { return strings.HasPrefix(e, "write cache/resolve/") }) {
+		t.Errorf("bar@2.1.0's unresolvable evidence = %q, want the write error inside the data directory", evidence)
+	}
+	for _, e := range evidence {
+		if strings.Contains(e, root) {
+			t.Errorf("bar@2.1.0's evidence %q holds the data directory %s", e, root)
+		}
+	}
+}
+
+// credentialPnpm fails bar@2.1.0 with an error naming a registry URL that
+// carries a user and password.
+type credentialPnpm struct{ fakePnpm }
+
+func (f *credentialPnpm) Resolve(ctx context.Context, in runner.ResolveInput) (runner.ResolveResult, error) {
+	var doc struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(in.Manifest, &doc); err == nil && doc.Dependencies["bar"] == "2.1.0" {
+		return runner.ResolveResult{}, errors.New("GET http://alice:s3cret@host/bar: 401")
+	}
+	return f.fakePnpm.Resolve(ctx, in)
+}
+
+func TestAnalysis_UnresolvableEvidenceHoldsNoURLCredentials(t *testing.T) {
+	st, proj, pending := newAnalysisProject(t, `{"name":"demo","dependencies":{"bar":"2.0.0"}}`)
+	a := &Analysis{
+		Store:    st,
+		Tools:    newTestToolsManager(t, st),
+		Pnpm:     &credentialPnpm{},
+		Trivy:    &fakeTrivy{},
+		Registry: &npm.Client{Registry: registryServer(t, map[string]string{"bar": barDoc}).URL, Attempts: 1, Backoff: func(int) time.Duration { return 0 }},
+		Project:  proj,
+		Settings: st.Settings(),
+		Dir:      pending.Path(),
+		ID:       pending.ID(),
+	}
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var result Result
+	if err := st.ReadJSON(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "ranking.json"), &result); err != nil {
+		t.Fatalf("read ranking.json: %v", err)
+	}
+	found := false
+	for _, d := range result.Dependencies {
+		for _, c := range d.Candidates {
+			for _, s := range c.Signals {
+				if s.Name != string(rank.Unresolvable) {
+					continue
+				}
+				found = true
+				if strings.Contains(s.Evidence, "alice") || strings.Contains(s.Evidence, "s3cret") {
+					t.Errorf("%s@%s's evidence %q holds the URL's credentials", d.Name, c.Version, s.Evidence)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no unresolvable candidate in the result")
+	}
 }

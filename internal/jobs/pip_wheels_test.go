@@ -382,6 +382,7 @@ func TestYankedPinWarnsWithReason(t *testing.T) {
 		{"with a reason", "broken connection pool", "redis==5.0.8 is yanked on the index: broken connection pool"},
 		{"with no reason", "-", "redis==5.0.8 is yanked on the index: no reason given"},
 		{"with control characters in the reason", "bad\u202e\x1b[31m pool", "redis==5.0.8 is yanked on the index: bad[31m pool"},
+		{"with a URL carrying credentials in the reason", "moved to http://alice:s3cret@host/", "redis==5.0.8 is yanked on the index: moved to http://host/"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
