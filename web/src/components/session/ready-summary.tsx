@@ -36,7 +36,7 @@ export function ReadySummary({ before, after, checkedTogether, directDependencie
           <p className="flex items-center gap-1.5 text-[13px] font-semibold text-muted">
             <Shield aria-hidden="true" className="size-3.5" />
             Known CVEs
-            <Term id="cve" />
+            <Term id="cve" prefer="above" />
           </p>
           <p data-total className="mt-1 flex items-center gap-2.5 text-[34px] leading-tight tracking-tight tabular-nums">
             <span className="text-muted">{count(total(before))}</span>

@@ -192,7 +192,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
             <ArrowRight aria-hidden="true" className="size-3.5" />
             <span className="sr-only"> to </span>
             <span className="figure text-ink">{total(after).toLocaleString("en-US")}</span>
-            {hasCveBand ? null : <Term id="cve" />}
+            {hasCveBand ? null : <Term id="cve" prefer="above" />}
           </p>
         )}
       </div>

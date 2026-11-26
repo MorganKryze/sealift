@@ -8,6 +8,20 @@ export type TermId = "cve" | "severity" | "major-jump"
 // Matches the popover's w-72 class.
 const POPOVER_WIDTH = 288
 
+// About the tallest popover at 288 px wide: two sentences and the Read more link, with its gap.
+const POPOVER_HEIGHT = 180
+
+/**
+ * Which side of its button a popover opens on: the preferred side when the window has room there, the other
+ * one otherwise. A term in a block's head prefers above, so its popover leaves the first row below readable.
+ */
+export function termSide(prefer: "above" | "below", button: { top: number; bottom: number }, windowHeight: number): "above" | "below" {
+  const roomAbove = button.top >= POPOVER_HEIGHT
+  const roomBelow = windowHeight - button.bottom >= POPOVER_HEIGHT
+  if (prefer === "above") return roomAbove || !roomBelow ? "above" : "below"
+  return roomBelow || !roomAbove ? "below" : "above"
+}
+
 const DOCS = "https://github.com/MorganKryze/sealift/blob/main/docs/how-sealift-chooses.md"
 
 /** Where each term's section of the docs lives: fixed addresses, so no link is built from data. */
@@ -37,12 +51,13 @@ const TERMS: Record<TermId, { name: string; text: string }> = {
  * dialog: the focus stays on the button until Tab moves into the link. Escape, a second press or a press
  * outside closes it and gives the focus back to the button.
  */
-export function Term({ id }: { id: TermId }) {
+export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | "below" }) {
   const term = TERMS[id]
   const [open, setOpen] = useState(false)
   // How far left the popover moves from its button so it ends 16 px inside the window, as a panel puts a
   // term near the right edge.
   const [shift, setShift] = useState(0)
+  const [side, setSide] = useState<"above" | "below">("below")
   const popoverId = useId()
   const wrapper = useRef<HTMLSpanElement>(null)
   const button = useRef<HTMLButtonElement>(null)
@@ -80,7 +95,9 @@ export function Term({ id }: { id: TermId }) {
         onClick={() => {
           if (!open && button.current) {
             const width = Math.min(POPOVER_WIDTH, window.innerWidth - 32)
-            const left = button.current.getBoundingClientRect().left
+            const rect = button.current.getBoundingClientRect()
+            const left = rect.left
+            setSide(termSide(prefer, rect, window.innerHeight))
             setShift(Math.max(16 - left, Math.min(0, window.innerWidth - 16 - width - left)))
           }
           setOpen(!open)
@@ -97,8 +114,12 @@ export function Term({ id }: { id: TermId }) {
         id={popoverId}
         hidden={!open}
         data-align={shift < 0 ? "end" : "start"}
+        data-side={side}
         style={{ left: shift }}
-        className="animate-fade absolute top-full z-30 mt-1 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none"
+        className={cn(
+          side === "above" ? "bottom-full mb-1" : "top-full mt-1",
+          "animate-fade absolute z-30 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none",
+        )}
       >
         {open ? (
           <>
