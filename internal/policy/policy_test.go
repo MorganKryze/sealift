@@ -335,7 +335,7 @@ func TestPipTargetFromThePolicy(t *testing.T) {
 }
 
 func TestReviewDefaults(t *testing.T) {
-	want := Review{ProposeOtherMajors: false, MajorJump: AskReason, CVEWithoutFix: AskReason}
+	want := Review{ProposeOtherMajors: false, MajorJump: AskReason, CVEWithoutFix: AskReason, Yanked: AskReason}
 	if got := DefaultReview(); got != want {
 		t.Errorf("DefaultReview() = %+v, want %+v", got, want)
 	}
@@ -361,11 +361,11 @@ func TestPolicyReadsTheReviewRules(t *testing.T) {
 		body string
 		want Review
 	}{
-		{"review:\n  proposeOtherMajors: true\n  majorJump: refuse\n  cveWithoutFix: refuse\n", Review{ProposeOtherMajors: true, MajorJump: Refuse, CVEWithoutFix: Refuse}},
-		{"review:\n  proposeOtherMajors: false\n  majorJump: reason\n  cveWithoutFix: reason\n", Review{MajorJump: AskReason, CVEWithoutFix: AskReason}},
-		{"review:\n  proposeOtherMajors: true\n", Review{ProposeOtherMajors: true, MajorJump: AskReason, CVEWithoutFix: AskReason}},
-		{"review:\n  majorJump: refuse\n", Review{MajorJump: Refuse, CVEWithoutFix: AskReason}},
-		{"review:\n  cveWithoutFix: refuse\n", Review{MajorJump: AskReason, CVEWithoutFix: Refuse}},
+		{"review:\n  proposeOtherMajors: true\n  majorJump: refuse\n  cveWithoutFix: refuse\n", Review{ProposeOtherMajors: true, MajorJump: Refuse, CVEWithoutFix: Refuse, Yanked: AskReason}},
+		{"review:\n  proposeOtherMajors: false\n  majorJump: reason\n  cveWithoutFix: reason\n", Review{MajorJump: AskReason, CVEWithoutFix: AskReason, Yanked: AskReason}},
+		{"review:\n  proposeOtherMajors: true\n", Review{ProposeOtherMajors: true, MajorJump: AskReason, CVEWithoutFix: AskReason, Yanked: AskReason}},
+		{"review:\n  majorJump: refuse\n", Review{MajorJump: Refuse, CVEWithoutFix: AskReason, Yanked: AskReason}},
+		{"review:\n  cveWithoutFix: refuse\n", Review{MajorJump: AskReason, CVEWithoutFix: Refuse, Yanked: AskReason}},
 	} {
 		p, err := Load(writePolicy(t, c.body), store.Settings{}, false)
 		if err != nil {
@@ -378,10 +378,40 @@ func TestPolicyReadsTheReviewRules(t *testing.T) {
 	}
 }
 
+func TestReadPolicyReviewYanked(t *testing.T) {
+	for _, c := range []struct {
+		body string
+		want Rule
+	}{
+		{"review:\n  majorJump: refuse\n", AskReason},
+		{"review:\n  yanked: reason\n", AskReason},
+		{"review:\n  yanked: refuse\n", Refuse},
+	} {
+		p, err := Load(writePolicy(t, c.body), store.Settings{}, false)
+		if err != nil {
+			t.Errorf("Load(%q): %v", c.body, err)
+			continue
+		}
+		if p.Review.Yanked != c.want {
+			t.Errorf("Load(%q).Review.Yanked = %q, want %q", c.body, p.Review.Yanked, c.want)
+		}
+	}
+	for _, value := range []string{"maybe", "Refuse", " null"} {
+		body := "review:\n  yanked: " + value + "\n"
+		_, err := Load(writePolicy(t, body), store.Settings{}, false)
+		if err == nil || !strings.Contains(err.Error(), "review.yanked must be one of reason, refuse") {
+			t.Errorf("Load(%q) = %v, want the start stopped with review.yanked must be one of reason, refuse", body, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "maybe") {
+			t.Errorf("Load(%q) = %q, which repeats the file's value", body, err)
+		}
+	}
+}
+
 // A rule key written with no value would otherwise fall back to the
 // permissive default without a word, while an empty string is refused.
 func TestPolicyRefusesARuleWithNoValue(t *testing.T) {
-	for _, key := range []string{"majorJump", "cveWithoutFix"} {
+	for _, key := range []string{"majorJump", "cveWithoutFix", "yanked"} {
 		for _, value := range []string{"", " null", " ~"} {
 			refused(t, "review:\n  "+key+":"+value+"\n", "review."+key, "reason, refuse")
 		}
