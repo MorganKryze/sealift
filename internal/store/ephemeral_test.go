@@ -246,6 +246,9 @@ func TestSweepEphemeralKeepsAProjectWithAJob(t *testing.T) {
 	if deleted {
 		t.Error("the sweep tried to delete a project with a job")
 	}
+	if s.isPurgePending() {
+		t.Error("the sweep left a purge pending for caches no delete asked to empty")
+	}
 	if _, err := os.Stat(filepath.Join(s.Root(), "cache", "tarballs", "x.tgz")); err != nil {
 		t.Errorf("the caches went while a job ran: %v", err)
 	}
