@@ -66,11 +66,11 @@ Each `Family` is a connected group of two or more. Its `Root` is the member the 
 | 5, `list-candidates` | `analysis_candidates.go`: `npm.NewerStable`, then `rank.KeyVersions` with the fixed versions from the project's scan |
 | 6, `resolve-candidates` | `analysis_candidates.go`: one isolated resolution per candidate, built by `buildProbeManifest`, key versions first |
 | 7, `scan-candidates` | Trivy over every candidate lockfile, into one index |
-| 8, `rank` | `analysis_rank.go`: `rankDependency` builds `Facts`, calls `rank.Signals` and `rank.Propose` with the policy's `review.proposeOtherMajors`, and writes each candidate with its vector, CVEs and signals, then `best` and `jump`. `cvesOf` keeps each CVE's `package` and `fixedIn`. Once every dependency is ranked, `setFamilies` reads each jump version's `peerDependencies` from the packument, calls `rank.Families`, and writes `families` and each member's `family` |
+| 8, `rank` | `analysis_rank.go`: `rankDependency` builds `Facts`, calls `rank.Signals` and `rank.Propose` with the policy's `review.proposeOtherMajors`, and writes each candidate with its vector, CVEs and signals, then `best` and `jump`. `cvesOf` keeps each CVE's `package` and `fixedIn`, and `setAdvisories` writes `advisories`, one entry per CVE id a `cves` list names. Once every dependency is ranked, `setFamilies` reads each jump version's `peerDependencies` from the packument, calls `rank.Families`, and writes `families` and each member's `family` |
 
 When the current version's own resolution fails, `rankDependency` records a warning and proposes nothing for that dependency: a zero vector would read as "no CVE" and hide every candidate. It still names the jump.
 
-An analysis is never rewritten. The API marks `leavesLine` on every candidate when it reads one, from `rank.SameLine`, so an analysis written by sealift 0.7.0 gets the marks too. Such an analysis has no `jump`, `family` or `families`, and its CVEs carry no `package` or `fixedIn`.
+An analysis is never rewritten. The API marks `leavesLine` on every candidate when it reads one, from `rank.SameLine`, so an analysis written by sealift 0.7.0 gets the marks too. Such an analysis has no `jump`, `family`, `families` or `advisories`, and its CVEs carry no `package` or `fixedIn`.
 
 ## The review groups
 

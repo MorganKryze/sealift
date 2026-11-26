@@ -96,8 +96,11 @@ A done npm analysis carries `result`. Beside each dependency's `current`, `vecto
 | `cves[].package` | The package and version Trivy found the CVE in, as `name@version`. |
 | `cves[].fixedIn` | The versions Trivy names as fixing it, as Trivy prints them, such as `4.19.2, 5.0.0`. Empty when none is known. |
 | `families` | On `result`: each group of dependencies whose jumps must move together, with `name` and `members`, sorted by name. |
+| `advisories` | On `result`: what each CVE id of a `cves` list does, by id. `title` is Trivy's title, at most 200 characters. `summary` is the first paragraph of Trivy's description, at most 500 characters, cut after its last whole sentence. `published` is the publication date, in RFC 3339, UTC. A field is absent when the report does not give it. |
 
-An analysis written by sealift 0.7.0 has no `jump`, `family` or `families`, and its CVEs have no `package` or `fixedIn`: an export counts each of them as a CVE without fix. [How sealift chooses](../how-sealift-chooses.md#the-current-line) explains the line, the jump and families.
+The text of `advisories` comes from the Trivy report. sealift cleans it of control characters, URL credentials and data-directory paths, and stores it as plain text. A client shows it as text, never as HTML or Markdown.
+
+An analysis written by sealift 0.7.0 has no `jump`, `family`, `families` or `advisories`, and its CVEs have no `package` or `fixedIn`: an export counts each of them as a CVE without fix. [How sealift chooses](../how-sealift-chooses.md#the-current-line) explains the line, the jump and families.
 
 The states are `queued`, `running`, `done`, `failed`, `cancelled` and `interrupted`. A failed analysis carries `failure` with the step id and the message:
 
@@ -126,7 +129,8 @@ A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in
 | --- | --- |
 | `target` | The target the set was resolved for. |
 | `files` | The requirements files the set comes from. |
-| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). |
+| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). `cves[].title` stays beside `advisories`. |
+| `advisories` | The same table as an npm analysis's `advisories`, by CVE id, for every id a package's `cves` names. An analysis written by sealift 0.7.0 has none. |
 | `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
 | `warnings` | A yanked release with the index's reason, a pin uploaded within the minimum release age, a database that could not be refreshed, and findings Trivy reported for packages outside the set. |
 

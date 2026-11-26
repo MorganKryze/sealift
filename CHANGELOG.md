@@ -20,6 +20,7 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - The signed `manifest.json` of an npm export carries a `review`: CVE totals before and after, updates, kept dependencies, jumps with their reasons, and each CVE the project keeps with its fixing versions or its reason. The import of sealift 0.7.0 imports such an archive as before, and a review an import cannot read never refuses an archive. [The air gap](docs/air-gap.md#the-review-in-the-manifest) describes it.
 - Each CVE in an analysis keeps the package Trivy found it in and the versions that fix it.
 - Three review rules in the policy file: `review.proposeOtherMajors`, `review.majorJump` and `review.cveWithoutFix`. By default, proposals stay in their line and a jump or a CVE without fix needs a reason; `refuse` stops such an export whatever its reason. [Settings](docs/settings.md#review-rules) lists them.
+- An analysis answer carries `advisories`: for each CVE id it lists, the title, a short summary and the publication date from the Trivy report, for npm and pip. An analysis from an earlier release answers without them.
 
 ### Changed
 
