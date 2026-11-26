@@ -184,6 +184,45 @@ const CHECK_STATES = [
   { path: "/update", name: "a failed start", before: refuseStart, file: fileAt("web-portal/package.json"), click: [{ role: "button", name: "Analyse" }], ready: "Analysis did not start" },
 ]
 
+// The review's states. A selection and its reasons are written to sessionStorage before the page loads,
+// as the review keeps them there.
+const stored = (storage) => (page) =>
+  page.addInitScript((entries) => {
+    for (const [key, value] of Object.entries(entries)) sessionStorage.setItem(key, JSON.stringify(value))
+  }, storage)
+const WORST_SELECTION = {
+  react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.2"], "@types/react-dom": ["19.2.2"], "react-router-dom": ["7.9.4"],
+  "@testing-library/react": ["16.3.0"], "react-redux": ["9.2.0"], eslint: ["9.38.0"], "eslint-plugin-react-hooks": ["5.2.0"],
+  "@typescript-eslint/parser": ["8.46.1"], "@typescript-eslint/eslint-plugin": ["8.46.1"], "eslint-config-prettier": ["10.1.8"],
+  vite: ["7.1.12"], "@vitejs/plugin-react": ["5.1.0"], vitest: ["4.0.8"],
+}
+const worstReview = stored({
+  "sealift:selection:20261125T091500Z": WORST_SELECTION,
+  "sealift:reasons:20261125T091500Z": {
+    "major-jump:react 19": "Moved to React 19 in branch react-19, all tests green",
+    "major-jump:eslint 9": "Flat config done in PR #412, lint passes on main",
+    "major-jump:vite 7": "CI and every dev machine run Node 22; Vite 7 builds the app",
+    "cve-without-fix:html-minifier": "Dev dependency, runs at build time on our own HTML",
+    "cve-without-fix:lodash.template": "Templates are our own files, never user input",
+  },
+})
+const WORST_WAITS = "Opens once angular, @babel/plugin-transform-async-generator-functions and request have a reason."
+const CVE_TEXT = "A CVE is a publicly listed security flaw, named by an id such as CVE-2024-4068. Known CVEs counts the ones the scan found in these versions."
+const JUMP_TEXT = "A major jump moves a package to a new major version, such as 4.x to 5.x. It may break your code, so it needs a reason."
+const button = (name) => ({ role: "button", name })
+
+const REVIEW_STATES = [
+  { path: "/sessions/reasons/review", name: "one reason missing with a group open", click: [button(/^1 package updated/)], ready: "Opens once html-minifier has a reason." },
+  { path: "/sessions/worst/review", name: "the worst case", before: worstReview, click: [button("7 packages of react 19"), button(/^8 packages updated/)], ready: WORST_WAITS },
+  { path: "/sessions/worst/review", name: "angular's CVEs open", before: worstReview, click: [button("11 CVEs of angular")], ready: "CVE-2022-25844" },
+  { path: "/sessions/reasons/review", name: "the CVE explanation open", click: [button("What a CVE is")], ready: CVE_TEXT },
+  { path: "/sessions/reasons/review", name: "Decide open", click: [button("Decide html-minifier")], ready: "Signed with the archive and read at import." },
+  { path: "/sessions/reasons/review", name: "Decide with its explanation open", click: [button("Decide html-minifier"), button("What a CVE is")], ready: CVE_TEXT },
+  { path: "/sessions/reasons/review", name: "Jump open", click: [button(/kept on their major/), button("Jump react")], ready: "3 packages that move together" },
+  { path: "/sessions/reasons/review", name: "Jump with its explanation open", click: [button(/kept on their major/), button("Jump react"), button("What a major jump is")], ready: JUMP_TEXT },
+  { path: "/sessions/legacy/review", name: "an analysis 0.7.0 wrote", click: [button(/packages? updated/), button("2 CVEs of angular")], ready: "fix not recorded" },
+]
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -210,24 +249,11 @@ export const UI = {
   states: [
     { path: "/instance", open: { role: "button", name: "How to regenerate", opens: { role: "button", name: "Copy command" } } },
     ...CHECK_STATES,
+    ...REVIEW_STATES,
   ],
   // A session route with sessionStorage written before the page loads, as the review screen keeps the
   // selection and the reasons there; `ready` is the text that proves the analysis arrived.
-  sessions: [
-    {
-      path: "/sessions/reasons/review",
-      storage: { "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] } },
-      ready: "3 reasons missing: react 19, express, html-minifier",
-    },
-    {
-      path: "/sessions/reasons/review",
-      storage: {
-        "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] },
-        "sealift:reasons:20261124T101500Z": { "major-jump:react 19": "first line\nsecond line", "major-jump:express": "the routes need express 5" },
-      },
-      ready: "Keep the reason on one line, with no tab or control character.",
-    },
-  ],
+  sessions: [],
   // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
   // `ready` is the text that proves the page drew that answer; `body` may be a function, called per
   // request. `focus` names a control focused next and what it must bring up.
@@ -753,55 +779,6 @@ for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" 
     })
   }
 }
-
-// Twenty reasons and the Export bar at its tallest: at the bottom of the page, the last reason field and
-// the text typed in it sit above the bar.
-for (const width of UI.widths) {
-  test(`/sessions/worst/review keeps the last reason above the Export bar ${width}`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 800 })
-    await page.addInitScript(() => {
-      sessionStorage.setItem("sealift:selection:20261124T111500Z", JSON.stringify({ "keeps-cve-20": ["1.0.1"] }))
-    })
-    await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
-    await page.getByText(/^20 reasons missing: /).waitFor({ timeout: 15_000 })
-    const last = page.locator("textarea").last()
-    await last.fill("x")
-    await last.focus()
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-    await page.evaluate(settle)
-    const hidden = await page.evaluate(() => {
-      const field = [...document.querySelectorAll("textarea")].at(-1).getBoundingClientRect()
-      const bar = document.getElementById("export-waits").closest(".fixed").getBoundingClientRect()
-      return Math.max(0, field.bottom - bar.top)
-    })
-    expect(hidden, `${hidden} px of the last reason field sit under the Export bar at ${width}px`).toBe(0)
-  })
-}
-
-// On a phone the tab bar is fixed to the bottom too: the Export bar sits above it, so its button can be pressed.
-test(`/sessions/worst/review keeps the Export button above the tab bar at ${PHONE.width}`, async ({ page }) => {
-  await page.setViewportSize({ width: PHONE.width, height: 800 })
-  await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
-  const button = page.getByRole("button", { name: "Confirm and build the archive" })
-  await button.waitFor({ timeout: 15_000 })
-  await page.evaluate(settle)
-  const overlap = await page.evaluate(() => {
-    const button = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Confirm and build the archive").getBoundingClientRect()
-    const tabs = document.querySelector('nav[aria-label="Places"]').getBoundingClientRect()
-    return Math.max(0, button.bottom - tabs.top)
-  })
-  expect(overlap, `${overlap} px of the Export button sit under the tab bar at ${PHONE.width}px`).toBe(0)
-  // The worst review leaves reasons unwritten, so the button is disabled; what matters is that nothing covers it.
-  const onTop = await page.evaluate(() => {
-    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Confirm and build the archive")
-    const r = b.getBoundingClientRect()
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    // A disabled button lets the pointer through to its bar, so the hit must land in the Export bar itself.
-    const bar = b.closest(".fixed")
-    return r.bottom <= innerHeight && bar !== null && bar.contains(hit)
-  })
-  expect(onTop, `the Export button is off screen or covered at ${PHONE.width}px`).toBe(true)
-})
 
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.

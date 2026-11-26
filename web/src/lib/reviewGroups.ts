@@ -1,6 +1,6 @@
-import type { Candidate, DependencyResult } from "@/api/projects"
+import type { AnalysisResult, DependencyResult } from "@/api/projects"
 
-export type ReviewGroupKey = "decide" | "proposed" | "nothing"
+export type ReviewGroupKey = "reasons" | "updated" | "kept" | "unchanged"
 
 export type JumpKind = "major" | "zero-minor" | "minor-or-patch"
 
@@ -36,33 +36,92 @@ export function jumpKind(current: string, version: string): JumpKind {
   return "minor-or-patch"
 }
 
-function bestCandidateOf(dependency: DependencyResult): Candidate | undefined {
-  return dependency.candidates.find((candidate) => candidate.version === dependency.best)
+/** One vulnerability behind a dependency's or a candidate's counts. */
+export type Cve = DependencyResult["cves"][number]
+
+/** Dependencies whose jumps move together. */
+export type Family = NonNullable<AnalysisResult["families"]>[number]
+
+/**
+ * The version an export holds for one dependency, as exportSelection reads
+ * it: the proposal while the developer has not touched it, the first pick
+ * otherwise, the current version for an empty pick.
+ */
+export function pickedOf(dependency: DependencyResult, selected: string[] | undefined): string {
+  return selected === undefined ? dependency.best || dependency.current : (selected[0] ?? dependency.current)
+}
+
+/** The CVEs one version of a dependency keeps, its current version's when the analysis lists no such candidate. */
+export function cvesOf(dependency: DependencyResult, version: string): Cve[] {
+  return version === dependency.current ? dependency.cves : (dependency.candidates.find((c) => c.version === version)?.cves ?? dependency.cves)
+}
+
+/** What a CVE's record says about its fix. An analysis of sealift 0.7.0 kept none, so its fix is unknown. */
+export function cveFix(cve: Cve): { kind: "fixed-in"; versions: string } | { kind: "none" } | { kind: "unknown" } {
+  if (cve.fixedIn === undefined) {
+    return { kind: "unknown" }
+  }
+  const versions = cve.fixedIn.trim()
+  return versions === "" ? { kind: "none" } : { kind: "fixed-in", versions }
+}
+
+/** The family a dependency's jump belongs to, from the dependency or the analysis' family list. */
+export function familyOf(dependency: DependencyResult, families: Family[]): Family | undefined {
+  return families.find((family) => family.name === dependency.family) ?? families.find((family) => family.members.includes(dependency.name))
 }
 
 /**
- * Buckets one dependency into the review's three groups, by sealift's own
- * proposal (dependency.best) rather than whatever the user has since
- * picked, so a row never jumps groups under the cursor. publisher-changed
- * is informational only (rank.Signal.Blocking never includes it) and never
- * sends a row to "to decide" on its own.
+ * The one group of the review a dependency sits in, first match: the
+ * reasons block for a jump the selection takes, a member of a family that
+ * jumps, or a held version that keeps a CVE with no known fix; then updated
+ * for a version change inside the line; then kept on its major when the
+ * analysis recorded a jump not taken; unchanged otherwise. families lists
+ * the families the selection jumps. A publisher change is a fact on the row
+ * and never moves it.
  */
-export function groupOf(dependency: DependencyResult): ReviewGroupKey {
-  if (!dependency.best) {
-    return "nothing"
+export function groupOf(dependency: DependencyResult, selected: string[] | undefined, families: Family[]): ReviewGroupKey {
+  const picked = pickedOf(dependency, selected)
+  const moved = picked !== dependency.current
+  const leaves = moved && (dependency.candidates.find((c) => c.version === picked)?.leavesLine ?? false)
+  if (leaves || families.some((family) => family.members.includes(dependency.name))) {
+    return "reasons"
   }
-  const best = bestCandidateOf(dependency)
-  const notableSignal = best?.signals.some((signal) => signal.name !== "publisher-changed") ?? false
-  if (notableSignal || jumpKind(dependency.current, dependency.best) !== "minor-or-patch") {
-    return "decide"
+  if (cvesOf(dependency, picked).some((cve) => cveFix(cve).kind !== "fixed-in")) {
+    return "reasons"
   }
-  return "proposed"
+  if (moved) {
+    return "updated"
+  }
+  if (dependency.jump && dependency.candidates.some((c) => c.version === dependency.jump)) {
+    return "kept"
+  }
+  return "unchanged"
 }
 
-export function groupDependencies(dependencies: DependencyResult[]): Record<ReviewGroupKey, DependencyResult[]> {
-  const groups: Record<ReviewGroupKey, DependencyResult[]> = { decide: [], proposed: [], nothing: [] }
+/** The families whose jump the selection takes: one member's selected version leaving its line moves the family. */
+function jumpingFamilies(dependencies: DependencyResult[], selection: Record<string, string[]>, families: Family[]): Family[] {
+  const jumping: Family[] = []
   for (const dependency of dependencies) {
-    groups[groupOf(dependency)].push(dependency)
+    const picked = pickedOf(dependency, selection[dependency.name])
+    const leaves = picked !== dependency.current && dependency.candidates.find((c) => c.version === picked)?.leavesLine
+    const family = familyOf(dependency, families)
+    if (leaves && family && !jumping.includes(family)) {
+      jumping.push(family)
+    }
+  }
+  return jumping
+}
+
+/** Each dependency in its one group, in the analysis' order. */
+export function groupDependencies(
+  dependencies: DependencyResult[],
+  selection: Record<string, string[]>,
+  families: Family[],
+): Record<ReviewGroupKey, DependencyResult[]> {
+  const jumping = jumpingFamilies(dependencies, selection, families)
+  const groups: Record<ReviewGroupKey, DependencyResult[]> = { reasons: [], updated: [], kept: [], unchanged: [] }
+  for (const dependency of dependencies) {
+    groups[groupOf(dependency, selection[dependency.name], jumping)].push(dependency)
   }
   return groups
 }
