@@ -11,7 +11,7 @@ describe("failureMessage", () => {
 
   it("names the step when an older analysis recorded no cause", () => {
     expect(failureMessage({ state: "failed", failure: { step: "scan-project", message: "" } })).toBe(
-      'It stopped at "Scan for known CVEs". The version of sealift that ran it did not record why; the log below has what it wrote.',
+      "It stopped while scanning the project. The version that ran it did not record why; the log has what it wrote.",
     )
   })
 

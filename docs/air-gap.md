@@ -53,7 +53,7 @@ The import trusts that one key and no other. It ignores any key an archive, a ma
 
 What a valid signature shows: the manifest was made by the holder of the private key, which stays in the connected sealift's volume, and it has not changed since. What it does not show:
 
-- Who pressed Export. Anyone who reaches sealift's port can have any selection signed.
+- Who pressed Seal. Anyone who reaches sealift's port can have any selection signed.
 - Freshness. An old archive with a valid signature stays importable until you regenerate the key.
 - Anything about the four reports, which are not signed.
 
@@ -191,7 +191,7 @@ sealift checks:
 - that an export carries a reason for each jump out of a line and each CVE that no version fixes, unless the policy refuses them;
 - Trivy against the sha256 of its release;
 - that no proposed version of a direct dependency is younger than the minimum release age, and that neither are the packages it pulls in;
-- that nothing downloads before you press Install, Analyse or Confirm and build the archive.
+- that nothing downloads before you press Install, Analyse or Seal.
 
 It does not:
 

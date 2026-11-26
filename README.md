@@ -49,10 +49,10 @@ At start, sealift downloads what an analysis needs and checks each download: Tri
 
 | | |
 | --- | --- |
-| ![The drop preview: five dependencies, all pinned, and the target platform](docs/assets/drop-preview.png) | ![The analysis at candidate resolution, 6 of 254, with the time left](docs/assets/analysis.png) |
-| **Drop.** Drop a `package.json`. The preview checks that each direct dependency is pinned before anything runs. | **Analyse.** sealift resolves and scans every candidate, and shows each step with the time left. The session runs on without the page. |
-| ![The review: 45 CVEs today, none with the selection, express opened on its candidates](docs/assets/review.png) | ![Archive ready: the archive with its sha256, and six files](docs/assets/export-done.png) |
-| **Review.** sealift proposes a version for each dependency and says why. Change any of them, or keep the current one. | **Export.** Confirm the review. sealift downloads, verifies and packs the archive, signs the manifest, then shows the sha256, the key that signed and the reports. |
+| ![Check: five packages, Compliant, and the target platform](docs/assets/drop-preview.png) | ![The analysis trying newer versions, with the time left and the log](docs/assets/analysis.png) |
+| **Check.** Drop a `package.json`. Check runs three checks on it, exact versions, registry only and supported fields, before anything runs. | **Analyse.** sealift resolves and scans every newer version, and shows the step, the time left and the log. The analysis runs on without the page. |
+| ![Ready to seal: Known CVEs 46 to 24, 4 packages updated, 1 kept on their major](docs/assets/review.png) | ![Sealed: the three files to carry with the archive's sha256, and four reports](docs/assets/export-done.png) |
+| **Review.** sealift proposes a version for each package. A major jump or a CVE with no fixed version asks a reason. | **Seal.** sealift downloads, verifies and packs the archive, signs the manifest, then lists the files to carry and the reports. |
 
 ## Quickstart
 

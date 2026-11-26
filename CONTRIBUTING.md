@@ -92,11 +92,11 @@ When a screen changes, re-read the pages that describe it, since they quote its 
 | The frame, both sides | `docs/workflow.md`, `docs/importing.md`, `docs/dev/web.md` |
 | Preparing | `docs/getting-started.md`, `docs/workflow.md`, `docs/deployment.md` |
 | Home | `docs/workflow.md`, `docs/getting-started.md` |
-| Update and drop | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md` |
+| Update and Check | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md` |
 | Projects and a project | `docs/workflow.md` |
-| Analysis | `docs/workflow.md`, `docs/troubleshooting.md` |
-| Review | `docs/workflow.md`, `docs/how-sealift-chooses.md` |
-| Export | `docs/workflow.md`, `docs/air-gap.md` |
+| Analyse | `docs/workflow.md`, `docs/troubleshooting.md` |
+| Review, its panels and info buttons | `docs/workflow.md`, `docs/how-sealift-chooses.md` |
+| Seal and Sealed | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md`, `docs/air-gap.md` |
 | Instance | `docs/settings.md`, `docs/deployment.md`, `docs/getting-started.md` |
 | Home (import service) | `docs/importing.md` |
 | Choose an archive (import service) | `docs/importing.md`, `docs/air-gap.md` |

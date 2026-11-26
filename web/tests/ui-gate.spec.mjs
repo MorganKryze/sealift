@@ -8,6 +8,8 @@
 // random input. Fill the blocks below; `exceptions` take a selector, the check they lift and the reason.
 // With UI_CAPTURES set to a folder, each page is saved there once checked, as
 // <role>-<route slug>-<width>-<theme>.png, for a reader to compare with the drawn screens.
+// Each module of tests/gate/ may export `routes`, `states`, `sessions` and `answers`, appended to UI's
+// lists below, so the states of one screen live in their own file.
 
 // GET /api/instance as the collection server answered it on an empty volume, with its stand-in upstream
 // answering 404 to everything: Trivy, pnpm and uv failed once and wait for their next try. Captured once
@@ -104,6 +106,123 @@ const READY_WITH_WARNING = {
   })),
 }
 
+// The package.json files the Check step's states drop, written under test-results/ before the run. Real
+// names where the design rules' worst cases name them; the rest numbered, since only their count matters.
+const FILES = resolve("test-results", "gate", "files")
+const fileAt = (name) => join(FILES, name)
+const pinned = (count, prefix, from = 0) =>
+  Object.fromEntries(Array.from({ length: count }, (_, i) => [`${prefix}-${String(i + from).padStart(3, "0")}`, `${1 + (i % 9)}.${i % 23}.${i % 7}`]))
+const WORST_PACKAGES = {
+  "@babel/plugin-transform-async-generator-functions": "1.0.0-beta.12+build.345",
+  "@typescript-eslint/eslint-plugin": "8.18.0",
+  "@typescript-eslint/parser": "8.18.0",
+  "@storybook/addon-interactions": "8.4.7",
+  "@testing-library/react-hooks": "8.0.1",
+  typescript: "0.0.0-insiders.20251101",
+}
+const CHECK_FILES = {
+  "web-portal/package.json": { name: "web-portal", version: "2.4.0", dependencies: pinned(139, "portal-lib"), devDependencies: pinned(11, "portal-tool") },
+  "billing-api/package.json": {
+    name: "billing-api",
+    dependencies: {
+      ...pinned(76, "billing-lib"),
+      express: "^4.18.2",
+      lodash: "~4.17.21",
+      pino: ">=9.0.0",
+      "@billing/shared-schemas": "git+ssh://git@gitlab.example.com/billing/shared-schemas.git#v3.2.0",
+      "pdf-templates": "file:../pdf-templates",
+    },
+    devDependencies: pinned(3, "billing-tool"),
+    pnpm: { overrides: { semver: "7.5.4", "tough-cookie": "4.1.3", ws: "8.17.1" } },
+  },
+  "kiosk-ui/package.json": { name: "kiosk-ui", dependencies: Object.fromEntries(Object.entries(pinned(150, "kiosk-lib")).map(([name, version]) => [name, `^${version}`])) },
+  "long-name/package.json": {
+    name: "customer-onboarding-portal-frontend-next",
+    dependencies: { ...WORST_PACKAGES, ...pinned(134, "onboarding-lib") },
+    devDependencies: pinned(10, "onboarding-tool"),
+  },
+}
+const writeCheckFiles = () => {
+  for (const [name, body] of Object.entries(CHECK_FILES)) {
+    mkdirSync(dirname(fileAt(name)), { recursive: true })
+    writeFileSync(fileAt(name), `${JSON.stringify(body, null, 2)}\n`)
+  }
+  writeFileSync(fileAt("kiosk-ui-export.zip"), "PK\u0003\u0004")
+}
+
+// POST /api/projects held until the page closes, so the page stays on Starting.
+const holdStart = (page) =>
+  page.route((url) => url.pathname === "/api/projects", (route) =>
+    route.request().method() === "POST" ? new Promise((done) => page.once("close", done)).then(() => route.abort().catch(() => {})) : route.fallback())
+// POST /api/projects answered 503 with the contract's Problem body, as a proxy in front of a stopped server would.
+const refuseStart = (page) =>
+  page.route((url) => url.pathname === "/api/projects", (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({ status: 503, contentType: "application/problem+json", body: JSON.stringify({ type: "about:blank", title: "Service Unavailable", status: 503 }) })
+      : route.fallback())
+
+const CHECK_STATES = [
+  { path: "/update", name: "a wrong file", file: fileAt("kiosk-ui-export.zip"), ready: "Drop the package.json at your project's root; nothing was sent." },
+  { path: "/update", name: "compliant", file: fileAt("web-portal/package.json"), ready: "Compliant" },
+  {
+    path: "/update",
+    name: "compliant open",
+    file: fileAt("web-portal/package.json"),
+    click: [{ role: "button", name: "Compliant" }, { role: "button", name: /^150 packages/ }],
+    ready: "3 checks passed",
+  },
+  { path: "/update", name: "issues", file: fileAt("billing-api/package.json"), ready: "3 checks to fix first" },
+  { path: "/update", name: "150 ranges", file: fileAt("kiosk-ui/package.json"), click: [{ role: "button", name: "Show all 150 packages" }], ready: "1 check to fix first" },
+  {
+    path: "/update",
+    name: "a 40-character name with 150 packages",
+    file: fileAt("long-name/package.json"),
+    click: [{ role: "button", name: "Compliant" }, { role: "button", name: /^150 packages/ }, { role: "button", name: "Show all 150 packages" }],
+    ready: "3 checks passed",
+  },
+  { path: "/update", name: "starting", before: holdStart, file: fileAt("web-portal/package.json"), click: [{ role: "button", name: "Analyse" }], ready: "Starting" },
+  { path: "/update", name: "a failed start", before: refuseStart, file: fileAt("web-portal/package.json"), click: [{ role: "button", name: "Analyse" }], ready: "Analysis did not start" },
+]
+
+// The review's states. A selection and its reasons are written to sessionStorage before the page loads,
+// as the review keeps them there.
+const stored = (storage) => (page) =>
+  page.addInitScript((entries) => {
+    for (const [key, value] of Object.entries(entries)) sessionStorage.setItem(key, JSON.stringify(value))
+  }, storage)
+const WORST_SELECTION = {
+  react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.2"], "@types/react-dom": ["19.2.2"], "react-router-dom": ["7.9.4"],
+  "@testing-library/react": ["16.3.0"], "react-redux": ["9.2.0"], eslint: ["9.38.0"], "eslint-plugin-react-hooks": ["5.2.0"],
+  "@typescript-eslint/parser": ["8.46.1"], "@typescript-eslint/eslint-plugin": ["8.46.1"], "eslint-config-prettier": ["10.1.8"],
+  vite: ["7.1.12"], "@vitejs/plugin-react": ["5.1.0"], vitest: ["4.0.8"],
+}
+const worstReview = stored({
+  "sealift:selection:20261125T091500Z": WORST_SELECTION,
+  "sealift:reasons:20261125T091500Z": {
+    "major-jump:react 19": "Moved to React 19 in branch react-19, all tests green",
+    "major-jump:eslint 9": "Flat config done in PR #412, lint passes on main",
+    "major-jump:vite 7": "CI and every dev machine run Node 22; Vite 7 builds the app",
+    "cve-without-fix:html-minifier": "Dev dependency, runs at build time on our own HTML",
+    "cve-without-fix:lodash.template": "Templates are our own files, never user input",
+  },
+})
+const WORST_WAITS = "Opens once angular, @babel/plugin-transform-async-generator-functions and request have a reason."
+const CVE_TEXT = "A CVE is a publicly listed security flaw, named by an id such as CVE-2024-4068. Known CVEs counts the ones the scan found in these versions."
+const JUMP_TEXT = "A major jump moves a package to a new major version, such as 4.x to 5.x. It may break your code, so it needs a reason."
+const button = (name) => ({ role: "button", name })
+
+const REVIEW_STATES = [
+  { path: "/sessions/reasons/review", name: "one reason missing with a group open", click: [button(/^1 package updated/)], ready: "Opens once html-minifier has a reason." },
+  { path: "/sessions/worst/review", name: "the worst case", before: worstReview, click: [button("7 packages of react 19"), button(/^8 packages updated/)], ready: WORST_WAITS },
+  { path: "/sessions/worst/review", name: "angular's CVEs open", before: worstReview, click: [button("11 CVEs of angular")], ready: "CVE-2022-25844" },
+  { path: "/sessions/reasons/review", name: "the CVE explanation open", click: [button("What a CVE is")], ready: CVE_TEXT },
+  { path: "/sessions/reasons/review", name: "Decide open", click: [button("Decide html-minifier")], ready: "Signed with the archive and read at import." },
+  { path: "/sessions/reasons/review", name: "Decide with its explanation open", click: [button("Decide html-minifier"), button("What a CVE is")], ready: CVE_TEXT },
+  { path: "/sessions/reasons/review", name: "Jump open", click: [button(/kept on their major/), button("Jump react")], ready: "3 packages that move together" },
+  { path: "/sessions/reasons/review", name: "Jump with its explanation open", click: [button(/kept on their major/), button("Jump react"), button("What a major jump is")], ready: JUMP_TEXT },
+  { path: "/sessions/legacy/review", name: "an analysis 0.7.0 wrote", click: [button(/packages? updated/), button("2 CVEs of angular")], ready: "fix not recorded" },
+]
+
 export const UI = {
   baseURL: "http://127.0.0.1:18080",
   // Runs from web/ with $SEALIFT set to the binary built from the embedded web build.
@@ -123,28 +242,18 @@ export const UI = {
     "/projects/web-portal",
     "/projects/pipeline",
   ],
-  // A page with a control pressed first: the state is checked as a route is. `opens` names the role
-  // and name the pressed control must bring up.
+  // A page brought to a state before it is checked as a route is. In order: `before(page)` runs before
+  // the page loads (for page.route fakes), `file` is set on the page's file input, each `click` step
+  // ({ role, name }) is pressed, `open` is pressed and must bring up its `opens`, and `ready` is the
+  // text that proves the state arrived. `name` tells states of one path apart.
   states: [
     { path: "/instance", open: { role: "button", name: "How to regenerate", opens: { role: "button", name: "Copy command" } } },
+    ...CHECK_STATES,
+    ...REVIEW_STATES,
   ],
   // A session route with sessionStorage written before the page loads, as the review screen keeps the
   // selection and the reasons there; `ready` is the text that proves the analysis arrived.
-  sessions: [
-    {
-      path: "/sessions/reasons/review",
-      storage: { "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] } },
-      ready: "3 reasons missing: react 19, express, html-minifier",
-    },
-    {
-      path: "/sessions/reasons/review",
-      storage: {
-        "sealift:selection:20261124T101500Z": { react: ["19.2.0"], "react-dom": ["19.2.0"], "@types/react": ["19.2.0"], express: ["5.1.0"] },
-        "sealift:reasons:20261124T101500Z": { "major-jump:react 19": "first line\nsecond line", "major-jump:express": "the routes need express 5" },
-      },
-      ready: "Keep the reason on one line, with no tab or control character.",
-    },
-  ],
+  sessions: [],
   // A page whose API answer is replaced by a fixed body, for a state the seeded server never reaches.
   // `ready` is the text that proves the page drew that answer; `body` may be a function, called per
   // request. `focus` names a control focused next and what it must bring up.
@@ -181,13 +290,19 @@ export const UI = {
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { test, expect } from "@playwright/test"
 import AxeBuilder from "@axe-core/playwright"
 
 import { IMPORT, startImportFixtures } from "./import-fixtures.mjs"
+
+const GATE = new URL("./gate/", import.meta.url)
+for (const name of existsSync(GATE) ? readdirSync(GATE).filter((f) => f.endsWith(".mjs")).sort() : []) {
+  const module = await import(new URL(name, GATE).href)
+  for (const list of ["routes", "states", "sessions", "answers"]) UI[list].push(...(module[list] ?? []))
+}
 
 // A copy button shows "Copy" and keeps its full name for assistive technology. Without the
 // stylesheet's `.sr-only` rule in the import bundle, the full name prints beside the visible word.
@@ -284,6 +399,7 @@ test.beforeAll(async () => {
   const out = resolve("test-results", "gate")
   mkdirSync(out, { recursive: true })
   binary = join(out, "sealift")
+  writeCheckFiles()
   upstream = await startFakeUpstream()
   // The binary embeds web/dist, so the build comes first and the binary is built once for both roles.
   await run("pnpm", ["run", "build"])
@@ -384,6 +500,31 @@ function sidebarReach() {
 
 // Loads one page and returns what the gate fails on: axe, overflow and small targets, plus what the
 // caller adds through `extra`. `prepare` runs before the page loads, `ready` once its data arrived.
+// Runs in the page: each open Term popover must show whole, inside the window and under no ancestor
+// that clips its overflow.
+const termsWhole = () => {
+  const found = []
+  for (const button of document.querySelectorAll("button[aria-expanded=true][aria-controls]")) {
+    const popover = document.getElementById(button.getAttribute("aria-controls"))
+    if (!popover || popover.hidden || !popover.querySelector("a")) continue
+    const box = popover.getBoundingClientRect()
+    const name = button.getAttribute("aria-label")
+    if (box.left < 0 || box.top < 0 || box.right > innerWidth || box.bottom > innerHeight) {
+      found.push(`${name}: popover leaves the window`)
+      continue
+    }
+    for (let up = popover.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up)
+      if (style.overflowX === "visible" && style.overflowY === "visible") continue
+      const clip = up.getBoundingClientRect()
+      if (box.left < clip.left - 0.5 || box.top < clip.top - 0.5 || box.right > clip.right + 0.5 || box.bottom > clip.bottom + 0.5) {
+        found.push(`${name}: popover clipped by ${up.tagName.toLowerCase()}.${[...up.classList].slice(0, 3).join(".")}`)
+      }
+    }
+  }
+  return found
+}
+
 async function inspect(page, { where, capture, url, width, theme, prepare, ready, extra }) {
   const failures = []
   await page.setViewportSize({ width, height: 800 })
@@ -409,6 +550,7 @@ async function inspect(page, { where, capture, url, width, theme, prepare, ready
   const sidebar = await page.evaluate(sidebarReach)
   if (sidebar) failures.push(`${where} · nav[aria-label=Places]: ${sidebar}`)
   const found = await page.evaluate(measure, { controls: CONTROLS, exceptions: UI.exceptions, target: UI.target })
+  for (const t of await page.evaluate(termsWhole)) failures.push(`${where} · ${t}`)
   for (const s of found.overflow) failures.push(`${where} · ${s}: overflows the page horizontally`)
   for (const t of found.targets) {
     failures.push(`${where} · ${t.selector}: target under ${UI.target} × ${UI.target} CSS px (${t.size})`)
@@ -440,19 +582,31 @@ for (const route of UI.routes) {
   }
 }
 
+// Brings a loaded page to its state: the file set on its input, then each control pressed in order.
+async function reach(page, { file, click }) {
+  if (file) await page.locator("input[type=file]").first().setInputFiles(file)
+  for (const control of click ?? []) await page.getByRole(control.role, { name: control.name, exact: true }).click()
+}
+
 for (const state of UI.states) {
+  const name = state.name ?? state.open.name
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
-      test(`${state.path} ${state.open.name} ${width} ${theme}`, async ({ page }) => {
+      test(`${state.path} ${name} ${width} ${theme}`, async ({ page }) => {
         const failures = await inspect(page, {
-          where: `${state.path} · ${state.open.name} · ${width}px · ${theme}`,
-          capture: `collection-${slug(state.path, state.open.name)}`,
+          where: `${state.path} · ${name} · ${width}px · ${theme}`,
+          capture: `collection-${slug(state.path, name)}`,
           url: new URL(state.path, UI.baseURL).href,
           width,
           theme,
+          prepare: state.before,
           ready: async (p) => {
-            await p.getByRole(state.open.role, { name: state.open.name }).click()
-            await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+            await reach(p, state)
+            if (state.open) {
+              await p.getByRole(state.open.role, { name: state.open.name }).click()
+              await p.getByRole(state.open.opens.role, { name: state.open.opens.name }).waitFor()
+            }
+            if (state.ready) await p.getByText(state.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
           },
         })
         expect(failures, failures.join("\n")).toEqual([])
@@ -616,6 +770,7 @@ const PHONE = {
   collection: [
     { path: "/", ready: "Start a crossing" },
     { path: "/instance", ready: "Instance", open: [{ role: "button", name: /^Public key sha256/ }, { role: "button", name: "How to regenerate" }] },
+    { path: "/update", ready: "3 checks to fix first", file: fileAt("billing-api/package.json") },
   ],
   // `columns` names blocks that must keep a readable width: a fixed grid squeezed them to nothing, and the text then ran over its neighbours inside the row, which the overflow check cannot see.
   import: [{ path: "/import", user: "alice", ready: "Not imported yet", columns: { selector: "#content li > div:first-child", min: 200 } }],
@@ -627,12 +782,13 @@ for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" 
       const base = route.role === "import" ? IMPORT.baseURL : UI.baseURL
       const failures = await inspect(page, {
         where: `${route.role} ${route.path} · ${PHONE.width}px · ${theme}`,
-        capture: `${route.role}-${slug(route.path, route.open && "open")}`,
+        capture: `${route.role}-${slug(route.path, route.open && "open", route.file && "file")}`,
         url: new URL(route.path, base).href,
         width: PHONE.width,
         theme,
         prepare: route.user ? (p) => p.setExtraHTTPHeaders({ "X-Access-Token": fixtures.token(route.user) }) : undefined,
         ready: async (p) => {
+          await reach(p, route)
           await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
           for (const control of route.open ?? []) await p.getByRole(control.role, { name: control.name }).first().click()
         },
@@ -649,55 +805,6 @@ for (const route of [...PHONE.collection.map((r) => ({ ...r, role: "collection" 
     })
   }
 }
-
-// Twenty reasons and the Export bar at its tallest: at the bottom of the page, the last reason field and
-// the text typed in it sit above the bar.
-for (const width of UI.widths) {
-  test(`/sessions/worst/review keeps the last reason above the Export bar ${width}`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 800 })
-    await page.addInitScript(() => {
-      sessionStorage.setItem("sealift:selection:20261124T111500Z", JSON.stringify({ "keeps-cve-20": ["1.0.1"] }))
-    })
-    await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
-    await page.getByText(/^20 reasons missing: /).waitFor({ timeout: 15_000 })
-    const last = page.locator("textarea").last()
-    await last.fill("x")
-    await last.focus()
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-    await page.evaluate(settle)
-    const hidden = await page.evaluate(() => {
-      const field = [...document.querySelectorAll("textarea")].at(-1).getBoundingClientRect()
-      const bar = document.getElementById("export-waits").closest(".fixed").getBoundingClientRect()
-      return Math.max(0, field.bottom - bar.top)
-    })
-    expect(hidden, `${hidden} px of the last reason field sit under the Export bar at ${width}px`).toBe(0)
-  })
-}
-
-// On a phone the tab bar is fixed to the bottom too: the Export bar sits above it, so its button can be pressed.
-test(`/sessions/worst/review keeps the Export button above the tab bar at ${PHONE.width}`, async ({ page }) => {
-  await page.setViewportSize({ width: PHONE.width, height: 800 })
-  await page.goto(new URL("/sessions/worst/review", UI.baseURL).href)
-  const button = page.getByRole("button", { name: "Confirm and build the archive" })
-  await button.waitFor({ timeout: 15_000 })
-  await page.evaluate(settle)
-  const overlap = await page.evaluate(() => {
-    const button = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Confirm and build the archive").getBoundingClientRect()
-    const tabs = document.querySelector('nav[aria-label="Places"]').getBoundingClientRect()
-    return Math.max(0, button.bottom - tabs.top)
-  })
-  expect(overlap, `${overlap} px of the Export button sit under the tab bar at ${PHONE.width}px`).toBe(0)
-  // The worst review leaves reasons unwritten, so the button is disabled; what matters is that nothing covers it.
-  const onTop = await page.evaluate(() => {
-    const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Confirm and build the archive")
-    const r = b.getBoundingClientRect()
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    // A disabled button lets the pointer through to its bar, so the hit must land in the Export bar itself.
-    const bar = b.closest(".fixed")
-    return r.bottom <= innerHeight && bar !== null && bar.contains(hit)
-  })
-  expect(onTop, `the Export button is off screen or covered at ${PHONE.width}px`).toBe(true)
-})
 
 test("the collection server turned ready on the seeded tools and asked its stand-in nothing", async () => {
   // A server that already answered at baseURL was not started with the stand-in, so there is nothing to tell.

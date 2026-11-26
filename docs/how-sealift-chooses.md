@@ -1,6 +1,6 @@
 # How sealift chooses
 
-This page explains how sealift picks the version it proposes for each dependency, what each signal on a candidate means, why the proposal can be older than the latest release, and when an export needs a reason in words.
+This page explains how sealift picks the version it proposes for each dependency, what each signal on a candidate means, why the proposal can be older than the latest release, when a seal needs a reason in words, and the terms the review's info buttons explain.
 
 ## The short version
 
@@ -37,7 +37,7 @@ B wins over A because it has fewer high CVEs, whatever its medium and low counts
 
 When candidates tie, sealift takes the smallest jump: a patch in the same minor first, then a minor in the same major, then a new major. When they still tie, it takes the lowest version.
 
-sealift proposes nothing when no candidate inside the line has fewer CVEs than the current version. The dependency then shows under Nothing to do.
+sealift proposes nothing when no candidate inside the line has fewer CVEs than the current version. The dependency then shows under unchanged.
 
 ## The current line
 
@@ -105,7 +105,7 @@ reason 2 (major-jump) covers nothing the selection takes
 
 Under `refuse`, the problem names the policy key: `review.majorJump is refuse: react 18.3.1 to 19.2.0 cannot cross`.
 
-[Workflow](workflow.md#reasons) shows where the review asks for them. [The air gap](air-gap.md#the-review-in-the-manifest) describes what the manifest carries.
+[Workflow](workflow.md#what-needs-a-reason) shows where the review asks for them. [The air gap](air-gap.md#the-review-in-the-manifest) describes what the manifest carries.
 
 ## Why the oldest version that fixes the most
 
@@ -141,21 +141,23 @@ The wait also covers what a version pulls in: every resolution holds the package
 
 The policy file's `minReleaseAgeDays` sets the wait, from 1 to 90 days, as [Settings](settings.md#minimum-release-age) describes.
 
-## The three groups
+## The review groups
 
-The review sorts dependencies by sealift's proposal:
+The review sorts packages by the selection, in this order:
 
 | Group | When |
 | --- | --- |
-| To decide | The proposal carries a signal other than `publisher-changed`, or, with `review.proposeOtherMajors`, is a major jump or a minor jump inside 0.x |
-| Proposed | The proposal is a patch or minor jump with no such signal |
-| Nothing to do | sealift proposes nothing |
+| updated | The selection moves the package to a new version |
+| kept on their major | The analysis named a jump the selection does not take. **Jump** takes it, with a reason |
+| unchanged | Any other package |
 
-Inside 0.x, semantic versioning makes no promise between minor versions, so `0.21.1` to `0.33.0` may break as much as a major jump. By default the proposal stays in its line, so neither kind of jump reaches To decide. `publisher-changed` alone does not move a row to To decide, since a new maintainer is common. The signal still shows on the candidate.
+A package that needs a reason, for a jump the selection takes or a CVE with no fixed version, shows in the Reasons block above the groups.
+
+Inside 0.x, semantic versioning makes no promise between minor versions, so `0.21.1` to `0.33.0` may break as much as a major jump, and counts as one.
 
 ## A worked example
 
-The demo project in [Getting started](getting-started.md) pins express 4.17.1, which carries 14 CVEs: 5 high, 3 medium, 6 low. Its line is major 4. The review shows its key versions:
+The demo project in [Getting started](getting-started.md) pins express 4.17.1, which carries 14 CVEs: 5 high, 3 medium, 6 low. Its line is major 4. Its key versions:
 
 | Version | CVEs | Signals | Outcome |
 | --- | --- | --- | --- |
@@ -167,12 +169,26 @@ The demo project in [Getting started](getting-started.md) pins express 4.17.1, w
 | 5.1.0 | none | `publisher-changed`, `major-jump` | The jump |
 | 5.2.1 | none | `publisher-changed`, `major-jump` | Outside the line, same count and jump as 5.1.0, higher version |
 
-4.22.3 would fix every CVE without leaving major version 4, but it is 9 days old. sealift keeps express in major 4: it proposes the unblocked 4.x candidate with the fewest CVEs, which **Show all 22 newer versions** compares with the key versions above. 5.1.0 has no known CVE and 18 months in use, so it is express's jump. Choosing it asks a reason before the export. Once 4.22.3 is 14 days old, a new analysis proposes it.
+4.22.3 would fix every CVE without leaving major version 4, but it is 9 days old. sealift keeps express in major 4: it proposes the unblocked 4.x candidate with the fewest CVEs, among 22 newer versions. 5.1.0 has no known CVE and 18 months in use, so it is express's jump. Choosing it asks a reason before the export. Once 4.22.3 is 14 days old, a new analysis proposes it.
 
-sealift 0.7.0 proposed 5.1.0 here, a major jump, and the capture below shows that proposal. `review.proposeOtherMajors: true` brings it back.
-
-![express opened in the review, with 4.22.3 held back as too recent and 5.1.0 proposed by sealift 0.7.0](assets/review.png)
+sealift 0.7.0 proposed 5.1.0 here, a major jump. `review.proposeOtherMajors: true` brings it back.
 
 ## After the choice
 
 Step 9 of the analysis resolves the whole project with every proposed version at once. A peer dependency the proposals leave unmet, and the project as given does not, also counts as a conflict, even though pnpm only warns about it. When they conflict, the analysis still finishes: the review shows the warning above the summary, and the log holds pnpm's output. Each proposal stays selectable. The export packs each selected version as the analysis resolved it, on its own, so it does not catch the conflict either: the install on the air-gapped side does. The members of a family are no exception: the export does not resolve their jumps together. When the log shows one, choose another version for one of the conflicting dependencies, or keep its current one.
+
+## Terms
+
+The review explains three terms with an info button beside their first place on each screen. Each button links to its section here.
+
+### Known CVEs
+
+A CVE is a publicly listed security flaw, named by an id such as CVE-2024-4068. Known CVEs counts the ones Trivy found in the versions an analysis scanned. Review shows the count today and with the selection, and Ready to seal shows it before and after. A flaw with no published CVE does not count.
+
+### Severity
+
+Each CVE is rated critical, high, medium or low by the harm it can do, or unknown when it has no rating. sealift ranks versions by these counts, the most serious first, as [Ranking by CVE count](#ranking-by-cve-count) shows. Ready to seal shows the count per severity under By severity, and each CVE row shows its rating.
+
+### Major jump
+
+A major jump moves a package to a new major version, such as 4.x to 5.x, or to a new minor inside 0.x. It may break your code, so sealift never takes one for you, and a seal that takes one needs a reason. Review lists such packages under kept on their major, with **Jump**, and the Jump panel shows the version change.

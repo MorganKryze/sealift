@@ -1,32 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
-import { ChevronRight, CircleAlert, Info } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { ArrowRight, ArrowUpRight, ChevronDown, Info, LoaderCircle, Lock, Minus, Pause } from "lucide-react"
+import { useEffect, useId, useState, type ReactNode } from "react"
 
 import { ProblemError } from "@/api/client"
-import { queueExport, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
-import { getSettings } from "@/api/settings"
+import { getProjectManifest, queueExport, type Analysis, type DependencyResult, type Project } from "@/api/projects"
 import { ProblemNotice } from "@/components/problem-notice"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
+import { ReadySummary } from "@/components/session/ready-summary"
 import { ReasonsBlock } from "@/components/session/reasons-block"
-import { SeverityCounts } from "@/components/severity-counts"
+import { DecidePanel, JumpPanel, SeverityCounts, VersionChange, releaseAge } from "@/components/session/review-panels"
 import { StepBar, type StepId } from "@/components/step-bar"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
+import { Term } from "@/components/ui/term"
 import { useReasons, useSelection } from "@/hooks/use-selection"
 import { exportSelection } from "@/lib/exportSelection"
-import { missingReasons, reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
-import {
-  afterVectorOf,
-  distinctCves,
-  groupDependencies,
-  jumpKind,
-  reasonFor,
-  type ReviewGroupKey,
-} from "@/lib/reviewGroups"
+import { parseManifestPreview } from "@/lib/manifestPreview"
+import { reasonKey, reasonProblem, reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
+import { afterVectorOf, cveFix, cvesOf, familyOf, groupDependencies, pickedOf, type ReviewGroupKey } from "@/lib/reviewGroups"
 import { sessionSteps } from "@/lib/sessionSteps"
-import { cn, humanizeSignal, releasedAgo } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 
 interface ReviewScreenProps {
   project: Project
@@ -34,53 +26,39 @@ interface ReviewScreenProps {
   onNavigateStep: (step: StepId) => void
 }
 
-const GROUP_COPY: Record<ReviewGroupKey, { title: string; why: string }> = {
-  decide: { title: "To decide", why: "Breaking change possible, or a signal worth a second look" },
-  proposed: { title: "Proposed", why: "Jumps that fix CVEs" },
-  nothing: { title: "Nothing to do", why: "No CVEs, or no newer version helps" },
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
+const total = (vector: number[]) => vector.reduce((sum, n) => sum + n, 0)
+const minus = (a: number[], b: number[]) => a.map((n, i) => Math.max(0, n - (b[i] ?? 0)))
+
+function andList(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`
 }
 
-const SEVERITY_DOT: Record<string, string> = {
-  critical: "bg-severity-critical",
-  high: "bg-severity-high",
-  medium: "bg-severity-medium",
-  low: "bg-severity-low",
-  unknown: "bg-severity-unknown",
-}
-
-/** The height of the element the returned ref lands on, kept current as it resizes. */
-function useHeight(): [number, (element: HTMLElement | null) => void] {
-  const [height, setHeight] = useState(0)
-  const observer = useRef<ResizeObserver | null>(null)
-  const ref = useCallback((element: HTMLElement | null) => {
-    observer.current?.disconnect()
-    observer.current = null
-    if (element === null || typeof ResizeObserver === "undefined") {
-      return
-    }
-    observer.current = new ResizeObserver(() => setHeight(element.offsetHeight))
-    observer.current.observe(element)
-    setHeight(element.offsetHeight)
-  }, [])
-  return [height, ref]
-}
+type Opened = { kind: "decide" | "jump"; name: string }
 
 export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreenProps) {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings })
   const selection = useSelection(analysis.id)
   const reasons = useReasons(analysis.id)
-  const [open, setOpen] = useState<Set<string>>(new Set())
-  const [nothingOpen, setNothingOpen] = useState(false)
+  const [open, setOpen] = useState<Set<ReviewGroupKey>>(new Set())
+  const [opened, setOpened] = useState<Opened | null>(null)
+  const [focusAfter, setFocusAfter] = useState<string | null>(null)
+  const causeId = useId()
 
   const result = analysis.result
   const dependencies = result?.dependencies ?? []
-  const [barHeight, barRef] = useHeight()
+  const families = result?.families ?? []
 
-  // Seeded from sealift's own best pick, so the initial export matches the
-  // proposal without the user touching anything; re-runs if the analysis
-  // (and so its dependency list) changes under the same mounted screen.
+  // Decide names a dev dependency, which only the stored package.json says.
+  const manifestQuery = useQuery({
+    queryKey: ["project", project.id, "manifest"],
+    queryFn: () => getProjectManifest(project.id),
+    enabled: opened?.kind === "decide",
+    staleTime: Infinity,
+  })
+
+  // Seeded from the proposal, so a first Seal sends it untouched; re-runs when the analysis changes under
+  // the same mounted screen.
   useEffect(() => {
     const defaults: Record<string, string[]> = {}
     for (const dependency of dependencies) {
@@ -92,26 +70,24 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis.id, dependencies])
 
-  function pickedVersionOf(dependency: DependencyResult): string {
-    return selection.selected(dependency.name, dependency.current)
-  }
-
-  const changedDependencies = dependencies.filter((d) => pickedVersionOf(d) !== d.current)
-  // Step 9 resolved the proposal as a whole; any other selection was never
-  // resolved together, so a conflict in it would only show on the far side.
-  // Before the seeding effect runs, a dependency has no entry yet and
-  // stands for the proposal, as exportSelection reads it.
-  const departsFromProposal = dependencies.some((d) => {
-    const proposed = d.best || d.current
-    const chosen = selection.selection[d.name] === undefined ? proposed : pickedVersionOf(d)
-    return chosen !== proposed
-  })
+  // A recorded jump moves its row into the reasons block: its new action takes the focus the old row held.
+  useEffect(() => {
+    if (focusAfter === null) return
+    const timer = setTimeout(() => {
+      document.querySelector<HTMLElement>(`[data-reason-action="${CSS.escape(focusAfter)}"]`)?.focus()
+      setFocusAfter(null)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [focusAfter])
 
   const toExport = exportSelection(dependencies, selection.selection)
   const needed = result ? requiredReasons(result, toExport) : []
-  const missing = missingReasons(needed, reasons.reasons)
+  const waiting = needed.filter((n) => {
+    const text = reasons.reasons[reasonKey(n)] ?? ""
+    return text.trim() === "" || reasonProblem(text) !== undefined
+  })
 
-  const confirmMutation = useMutation({
+  const sealMutation = useMutation({
     mutationFn: () =>
       queueExport(project.id, analysis.id, {
         selection: toExport,
@@ -122,25 +98,25 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
       queryClient.setQueryData(["project", project.id], (prev: Project | undefined) =>
         prev ? { ...prev, exports: [...(prev.exports ?? []), created] } : prev,
       )
-      void navigate({ to: "/sessions/$sessionId/export", params: { sessionId: project.id } })
+      onNavigateStep("export")
     },
   })
-  const confirmError = confirmMutation.error instanceof ProblemError ? confirmMutation.error : null
+  const sealError = sealMutation.error instanceof ProblemError ? sealMutation.error : null
   // internal/api answers a selection whose reasons fall short with this title and one problem per line of its detail.
   const refusal =
-    confirmError?.status === 400 && confirmError.problem?.title === "invalid export reasons" ? (confirmError.problem.detail ?? undefined) : undefined
+    sealError?.status === 400 && sealError.problem?.title === "invalid export reasons" ? (sealError.problem.detail ?? undefined) : undefined
 
-  const steps = sessionSteps({ project, current: "review", onNavigate: onNavigateStep })
+  const steps = sessionSteps({ project, analysis, current: "review", onNavigate: onNavigateStep })
 
   if (!result) {
     return (
-      <div className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">
+      <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
         <StepBar steps={steps} />
         <div className="flex flex-col items-start gap-3">
           <p className="text-muted">
             {analysis.state === "failed" || analysis.state === "cancelled" || analysis.state === "interrupted"
-              ? "This analysis did not finish, so there is no proposal to review."
-              : "The analysis is still running. The proposal appears here once it finishes."}
+              ? "This analysis did not finish, so there is nothing to review."
+              : "The analysis is still running. Its review opens here once it finishes."}
           </p>
           <Button onClick={() => onNavigateStep("analysis")}>Go to the analysis</Button>
         </div>
@@ -148,365 +124,329 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
     )
   }
 
-  const groups = groupDependencies(dependencies)
-  const before = dependencies.reduce<number[]>(
-    (total, d) => total.map((count, i) => count + (d.vector[i] ?? 0)),
-    [0, 0, 0, 0, 0],
-  )
-  const after = afterVectorOf(dependencies, pickedVersionOf)
-  const beforeTotal = before.reduce((a, b) => a + b, 0)
-  const afterTotal = after.reduce((a, b) => a + b, 0)
-  const fixedCritical = before[0] - after[0]
+  const picked = (dependency: DependencyResult) => pickedOf(dependency, selection.selection[dependency.name])
+  const groups = groupDependencies(dependencies, selection.selection, families)
+  const departs = dependencies.some((d) => picked(d) !== (d.best || d.current))
+  // The combined check measured the proposal only; any other selection sums each package's own scan.
+  const checkedTogether = !departs && result.after !== undefined
+  const after = checkedTogether && result.after ? result.after : afterVectorOf(dependencies, picked)
+  const ready = waiting.length === 0
+  const changed = Object.keys(toExport).length
 
-  function toggleOpen(name: string) {
-    setOpen((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) {
-        next.delete(name)
-      } else {
-        next.add(name)
-      }
+  const hasCveBand = needed.some((n) => n.kind === "cve-without-fix")
+  const hasJumpBand = needed.some((n) => n.kind === "major-jump")
+  // The severity's explanation goes to the first row on screen that shows severities, when neither Ready's head nor
+  // a reason row shows them first.
+  const severityRow = ready || hasCveBand
+    ? undefined
+    : (["updated", "kept", "unchanged"] as const)
+        .filter((key) => open.has(key))
+        .flatMap((key) => groups[key].map((d) => ({ key, d })))
+        .find(({ key, d }) => total(rowVectors(key, d, picked(d)).flat()) > 0)
+
+  // The server refuses an export that selects no version, so a recorded reason alone leaves nothing to seal.
+  const title = ready ? (changed === 0 ? "Nothing to seal" : "Ready to seal") : waiting.length === 1 ? "One thing needs you" : `${plural(waiting.length, "thing", "things")} need you`
+  const names = waiting.map((n) => n.label)
+  const cause =
+    names.length > 0
+      ? `Opens once ${andList(names)} ${names.length === 1 ? "has" : "have"} a reason.`
+      : changed === 0
+        ? "Opens once a package changes version."
+        : undefined
+
+  function toggle(key: ReviewGroupKey) {
+    setOpen((was) => {
+      const next = new Set(was)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
 
+  const openedDependency = opened ? dependencies.find((d) => d.name === opened.name) : undefined
+  const membersOf = (dependency: DependencyResult) => {
+    const family =
+      familyOf(dependency, families) ??
+      (dependency.family ? { name: dependency.family, members: dependencies.filter((d) => d.family === dependency.family).map((d) => d.name) } : undefined)
+    return { family, members: family ? dependencies.filter((d) => family.members.includes(d.name)) : [dependency] }
+  }
+  const dev = (() => {
+    if (!manifestQuery.data || !openedDependency) return false
+    try {
+      return parseManifestPreview(manifestQuery.data, project.name).dependencies.some((d) => d.name === openedDependency.name && d.kind === "dev")
+    } catch {
+      return false
+    }
+  })()
+
   return (
-    <div
-      className="animate-enter mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8 pb-28"
-      // The Export bar is fixed and grows with its cause, so the page keeps its real height free below
-      // the last reason field.
-      style={barHeight > 0 ? { paddingBottom: barHeight + 32 } : undefined}
-    >
+    <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
       <StepBar steps={steps} />
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">Review the proposal</h1>
-        <p className="mt-1.5 max-w-[62ch] text-muted">
-          sealift picked a version for each dependency. Check the ones marked to decide, open any row to choose
-          another version, then confirm.
-        </p>
+      <div className={ready ? "mb-1" : "mb-5"}>
+        <h1 className="text-[28px] font-bold tracking-tight text-ink">{title}</h1>
+        {ready ? null : (
+          <p data-known-cves className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[15px] text-muted">
+            <span>Known CVEs</span>{" "}
+            <span className="figure text-ink-2">{total(result.before).toLocaleString("en-US")}</span>
+            <ArrowRight aria-hidden="true" className="size-3.5" />
+            <span className="sr-only"> to </span>
+            <span className="figure text-ink">{total(after).toLocaleString("en-US")}</span>
+            {hasCveBand ? null : <Term id="cve" prefer="above" />}
+          </p>
+        )}
       </div>
+      {ready ? <ReadySummary before={result.before} after={after} checkedTogether={checkedTogether} directDependencies={dependencies.length} /> : null}
 
       <AnalysisWarnings warnings={result.warnings} />
 
-      <Card>
-        <div className="grid grid-cols-1 items-center gap-4 p-5 sm:grid-cols-[1fr_auto_1fr]">
-          <div>
-            <p className="mb-1.5 text-xs text-muted">Today · {beforeTotal} CVE{beforeTotal === 1 ? "" : "s"}</p>
-            <SeverityCounts vector={before} />
-          </div>
-          <span className="hidden text-muted sm:inline" aria-hidden>
-            →
-          </span>
-          <div>
-            <p className="mb-1.5 text-xs text-muted">With this selection · {afterTotal} CVE{afterTotal === 1 ? "" : "s"}</p>
-            <SeverityCounts vector={after} />
-          </div>
+      <ReasonsBlock
+        needed={needed}
+        reasons={reasons.reasons}
+        result={result}
+        refusal={refusal}
+        explainCves={!ready}
+        onDecide={(name) => setOpened({ kind: "decide", name })}
+        onJump={(name) => setOpened({ kind: "jump", name })}
+      />
+
+      {(["updated", "kept", "unchanged"] as const).some((key) => groups[key].length > 0) ? (
+        <div className="overflow-hidden rounded-xl border border-rule bg-bg">
+          {(["updated", "kept", "unchanged"] as const)
+            .filter((key) => groups[key].length > 0)
+            .map((key, index) => (
+              <Group
+                key={key}
+                kind={key}
+                first={index === 0}
+                dependencies={groups[key]}
+                picked={picked}
+                open={open.has(key)}
+                onToggle={() => toggle(key)}
+                explainJump={key === "kept" && !hasJumpBand}
+                severityAt={severityRow?.key === key ? severityRow.d.name : undefined}
+                onJump={(name) => setOpened({ kind: "jump", name })}
+              />
+            ))}
         </div>
-        <div className="border-t border-line px-5 py-3.5 text-sm text-muted">
-          <span className="font-semibold text-ink">
-            {beforeTotal - afterTotal} CVE{beforeTotal - afterTotal === 1 ? "" : "s"} fixed
-          </span>
-          {fixedCritical > 0 ? `, including ${fixedCritical} critical` : ""}, by changing {changedDependencies.length}{" "}
-          of {dependencies.length} dependencies.
-        </div>
-      </Card>
+      ) : null}
 
-      <p className="mt-4 max-w-[70ch] text-sm text-muted">
-        sealift proposes the oldest version that fixes the most CVEs: a release with no known CVE may be too
-        new to have any, and older ones have had more eyes on them.
-        {settingsQuery.data ? ` Releases younger than ${settingsQuery.data.minReleaseAgeDays} days are held back.` : ""}
-      </p>
-
-      {(["decide", "proposed", "nothing"] as const).map((key) => {
-        const list = groups[key]
-        if (list.length === 0) {
-          return null
-        }
-        const copy = GROUP_COPY[key]
-        if (key === "nothing") {
-          return (
-            <section key={key} className="mt-7">
-              <div className="mb-2.5 flex items-baseline gap-2.5">
-                <h2 className="text-lg font-semibold text-ink">{copy.title}</h2>
-                <span className="text-sm text-muted">{list.length}</span>
-              </div>
-              <button
-                type="button"
-                className="py-1.5 text-sm font-medium text-accent"
-                aria-expanded={nothingOpen}
-                onClick={() => setNothingOpen((v) => !v)}
-              >
-                {nothingOpen ? "Hide" : "Show"} {list.length} dependencies
-              </button>
-              {nothingOpen ? (
-                <Card className="mt-2.5">
-                  {list.map((dependency, index) => (
-                    <div key={dependency.name} className={cn("px-4.5 py-3.5 text-sm", index > 0 && "border-t border-line")}>
-                      <span className="font-mono font-semibold text-ink">{dependency.name}</span>
-                      <span className="ml-2 text-muted">{dependency.current}</span>
-                      <p className="mt-1 text-xs text-muted">
-                        {dependency.candidates.length} newer version{dependency.candidates.length === 1 ? "" : "s"} exist;
-                        none changes the CVE picture.
-                      </p>
-                    </div>
-                  ))}
-                </Card>
-              ) : null}
-            </section>
-          )
-        }
-        return (
-          <section key={key} className="mt-7">
-            <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-              <h2 className="text-lg font-semibold whitespace-nowrap text-ink">{copy.title}</h2>
-              <span className="text-sm text-muted">{list.length}</span>
-              <span className="text-sm text-muted sm:ml-auto">{copy.why}</span>
-            </div>
-            <Card>
-              {list.map((dependency, index) => (
-                <DependencyRow
-                  key={dependency.name}
-                  dependency={dependency}
-                  isFirst={index === 0}
-                  isOpen={open.has(dependency.name)}
-                  onToggle={() => toggleOpen(dependency.name)}
-                  picked={pickedVersionOf(dependency)}
-                  onPick={(version) => selection.pick(dependency.name, version, dependency.current)}
-                />
-              ))}
-            </Card>
-          </section>
-        )
-      })}
-
-      <ReasonsBlock needed={needed} reasons={reasons.reasons} onChange={reasons.setReason} refusal={refusal} />
-
-      <div ref={barRef} style={{ bottom: "var(--tabbar-h)" }} className="fixed inset-x-0 z-10 border-t border-line bg-background/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-240 flex-wrap items-center justify-between gap-4 px-5 py-3.5">
-          <div className="text-sm">
-            <span className="font-semibold text-ink">
-              {changedDependencies.length} change{changedDependencies.length === 1 ? "" : "s"}
-            </span>
-            <span className="text-muted"> · {afterTotal} CVE{afterTotal === 1 ? "" : "s"} left</span>
-            {departsFromProposal ? (
-              <p className="mt-0.5 text-muted">
-                The analysis checked its proposal as a whole. Your changes to it were not installed together.
-              </p>
-            ) : null}
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            {missing ? (
-              <p id="export-waits" className="max-w-[60ch] text-right text-sm text-muted">
-                {missing}
-              </p>
-            ) : null}
-            <Button
-              size="lg"
-              disabled={changedDependencies.length === 0 || confirmMutation.isPending || missing !== ""}
-              aria-describedby={missing ? "export-waits" : undefined}
-              onClick={() => confirmMutation.mutate()}
-            >
-              {confirmMutation.isPending ? "Building…" : "Confirm and build the archive"}
-            </Button>
-          </div>
-        </div>
-        {confirmError && refusal === undefined ? (
-          <div className="mx-auto w-full max-w-240 px-5 pb-3.5">
-            <ProblemNotice status={confirmError.status} problem={confirmError.problem} />
-          </div>
+      <div className="mt-7 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+        {cause ? (
+          <p id={causeId} className="text-[13px] text-muted [overflow-wrap:anywhere]">
+            {cause}
+          </p>
         ) : null}
+        <Button
+          size="page"
+          aria-disabled={cause || sealMutation.isPending ? true : undefined}
+          aria-describedby={cause ? causeId : undefined}
+          onClick={() => {
+            if (!cause && !sealMutation.isPending) sealMutation.mutate()
+          }}
+        >
+          {sealMutation.isPending ? <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" /> : <Lock aria-hidden="true" />}
+          {sealMutation.isPending ? "Sealing" : "Seal"}
+        </Button>
       </div>
+      {sealError && refusal === undefined ? <ProblemNotice status={sealError.status} problem={sealError.problem} className="mt-3" /> : null}
+
+      {opened?.kind === "decide" && openedDependency ? (
+        <DecidePanel
+          dependency={openedDependency}
+          version={picked(openedDependency)}
+          dev={dev}
+          reason={reasons.reasons[`cve-without-fix:${openedDependency.name}`] ?? ""}
+          onClose={() => setOpened(null)}
+          onRecord={(choice) => {
+            if (choice.carry) reasons.setReason(`cve-without-fix:${openedDependency.name}`, choice.reason)
+            else selection.pick(openedDependency.name, openedDependency.current, openedDependency.current)
+            setOpened(null)
+          }}
+        />
+      ) : null}
+      {opened?.kind === "jump" && openedDependency
+        ? (() => {
+            const { family, members } = membersOf(openedDependency)
+            const label = openedDependency.family || openedDependency.name
+            return (
+              <JumpPanel
+                dependency={openedDependency}
+                family={family}
+                members={members}
+                reason={reasons.reasons[`major-jump:${label}`] ?? ""}
+                onClose={() => setOpened(null)}
+                onRecord={(choice) => {
+                  for (const member of members) {
+                    if (choice.jump) {
+                      if (member.jump) selection.pick(member.name, member.jump, member.current)
+                    } else {
+                      const best = member.candidates.find((c) => c.version === member.best)
+                      selection.pick(member.name, best && !best.leavesLine ? best.version : member.current, member.current)
+                    }
+                  }
+                  if (choice.jump) {
+                    reasons.setReason(`major-jump:${label}`, choice.reason)
+                    setFocusAfter(label)
+                  }
+                  setOpened(null)
+                }}
+              />
+            )
+          })()
+        : null}
     </div>
   )
 }
 
-interface DependencyRowProps {
-  dependency: DependencyResult
-  isFirst: boolean
-  isOpen: boolean
-  onToggle: () => void
-  picked: string
-  onPick: (version: string) => void
+/** A row's counts: what the change fixes and what the held version keeps. */
+function rowVectors(kind: ReviewGroupKey, dependency: DependencyResult, picked: string): [number[], number[]] {
+  const held = picked === dependency.current ? dependency.vector : (dependency.candidates.find((c) => c.version === picked)?.vector ?? dependency.vector)
+  return kind === "updated" ? [minus(dependency.vector, held), held] : [[0, 0, 0, 0, 0], held]
 }
 
-function DependencyRow({ dependency, isFirst, isOpen, onToggle, picked, onPick }: DependencyRowProps) {
-  const kept = picked === dependency.current
-  const kind = kept ? null : jumpKind(dependency.current, picked)
-  const pickedCandidate = dependency.candidates.find((c) => c.version === picked)
-  const reason = [reasonFor(dependency, picked), !kept && pickedCandidate?.published ? releasedAgo(pickedCandidate.published) : null]
-    .filter(Boolean)
-    .join(", ")
-  const defaultCandidates = dependency.candidates.filter((c) => c.key || c.version === dependency.best)
-  const extraCandidates = dependency.candidates.filter((c) => !defaultCandidates.includes(c))
-  const [showAll, setShowAll] = useState(false)
-  const listRef = useRef<HTMLDivElement>(null)
-  const shownCandidates = showAll ? dependency.candidates : defaultCandidates
-  const cveTotal = dependency.vector.reduce((a, b) => a + b, 0)
-  const cves = distinctCves(dependency.cves)
-  const extraCves = cveTotal - cves.length
+/** The versions that fix what a held version keeps, as its CVEs name them. */
+function fixesOf(dependency: DependencyResult, picked: string): string[] {
+  return [
+    ...new Set(
+      cvesOf(dependency, picked).flatMap((cve) => {
+        const fix = cveFix(cve)
+        return fix.kind === "fixed-in" ? [fix.versions] : []
+      }),
+    ),
+  ]
+}
+
+const GROUPS: Record<Exclude<ReviewGroupKey, "reasons">, { icon: typeof Minus; words: string }> = {
+  updated: { icon: ArrowUpRight, words: "updated" },
+  kept: { icon: Pause, words: "kept on their major" },
+  unchanged: { icon: Minus, words: "unchanged" },
+}
+
+interface GroupProps {
+  kind: Exclude<ReviewGroupKey, "reasons">
+  first: boolean
+  dependencies: DependencyResult[]
+  picked: (dependency: DependencyResult) => string
+  open: boolean
+  onToggle: () => void
+  explainJump: boolean
+  /** The dependency whose row explains severities, when this group holds the first one. */
+  severityAt?: string
+  onJump: (name: string) => void
+}
+
+function Group({ kind, first, dependencies, picked, open, onToggle, explainJump, severityAt, onJump }: GroupProps) {
+  const look = GROUPS[kind]
+  const Icon = look.icon
+  const vectors = dependencies.map((d) => rowVectors(kind, d, picked(d)))
+  const fixed = total(vectors.flatMap(([f]) => f))
+  const left = total(vectors.flatMap(([, l]) => l))
+  const summary =
+    kind === "updated" ? { n: fixed, words: fixed === 1 ? "known CVE fixed" : "known CVEs fixed" } : kind === "kept" && left > 0 ? { n: left, words: left === 1 ? "known CVE left" : "known CVEs left" } : undefined
+  const th = "py-2 pr-3 text-left text-xs font-semibold text-muted"
 
   return (
-    <div className={cn(isFirst ? "" : "border-t border-line")}>
-      <button
-        type="button"
-        className="grid w-full grid-cols-[minmax(0,1.2fr)_minmax(0,1.4fr)_auto] items-center gap-3.5 px-4.5 py-3.5 text-left hover:bg-card"
-        aria-expanded={isOpen}
-        onClick={onToggle}
-      >
-        <span>
-          <span className="font-mono text-sm font-semibold text-ink">{dependency.name}</span>
-          <p className="mt-0.5 text-xs text-muted">{reason}</p>
-        </span>
-        <span className="flex flex-wrap items-center gap-2 font-mono text-sm">
-          <span className="text-muted">{dependency.current}</span>
-          <span className="text-muted" aria-hidden>
-            →
+    <div data-group={kind} className={cn(!first && "border-t border-rule")}>
+      <div className="flex items-center pr-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={onToggle}
+          className="flex min-h-14 min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 px-4 py-2 text-left transition-colors duration-150 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-hover"
+        >
+          <Icon aria-hidden="true" className="size-4 flex-none text-ink-2" />
+          <span className="text-[15px] text-ink-2">
+            <span className="figure text-ink">{plural(dependencies.length, "package", "packages")}</span> {look.words}
           </span>
-          <span className={kept ? "font-semibold text-muted" : "font-semibold text-accent"}>{picked}</span>
-          {kind && kind !== "minor-or-patch" ? (
-            <Badge className="border-severity-high/60 bg-transparent text-ink">
-              {kind === "major" ? "Major" : "0.x, may break"}
-            </Badge>
-          ) : null}
-        </span>
-        <ChevronRight className={cn("size-4.5 text-muted transition-transform", isOpen && "rotate-90")} />
-      </button>
-
-      {isOpen ? (
-        <div className="animate-enter px-4.5 pb-4.5">
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-            Current {dependency.current} · {cveTotal} CVE{cveTotal === 1 ? "" : "s"}
-          </p>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {cves.map((cve) => (
-              <span key={cve.id} className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-0.5 font-mono text-xs">
-                <span className={cn("size-1.5 rounded-full", SEVERITY_DOT[cve.severity.toLowerCase()] ?? "bg-severity-unknown")} />
-                {cve.id}
-              </span>
-            ))}
-            {extraCves > 0 && cves.length > 0 ? (
-              <span className="rounded-md border border-line px-2 py-0.5 font-mono text-xs text-muted">+{extraCves} more</span>
-            ) : null}
-            {extraCves > 0 && cves.length === 0 ? (
-              <span className="text-xs text-muted">The version of sealift that ran this analysis did not record CVE ids.</span>
-            ) : null}
-          </div>
-
-          <div ref={listRef} role="radiogroup" aria-label={`Version of ${dependency.name}`} className="grid gap-1.5">
-            {shownCandidates.map((candidate, index) => (
-              <CandidateRow
-                key={candidate.version}
-                firstExtra={showAll && index === defaultCandidates.length}
-                dependency={dependency}
-                candidate={candidate}
-                selected={picked === candidate.version}
-                onPick={() => onPick(candidate.version)}
-              />
-            ))}
-            <button
-              type="button"
-              role="radio"
-              aria-checked={kept}
-              className={cn(
-                "grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border p-3 text-left",
-                kept ? "border-accent shadow-[0_0_0_3px_var(--color-accent)]/15" : "border-line hover:border-accent/50",
-              )}
-              onClick={() => onPick(dependency.current)}
-            >
-              <Radio selected={kept} />
-              <span>
-                <span className="font-mono text-sm font-semibold text-ink">{dependency.current}</span>{" "}
-                <span className="text-sm text-muted">Keep the current version</span>
-              </span>
-              <SeverityCounts vector={dependency.vector} />
-            </button>
-          </div>
-
-          {extraCandidates.length > 0 ? (
-            <button
-              type="button"
-              className="mt-2 py-1.5 text-sm font-medium text-accent"
-              onClick={() => {
-                const expanding = !showAll
-                setShowAll(expanding)
-                // Focus follows the list, so a keyboard user lands on the first version just shown.
-                if (expanding) requestAnimationFrame(() => listRef.current?.querySelector<HTMLElement>("[data-first-extra]")?.focus())
-              }}
-            >
-              {showAll ? "Show fewer versions" : `Show all ${dependency.candidates.length} newer versions`}
-            </button>
-          ) : null}
+          {summary ? (
+            <span className="ml-auto text-[13px] text-muted">
+              <span className="figure text-ink">{summary.n.toLocaleString("en-US")}</span> {summary.words}
+            </span>
+          ) : <span className="ml-auto" />}
+          <ChevronDown aria-hidden="true" className={cn("size-4 flex-none text-muted transition-transform duration-200 ease-out motion-reduce:transition-none", !open && "-rotate-90")} />
+        </button>
+        {explainJump ? <Term id="major-jump" /> : null}
+      </div>
+      {open ? (
+        <div className="animate-fade overflow-x-auto px-4 pb-3">
+          <table className="w-full min-w-[34rem] text-[13px]">
+            <thead>
+              <tr className="border-b border-rule">
+                <th scope="col" className={th}>Package</th>
+                <th scope="col" className={th}>{kind === "kept" ? "Kept to next major" : "Version"}</th>
+                <th scope="col" className={th}>{kind === "updated" ? "Known CVEs fixed" : "Known CVEs"}</th>
+                {kind === "updated" ? <th scope="col" className={th}>Left</th> : null}
+                {kind === "updated" ? <th scope="col" className={th}>Release age</th> : null}
+                {kind === "kept" ? <th scope="col" className={cn(th, "pr-0")}><span className="sr-only">Jump</span></th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {dependencies.map((dependency, index) => {
+                const version = picked(dependency)
+                const [fixedVector, leftVector] = vectors[index]
+                const candidate = dependency.candidates.find((c) => c.version === version)
+                const notes = (candidate?.signals ?? []).filter((s) => s.name === "publisher-changed")
+                const fixes = fixesOf(dependency, version)
+                const explain = severityAt === dependency.name ? <Term id="severity" /> : null
+                return (
+                  <tr key={dependency.name} className="border-b border-rule last:border-b-0">
+                    <td className="py-2 pr-3 align-top">
+                      <span className="font-medium text-ink [overflow-wrap:anywhere]">{dependency.name}</span>
+                      {notes.map((signal) => (
+                        <span key={signal.name} className="mt-0.5 flex items-start gap-1 text-xs text-muted">
+                          <Info aria-hidden="true" className="mt-0.5 size-3 flex-none" />
+                          <span className="[overflow-wrap:anywhere]">{signal.evidence}</span>
+                        </span>
+                      ))}
+                    </td>
+                    <td className="py-2 pr-3 align-top">
+                      {kind === "unchanged" ? (
+                        <span className="font-mono text-[12.5px] text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{dependency.current}</span>
+                      ) : (
+                        <VersionChange before={dependency.current} after={kind === "kept" ? (dependency.jump ?? version) : version} />
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 align-top">
+                      <span className="inline-flex flex-wrap items-center gap-x-1">
+                        <SeverityCounts vector={kind === "updated" ? fixedVector : leftVector} />
+                        {kind !== "updated" || total(fixedVector) > 0 ? explain : null}
+                      </span>
+                      {kind !== "updated" && fixes.length > 0 ? <FixedIn fixes={fixes} /> : null}
+                    </td>
+                    {kind === "updated" ? (
+                      <td className="py-2 pr-3 align-top">
+                        <span className="inline-flex flex-wrap items-center gap-x-1">
+                          <SeverityCounts vector={leftVector} />
+                          {total(fixedVector) > 0 ? null : explain}
+                        </span>
+                        {fixes.length > 0 ? <FixedIn fixes={fixes} /> : null}
+                      </td>
+                    ) : null}
+                    {kind === "updated" ? <td className="py-2 pr-3 align-top whitespace-nowrap text-ink-2">{releaseAge(candidate?.published) ?? "no date"}</td> : null}
+                    {kind === "kept" ? (
+                      <td className="py-1 text-right align-top">
+                        <Button type="button" variant="outline" size="sm" aria-label={`Jump ${dependency.name}`} onClick={() => onJump(dependency.name)}>
+                          <ArrowUpRight aria-hidden="true" />
+                          Jump
+                        </Button>
+                      </td>
+                    ) : null}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       ) : null}
     </div>
   )
 }
 
-interface CandidateRowProps {
-  dependency: DependencyResult
-  candidate: Candidate
-  selected: boolean
-  /** Marks the first version revealed by "Show all", which takes focus. */
-  firstExtra: boolean
-  onPick: () => void
-}
-
-function CandidateRow({ dependency, candidate, selected, firstExtra, onPick }: CandidateRowProps) {
-  const blocking = candidate.signals.filter((s) => s.blocking)
-  const notable = candidate.signals.filter((s) => !s.blocking)
-  const blocked = blocking.length > 0
-  const isBest = candidate.version === dependency.best
-
+function FixedIn({ fixes }: { fixes: string[] }): ReactNode {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      data-first-extra={firstExtra || undefined}
-      disabled={blocked}
-      aria-disabled={blocked}
-      className={cn(
-        "grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border p-3 text-left",
-        blocked && "cursor-not-allowed opacity-70",
-        selected && "border-accent shadow-[0_0_0_3px_var(--color-accent)]/15",
-        !selected && !blocked && "border-line hover:border-accent/50",
-        !selected && blocked && "border-line",
-      )}
-      onClick={onPick}
-    >
-      <Radio selected={selected} />
-      <span>
-        <span className="font-mono text-sm font-semibold text-ink">{candidate.version}</span>
-        {isBest ? <span className="ml-1.5 text-xs text-muted">· proposed</span> : null}
-        <p className="mt-0.5 text-xs text-muted">
-          {candidate.published ? releasedAgo(candidate.published) : "publication date unknown"}
-        </p>
-        {blocking.map((signal) => (
-          <p key={signal.name} className="mt-1 flex items-start gap-1.5 text-xs text-severity-critical-fg">
-            <CircleAlert className="mt-0.5 size-3 flex-none" />
-            {/* The evidence counts days at analysis time; the line above counts them now, so the age is not repeated. */}
-            <span>{signal.name === "too-recent" ? "Held back as too recent for the minimum release age." : signal.evidence}</span>
-          </p>
-        ))}
-        {notable.map((signal) => (
-          <p key={signal.name} className="mt-1 flex items-start gap-1.5 text-xs text-muted">
-            <Info className="mt-0.5 size-3 flex-none" />
-            <span>
-              {signal.name === "publisher-changed" ? signal.evidence : `${humanizeSignal(signal.name)}: ${signal.evidence}`}
-            </span>
-          </p>
-        ))}
-      </span>
-      <SeverityCounts vector={candidate.vector} />
-    </button>
-  )
-}
-
-function Radio({ selected }: { selected: boolean }) {
-  return (
-    <span className={cn("mt-0.5 grid size-4.5 place-items-center rounded-full border-1.5", selected ? "border-accent" : "border-line")}>
-      {selected ? <span className="size-2 rounded-full bg-accent" /> : null}
+    <span className="mt-0.5 block text-xs text-muted [overflow-wrap:anywhere]">
+      fixed in <span className="font-mono text-ink-2 [font-variant-ligatures:none]">{fixes.join(", ")}</span>
     </span>
   )
 }

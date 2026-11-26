@@ -74,13 +74,14 @@ An analysis is never rewritten. The API marks `leavesLine` on every candidate wh
 
 ## The review groups
 
-The three groups of the review are computed in the browser, in `web/src/lib/reviewGroups.ts`, from the analysis result. `groupOf` puts a dependency in:
+The four groups of the review are computed in the browser, in `web/src/lib/reviewGroups.ts`, from the analysis result and the selection. `groupOf` puts a dependency in the first that matches:
 
-- `nothing` when `best` is empty;
-- `decide` when the best candidate carries any signal other than `publisher-changed`, or when `jumpKind` is `major` or `zero-minor`, which only `review.proposeOtherMajors` lets a proposal be;
-- `proposed` otherwise.
+- `reasons` when its selected version leaves its current line, when it belongs to a family whose jump the selection takes, or when the selected version keeps a CVE with no known fix;
+- `updated` when the selected version differs from the current one;
+- `kept` when the analysis recorded a jump the selection does not take;
+- `unchanged` otherwise.
 
-`jumpKind` treats a minor bump inside 0.x as `zero-minor`, since semantic versioning promises nothing there. The grouping follows sealift's proposal, not the user's pick, so a row does not move while someone changes its version.
+A publisher change is a fact on the row and never moves it. `jumpKind` treats a minor bump inside 0.x as `zero-minor`, since semantic versioning promises nothing there.
 
 ## Tests to extend
 

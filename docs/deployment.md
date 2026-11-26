@@ -193,7 +193,7 @@ The overlay sets two variables and mounts `/data/projects` and `/data/cache` in 
 In this mode:
 
 - A project gets a random id, so no line of the container's log names it.
-- **Erase this project now**, under the archive on the export screen, deletes the project: its `package.json`, analyses, logs, reports and archive. It also empties the shared caches that recorded what it fetched: pnpm's metadata and store, the tarball cache and the resolve directories. When another project's job is queued or running, that purge waits for the first minute the instance is idle. The browser tab forgets the version selection it kept, and API answers carry `Cache-Control: no-store`, so the browser's cache keeps none of them.
+- On Sealed, **Erase now** asks in place, and **Keep it** backs out. **Erase** deletes the project: its `package.json`, analyses, logs, reports and archive. It also empties the shared caches that recorded what it fetched: pnpm's metadata and store, the tarball cache and the resolve directories. When another project's job is queued or running, that purge waits for the first minute the instance is idle. The browser tab forgets the version selection it kept, and API answers carry `Cache-Control: no-store`, so the browser's cache keeps none of them.
 - Every minute, sealift deletes each project whose newest file is older than the idle delay and that has no job queued or running, then empties the caches once no project remains or a purge is waiting. Its log lines carry counts only.
 - Trivy, its vulnerability database, the settings and the signing key stay.
 

@@ -32,6 +32,13 @@ class FakeEventSource {
     this.closed = true
   }
 
+  // What the browser fires on each connection, the first and every reconnect.
+  emitOpen() {
+    for (const listener of this.listeners.get("open") ?? []) {
+      listener({ data: "" } as MessageEvent<string>)
+    }
+  }
+
   emitRaw(raw: string) {
     for (const frame of raw.split("\n\n")) {
       if (!frame.trim()) {
@@ -148,5 +155,27 @@ describe("useJobEvents", () => {
     const { result: fresh } = renderHook(() => useJobEvents("analysis-2", true, vi.fn()))
 
     expect(fresh.current.steps).toEqual([])
+  })
+
+  it("starts the log again on each connection, so a replay shows each line once", () => {
+    const { result } = renderHook(() => useJobEvents("analysis-1", true, vi.fn()))
+    const source = FakeEventSource.instances[0]!
+    const history =
+      'event: step\ndata: {"kind":"step","job":"analysis-3","storeId":"analysis-1","data":{"name":"validate","state":"done","durationMs":120}}\n\n' +
+      'event: log\ndata: {"kind":"log","job":"analysis-3","storeId":"analysis-1","data":{"line":"left-pad@1.3.0 does not resolve"}}\n\n'
+
+    act(() => {
+      source.emitOpen()
+      source.emitRaw(history)
+    })
+    // The server closed the stream; the browser reconnects and the queue replays the job so far.
+    act(() => {
+      source.emitOpen()
+      source.emitRaw(history)
+    })
+
+    expect(result.current.log.map((line) => line.text)).toEqual(["done in less than 1 s", "left-pad@1.3.0 does not resolve"])
+    expect(result.current.logCount).toBe(2)
+    expect(result.current.steps).toHaveLength(1)
   })
 })
