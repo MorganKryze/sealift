@@ -152,8 +152,15 @@ func TestPnpmCLI_Resolve_UsesTheConfiguredRegistry(t *testing.T) {
 		{"default", "", "registry=https://registry.npmjs.org\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, name := range []string{"NPM_CONFIG_REGISTRY", "npm_config_registry", "PNPM_CONFIG_REGISTRY", "pnpm_config_registry"} {
+			for _, name := range []string{"NPM_CONFIG_REGISTRY", "npm_config_registry", "PNPM_CONFIG_REGISTRY", "pnpm_config_registry", "npm_config_@acme:registry", "NPM_CONFIG_@ACME:REGISTRY", "pnpm_config_@acme:registry"} {
 				t.Setenv(name, "http://127.0.0.1:9/decoy")
+			}
+			userconfig := filepath.Join(t.TempDir(), "decoy-npmrc")
+			if err := os.WriteFile(userconfig, []byte("@acme:registry=http://127.0.0.1:9/decoy\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"NPM_CONFIG_USERCONFIG", "npm_config_userconfig", "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig", "PNPM_CONFIG_USERCONFIG"} {
+				t.Setenv(name, userconfig)
 			}
 			captureDir := t.TempDir()
 			t.Setenv("NODE_CAPTURE_DIR", captureDir)

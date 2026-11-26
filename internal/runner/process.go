@@ -58,8 +58,9 @@ func (b *syncBuffer) String() string {
 // and the settings pnpm, node and Trivy read from their own prefixed
 // variables. Everything else stays behind, notably SEALIFT_GITHUB_TOKEN: a
 // poisoned pnpm or Trivy release harvests the environment it is given.
-// The registry variables stay behind too: pnpm would rank them above the
-// .npmrc that names SEALIFT_NPM_REGISTRY.
+// The registry variables stay behind too, scoped ones and the user and
+// global config files included: pnpm would rank them above the .npmrc that
+// names SEALIFT_NPM_REGISTRY.
 var (
 	childEnvNames = map[string]bool{
 		"PATH": true, "HOME": true, "TMPDIR": true, "TZ": true, "LANG": true,
@@ -67,8 +68,8 @@ var (
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 		"http_proxy": true, "https_proxy": true, "no_proxy": true,
 	}
-	childEnvPrefixes = []string{"LC_", "NPM_CONFIG_", "npm_config_", "PNPM_", "NODE_", "TRIVY_"}
-	childEnvDropped  = []string{"npm_config_registry", "pnpm_config_registry"}
+	childEnvPrefixes       = []string{"LC_", "NPM_CONFIG_", "npm_config_", "PNPM_", "NODE_", "TRIVY_"}
+	childEnvConfigPrefixes = []string{"npm_config_", "pnpm_config_"}
 )
 
 // childEnv returns the allowed part of the server's environment.
@@ -80,14 +81,27 @@ func childEnv() []string {
 		for _, prefix := range childEnvPrefixes {
 			allowed = allowed || strings.HasPrefix(name, prefix)
 		}
-		for _, dropped := range childEnvDropped {
-			allowed = allowed && !strings.EqualFold(name, dropped)
-		}
+		allowed = allowed && !registryConfig(name)
 		if allowed {
 			env = append(env, kv)
 		}
 	}
 	return env
+}
+
+// registryConfig reports whether name is an npm or pnpm config variable
+// that can point a resolution at another registry: any key ending in
+// registry, @scope:registry included, or a user or global config file
+// that could name one. npm and pnpm read these names in any case.
+func registryConfig(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range childEnvConfigPrefixes {
+		key, ok := strings.CutPrefix(lower, prefix)
+		if ok && (strings.HasSuffix(key, "registry") || key == "userconfig" || key == "globalconfig") {
+			return true
+		}
+	}
+	return false
 }
 
 // run starts name with args in dir and waits for it to end or for ctx to be
