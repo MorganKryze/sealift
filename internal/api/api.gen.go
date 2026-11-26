@@ -141,6 +141,7 @@ func (e PreparingItemState) Valid() bool {
 const (
 	CveWithoutFix ReasonKind = "cve-without-fix"
 	MajorJump     ReasonKind = "major-jump"
+	Yanked        ReasonKind = "yanked"
 )
 
 // Valid indicates whether the value is a known member of the ReasonKind enum.
@@ -149,6 +150,8 @@ func (e ReasonKind) Valid() bool {
 	case CveWithoutFix:
 		return true
 	case MajorJump:
+		return true
+	case Yanked:
 		return true
 	default:
 		return false
@@ -410,12 +413,12 @@ type Export struct {
 	State State `json:"state"`
 }
 
-// ExportRequest A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag.
+// ExportRequest A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and the reasons its set needs, and ignores the flag.
 type ExportRequest struct {
 	// IncludeProject Add the current project tree to an npm export. A pip export ignores it.
 	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000.
+	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. A pip export needs one reason per package for each major jump since the previous crossing, each CVE that no version fixes and each yanked release, and refuses a reason that is missing, repeated or covers nothing. The signed manifest carries them in its review. At most 10,000.
 	Reasons *[]Reason `json:"reasons,omitempty"`
 
 	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415.
@@ -760,9 +763,9 @@ type ProjectSummary struct {
 	Target *Target `json:"target,omitempty"`
 }
 
-// Reason Why a selection takes a jump or keeps a CVE that no version fixes.
+// Reason Why a selection takes a jump, keeps a CVE that no version fixes, or carries a yanked release. `yanked` is for a pip export only: an npm export refuses it.
 type Reason struct {
-	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes.
+	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes. A pip reason names one package.
 	Dependencies []string   `json:"dependencies"`
 	Kind         ReasonKind `json:"kind"`
 

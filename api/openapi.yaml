@@ -1525,7 +1525,8 @@ components:
       type: object
       description: >
         A selection of versions per dependency, plus the project tree flag.
-        A pip export takes an empty selection and ignores the flag.
+        A pip export takes an empty selection and the reasons its set
+        needs, and ignores the flag.
       properties:
         selection:
           type: object
@@ -1553,8 +1554,12 @@ components:
           description: >
             The reasons the selection needs: one for each family or lone
             dependency it takes out of its line, and one for each dependency
-            whose kept version carries a CVE that no version fixes. The
-            signed manifest carries them in its review. At most 10,000.
+            whose kept version carries a CVE that no version fixes. A pip
+            export needs one reason per package for each major jump since
+            the previous crossing, each CVE that no version fixes and each
+            yanked release, and refuses a reason that is missing, repeated
+            or covers nothing. The signed manifest carries them in its
+            review. At most 10,000.
           maxItems: 10000
           items:
             $ref: "#/components/schemas/Reason"
@@ -1562,18 +1567,24 @@ components:
         - selection
     Reason:
       type: object
-      description: Why a selection takes a jump or keeps a CVE that no version fixes.
+      description: >
+        Why a selection takes a jump, keeps a CVE that no version fixes, or
+        carries a yanked release. `yanked` is for a pip export only: an npm
+        export refuses it.
       properties:
         kind:
           type: string
           enum:
             - major-jump
             - cve-without-fix
+            - yanked
         dependencies:
           type: array
           minItems: 1
           maxItems: 10000
-          description: The dependencies the reason covers, by name, each at most 214 bytes.
+          description: >
+            The dependencies the reason covers, by name, each at most 214
+            bytes. A pip reason names one package.
           items:
             type: string
             maxLength: 214
