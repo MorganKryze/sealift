@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -155,7 +156,32 @@ func cause(root string, err error) string {
 	if root == "" {
 		return msg
 	}
-	return strings.ReplaceAll(msg, filepath.Clean(root)+string(filepath.Separator), "")
+	return relativeToRoot(msg, filepath.Clean(root))
+}
+
+// relativeToRoot rewrites each path in msg that starts at root: root/x
+// reads x and root alone reads ".". A path starts at the text's start or
+// after whitespace, a quote, "(", "=" or ":", and root must end at a
+// separator or where the path ends, so /srv/data/x, a URL's /data/ or a
+// sibling such as /data2 stay as they are.
+func relativeToRoot(msg, root string) string {
+	re := regexp.MustCompile(`(?:^|[\s"'(=:])(` + regexp.QuoteMeta(root) + `)`)
+	sep := string(filepath.Separator)
+	var b strings.Builder
+	last := 0
+	for _, m := range re.FindAllStringSubmatchIndex(msg, -1) {
+		start, end := m[2], m[3]
+		switch {
+		case strings.HasPrefix(msg[end:], sep):
+			b.WriteString(msg[last:start])
+			last = end + len(sep)
+		case end == len(msg) || strings.ContainsRune(" \t\n\"'),:;", rune(msg[end])):
+			b.WriteString(msg[last:start] + ".")
+			last = end
+		}
+	}
+	b.WriteString(msg[last:])
+	return b.String()
 }
 
 // progressData is the payload of a "progress" event. Step names the step

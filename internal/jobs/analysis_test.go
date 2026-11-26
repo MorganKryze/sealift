@@ -334,6 +334,15 @@ func TestCauseDropsOnlyTheDataDirectory(t *testing.T) {
 		{"every path under the root", "/data/", "rename /data/a.tmp /data/a: exists", "rename a.tmp a: exists"},
 		{"a sibling of the root", "/data", "open /data2/x: denied", "open /data2/x: denied"},
 		{"no root", "", "open /data/x: denied", "open /data/x: denied"},
+		{"a directory that ends with the root's name", "/data", "open /srv/data/x: denied", "open /srv/data/x: denied"},
+		{"a URL path holding the root's name", "/data", "GET https://nexus.corp/repository/data/left-pad: 404", "GET https://nexus.corp/repository/data/left-pad: 404"},
+		{"a relative root inside a word", "data", "open metadata/x: denied", "open metadata/x: denied"},
+		{"a relative root", "data", "open data/x: denied", "open x: denied"},
+		{"the bare root", "/data", "open /data: denied", "open .: denied"},
+		{"the root twice", "/data", "rename /data/a (/data/b): exists", "rename a (b): exists"},
+		{"a quoted path", "/data", `open "/data/x": denied`, `open "x": denied`},
+		{"a relative root repeated in a path", "data", "open data/data/x: denied", "open data/x: denied"},
+		{"the bare root before another path", "/data", "rename /data /data/b: exists", "rename . b: exists"},
 		{"registry credentials", "/data", "GET http://alice:s3cret@nexus/x.tgz: 503", "GET http://nexus/x.tgz: 503"},
 	}
 	for _, c := range cases {
