@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import type { ComponentType } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -55,5 +55,17 @@ describe("the crossing route", () => {
     renderCrossing()
     expect(await screen.findByText("review screen")).toBeInTheDocument()
     expect(screen.queryByText("export screen")).toBeNull()
+  })
+})
+
+describe("the Check step bar on an earlier crossing", () => {
+  it("follows the analysis the address names, not a later cancelled one", async () => {
+    const later = { id: "20261125T090000Z", projectId: "demo", state: "cancelled", createdAt: "2026-11-25T09:00:00Z" }
+    vi.mocked(getProject).mockResolvedValue({ ...sealed, analyses: [...sealed.analyses!, later] } as unknown as Project)
+    search.current = { analysis: "20261124T101500Z", step: "check" }
+    renderCrossing()
+    const nav = await screen.findByRole("navigation", { name: "Session steps" })
+    expect(within(nav).queryByText(", cancelled")).toBeNull()
+    expect(within(nav).getByRole("button", { name: /Review/ })).toBeDefined()
   })
 })

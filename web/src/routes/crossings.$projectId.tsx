@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
-import { getProject, getProjectManifest, type Project } from "@/api/projects"
+import { getProject, getProjectManifest, type Analysis, type Project } from "@/api/projects"
 import { SessionLoadError } from "@/components/route-error"
 import { AnalysisScreen } from "@/components/session/analysis-screen"
 import { CheckBlock } from "@/components/session/check-block"
@@ -82,7 +82,7 @@ function CrossingRoute() {
   const onChanged = () => void queryClient.invalidateQueries({ queryKey: ["project", projectId] })
 
   if (step === "check" || !analysis) {
-    return <CheckStep project={project} onNavigateStep={goToStep} />
+    return <CheckStep project={project} analysis={analysis} onNavigateStep={goToStep} />
   }
 
   if (step !== "review" && analysis.state !== "done") {
@@ -111,7 +111,7 @@ function CrossingRoute() {
 }
 
 /** The Check step read back: the package.json the server stored, with no file to replace. */
-function CheckStep({ project, onNavigateStep }: { project: Project; onNavigateStep: (step: StepId) => void }) {
+function CheckStep({ project, analysis, onNavigateStep }: { project: Project; analysis?: Analysis; onNavigateStep: (step: StepId) => void }) {
   // The same entry Review's Decide reads, so going back and forth asks once.
   const manifestQuery = useQuery({
     queryKey: ["project", project.id, "manifest"],
@@ -126,7 +126,7 @@ function CheckStep({ project, onNavigateStep }: { project: Project; onNavigateSt
       return undefined
     }
   })()
-  const steps = sessionSteps({ project, current: "drop", onNavigate: onNavigateStep })
+  const steps = sessionSteps({ project, analysis, current: "drop", onNavigate: onNavigateStep })
 
   return (
     <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
