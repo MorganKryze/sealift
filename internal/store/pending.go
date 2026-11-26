@@ -29,7 +29,8 @@ type Pending struct {
 //
 // The first job of a second takes the bare timestamp; each later one in
 // that second takes the timestamp, "-" and the next six-digit hex counter
-// after the highest one already there, pending or committed. The counter
+// after the highest one already there, pending or committed, or handed out
+// earlier by this process and since deleted or discarded. The counter
 // keeps jobs of one second listed in creation order, where a random suffix
 // would not. Ids from before the counter, with a random suffix, keep their
 // place: a new job of their second still counts past them.
@@ -49,10 +50,22 @@ func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
 	}
 
 	base := nowFunc().UTC().Format(analysisIDLayout)
+	key := givenKey{parent, base}
+	s.givenMu.Lock()
+	defer s.givenMu.Unlock()
+	for k := range s.given {
+		if k.base != base {
+			delete(s.given, k)
+		}
+	}
+	given, ok := s.given[key]
+	if !ok {
+		given = -1
+	}
 	// Each miss means a concurrent call took the id first, so a retry
 	// only fails past this many jobs racing for one project and second.
 	for attempt := 0; attempt < 10; attempt++ {
-		id, err := nextJobID(parent, base)
+		id, n, err := nextJobID(parent, base, given)
 		if err != nil {
 			return nil, err
 		}
@@ -73,45 +86,49 @@ func (s *Store) NewDir(kind, projectID string) (*Pending, error) {
 			_ = os.Remove(tmp)
 			return nil, fmt.Errorf("store: stat %s: %w", final, err)
 		}
+		if s.given == nil {
+			s.given = make(map[givenKey]int64)
+		}
+		s.given[key] = n
 		return &Pending{final: final, id: id}, nil
 	}
 	return nil, fmt.Errorf("store: could not allocate an id under %s/%s", projectID, kind)
 }
 
-// nextJobID returns the id NewDir tries next for the second base names:
-// base itself when no directory of that second exists under parent, or
-// base, "-" and the highest counter found there plus one.
-func nextJobID(parent, base string) (string, error) {
+// nextJobID returns the id NewDir tries next for the second base names,
+// and its counter: base itself, counter 0, when no directory of that second
+// exists under parent and given is below 0; otherwise base, "-" and one
+// past the highest of given and the counters found there. given is the
+// highest counter this process handed out for that second, -1 for none.
+func nextJobID(parent, base string, given int64) (string, int64, error) {
 	entries, err := os.ReadDir(parent)
 	if err != nil {
-		return "", fmt.Errorf("store: list %s: %w", parent, err)
+		return "", 0, fmt.Errorf("store: list %s: %w", parent, err)
 	}
-	taken := false
-	var highest uint64
+	highest := given
 	for _, e := range entries {
 		name := strings.TrimSuffix(e.Name(), ".tmp")
 		if name == base {
-			taken = true
+			highest = max(highest, 0)
 			continue
 		}
 		suffix, ok := strings.CutPrefix(name, base+"-")
 		if !ok || len(suffix) != 6 || strings.Trim(suffix, "0123456789abcdef") != "" {
 			continue
 		}
-		n, err := strconv.ParseUint(suffix, 16, 32)
+		n, err := strconv.ParseInt(suffix, 16, 32)
 		if err != nil {
 			continue
 		}
-		taken = true
 		highest = max(highest, n)
 	}
 	switch {
-	case !taken:
-		return base, nil
-	case highest == 0xffffff:
-		return "", fmt.Errorf("store: no id left for %s under %s", base, parent)
+	case highest < 0:
+		return base, 0, nil
+	case highest >= 0xffffff:
+		return "", 0, fmt.Errorf("store: no id left for %s under %s", base, parent)
 	}
-	return fmt.Sprintf("%s-%06x", base, highest+1), nil
+	return fmt.Sprintf("%s-%06x", base, highest+1), highest + 1, nil
 }
 
 // Path returns the <id>.tmp directory the caller writes into.

@@ -335,3 +335,48 @@ func TestNewDirRefusesASecondPastItsLastCounter(t *testing.T) {
 		t.Fatalf("analyses dir holds %d entries, want the 2 written before", len(entries))
 	}
 }
+
+func TestNewDirNeverGivesAFreedIDAgainInItsSecond(t *testing.T) {
+	s := openTestStore(t)
+	fixed := mustParseTime(t, "2026-11-26T00:19:27Z")
+	defer stubNow(func() time.Time { return fixed })()
+
+	var ids []string
+	for range 2 {
+		p, err := s.NewDir("analyses", "proj-1")
+		if err != nil {
+			t.Fatalf("NewDir: %v", err)
+		}
+		if err := s.WriteJSON(filepath.Join(p.Path(), "status.json"), map[string]string{"state": "done"}); err != nil {
+			t.Fatalf("write status.json: %v", err)
+		}
+		if err := p.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		ids = append(ids, p.ID())
+	}
+	if ids[1] != "20261126T001927Z-000001" {
+		t.Fatalf("second id = %q, want 20261126T001927Z-000001", ids[1])
+	}
+	if err := s.DeleteAnalysis("proj-1", ids[1]); err != nil {
+		t.Fatalf("DeleteAnalysis: %v", err)
+	}
+
+	p, err := s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000002" {
+		t.Fatalf("NewDir after a delete = %q, want 20261126T001927Z-000002", p.ID())
+	}
+	if err := p.Discard(); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	p, err = s.NewDir("analyses", "proj-1")
+	if err != nil {
+		t.Fatalf("NewDir: %v", err)
+	}
+	if p.ID() != "20261126T001927Z-000003" {
+		t.Fatalf("NewDir after a discard = %q, want 20261126T001927Z-000003", p.ID())
+	}
+}
