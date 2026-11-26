@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
 )
 
@@ -67,6 +68,19 @@ type storeIdentified interface {
 func storeIDOf(j Job) string {
 	if s, ok := j.(storeIdentified); ok {
 		return s.StoreID()
+	}
+	return ""
+}
+
+// projectIdentified is a job that knows the project it runs for, which
+// the queue names in a failed job's log line.
+type projectIdentified interface {
+	ProjectID() string
+}
+
+func projectIDOf(j Job) string {
+	if p, ok := j.(projectIdentified); ok {
+		return p.ProjectID()
 	}
 	return ""
 }
@@ -352,6 +366,10 @@ func (q *Queue) run() {
 			state = store.Failed
 		}
 		q.mu.Unlock()
+
+		if state == store.Failed {
+			q.log.Warn("job failed", "id", next.id, "kind", next.job.Kind(), "storeId", storeID, "project", projectIDOf(next.job), "error", runner.StripURLCredentials(err.Error()))
+		}
 
 		// Called before the event below, and unlocked: a hook that
 		// commits a directory or reconciles a status file must run

@@ -95,6 +95,9 @@ func (e *Export) Kind() string { return "export" }
 // StoreID names the job by its store directory id, which the client uses.
 func (e *Export) StoreID() string { return e.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (e *Export) ProjectID() string { return e.Project.ID }
+
 // exportStatusFile is the on-disk shape of a failed or cancelled export's
 // status.json: enough for store.readExportInfo to report the same state,
 // analysis id and first-failed-step cause a reader gets for an analysis.
@@ -119,10 +122,16 @@ type exportStatusFile struct {
 // while it was still live, since the next poll found no export at all.
 func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	var steps []stepRecord
+	// Every step event passes here, so each failed step's cause is
+	// cleaned of the data root once, whichever step failed.
 	record := func(ev Event) {
 		if ev.Kind == "step" {
 			var d stepData
 			if json.Unmarshal(ev.Data, &d) == nil {
+				if d.Error != "" {
+					d.Error = causeText(e.Store.Root(), d.Error)
+					ev.Data = mustJSON(d)
+				}
 				steps = append(steps, stepRecord{Name: d.Name, State: string(d.State), DurationMs: d.DurationMs, Error: d.Error})
 			}
 		}
@@ -1005,7 +1014,7 @@ func emitStep(emit func(Event), name string, state store.State, d time.Duration)
 }
 
 // emitFailedStep is emitStep for state Failed, with the error that failed
-// it.
+// it. Run's record cleans the cause of server paths.
 func emitFailedStep(emit func(Event), name string, d time.Duration, err error) {
 	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: store.Failed, DurationMs: d.Milliseconds(), Error: err.Error()})})
 }

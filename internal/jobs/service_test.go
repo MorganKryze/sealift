@@ -1,14 +1,19 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -1167,9 +1172,97 @@ func TestCancellingAQueuedAnalysisNeverPublishesAStaleQueuedRecord(t *testing.T)
 // TestAnalysisThatFailedBeforeItBeganKeepsItsCause proves a run that fails
 // before its first write, such as one that cannot open its log, is
 // published with a failed step and the run's error, so the screen can say
-// what went wrong.
+// what went wrong. A path under the data directory in that error is kept
+// relative to it, and a file system error stripped of its path reads as
+// it did.
 func TestAnalysisThatFailedBeforeItBeganKeepsItsCause(t *testing.T) {
-	svc, st := newTestService(t)
+	cases := []struct {
+		name  string
+		err   func(root, dir string) error
+		cause func(root, dir string) string
+	}{
+		{
+			name: "a file system error stripped of its path",
+			err: func(_, dir string) error {
+				return fmt.Errorf("jobs: open log.txt: %w", withoutPath(&fs.PathError{Op: "open", Path: filepath.Join(dir, "log.txt"), Err: fs.ErrPermission}))
+			},
+			cause: func(string, string) string { return "jobs: open log.txt: permission denied" },
+		},
+		{
+			name: "another error naming a path under the data directory",
+			err: func(_, dir string) error {
+				return fmt.Errorf("jobs: write initial status.json: store: %s was replaced while it was written", filepath.Join(dir, "status.json"))
+			},
+			cause: func(root, dir string) string {
+				rel, _ := filepath.Rel(root, filepath.Join(dir, "status.json"))
+				return "jobs: write initial status.json: store: " + rel + " was replaced while it was written"
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svc, st := newTestService(t)
+			project := mustCreateProject(t, st)
+			pending, err := st.NewDir("analyses", project.ID)
+			if err != nil {
+				t.Fatalf("NewDir: %v", err)
+			}
+			createdAt, _ := store.JobCreatedAt(pending.ID())
+			if err := svc.seedPending(pending, createdAt, project); err != nil {
+				t.Fatalf("seedPending: %v", err)
+			}
+
+			runErr := c.err(st.Root(), pending.Path())
+			job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
+				return runErr
+			}}
+			if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+				svc.track(queueID, "analysis", project.ID, "", pending)
+			}); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+
+			info, err := st.AnalysisInfo(project.ID, pending.ID())
+			if err != nil {
+				t.Fatalf("AnalysisInfo: %v", err)
+			}
+			if info.State != store.Failed {
+				t.Errorf("State = %q, want %q", info.State, store.Failed)
+			}
+			want := store.StepFailure{Step: "prepare", Message: c.cause(st.Root(), pending.Path())}
+			if info.Failure == nil || *info.Failure != want {
+				t.Errorf("Failure = %+v, want %+v", info.Failure, want)
+			}
+			var status map[string]json.RawMessage
+			if err := st.ReadJSON(filepath.Join(pending.Final(), "status.json"), &status); err != nil {
+				t.Fatalf("read status.json: %v", err)
+			}
+			if status["target"] == nil || status["createdAt"] == nil {
+				t.Errorf("status.json = %v, want the queued record's target and creation time kept", status)
+			}
+		})
+	}
+}
+
+// TestFailedJobLogsItsFullErrorOnce proves the server log, the operator's,
+// gets one line for a failed job with its id, its kind and the run's error
+// as it was, paths included.
+func TestFailedJobLogsItsFullErrorOnce(t *testing.T) {
+	var logged bytes.Buffer
+	var mu sync.Mutex
+	log := slog.New(slog.NewTextHandler(&lockedWriter{w: &logged, mu: &mu}, nil))
+	previous := slog.Default()
+	slog.SetDefault(log)
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	q := NewQueue(log)
+	t.Cleanup(q.Close)
+	svc := NewService(st, q, tools.NewManager(st, nil, nil), noopPnpm{}, noopTrivy{}, &npm.Client{})
 	project := mustCreateProject(t, st)
 	pending, err := st.NewDir("analyses", project.ID)
 	if err != nil {
@@ -1179,35 +1272,35 @@ func TestAnalysisThatFailedBeforeItBeganKeepsItsCause(t *testing.T) {
 	if err := svc.seedPending(pending, createdAt, project); err != nil {
 		t.Fatalf("seedPending: %v", err)
 	}
-
-	const cause = "jobs: open log.txt: permission denied"
+	replaced := filepath.Join(pending.Path(), "status.json")
 	job := &fakeJob{kind: "analysis", run: func(context.Context, func(Event)) error {
-		return errors.New(cause)
+		return fmt.Errorf("store: %s was replaced while it was written", replaced)
 	}}
-	if _, err := svc.queue.SubmitWith(job, func(queueID string) {
+	queueID, err := svc.queue.SubmitWith(job, func(queueID string) {
 		svc.track(queueID, "analysis", project.ID, "", pending)
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 	waitForTerminal(t, svc, project.ID, "analysis", pending.ID())
+	q.Close()
 
-	info, err := st.AnalysisInfo(project.ID, pending.ID())
-	if err != nil {
-		t.Fatalf("AnalysisInfo: %v", err)
+	mu.Lock()
+	out := logged.String()
+	mu.Unlock()
+	if n := strings.Count(out, replaced); n != 1 {
+		t.Fatalf("the log names %s %d times, want once:\n%s", replaced, n, out)
 	}
-	if info.State != store.Failed {
-		t.Errorf("State = %q, want %q", info.State, store.Failed)
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, replaced) {
+			line = l
+		}
 	}
-	want := store.StepFailure{Step: "prepare", Message: cause}
-	if info.Failure == nil || *info.Failure != want {
-		t.Errorf("Failure = %+v, want %+v", info.Failure, want)
-	}
-	var status map[string]json.RawMessage
-	if err := st.ReadJSON(filepath.Join(pending.Final(), "status.json"), &status); err != nil {
-		t.Fatalf("read status.json: %v", err)
-	}
-	if status["target"] == nil || status["createdAt"] == nil {
-		t.Errorf("status.json = %v, want the queued record's target and creation time kept", status)
+	for _, want := range []string{"level=WARN", "id=" + queueID, "kind=analysis"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line %q lacks %q", line, want)
+		}
 	}
 }
 

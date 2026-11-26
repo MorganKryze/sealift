@@ -109,15 +109,24 @@ func (e *PipExport) Kind() string { return "export" }
 // StoreID names the job by its store directory id, which the client uses.
 func (e *PipExport) StoreID() string { return e.ID }
 
+// ProjectID is the id of the project the job runs for.
+func (e *PipExport) ProjectID() string { return e.Project.ID }
+
 // Run packs the analysis's wheels: package-list, download, archive and
 // reports. A failed or cancelled run keeps only status.json, as Export's
 // does; a done run leaves its directory for Service to commit.
 func (e *PipExport) Run(ctx context.Context, emit func(Event)) (err error) {
 	var steps []stepRecord
+	// Every step event passes here, so each failed step's cause is
+	// cleaned of the data root once, whichever step failed.
 	record := func(ev Event) {
 		if ev.Kind == "step" {
 			var d stepData
 			if json.Unmarshal(ev.Data, &d) == nil {
+				if d.Error != "" {
+					d.Error = causeText(e.Store.Root(), d.Error)
+					ev.Data = mustJSON(d)
+				}
 				steps = append(steps, stepRecord{Name: d.Name, State: string(d.State), DurationMs: d.DurationMs, Error: d.Error})
 			}
 		}

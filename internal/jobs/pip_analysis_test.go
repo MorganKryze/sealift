@@ -906,6 +906,24 @@ func TestPipScanFailureFailsTheAnalysis(t *testing.T) {
 	}
 }
 
+func TestPipAnalysisCauseNamesNoDataDirectory(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "jinja2==3.1.2\n"))
+	a.Uv = &fakeUv{lock: "jinja2==3.1.2\n", set: resolved("jinja2", "3.1.2", "markupsafe", "3.0.2")}
+	serveWheels(t, a, resolved("jinja2", "3.1.2", "markupsafe", "3.0.2"))
+	input := filepath.Join(a.Dir, "scan-input")
+	a.Trivy = &cannedTrivy{scanErr: errors.New("trivy fs " + input + ": exit status 1")}
+
+	if err := a.Run(context.Background(), func(Event) {}); err == nil {
+		t.Fatal("Run succeeded, want the scan failure")
+	}
+	status, _ := readStatus(t, st, a)
+	scan := status.Steps[len(status.Steps)-1]
+	rel, _ := filepath.Rel(st.Root(), input)
+	if want := "trivy fs " + rel + ": exit status 1"; !strings.HasSuffix(scan.Error, want) || strings.Contains(scan.Error, st.Root()) {
+		t.Errorf("scan cause = %q, want it to end %q", scan.Error, want)
+	}
+}
+
 func TestReadTrivyReportBound(t *testing.T) {
 	const limit = 1 << 20
 	report := pipTrivyReport([5]string{"jinja2", "3.1.2", "CVE-2024-22195", "MEDIUM", "3.1.3"})

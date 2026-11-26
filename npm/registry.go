@@ -271,9 +271,21 @@ func (c *Client) try(ctx context.Context, u, accept string, fn func(io.Reader) e
 	case resp.StatusCode == http.StatusNotFound:
 		return ErrNotFound
 	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("GET %s: %s", u, resp.Status)
+		return fmt.Errorf("GET %s: %s", redactUserinfo(u), resp.Status)
 	}
 	return fn(resp.Body)
+}
+
+// redactUserinfo is u with the user and password a registry URL may carry
+// replaced by "[redacted]", since an error naming u reaches a job's cause
+// and the log.
+func redactUserinfo(u string) string {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.User == nil {
+		return u
+	}
+	parsed.User = nil
+	return strings.Replace(parsed.String(), "://", "://[redacted]@", 1)
 }
 
 func (c *Client) registry() string {
