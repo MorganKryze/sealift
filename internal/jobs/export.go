@@ -141,7 +141,7 @@ func (e *Export) Run(ctx context.Context, emit func(Event)) (err error) {
 	// every download; fail before the first one instead, as a failed
 	// step so the screen shows the cause.
 	if err := key.Err(); err != nil {
-		emitFailedStep(record, "prepare", 0, err)
+		emitFailedStep(record, e.Store.Root(), "prepare", 0, err)
 		return err
 	}
 
@@ -229,7 +229,7 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 
 	if bad := ValidateSelection(e.Analysis.Result, e.Request.Selection); len(bad) > 0 {
 		err := fmt.Errorf("%w: %s", ErrUnknownSelection, strings.Join(bad, ", "))
-		emitFailedStep(emit, "package-list", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "package-list", time.Since(start), err)
 		return nil, err
 	}
 
@@ -248,7 +248,7 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 		for _, version := range e.Request.Selection[name] {
 			lock, err := e.readLockfile(e.candidateLockfilePath(name, version))
 			if err != nil {
-				emitFailedStep(emit, "package-list", time.Since(start), err)
+				emitFailedStep(emit, e.Store.Root(), "package-list", time.Since(start), err)
 				return nil, err
 			}
 			add(lock)
@@ -257,7 +257,7 @@ func (e *Export) packageList(emit func(Event)) ([]npm.LockPackage, error) {
 	if e.Request.IncludeProject {
 		lock, err := e.readLockfile(filepath.Join(e.Analysis.Dir, "project", "pnpm-lock.yaml"))
 		if err != nil {
-			emitFailedStep(emit, "package-list", time.Since(start), err)
+			emitFailedStep(emit, e.Store.Root(), "package-list", time.Since(start), err)
 			return nil, err
 		}
 		add(lock)
@@ -348,12 +348,12 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 
 	if err := os.MkdirAll(filepath.Join(e.Dir, "downloads"), 0o770); err != nil {
 		werr := fmt.Errorf("jobs: create downloads dir: %w", err)
-		emitFailedStep(emit, "download", time.Since(start), werr)
+		emitFailedStep(emit, e.Store.Root(), "download", time.Since(start), werr)
 		return nil, werr
 	}
 	if err := os.MkdirAll(filepath.Join(e.Store.Root(), "cache", "tarballs"), 0o770); err != nil {
 		werr := fmt.Errorf("jobs: create tarball cache: %w", err)
-		emitFailedStep(emit, "download", time.Since(start), werr)
+		emitFailedStep(emit, e.Store.Root(), "download", time.Since(start), werr)
 		return nil, werr
 	}
 
@@ -398,7 +398,7 @@ func (e *Export) downloadAll(ctx context.Context, emit func(Event), pkgs []npm.L
 	wg.Wait()
 
 	if firstErr != nil {
-		emitFailedStep(emit, "download", time.Since(start), firstErr)
+		emitFailedStep(emit, e.Store.Root(), "download", time.Since(start), firstErr)
 		return nil, firstErr
 	}
 	emitStep(emit, "download", store.Done, time.Since(start))
@@ -509,7 +509,7 @@ func (e *Export) stripAll(ctx context.Context, emit func(Event), downloaded []do
 	for i, d := range downloaded {
 		s, err := e.stripOne(ctx, strippedDir, d)
 		if err != nil {
-			emitFailedStep(emit, "strip", time.Since(start), err)
+			emitFailedStep(emit, e.Store.Root(), "strip", time.Since(start), err)
 			return nil, err
 		}
 		shipped[i] = s
@@ -606,7 +606,7 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	f, err := createNew(path)
 	if err != nil {
 		werr := fmt.Errorf("jobs: create archive: %w", err)
-		emitFailedStep(emit, "archive", time.Since(start), werr)
+		emitFailedStep(emit, e.Store.Root(), "archive", time.Since(start), werr)
 		return report.ArchiveManifest{}, werr
 	}
 	sum := sha256.New()
@@ -616,13 +616,13 @@ func (e *Export) writeArchive(ctx context.Context, emit func(Event), shipped []s
 	}
 	if writeErr != nil {
 		werr := fmt.Errorf("jobs: write archive: %w", writeErr)
-		emitFailedStep(emit, "archive", time.Since(start), werr)
+		emitFailedStep(emit, e.Store.Root(), "archive", time.Since(start), werr)
 		return report.ArchiveManifest{}, werr
 	}
 	st, err := os.Stat(path)
 	if err != nil {
 		werr := fmt.Errorf("jobs: stat archive: %w", err)
-		emitFailedStep(emit, "archive", time.Since(start), werr)
+		emitFailedStep(emit, e.Store.Root(), "archive", time.Since(start), werr)
 		return report.ArchiveManifest{}, werr
 	}
 	emitStep(emit, "archive", store.Done, time.Since(start))
@@ -639,20 +639,20 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 	// The shipped set's scan comes first: the manifest's check reads it
 	// before signing.
 	if err := e.writeTrivyReports(ctx, shipped); err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "reports", time.Since(start), err)
 		return err
 	}
 	projected := e.projected()
 	if err := e.writeManifest(shipped, arch, key, projected); err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "reports", time.Since(start), err)
 		return err
 	}
 	if err := e.writeFindingsCSV(); err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "reports", time.Since(start), err)
 		return err
 	}
 	if err := e.writeSummary(shipped, arch, projected); err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "reports", time.Since(start), err)
 		return err
 	}
 	emitStep(emit, "reports", store.Done, time.Since(start))
@@ -1004,10 +1004,10 @@ func emitStep(emit func(Event), name string, state store.State, d time.Duration)
 	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: d.Milliseconds()})})
 }
 
-// emitFailedStep is emitStep for state Failed, with the error that failed
-// it.
-func emitFailedStep(emit func(Event), name string, d time.Duration, err error) {
-	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: store.Failed, DurationMs: d.Milliseconds(), Error: err.Error()})})
+// emitFailedStep is emitStep for state Failed, with the cause of the error
+// that failed it under the data directory root.
+func emitFailedStep(emit func(Event), root, name string, d time.Duration, err error) {
+	emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: store.Failed, DurationMs: d.Milliseconds(), Error: cause(root, err)})})
 }
 
 // progressEvent builds a "progress" event with analysis.go's progressData

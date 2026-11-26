@@ -134,7 +134,7 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
-	r := &pipRun{stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
+	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
 	uvVersion, trivyVersion, trivyDBDate := "", "", time.Time{}
 	defer func() {
 		state := store.Done

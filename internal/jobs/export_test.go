@@ -1618,8 +1618,9 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	}
 	fetched := 0
 	h.onFetch = func() { fetched++ }
+	rec := &stepRecorder{}
 
-	err := exp.Run(context.Background(), noopEmit)
+	err := exp.Run(context.Background(), rec.emit)
 	if err == nil || !strings.Contains(err.Error(), keyFile) {
 		t.Fatalf("Run = %v, want an error naming %s", err, keyFile)
 	}
@@ -1627,7 +1628,10 @@ func TestExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 		t.Errorf("%d tarballs fetched before the key was checked, want none", fetched)
 	}
 	// Without a failed step the screen would show the failure with no cause.
-	assertExportFailedStatus(t, exportDir, "prepare", keyFile)
+	assertExportFailedStatus(t, exportDir, "prepare", "store: signing key private/signing-key.pem is not")
+	if len(rec.steps) == 0 || strings.Contains(rec.steps[0].Error, h.root) {
+		t.Errorf("step events = %+v, want a prepare cause without %s", rec.steps, h.root)
+	}
 }
 
 // TestExportDownloadRefusesAPathInTheVersion proves a lockfile version

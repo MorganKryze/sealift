@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -301,6 +302,45 @@ func TestRunStepRecordsTheFailureMessage(t *testing.T) {
 	}
 	if r.steps[0].Error != "boom" {
 		t.Errorf("steps[0].Error = %q, want %q", r.steps[0].Error, "boom")
+	}
+}
+
+// TestRunStepKeepsTheDataDirectoryOutOfTheCause proves a failed step's
+// cause names a path under the data directory relative to it, in
+// status.json and in the step event, whatever kind of error named it.
+func TestRunStepKeepsTheDataDirectoryOutOfTheCause(t *testing.T) {
+	root := t.TempDir()
+	var events []Event
+	r := &run{a: &Analysis{}, stepLog: stepLog{ctx: context.Background(), root: root, emit: func(e Event) { events = append(events, e) }}}
+	replaced := filepath.Join(root, "projects", "p", "analyses", "a.tmp", "status.json")
+
+	_ = r.runStep("write", func() error { return fmt.Errorf("store: %s was replaced while it was written", replaced) })
+
+	const want = "store: projects/p/analyses/a.tmp/status.json was replaced while it was written"
+	if len(r.steps) != 1 || r.steps[0].Error != want {
+		t.Errorf("steps = %+v, want one failed step with cause %q", r.steps, want)
+	}
+	var d stepData
+	if len(events) != 1 || json.Unmarshal(events[0].Data, &d) != nil || d.Error != want {
+		t.Errorf("step event = %+v, want cause %q", events, want)
+	}
+}
+
+func TestCauseDropsOnlyTheDataDirectory(t *testing.T) {
+	cases := []struct {
+		name, root, err, want string
+	}{
+		{"a path under the root", "/data", "open /data/projects/p/log.txt: denied", "open projects/p/log.txt: denied"},
+		{"every path under the root", "/data/", "rename /data/a.tmp /data/a: exists", "rename a.tmp a: exists"},
+		{"a sibling of the root", "/data", "open /data2/x: denied", "open /data2/x: denied"},
+		{"no root", "", "open /data/x: denied", "open /data/x: denied"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := cause(c.root, errors.New(c.err)); got != c.want {
+				t.Errorf("cause(%q, %q) = %q, want %q", c.root, c.err, got, c.want)
+			}
+		})
 	}
 }
 
@@ -612,6 +652,10 @@ func TestAnalysis_CandidateWriteFailureFailsTheJob(t *testing.T) {
 	}
 	if status.State != store.Failed {
 		t.Fatalf("status.json state = %q, want %q", status.State, store.Failed)
+	}
+	failed := status.Steps[len(status.Steps)-1]
+	if failed.Name != "resolve-candidates" || !strings.Contains(failed.Error, "candidates") || strings.Contains(failed.Error, st.Root()) {
+		t.Errorf("failed step = %+v, want resolve-candidates naming candidates/ without %s", failed, st.Root())
 	}
 }
 

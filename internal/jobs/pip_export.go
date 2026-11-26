@@ -141,7 +141,7 @@ func (e *PipExport) Run(ctx context.Context, emit func(Event)) (err error) {
 	// every download; fail before the first one instead, as a failed
 	// step so the screen shows the cause.
 	if err := key.Err(); err != nil {
-		emitFailedStep(record, "prepare", 0, err)
+		emitFailedStep(record, e.Store.Root(), "prepare", 0, err)
 		return err
 	}
 
@@ -198,7 +198,7 @@ func (e *PipExport) packageList(emit func(Event)) ([]PipPackage, error) {
 	emitStep(emit, "package-list", store.Running, 0)
 	pkgs := e.Analysis.Result.Packages
 	if err := checkPipSet(pkgs); err != nil {
-		emitFailedStep(emit, "package-list", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "package-list", time.Since(start), err)
 		return nil, err
 	}
 	emitStep(emit, "package-list", store.Done, time.Since(start))
@@ -276,7 +276,7 @@ func (e *PipExport) downloadAll(ctx context.Context, emit func(Event), pkgs []Pi
 	start := time.Now()
 	emitStep(emit, "download", store.Running, 0)
 	fail := func(err error) ([]pipWheelFile, error) {
-		emitFailedStep(emit, "download", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "download", time.Since(start), err)
 		return nil, err
 	}
 	for _, dir := range []string{filepath.Join(e.Dir, "downloads"), e.wheelCache()} {
@@ -422,7 +422,7 @@ func (e *PipExport) writeArchive(ctx context.Context, emit func(Event), wheels [
 	start := time.Now()
 	emitStep(emit, "archive", store.Running, 0)
 	fail := func(err error) (report.ArchiveManifest, error) {
-		emitFailedStep(emit, "archive", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "archive", time.Since(start), err)
 		return report.ArchiveManifest{}, err
 	}
 
@@ -489,7 +489,7 @@ func (e *PipExport) writeReports(ctx context.Context, emit func(Event), wheels [
 		err = e.writeSummary(findings, wheels, arch)
 	}
 	if err != nil {
-		emitFailedStep(emit, "reports", time.Since(start), err)
+		emitFailedStep(emit, e.Store.Root(), "reports", time.Since(start), err)
 		return err
 	}
 	emitStep(emit, "reports", store.Done, time.Since(start))

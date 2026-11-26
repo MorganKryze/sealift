@@ -1956,8 +1956,12 @@ func TestPipExportFailsBeforeAnyDownloadWithAKeyThatDoesNotRead(t *testing.T) {
 	if err := json.Unmarshal(readFile(t, filepath.Join(e.Dir, "status.json")), &status); err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Steps) == 0 || status.Steps[0].Name != "prepare" || status.Steps[0].State != string(store.Failed) || !strings.Contains(status.Steps[0].Error, keyFile) {
-		t.Errorf("status.json steps = %+v, want a failed prepare step naming %s", status.Steps, keyFile)
+	const cause = "store: signing key private/signing-key.pem is not"
+	if len(status.Steps) == 0 || status.Steps[0].Name != "prepare" || status.Steps[0].State != string(store.Failed) || !strings.HasPrefix(status.Steps[0].Error, cause) {
+		t.Errorf("status.json steps = %+v, want a failed prepare step starting %q", status.Steps, cause)
+	}
+	if len(rec.steps) == 0 || !strings.HasPrefix(rec.steps[0].Error, cause) {
+		t.Errorf("step events = %+v, want a prepare cause starting %q", rec.steps, cause)
 	}
 }
 

@@ -146,6 +146,18 @@ type stepData struct {
 	Error      string      `json:"error,omitempty"`
 }
 
+// cause is err's message as a job records it for a client, in status.json
+// and in a step event: a path under the data directory root reads relative
+// to it, whatever kind of error named the path. The server log keeps err
+// as it is.
+func cause(root string, err error) string {
+	msg := err.Error()
+	if root == "" {
+		return msg
+	}
+	return strings.ReplaceAll(msg, filepath.Clean(root)+string(filepath.Separator), "")
+}
+
 // progressData is the payload of a "progress" event. Step names the step
 // this progress belongs to, so a client keys it by name instead of by how
 // many step events it has seen so far: the latter breaks for a subscriber
@@ -192,6 +204,7 @@ func mustJSON(v any) json.RawMessage {
 // The npm and pip analyses share it.
 type stepLog struct {
 	ctx     context.Context
+	root    string
 	emit    func(Event)
 	logFile *os.File
 	steps   []stepRecord
@@ -223,7 +236,7 @@ func (l *stepLog) runStep(name string, fn func() error) error {
 	duration := time.Since(start).Milliseconds()
 	message := ""
 	if state == store.Failed {
-		message = err.Error()
+		message = cause(l.root, err)
 	}
 	l.steps = append(l.steps, stepRecord{Name: name, State: string(state), DurationMs: duration, Error: message})
 	l.emit(Event{Kind: "step", Data: mustJSON(stepData{Name: name, State: state, DurationMs: duration, Error: message})})
@@ -315,7 +328,7 @@ func (a *Analysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	}
 
 	r := &run{
-		stepLog: stepLog{ctx: ctx, emit: emit, logFile: logFile},
+		stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile},
 		a:       a,
 		// Dependencies and Warnings start as empty slices, not nil: the
 		// contract marks both required arrays, and a client that trusts it
