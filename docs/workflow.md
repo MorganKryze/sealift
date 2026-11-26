@@ -97,7 +97,7 @@ When a step fails, the screen reads Analysis stopped, with how long it ran, and 
 | The vulnerability database did not download | **Retry** |
 | Any other cause, in the first line of the tool's message | **Retry** |
 
-An analysis from a release that kept no cause reads The cause was not recorded, and names the step it stopped at. The log stays folded under the block, and **Open Instance** shows the target and limits in effect. See your administrators closes the page with the deployment's contact.
+An analysis from a release that kept no cause reads The cause was not recorded, and names the step it stopped at. The log stays folded under the block. The Instance page shows the target and limits in effect. See your administrators closes the page with the deployment's contact.
 
 ![Analysis stopped: A pinned version is not on npm, lodash 4.17.99, with Replace package.json](assets/analysis-failed.png)
 
