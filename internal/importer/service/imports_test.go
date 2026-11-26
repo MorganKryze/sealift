@@ -71,6 +71,8 @@ type rigOptions struct {
 	settings func(*importer.Settings) // changes the settings that point at the fake Nexus
 	// publisher wraps each client of the fake Nexus the service builds.
 	publisher func(importer.Publisher) importer.Publisher
+	// removing runs before each removal of an archive, once the attempt's end is stored.
+	removing func()
 }
 
 func newImportRig(t *testing.T, o rigOptions) *importRig {
@@ -132,7 +134,14 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 				}
 			}
 		}
-		return r.handlers.RunAttempt(ctx, imp, dir, p)
+		rep, remove := r.handlers.RunAttempt(ctx, imp, dir, p)
+		if remove != nil && o.removing != nil {
+			return rep, func(ctx context.Context) *imports.Removal {
+				o.removing()
+				return remove(ctx)
+			}
+		}
+		return rep, remove
 	}
 	r.queue = imports.NewQueue(st, run, slog.New(slog.NewJSONHandler(r.logs, nil)))
 	t.Cleanup(r.queue.Close)
@@ -1395,6 +1404,31 @@ func TestCancelImport(t *testing.T) {
 			if got, _ := r.store.Get("alice", id); got.Outcome() != outcome {
 				t.Errorf("%s: the import now reads %q", outcome, got.Outcome())
 			}
+		}
+	})
+
+	t.Run("answers 409 to a cancel that lands after the run returned", func(t *testing.T) {
+		removing, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{removing: func() {
+			close(removing)
+			<-release
+		}})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-removing:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the archive was never removed")
+		}
+		rec := r.cancel("t", id)
+		free()
+		if rec.Code != http.StatusConflict || detailOf(problemOf(t, rec)) != "the latest attempt of this import has ended" {
+			t.Errorf("a cancel during the removal answered %d %s, want 409", rec.Code, rec.Body)
+		}
+		if done := waitEnded(t, r.store, id); done.Outcome() != importer.OutcomeComplete || !done.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", done.Outcome(), done.ArchiveRemoved())
 		}
 	})
 

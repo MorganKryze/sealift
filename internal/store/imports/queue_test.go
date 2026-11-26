@@ -508,6 +508,35 @@ func TestQueueCancel(t *testing.T) {
 		}
 	})
 
+	t.Run("answers ErrEnded to a cancel that lands after the run returned", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, removing, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			return completeReport(), func(ctx context.Context) *Removal {
+				close(removing)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return &Removal{Removed: true}
+			}
+		})
+		q.Submit(imp.User, imp.ID)
+		// The queue removes the archive after the end is stored, while the
+		// attempt is still its current one.
+		waitFor(t, removing, "the removal")
+		_, err := s.Cancel(imp.User, imp.ID)
+		close(release)
+		if !errors.Is(err, ErrEnded) {
+			t.Errorf("err = %v, want ErrEnded", err)
+		}
+		q.Close()
+		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete || !got.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", got.Outcome(), got.ArchiveRemoved())
+		}
+	})
+
 	t.Run("a store with no queue ends a queued attempt and refuses a running one", func(t *testing.T) {
 		s, _ := openStore(t, testRoot(t))
 		queued, running := newImport(t, s, "alice"), newImport(t, s, "alice")
