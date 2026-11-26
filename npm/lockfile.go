@@ -160,8 +160,8 @@ func writeBounded(b *strings.Builder, v any) {
 	case bool, int, int64, uint64, float64:
 		fmt.Fprint(b, x)
 	default:
-		// A kind yaml does not give today, such as a map with keys that are
-		// not strings, is named rather than printed whole.
+		// Any other kind, such as the map yaml gives for keys that are not
+		// strings, is named rather than printed whole.
 		b.WriteString("?")
 	}
 }

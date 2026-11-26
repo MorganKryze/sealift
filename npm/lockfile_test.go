@@ -115,7 +115,10 @@ func TestParseLockfileReadsEnginesThatAreNotStrings(t *testing.T) {
 		{"another engine is not a number", `{node: '>=18', npm: .nan}`, map[string]string{"node": ">=18"}},
 		{"node is not a number", `{node: [.inf]}`, map[string]string{"node": "not a string: [+Inf]"}},
 		{"node is 0", `{node: 0}`, map[string]string{}},
-		{"long node is cut", `{node: ['` + strings.Repeat("é", 40) + `']}`, map[string]string{"node": `not a string: ["` + strings.Repeat("é", 31)}},
+		{"long node is cut inside a rune", `{node: ['a` + strings.Repeat("é", 40) + `']}`, map[string]string{"node": `not a string: ["a` + strings.Repeat("é", 30)}},
+		{"long list is cut", `{node: [` + strings.Repeat("1, ", 99) + `1]}`, map[string]string{"node": "not a string: [" + strings.Repeat("1,", 31) + "1"}},
+		{"long map is cut", `{node: {` + strings.Repeat("a", 30) + `: 1, ` + strings.Repeat("b", 30) + `: 2, c: 3}}`, map[string]string{"node": `not a string: {"` + strings.Repeat("a", 30) + `":1,"` + strings.Repeat("b", 27)}},
+		{"node map has a key that is not a string", `{node: {1: x}}`, map[string]string{"node": "not a string: ?"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -177,6 +180,7 @@ func TestParseLockfileReadsALargeAliasedValueCheaply(t *testing.T) {
 	b.WriteString("lockfileVersion: '9.0'\nbig: &s ['" + strings.Repeat("x", 1<<20) + "']\npackages:\n")
 	for i := range 200 {
 		fmt.Fprintf(&b, "  p%d@1.0.0:\n    resolution: {integrity: sha512-x}\n    engines: {node: *s}\n", i)
+		fmt.Fprintf(&b, "  q%d@1.0.0:\n    resolution: {integrity: sha512-x}\n    engines: {node: {1: *s}}\n", i)
 	}
 	doc := b.String()
 	var before, after runtime.MemStats
