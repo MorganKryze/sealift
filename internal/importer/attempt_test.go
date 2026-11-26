@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importtest"
@@ -445,6 +446,8 @@ type pipFixture struct {
 	// cancelOpen and cancelRead cancel the attempt as the archive is opened,
 	// or as its first bytes are read.
 	cancelOpen, cancelRead bool
+	// wrap, when set, wraps the Nexus client the attempt builds.
+	wrap func(Publisher) Publisher
 }
 
 // cancelOnRead cancels the attempt on each read and reads on, so only the
@@ -520,7 +523,17 @@ func (p *pipFixture) attempt(t *testing.T, folder archive.Ecosystem, opts ...fun
 	for _, o := range opts {
 		o(&a)
 	}
-	return RunAttempt(ctx, a, clientFor), opened
+	newPublisher := clientFor
+	if p.wrap != nil {
+		newPublisher = func(s Settings) (Publisher, error) {
+			c, err := clientFor(s)
+			if err != nil {
+				return nil, err
+			}
+			return p.wrap(c), nil
+		}
+	}
+	return RunAttempt(ctx, a, newPublisher), opened
 }
 
 func TestPipAttemptRefusals(t *testing.T) {
@@ -933,6 +946,34 @@ func TestRunAttemptCancel(t *testing.T) {
 			t.Errorf("outcome %q, counts %+v", rep.Outcome, rep.Counts)
 		}
 	})
+	t.Run("lets the wheel in flight finish and starts no other", func(t *testing.T) {
+		p := newPipFixture(t)
+		w := &cancelInFlight{cancel: make(chan struct{})}
+		p.wrap = func(c Publisher) Publisher {
+			w.Publisher = c
+			return w
+		}
+		rep, _ := p.attempt(t, archive.Pip, func(a *Attempt) {
+			a.Progress.Cancelled = w.cancel
+			open := a.Source.Archive
+			a.Source.Archive = func(ctx context.Context) (io.ReadCloser, error) {
+				w.checks = ctx
+				return open(ctx)
+			}
+		})
+		if r := rep.Packages[0]; r.State != Published {
+			t.Errorf("the wheel in flight = %+v, want published once read back", r)
+		}
+		if r := rep.Packages[1]; r.State != Failed || r.Kind != KindInterrupted || r.Reason != reasonInterrupted {
+			t.Errorf("%s after the cancel = %+v, want failed interrupted", r.Name, r)
+		}
+		if n := p.n.Uploads(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if rep.Outcome != OutcomeIncomplete || rep.Counts.Published != 1 || rep.Counts.Failed != 1 {
+			t.Errorf("outcome %q, counts %+v", rep.Outcome, rep.Counts)
+		}
+	})
 	t.Run("stops the checks of an attempt cancelled before its first package", func(t *testing.T) {
 		r := newFixture(t)
 		cancelled := make(chan struct{})
@@ -953,4 +994,33 @@ func TestRunAttemptCancel(t *testing.T) {
 		}
 		r.f.mu.Unlock()
 	})
+}
+
+// cancelInFlight cancels the attempt once Nexus has stored the first upload,
+// and answers only after the cancel has ended checks, the context the archive
+// was read on. An upload made on that context then fails, as one a cancel
+// cut on the network would.
+type cancelInFlight struct {
+	Publisher
+	cancel chan struct{}
+	checks context.Context
+	once   sync.Once
+}
+
+func (c *cancelInFlight) Upload(ctx context.Context, file string, r io.Reader) error {
+	if err := c.Publisher.Upload(ctx, file, r); err != nil {
+		return err
+	}
+	first := false
+	c.once.Do(func() { first = true })
+	if !first {
+		return nil
+	}
+	close(c.cancel)
+	select {
+	case <-c.checks.Done():
+	case <-time.After(10 * time.Second):
+		return errors.New("the cancel never ended the checks")
+	}
+	return ctx.Err()
 }
