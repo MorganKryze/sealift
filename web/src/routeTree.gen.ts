@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InstanceRouteImport } from './routes/instance'
 import { Route as UpdateRouteImport } from './routes/update'
+import { Route as CrossingsProjectIdRouteImport } from './routes/crossings.$projectId'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
@@ -34,6 +35,11 @@ const InstanceRoute = InstanceRouteImport.update({
 const UpdateRoute = UpdateRouteImport.update({
   id: '/update',
   path: '/update',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CrossingsProjectIdRoute = CrossingsProjectIdRouteImport.update({
+  id: '/crossings/$projectId',
+  path: '/crossings/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/projects': typeof ProjectsIndexRoute
   '/sessions/$sessionId/analysis': typeof SessionsSessionIdAnalysisRoute
@@ -108,6 +116,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/instance': typeof InstanceRoute
   '/update': typeof UpdateRoute
+  '/crossings/$projectId': typeof CrossingsProjectIdRoute
   '/projects/$projectId': typeof ProjectsProjectIdRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
@@ -123,6 +132,7 @@ export interface FileRouteTypes {
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/projects/'
@@ -136,6 +146,7 @@ export interface FileRouteTypes {
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
     | '/projects'
     | '/sessions/$sessionId/analysis'
@@ -148,6 +159,7 @@ export interface FileRouteTypes {
     | '/'
     | '/instance'
     | '/update'
+    | '/crossings/$projectId'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/projects/'
@@ -162,6 +174,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   InstanceRoute: typeof InstanceRoute
   UpdateRoute: typeof UpdateRoute
+  CrossingsProjectIdRoute: typeof CrossingsProjectIdRoute
   ProjectsProjectIdRoute: typeof ProjectsProjectIdRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRouteWithChildren
   ProjectsIndexRoute: typeof ProjectsIndexRoute
@@ -188,6 +201,13 @@ declare module '@tanstack/react-router' {
       path: '/update'
       fullPath: '/update'
       preLoaderRoute: typeof UpdateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/crossings/$projectId': {
+      id: '/crossings/$projectId'
+      path: '/crossings/$projectId'
+      fullPath: '/crossings/$projectId'
+      preLoaderRoute: typeof CrossingsProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
@@ -272,6 +292,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   InstanceRoute: InstanceRoute,
   UpdateRoute: UpdateRoute,
+  CrossingsProjectIdRoute: CrossingsProjectIdRoute,
   ProjectsProjectIdRoute: ProjectsProjectIdRoute,
   SessionsSessionIdRoute: SessionsSessionIdRouteWithChildren,
   ProjectsIndexRoute: ProjectsIndexRoute,

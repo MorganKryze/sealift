@@ -19,6 +19,8 @@ interface ReasonsBlockProps {
   onJump: (name: string) => void
   /** The server's words when it refused the export for its reasons. */
   refusal?: string
+  /** False on Ready, whose head explains CVE and the severities first. */
+  explainCves?: boolean
 }
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`
@@ -69,7 +71,7 @@ function cveRow(need: NeededReason, byName: Map<string, DependencyResult>): CveR
  * missing is a closed amber row with its action; a written one shows its text. CVE, a severity and major
  * jump are explained once each, at the bands' heads and the first row with severities.
  */
-export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusal }: ReasonsBlockProps) {
+export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusal, explainCves = true }: ReasonsBlockProps) {
   const id = useId()
   if (needed.length === 0 && !refusal) {
     return null
@@ -86,7 +88,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
   const cvesWritten = cves.filter((row) => written(textOf(row.need))).length
   const unknown = cves.some((row) => row.cves.some((cve) => cveFix(cve).kind === "unknown"))
   const carried = (n: number) => (n > 0 ? `, carried with ${plural(n, "reason", "reasons")}` : "")
-  const firstSeverities = cves.find((row) => row.cves.length > 0)
+  const firstSeverities = explainCves ? cves.find((row) => row.cves.length > 0) : undefined
 
   return (
     <section aria-label="Reasons" className="mb-3">
@@ -120,7 +122,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
                   {cves.length > 1 ? ` in ${plural(cves.length, "package", "packages")}` : ""}
                   {carried(cvesWritten)}
                 </p>
-                <Term id="cve" />
+                {explainCves ? <Term id="cve" /> : null}
               </Band>
               <ul className="flex flex-col gap-1.5 p-1.5">
                 {cves.map((row) => (

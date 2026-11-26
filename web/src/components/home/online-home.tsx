@@ -24,7 +24,7 @@ function place(project: ProjectSummary): Placed | null {
   // An export counts only when it belongs to the latest analysis.
   const exported = last && project.lastExport?.analysisId === last.id ? project.lastExport : undefined
   const state = crossingState(last, exported)
-  const session = `/sessions/${encodeURIComponent(project.id)}`
+  const crossing = `/crossings/${encodeURIComponent(project.id)}`
   const row = (icon: HomeRow["icon"], tone: Tone, action: HomeRow["action"]) => ({
     key: project.id,
     icon,
@@ -34,15 +34,15 @@ function place(project: ProjectSummary): Placed | null {
   })
   switch (state.kind) {
     case "waits":
-      return { project, group: "needs", row: row(ListChecks, "warn", { label: "Review", to: `${session}/review` }) }
+      return { project, group: "needs", row: row(ListChecks, "warn", { label: "Review", to: crossing }) }
     case "failed":
-      return { project, group: "needs", row: row(CircleX, "bad", { label: "Open", to: session }) }
+      return { project, group: "needs", row: row(CircleX, "bad", { label: "Open", to: crossing }) }
     case "new":
-      return { project, group: "needs", row: row(CircleDashed, "warn", { label: "Open", to: `${session}/drop` }) }
+      return { project, group: "needs", row: row(CircleDashed, "warn", { label: "Open", to: crossing, search: { step: "check" } }) }
     case "queued":
-      return { project, group: "progress", row: row(Clock, "info", { label: "Open", to: session }) }
+      return { project, group: "progress", row: row(Clock, "info", { label: "Open", to: crossing }) }
     case "running":
-      return { project, group: "progress", row: row(exported ? Lock : LoaderCircle, "info", { label: "Open", to: session }) }
+      return { project, group: "progress", row: row(exported ? Lock : LoaderCircle, "info", { label: "Open", to: crossing }) }
     case "sealed":
     case "cancelled":
       return null
