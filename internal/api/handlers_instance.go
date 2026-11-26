@@ -35,6 +35,7 @@ func (h *Handlers) GetInstance(ctx context.Context, _ GetInstanceRequestObject) 
 				ProposeOtherMajors: h.Policy.Review.ProposeOtherMajors,
 				MajorJump:          ReviewRule(h.Policy.Review.MajorJump),
 				CveWithoutFix:      ReviewRule(h.Policy.Review.CVEWithoutFix),
+				Yanked:             ReviewRule(h.Policy.Review.Yanked),
 			},
 		},
 	}
