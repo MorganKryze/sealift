@@ -701,6 +701,25 @@ export interface components {
             warnings: string[];
             /** @description The groups of dependencies whose jumps must move together, sorted by name. Absent from an analysis written before families existed. */
             families?: components["schemas"]["Family"][];
+            /** @description What each CVE id that the result's cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date. */
+            advisories?: {
+                [key: string]: components["schemas"]["Advisory"];
+            };
+        };
+        /** @description What one CVE does, as the Trivy report words it, cleaned and bounded. Each field is absent when the report does not give it. */
+        Advisory: {
+            /**
+             * @description Trivy's title, at most 200 code points. Plain text: a client renders it as text, never as HTML or Markdown.
+             * @example axios: Axios DoS via lack of data size check
+             */
+            title?: string;
+            /** @description The first paragraph of Trivy's description, at most 500 code points, cut after its last whole sentence. Plain text: a client renders it as text, never as HTML or Markdown. */
+            summary?: string;
+            /**
+             * Format: date-time
+             * @description When the advisory was published, in UTC, to the second
+             */
+            published?: string;
         };
         /** @description Dependencies whose jumps must move together */
         Family: {
@@ -722,6 +741,10 @@ export interface components {
             /** @description Packages with no wheel the target can install */
             blocking: components["schemas"]["PipBlocking"][];
             warnings: string[];
+            /** @description What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date. */
+            advisories?: {
+                [key: string]: components["schemas"]["Advisory"];
+            };
         };
         /** @description One package of a pip analysis' set */
         PipPackage: {
@@ -761,6 +784,7 @@ export interface components {
             severity: string;
             /** @description The versions that fix it, as Trivy lists them, empty when none is known */
             fixedVersions: string[];
+            /** @description Trivy's title, plain text that a client renders as text, never as HTML or Markdown. A newer analysis stores it cleaned and cut to 200 code points. An analysis from 0.7.0 stores it as Trivy gave it. */
             title?: string;
         };
         /** @description A package the target cannot install from a wheel */

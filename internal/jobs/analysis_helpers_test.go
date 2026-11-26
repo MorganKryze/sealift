@@ -236,3 +236,12 @@ func TestFactsOfFlagsANodeEngineThatIsNotAString(t *testing.T) {
 		})
 	}
 }
+
+func TestScanPackagesRefusesAReportPastItsBound(t *testing.T) {
+	a := &Analysis{Trivy: &cannedTrivy{report: `{"SchemaVersion": 2}` + strings.Repeat(" ", trivyReportLimit)}}
+	out := filepath.Join(t.TempDir(), "project.trivy.json")
+	_, err := a.scanPackages(context.Background(), nil, out)
+	if err == nil || !strings.Contains(err.Error(), "larger than 64 MiB") {
+		t.Errorf("scanPackages = %v, want the report refused past 64 MiB", err)
+	}
+}

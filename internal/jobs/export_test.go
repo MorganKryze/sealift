@@ -1492,6 +1492,91 @@ func TestSameSelectionSameArchiveWhateverTheReasons(t *testing.T) {
 	}
 }
 
+// writeResultFiles writes result to the analysis' ranking.json and
+// candidates.json, with advisories as their "advisories" object when it is
+// not nil and without the key otherwise, and returns the result an export
+// reads back from ranking.json.
+func writeResultFiles(t *testing.T, analysisDir string, result Result, advisories map[string]Advisory) Result {
+	t.Helper()
+	result.Advisories = nil
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if advisories != nil {
+		if doc["advisories"], err = json.Marshal(advisories); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if raw, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ranking.json", "candidates.json"} {
+		if err := os.WriteFile(filepath.Join(analysisDir, name), raw, 0o664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var read Result
+	if err := json.Unmarshal(readFile(t, filepath.Join(analysisDir, "ranking.json")), &read); err != nil {
+		t.Fatal(err)
+	}
+	return read
+}
+
+func TestSameSelectionSameArchiveWhetherTheAnalysisKeepsAdvisories(t *testing.T) {
+	h := newTestHarness(t)
+	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+	h.buildAnalysis(analysisDir)
+	const reason = "Only our own build calls the gadget."
+
+	var archives, manifests [2][]byte
+	for i, keep := range []bool{false, true} {
+		exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+		exp := reviewedExport(t, h, analysisDir, exportDir, reason)
+		var advisories map[string]Advisory
+		if keep {
+			advisories = map[string]Advisory{}
+			for _, dr := range exp.Analysis.Result.Dependencies {
+				for _, cand := range append([]Candidate{{CVEs: dr.CVEs}}, dr.Candidates...) {
+					for _, c := range cand.CVEs {
+						advisories[c.ID] = Advisory{
+							Title:     "gadget: <b>a title</b> the review never quotes",
+							Summary:   "The gadget evaluates `input` as code. See [the advisory](https://example.com).",
+							Published: "2026-09-01T12:00:00Z",
+						}
+					}
+				}
+			}
+			if len(advisories) == 0 {
+				t.Fatal("the result names no CVE id, the test proves nothing")
+			}
+		}
+		exp.Analysis.Result = writeResultFiles(t, analysisDir, exp.Analysis.Result, advisories)
+		if got := len(exp.Analysis.Result.Advisories); got != len(advisories) {
+			t.Fatalf("export %d reads %d advisories, want %d", i, got, len(advisories))
+		}
+		if err := exp.Run(context.Background(), noopEmit); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		archives[i] = readFile(t, filepath.Join(exportDir, "packages_npm.tar.gz"))
+		manifest := readFile(t, filepath.Join(exportDir, "manifest.json"))
+		if !createdAtLine.Match(manifest) {
+			t.Fatalf("export %d: manifest.json has no createdAt line:\n%s", i, manifest)
+		}
+		manifests[i] = createdAtLine.ReplaceAll(manifest, nil)
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("the archive's bytes changed with the analysis' advisories")
+	}
+	if !bytes.Equal(manifests[0], manifests[1]) {
+		t.Errorf("manifest.json changed with the analysis' advisories:\n%s\nthen\n%s", manifests[0], manifests[1])
+	}
+}
+
 func TestExportRefusesAManifestTheImportCannotRead(t *testing.T) {
 	h := newTestHarness(t)
 	analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")

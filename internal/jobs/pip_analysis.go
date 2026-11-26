@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/MorganKryze/sealift/internal/runner"
 	"github.com/MorganKryze/sealift/internal/store"
@@ -47,11 +46,12 @@ func (a *PipAnalysis) ProjectID() string { return a.Project.ID }
 // PipResult is what a pip analysis writes to pip-result.json, and what the
 // API returns as pipResult. Field names match the contract's schemas.
 type PipResult struct {
-	Target   store.PipTarget `json:"target"`
-	Files    []string        `json:"files"`    // every requirements file the set was resolved from
-	Packages []PipPackage    `json:"packages"` // sorted by normalized name
-	Blocking []PipBlocking   `json:"blocking"`
-	Warnings []string        `json:"warnings"`
+	Target     store.PipTarget     `json:"target"`
+	Files      []string            `json:"files"`    // every requirements file the set was resolved from
+	Packages   []PipPackage        `json:"packages"` // sorted by normalized name
+	Blocking   []PipBlocking       `json:"blocking"`
+	Warnings   []string            `json:"warnings"`
+	Advisories map[string]Advisory `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
 }
 
 // PipPackage is one package of the resolved set.
@@ -356,6 +356,7 @@ func (r *pipRun) stepScan() error {
 			Blocking: []PipBlocking{},
 			Warnings: nonNil(r.warnings),
 		}
+		advisories := map[string]Advisory{}
 		matched := map[string]bool{}
 		for _, p := range r.resolved {
 			key := p.Name + "@" + p.Version
@@ -364,12 +365,15 @@ func (r *pipRun) stepScan() error {
 				Name:    p.Name,
 				Version: p.Version,
 				Files:   nonNil(r.set.FilesOf(p.Name)),
-				CVEs:    pipFindingsOf(index.Set([]string{key})),
+				CVEs:    pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
 			}
 			if w, ok := r.wheels[p.Name]; ok {
 				pkg.Wheel = &w
 			}
 			result.Packages = append(result.Packages, pkg)
+		}
+		if len(advisories) > 0 {
+			result.Advisories = advisories
 		}
 		var outside []string
 		outsideFindings := 0
@@ -408,18 +412,15 @@ func outsideWarning(findings int, names []string) string {
 const shownNameLimit = 100
 
 // cleanName drops control and format characters from a name Trivy
-// reported and cuts it to shownNameLimit runes.
+// reported, turns each whitespace control into a space, and cuts it to
+// shownNameLimit runes.
 func cleanName(s string) string { return cleanText(s, shownNameLimit) }
 
 // cleanText drops control and format characters from s, which comes from
-// outside, and cuts it to limit runes.
+// outside, turns each whitespace control into a space, and cuts it to
+// limit runes.
 func cleanText(s string, limit int) string {
-	runes := []rune(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, s))
+	runes := []rune(dropControl(s))
 	if len(runes) <= limit {
 		return string(runes)
 	}
@@ -450,7 +451,7 @@ func scanComponents(ctx context.Context, trivy runner.Trivy, components []sbom.C
 	return readTrivyReport(outPath, trivyReportLimit)
 }
 
-// trivyReportLimit bounds the Trivy report a pip scan reads. A finding
+// trivyReportLimit bounds the Trivy report an npm or pip scan reads. A finding
 // takes about 4 KiB of it, so this holds some 16,000 findings.
 const trivyReportLimit = 64 << 20
 
@@ -465,14 +466,21 @@ func readTrivyReport(path string, limit int64) ([]rank.Finding, error) {
 }
 
 // pipFindingsOf converts a vulnerability set, as rank.Index.Set returns
-// it, into findings sorted by severity, critical first, then id.
-func pipFindingsOf(set map[string]rank.Finding) []PipFinding {
+// it, into findings sorted by severity, critical first, then id, with
+// titles cleaned as advisoryTitle cleans them. It adds each finding's
+// advisory to advisories in that order, unless the table already holds
+// one for its id, and passes logDropped each finding it adds.
+func pipFindingsOf(root string, set map[string]rank.Finding, advisories map[string]Advisory, logDropped func(rank.Finding)) []PipFinding {
 	sorted := slices.SortedFunc(maps.Values(set), func(a, b rank.Finding) int {
 		return cmp.Or(cmp.Compare(a.Severity, b.Severity), strings.Compare(a.ID, b.ID))
 	})
 	findings := make([]PipFinding, len(sorted))
 	for i, f := range sorted {
-		findings[i] = PipFinding{ID: f.ID, Severity: severityText(f.Severity), FixedVersions: fixedVersions(f.FixedVersion), Title: f.Title}
+		findings[i] = PipFinding{ID: f.ID, Severity: severityText(f.Severity), FixedVersions: fixedVersions(f.FixedVersion), Title: advisoryTitle(root, f.Title)}
+		if _, ok := advisories[f.ID]; !ok {
+			logDropped(f)
+		}
+		addAdvisory(advisories, root, f)
 	}
 	return findings
 }

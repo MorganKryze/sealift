@@ -1159,11 +1159,48 @@ components:
             by name. Absent from an analysis written before families existed.
           items:
             $ref: "#/components/schemas/Family"
+        advisories:
+          type: object
+          description: >-
+            What each CVE id that the result's cves lists name does, keyed by
+            id, from the Trivy report. Absent from an analysis written before
+            advisories were kept, and when no CVE has a title, a description
+            or a date.
+          propertyNames:
+            type: string
+            maxLength: 64
+            pattern: "^[A-Z]+-[A-Za-z0-9-]+$"
+          additionalProperties:
+            $ref: "#/components/schemas/Advisory"
       required:
         - target
         - before
         - dependencies
         - warnings
+    Advisory:
+      type: object
+      description: >-
+        What one CVE does, as the Trivy report words it, cleaned and bounded.
+        Each field is absent when the report does not give it.
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          description: >-
+            Trivy's title, at most 200 code points. Plain text: a client
+            renders it as text, never as HTML or Markdown.
+          example: "axios: Axios DoS via lack of data size check"
+        summary:
+          type: string
+          maxLength: 500
+          description: >-
+            The first paragraph of Trivy's description, at most 500 code
+            points, cut after its last whole sentence. Plain text: a client
+            renders it as text, never as HTML or Markdown.
+        published:
+          type: string
+          format: date-time
+          description: When the advisory was published, in UTC, to the second
     Family:
       type: object
       description: Dependencies whose jumps must move together
@@ -1208,6 +1245,19 @@ components:
           type: array
           items:
             type: string
+        advisories:
+          type: object
+          description: >-
+            What each CVE id that the packages' cves lists name does, keyed
+            by id, from the Trivy report. Absent from an analysis written
+            before advisories were kept, and when no CVE has a title, a
+            description or a date.
+          propertyNames:
+            type: string
+            maxLength: 64
+            pattern: "^[A-Z]+-[A-Za-z0-9-]+$"
+          additionalProperties:
+            $ref: "#/components/schemas/Advisory"
       required:
         - target
         - files
@@ -1280,6 +1330,10 @@ components:
             type: string
         title:
           type: string
+          description: >-
+            Trivy's title, plain text that a client renders as text, never as
+            HTML or Markdown. A newer analysis stores it cleaned and cut to 200
+            code points. An analysis from 0.7.0 stores it as Trivy gave it.
       required:
         - id
         - severity

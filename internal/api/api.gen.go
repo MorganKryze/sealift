@@ -203,6 +203,18 @@ func (e State) Valid() bool {
 	}
 }
 
+// Advisory What one CVE does, as the Trivy report words it, cleaned and bounded. Each field is absent when the report does not give it.
+type Advisory struct {
+	// Published When the advisory was published, in UTC, to the second
+	Published *time.Time `json:"published,omitempty"`
+
+	// Summary The first paragraph of Trivy's description, at most 500 code points, cut after its last whole sentence. Plain text: a client renders it as text, never as HTML or Markdown.
+	Summary *string `json:"summary,omitempty"`
+
+	// Title Trivy's title, at most 200 code points. Plain text: a client renders it as text, never as HTML or Markdown.
+	Title *string `json:"title,omitempty"`
+}
+
 // Analysis One analysis job and its state.
 type Analysis struct {
 	CreatedAt time.Time `json:"createdAt"`
@@ -236,6 +248,9 @@ type Analysis struct {
 
 // AnalysisResult What an analysis writes to candidates.json and ranking.json
 type AnalysisResult struct {
+	// Advisories What each CVE id that the result's cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date.
+	Advisories *map[string]Advisory `json:"advisories,omitempty"`
+
 	// After Null when the combined check (step 9) never measured it
 	After *Vector `json:"after"`
 
@@ -469,6 +484,9 @@ type LogData struct {
 
 // PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
 type PipAnalysisResult struct {
+	// Advisories What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date.
+	Advisories *map[string]Advisory `json:"advisories,omitempty"`
+
 	// Blocking Packages with no wheel the target can install
 	Blocking []PipBlocking `json:"blocking"`
 
@@ -501,8 +519,10 @@ type PipFinding struct {
 	Id            string   `json:"id"`
 
 	// Severity As Trivy prints it, upper case
-	Severity string  `json:"severity"`
-	Title    *string `json:"title,omitempty"`
+	Severity string `json:"severity"`
+
+	// Title Trivy's title, plain text that a client renders as text, never as HTML or Markdown. A newer analysis stores it cleaned and cut to 200 code points. An analysis from 0.7.0 stores it as Trivy gave it.
+	Title *string `json:"title,omitempty"`
 }
 
 // PipPackage One package of a pip analysis' set

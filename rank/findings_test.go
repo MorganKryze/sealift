@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/trivy-report.json: `trivy sbom --format json` (Trivy 0.72.0) on
@@ -112,5 +113,102 @@ func TestSeverityMarshalText(t *testing.T) {
 	}
 	if _, err := Severity(99).MarshalText(); err == nil {
 		t.Error("MarshalText of an out-of-range severity: want an error, got nil")
+	}
+}
+
+func TestReadTrivyJSONKeepsDescriptionAndPublishedDate(t *testing.T) {
+	const body = `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+		{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+		 "Title": "a: one", "Description": "First line.\n\nSecond \u2060 part.", "PublishedDate": "2026-02-09T21:15:49.01Z"},
+		{"VulnerabilityID": "CVE-2", "PkgName": "b", "InstalledVersion": "2.0.0", "Severity": "LOW",
+		 "Title": "b: two", "PublishedDate": "not a date"},
+		{"VulnerabilityID": "CVE-3", "PkgName": "c", "InstalledVersion": "3.0.0", "Severity": "MEDIUM"}
+	]}]}`
+	findings, err := ReadTrivyJSON(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 3 {
+		t.Fatalf("got %d findings, want 3", len(findings))
+	}
+	first := findings[0]
+	if first.Description != "First line.\n\nSecond \u2060 part." {
+		t.Errorf("description = %q, want it byte for byte", first.Description)
+	}
+	want := time.Date(2026, 2, 9, 21, 15, 49, 10_000_000, time.UTC)
+	if !first.Published.Equal(want) || first.Published.Location() != time.UTC {
+		t.Errorf("published = %v, want %v in UTC", first.Published, want)
+	}
+	for _, f := range findings[1:] {
+		if !f.Published.IsZero() {
+			t.Errorf("%s: published = %v, want zero", f.ID, f.Published)
+		}
+		if f.Description != "" {
+			t.Errorf("%s: description = %q, want empty", f.ID, f.Description)
+		}
+	}
+	if findings[1].Title != "b: two" || findings[1].Severity != Low || findings[2].Severity != Medium {
+		t.Errorf("rest of the report misread: %+v", findings[1:])
+	}
+}
+
+func TestReadTrivyJSONLeavesOutADateOutsideYearsOneTo9999InUTC(t *testing.T) {
+	// RFC 3339 writes a year in four digits, so a date past either end in
+	// UTC could be read here and then never answered as a date.
+	for _, c := range []struct {
+		date string
+		want time.Time
+	}{
+		{"0000-01-01T00:00:00+01:00", time.Time{}},
+		{"0000-06-15T12:00:00Z", time.Time{}},
+		{"0001-01-01T00:30:00+01:00", time.Time{}},
+		{"0001-01-01T00:00:01Z", time.Date(1, 1, 1, 0, 0, 1, 0, time.UTC)},
+		{"9999-12-31T23:59:59Z", time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)},
+		{"9999-12-31T23:30:00-01:00", time.Time{}},
+	} {
+		body := `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+			{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+			 "Title": "a: one", "PublishedDate": "` + c.date + `"}]}]}`
+		findings, err := ReadTrivyJSON(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s: %v", c.date, err)
+		}
+		if len(findings) != 1 || findings[0].Title != "a: one" {
+			t.Fatalf("%s: findings = %+v, want the one finding read", c.date, findings)
+		}
+		if got := findings[0].Published; !got.Equal(c.want) || got.Location() != time.UTC {
+			t.Errorf("%s: published = %v, want %v in UTC", c.date, got, c.want)
+		}
+	}
+}
+
+func TestValidIDAcceptsAdvisoryIdsOnly(t *testing.T) {
+	for _, id := range []string{"CVE-2026-12345", "GHSA-jr5f-v2jv-69x6", "PYSEC-2021-123", "GO-2022-0001"} {
+		if !ValidID(id) {
+			t.Errorf("ValidID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{"", "constructor", "__proto__", "CVE-", "-1", "cve 1", "CVE-1/../x", "CVE-1\u202e", "cve-2024-1", "__proto__-x", "CVE-" + strings.Repeat("1", 61)} {
+		if ValidID(id) {
+			t.Errorf("ValidID(%q) = true, want false", id)
+		}
+	}
+	if id := "CVE-" + strings.Repeat("1", 60); !ValidID(id) {
+		t.Errorf("an id of 64 bytes must pass")
+	}
+}
+
+func TestReadTrivyJSONTurnsAnOffsetDateToUTC(t *testing.T) {
+	const body = `{"SchemaVersion": 2, "Results": [{"Vulnerabilities": [
+		{"VulnerabilityID": "CVE-1", "PkgName": "a", "InstalledVersion": "1.0.0", "Severity": "HIGH",
+		 "PublishedDate": "2026-02-09T23:15:49+02:00"}
+	]}]}`
+	findings, err := ReadTrivyJSON(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 2, 9, 21, 15, 49, 0, time.UTC)
+	if got := findings[0].Published; !got.Equal(want) || got.Location() != time.UTC {
+		t.Errorf("published = %v, want %v in UTC", got, want)
 	}
 }
