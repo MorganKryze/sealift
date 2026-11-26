@@ -72,14 +72,18 @@ type Removal struct {
 
 // Attempt is one try at an import. Each keeps its own report.
 type Attempt struct {
-	N         int             `json:"n"`
-	Status    Status          `json:"status"`
-	QueuedAt  *time.Time      `json:"queuedAt,omitempty"`
-	StartedAt *time.Time      `json:"startedAt,omitempty"`
-	EndedAt   *time.Time      `json:"endedAt,omitempty"`
-	Outcome   string          `json:"outcome"`
-	Report    importer.Report `json:"report"`
-	Removal   *Removal        `json:"removal,omitempty"`
+	N         int        `json:"n"`
+	Status    Status     `json:"status"`
+	QueuedAt  *time.Time `json:"queuedAt,omitempty"`
+	StartedAt *time.Time `json:"startedAt,omitempty"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
+	Outcome   string     `json:"outcome"`
+	// Retry names the files this attempt uploads, the packages of one
+	// cause; nil on a first attempt, on a whole retry and in a record of
+	// sealift 0.7.0 or earlier.
+	Retry   []string        `json:"retry,omitempty"`
+	Report  importer.Report `json:"report"`
+	Removal *Removal        `json:"removal,omitempty"`
 }
 
 // Import is the record of one archive and its attempts.
@@ -133,6 +137,9 @@ type Store struct {
 	// so a removed import's id never comes back, even when the clock steps
 	// back into a second it already used.
 	given map[idKey]int64
+	// queue is the queue that runs this store's attempts, once NewQueue
+	// registers it; nil for a store nothing runs, such as the command line's.
+	queue *Queue
 }
 
 type idKey struct {

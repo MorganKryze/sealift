@@ -61,8 +61,11 @@ type importRig struct {
 }
 
 type rigOptions struct {
-	links    []string
-	hold     bool // runs wait for the test before they read anything
+	links []string
+	hold  bool // runs wait for the test before they read anything
+	// pause holds a run once its first package has ended, until the test
+	// releases it or the run is cancelled; entered then gets the import's id.
+	pause    bool
 	pkgs     []testPkg
 	settings func(*importer.Settings) // changes the settings that point at the fake Nexus
 }
@@ -100,6 +103,20 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 			case <-ctx.Done():
 			}
 		}
+		if o.pause {
+			ended, paused := p.Ended, false
+			p.Ended = func(i int, res importer.Result) {
+				ended(i, res)
+				if !paused {
+					paused = true
+					r.entered <- imp.ID
+					select {
+					case <-r.release:
+					case <-ctx.Done():
+					}
+				}
+			}
+		}
 		return r.handlers.RunAttempt(ctx, imp, dir, p)
 	}
 	r.queue = imports.NewQueue(st, run, slog.New(slog.NewJSONHandler(r.logs, nil)))
@@ -125,6 +142,23 @@ func (r *importRig) post(tok, body string, header ...string) *httptest.ResponseR
 		req.Header.Set(header[i], header[i+1])
 	}
 	return r.do(req)
+}
+
+// postTo sends a JSON POST to path with the token header set when tok is not empty.
+func (r *importRig) postTo(path, tok, body string, header ...string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if tok != "" {
+		req.Header.Set(TokenHeader, tok)
+	}
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	return r.do(req)
+}
+
+func (r *importRig) cancel(tok, id string, header ...string) *httptest.ResponseRecorder {
+	return r.postTo("/api/imports/"+id+"/cancel", tok, "{}", header...)
 }
 
 func (r *importRig) start(tok, key string) *httptest.ResponseRecorder {
@@ -1238,4 +1272,184 @@ func TestGetImportKeepsEveryField070Answered(t *testing.T) {
 		g, _ := json.Marshal(got)
 		t.Errorf("the answer to a 0.7.0 record differs from 0.7.0's:\n%s", g)
 	}
+}
+
+const (
+	thirdKey = base + "c/packages_npm.tar.gz"
+	thirdMan = base + "c/manifest.json"
+)
+
+func TestCancelImport(t *testing.T) {
+	t.Run("cancels a queued import at once", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		b := buildBundle(t, leftPad)
+		r.seed(archiveKey, manifestKey, b)
+		r.seed(otherKey, otherMan, b)
+		r.seed(thirdKey, thirdMan, b)
+		running := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+		waitEntered(t, r)
+		queued := importOf(t, r.start("t", otherKey), http.StatusAccepted)
+
+		got := importOf(t, r.cancel("t", queued.Id), http.StatusAccepted)
+		if got.Outcome != imports.OutcomeCancelled || got.QueueAhead != nil || got.ArchiveRemoved {
+			t.Errorf("answer: outcome %q, queueAhead %v, removed %v", got.Outcome, got.QueueAhead, got.ArchiveRemoved)
+		}
+		later := importOf(t, r.start("t", thirdKey), http.StatusAccepted)
+		close(r.release)
+		waitEnded(t, r.store, running.Id)
+		if id := waitEntered(t, r); id != later.Id {
+			t.Errorf("import %s ran after its cancel", id)
+		}
+		stored, _ := r.store.Get("alice", queued.Id)
+		if a := stored.Attempts[0]; a.Status != imports.StatusEnded || a.Outcome != imports.OutcomeCancelled || a.StartedAt != nil {
+			t.Errorf("the cancelled attempt = %+v", a)
+		}
+	})
+
+	t.Run("stops a running import before its next package", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pause: true, pkgs: []testPkg{leftPad, zeta}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad, zeta))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		done := waitEnded(t, r.store, id)
+		a := done.Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || done.ArchiveRemoved() || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		if p := a.Report.Packages[0]; p.State != importer.Published {
+			t.Errorf("the package that reached Nexus = %+v", p)
+		}
+		if p := a.Report.Packages[1]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the package not reached = %+v", p)
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("answers 409 to a cancel of an ended import", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		for _, outcome := range []string{importer.OutcomeIncomplete, importer.OutcomeComplete, importer.OutcomeRefused} {
+			id := r.endedImport(t, outcome)
+			rec := r.cancel("t", id)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("%s: status = %d, want 409; body %s", outcome, rec.Code, rec.Body)
+			}
+			var c ImportConflict
+			if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || c.ImportId == nil || *c.ImportId != id {
+				t.Errorf("%s: body %s", outcome, rec.Body)
+			}
+			if got, _ := r.store.Get("alice", id); got.Outcome() != outcome {
+				t.Errorf("%s: the import now reads %q", outcome, got.Outcome())
+			}
+		}
+	})
+
+	t.Run("keeps a cancelled import blocking a new start", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		if got := waitEnded(t, r.store, id); got.Outcome() != imports.OutcomeCancelled {
+			t.Fatalf("outcome %q, want cancelled", got.Outcome())
+		}
+		rec := r.start("t", archiveKey)
+		var c ImportConflict
+		if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &c) != nil || c.ImportId == nil || *c.ImportId != id {
+			t.Fatalf("a new start answered %d %s, want 409 naming %s", rec.Code, rec.Body, id)
+		}
+		if again := importOf(t, r.retry("t", id), http.StatusAccepted); len(again.Attempts) != 2 {
+			t.Errorf("the retry of a cancelled import = %+v", again)
+		}
+	})
+
+	t.Run("refuses a cross-site cancel", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		for _, h := range [][]string{
+			{"Origin", "https://evil.example"},
+			{"Sec-Fetch-Site", "cross-site"},
+			{"Content-Type", "text/plain"},
+		} {
+			rec := r.cancel("t", id, h...)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%v: status = %d, want 403", h, rec.Code)
+			}
+			if d := detailOf(problemOf(t, rec)); strings.Contains(d, "evil") {
+				t.Errorf("detail %q repeats the request", d)
+			}
+		}
+		if rec := r.cancel("", id); rec.Code != http.StatusUnauthorized {
+			t.Errorf("no token: status = %d, want 401", rec.Code)
+		}
+		if got, _ := r.store.Get("alice", id); got.Outcome() != string(imports.StatusRunning) {
+			t.Errorf("a refused cancel left the import %q", got.Outcome())
+		}
+		close(r.release)
+		if got := waitEnded(t, r.store, id); got.Outcome() != importer.OutcomeComplete {
+			t.Errorf("outcome %q, want complete", got.Outcome())
+		}
+	})
+
+	t.Run("answers another user's import 404 on cancel", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		for _, target := range []string{id, "20260101T000000Z-00000000"} {
+			if rec := r.cancel("b", target); rec.Code != http.StatusNotFound || detailOf(problemOf(t, rec)) != "no such import" {
+				t.Errorf("%s: status = %d, body %s", target, rec.Code, rec.Body)
+			}
+		}
+		if got, _ := r.store.Get("alice", id); got.Outcome() != string(imports.StatusRunning) {
+			t.Errorf("bob's cancel left alice's import %q", got.Outcome())
+		}
+		close(r.release)
+		waitEnded(t, r.store, id)
+	})
+}
+
+func TestQueueRankOnTheImport(t *testing.T) {
+	t.Run("gives the queue rank only while queued", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		b := buildBundle(t, leftPad)
+		r.seed(archiveKey, manifestKey, b)
+		r.seed(otherKey, otherMan, b)
+		running := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+		waitEntered(t, r)
+		queued := importOf(t, r.start("t", otherKey), http.StatusAccepted)
+		if queued.QueueAhead == nil || *queued.QueueAhead != 1 {
+			t.Errorf("the start's answer ranks %v, want 1", queued.QueueAhead)
+		}
+		if got := importOf(t, r.get("/api/imports/"+queued.Id, "t"), http.StatusOK); got.QueueAhead == nil || *got.QueueAhead != 1 {
+			t.Errorf("the queued import ranks %v, want 1", got.QueueAhead)
+		}
+		if got := importOf(t, r.get("/api/imports/"+running.Id, "t"), http.StatusOK); got.QueueAhead != nil {
+			t.Errorf("the running import ranks %d", *got.QueueAhead)
+		}
+		for _, imp := range listOfImports(t, r.get("/api/imports", "t")).Imports {
+			want := imp.Id == queued.Id
+			if (imp.QueueAhead != nil) != want || want && *imp.QueueAhead != 1 {
+				t.Errorf("the list ranks %s at %v", imp.Id, imp.QueueAhead)
+			}
+		}
+		if raw := r.get("/api/imports/"+running.Id, "t").Body.String(); strings.Contains(raw, "queueAhead") {
+			t.Errorf("the running import's answer names queueAhead: %s", raw)
+		}
+		close(r.release)
+		waitEnded(t, r.store, running.Id)
+		waitEntered(t, r)
+		waitEnded(t, r.store, queued.Id)
+		if got := importOf(t, r.get("/api/imports/"+queued.Id, "t"), http.StatusOK); got.QueueAhead != nil {
+			t.Errorf("the ended import ranks %d", *got.QueueAhead)
+		}
+	})
 }

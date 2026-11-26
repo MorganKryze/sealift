@@ -59,6 +59,13 @@ type Attempt struct {
 	// Ecosystem is the archive's folder: a manifest of another ecosystem is
 	// refused. Empty accepts either.
 	Ecosystem archive.Ecosystem
+	// Only names, by file, the packages a retry of one cause uploads; nil
+	// uploads any package. A package outside it is read from Nexus and
+	// never uploaded.
+	Only map[string]bool
+	// Before holds, by file, the results of the attempt a retry follows. A
+	// package outside Only that Nexus lacks keeps its failure from there.
+	Before map[string]Result
 }
 
 type publishEachFunc func(context.Context, Publisher, []Package, string, func(int, Result)) []Result
@@ -67,7 +74,67 @@ type publishEachFunc func(context.Context, Publisher, []Package, string, func(in
 // manifest, then publishes its packages. It writes only to a.Dir and empties it before
 // it returns.
 func RunAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error)) Report {
-	return runAttempt(ctx, a, newPublisher, PublishEach)
+	if a.Only == nil {
+		return runAttempt(ctx, a, newPublisher, PublishEach)
+	}
+	k := &kept{only: a.Only, before: a.Before, refused: map[string]bool{}}
+	readOnly := func(s Settings) (Publisher, error) {
+		p, err := newPublisher(s)
+		if err != nil {
+			return nil, err
+		}
+		return onlyListed{Publisher: p, kept: k}, nil
+	}
+	if ended := a.Progress.Ended; ended != nil {
+		a.Progress.Ended = func(i int, r Result) { ended(i, k.result(r)) }
+	}
+	rep := runAttempt(ctx, a, readOnly, PublishEach)
+	for i, r := range rep.Packages {
+		rep.Packages[i] = k.result(r)
+	}
+	return rep
+}
+
+// errNotListed is the upload error of a package a retry of one cause leaves out.
+var errNotListed = errors.New("not part of this retry")
+
+// reasonNotInNexus is the reason of a package a retry of one cause left out
+// that Nexus no longer holds, though the earlier attempt did not fail it.
+const reasonNotInNexus = "nexus no longer holds this package: retry the whole import to upload it again"
+
+// kept tracks the packages a retry of one cause did not upload. The run
+// publishes one package at a time on one goroutine, so refused needs no lock.
+type kept struct {
+	only    map[string]bool
+	before  map[string]Result
+	refused map[string]bool
+}
+
+// result is r, or for a package whose upload was refused because the retry
+// leaves it out, its earlier failure.
+func (k *kept) result(r Result) Result {
+	if r.State != Failed || !k.refused[r.File] {
+		return r
+	}
+	pkg := Package{Name: r.Name, Version: r.Version, File: r.File}
+	if b, ok := k.before[r.File]; ok && b.State == Failed {
+		return failed(pkg, b.Kind, b.Reason)
+	}
+	return failed(pkg, KindNexus, reasonNotInNexus)
+}
+
+// onlyListed reads every package from Nexus and uploads only those of Only.
+type onlyListed struct {
+	Publisher
+	kept *kept
+}
+
+func (o onlyListed) Upload(ctx context.Context, file string, r io.Reader) error {
+	if !o.kept.only[file] {
+		o.kept.refused[file] = true
+		return errNotListed
+	}
+	return o.Publisher.Upload(ctx, file, r)
 }
 
 // runAttempt takes the publishing step as a parameter so a test can fix its results.

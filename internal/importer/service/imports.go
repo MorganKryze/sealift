@@ -123,7 +123,7 @@ func (h *Handlers) StartImport(ctx context.Context, req StartImportRequestObject
 	if !h.submit(user, imp.ID) {
 		return fail(h.stopping(user, imp.ID))
 	}
-	out, err := toImport(imp)
+	out, err := h.answer(imp)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func (h *Handlers) ListImports(ctx context.Context, _ ListImportsRequestObject) 
 	}
 	out := ImportList{Imports: make([]Import, 0, len(imps))}
 	for _, imp := range imps {
-		api, err := toImport(imp)
+		api, err := h.answer(imp)
 		if err != nil {
 			return nil, err
 		}
@@ -204,11 +204,26 @@ func (h *Handlers) GetImport(ctx context.Context, req GetImportRequestObject) (G
 	if err != nil {
 		return nil, err
 	}
-	out, err := toImport(imp)
+	out, err := h.answer(imp)
 	if err != nil {
 		return nil, err
 	}
 	return GetImport200JSONResponse(out), nil
+}
+
+// answer is the contract's shape of imp, with its rank in the queue while its
+// latest attempt waits there.
+func (h *Handlers) answer(imp imports.Import) (Import, error) {
+	out, err := toImport(imp)
+	if err != nil {
+		return Import{}, err
+	}
+	if imp.Outcome() == string(imports.StatusQueued) {
+		if n, ok := h.store.Ahead(imp.User, imp.ID); ok {
+			out.QueueAhead = &n
+		}
+	}
+	return out, nil
 }
 
 // toImport turns a stored import into the contract's shape. The record and
@@ -314,21 +329,63 @@ func (h *Handlers) RetryImport(ctx context.Context, req RetryImportRequestObject
 	case err != nil:
 		return fail(h.minioProblem("check that the archive is still there", err))
 	}
-	imp, err = h.store.Retry(user, imp.ID)
-	if errors.Is(err, imports.ErrBusy) {
-		return refuse("an attempt of this import is queued or running", imp.ID)
+	var files []string
+	if req.Body != nil && req.Body.Packages != nil {
+		files = *req.Body.Packages
 	}
-	if err != nil {
+	id := imp.ID
+	imp, err = h.store.Retry(user, id, files...)
+	switch {
+	case errors.Is(err, imports.ErrBusy):
+		return refuse("an attempt of this import is queued or running", id)
+	case errors.Is(err, imports.ErrRetryList):
+		// The list comes from the client: neither the answer nor the log repeats it.
+		h.log.Info("refused a retry", "user", user, "id", id, "check", "packages")
+		return fail(problem{status: 400, body: newProblem(400, "Bad request", "the packages to retry must be failed packages of the latest attempt")})
+	case err != nil:
 		return nil, err
 	}
 	if !h.submit(user, imp.ID) {
 		return fail(h.stopping(user, imp.ID))
 	}
-	out, err := toImport(imp)
+	out, err := h.answer(imp)
 	if err != nil {
 		return nil, err
 	}
 	return RetryImport202JSONResponse(out), nil
+}
+
+// CancelImport ends the latest attempt of one of the user's imports: a queued
+// one at once, a running one before its next package.
+func (h *Handlers) CancelImport(ctx context.Context, req CancelImportRequestObject) (CancelImportResponseObject, error) {
+	user := userFrom(ctx)
+	refuse := func(detail, id string) (CancelImportResponseObject, error) {
+		return CancelImport409ApplicationProblemPlusJSONResponse(ImportConflict{
+			Type: ptr("about:blank"), Title: "Cannot cancel this import", Status: 409, Detail: &detail, ImportId: &id,
+		}), nil
+	}
+	// A cancel waits for a start or a retry to queue its attempt, so it never
+	// meets a record the queue has not been given yet.
+	h.startMu.Lock()
+	defer h.startMu.Unlock()
+	// The store checks the id's shape before it joins any path.
+	imp, err := h.store.Cancel(user, req.ImportId)
+	switch {
+	case errors.Is(err, imports.ErrNotFound):
+		return CancelImportdefaultApplicationProblemPlusJSONResponse{StatusCode: 404, Body: newProblem(404, "Not found", "no such import")}, nil
+	case errors.Is(err, imports.ErrEnded):
+		return refuse("the latest attempt of this import has ended", req.ImportId)
+	case errors.Is(err, imports.ErrBusy):
+		return refuse("the running attempt of this import cannot be stopped here", req.ImportId)
+	case err != nil:
+		return nil, err
+	}
+	h.log.Info("cancelled an import", "user", user, "id", imp.ID)
+	out, err := h.answer(imp)
+	if err != nil {
+		return nil, err
+	}
+	return CancelImport202JSONResponse(out), nil
 }
 
 // stopped is the report of an attempt that ended before it read the archive.
@@ -386,6 +443,10 @@ func (h *Handlers) unchanged(ctx context.Context, bucket string, imp imports.Imp
 func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 	bucket := bucketOf(imp.User)
 	if rep := h.unchanged(ctx, bucket, imp); rep != nil {
+		if ctx.Err() != nil && rep.Outcome == importer.OutcomeIncomplete {
+			// The stop cut the check short, MinIO did not fail: the queue names the stop.
+			rep.Reason = ""
+		}
 		return *rep, nil
 	}
 	work, err := os.MkdirTemp(dir, "run-")
@@ -396,6 +457,7 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 	defer os.RemoveAll(work)
 	// Every recorded key passed ArchiveKey, so it sits under one of the two folders.
 	folder, _ := FolderOf(imp.Archive.Key)
+	only, before := retried(imp)
 	rep := importer.RunAttempt(ctx, importer.Attempt{
 		Settings:       h.settings,
 		Source:         minioSource(h.objects, bucket, imp),
@@ -405,11 +467,31 @@ func (h *Handlers) RunAttempt(ctx context.Context, imp imports.Import, dir strin
 		Unencrypted:    len(h.links) > 0,
 		Progress:       p,
 		Ecosystem:      folder,
+		Only:           only,
+		Before:         before,
 	}, h.newPublisher)
 	if !everyPackageIn(rep) {
 		return rep, nil
 	}
 	return rep, func(ctx context.Context) *imports.Removal { return h.remove(ctx, bucket, imp) }
+}
+
+// retried returns, for a latest attempt that retries one cause, the files it
+// uploads and the results of the attempt before it by file; nil for any other.
+func retried(imp imports.Import) (map[string]bool, map[string]importer.Result) {
+	n := len(imp.Attempts)
+	if n < 2 || len(imp.Attempts[n-1].Retry) == 0 {
+		return nil, nil
+	}
+	only := make(map[string]bool, len(imp.Attempts[n-1].Retry))
+	for _, f := range imp.Attempts[n-1].Retry {
+		only[f] = true
+	}
+	before := make(map[string]importer.Result, len(imp.Attempts[n-2].Report.Packages))
+	for _, r := range imp.Attempts[n-2].Report.Packages {
+		before[r.File] = r
+	}
+	return only, before
 }
 
 // everyPackageIn reports whether the report is complete and each of its

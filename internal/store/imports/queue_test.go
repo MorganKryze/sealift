@@ -2,6 +2,7 @@ package imports
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -268,4 +269,204 @@ func TestQueuePanicKeepsTheStoredPackages(t *testing.T) {
 	if r.Counts.Published != 1 || r.Counts.Failed != 1 {
 		t.Errorf("counts = %+v, want 1 published and 1 failed", r.Counts)
 	}
+}
+
+// heldQueue runs each attempt through run after it tells started its id.
+func heldQueue(t *testing.T, s *Store, started chan<- string, run RunFunc) *Queue {
+	t.Helper()
+	q := NewQueue(s, func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, Remover) {
+		started <- imp.ID
+		return run(ctx, imp, dir, p)
+	}, quietLog())
+	t.Cleanup(q.Close)
+	return q
+}
+
+func TestQueueRank(t *testing.T) {
+	t.Run("gives the rank of every attempt before this one, whoever started it", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		first, other, mine := newImport(t, s, "alice"), newImport(t, s, "bob"), newImport(t, s, "alice")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		for _, imp := range []Import{first, other, mine} {
+			q.Submit(imp.User, imp.ID)
+		}
+		waitFor(t, started, "the first run")
+		for _, tc := range []struct {
+			imp    Import
+			n      int
+			queued bool
+		}{{first, 0, false}, {other, 1, true}, {mine, 2, true}} {
+			if n, queued := s.Ahead(tc.imp.User, tc.imp.ID); n != tc.n || queued != tc.queued {
+				t.Errorf("%s's import: ahead %d queued %v, want %d %v", tc.imp.User, n, queued, tc.n, tc.queued)
+			}
+		}
+		close(release)
+		waitFor(t, started, "the second run")
+		waitFor(t, started, "the third run")
+		q.Close()
+		if n, queued := s.Ahead(mine.User, mine.ID); n != 0 || queued {
+			t.Errorf("after the runs: ahead %d queued %v", n, queued)
+		}
+	})
+	t.Run("a store with no queue ranks nothing", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		if n, queued := s.Ahead(imp.User, imp.ID); n != 0 || queued {
+			t.Errorf("ahead %d queued %v", n, queued)
+		}
+	})
+}
+
+func TestQueueCancel(t *testing.T) {
+	t.Run("takes a queued attempt out of the queue on cancel", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		running, waiting := newImport(t, s, "alice"), newImport(t, s, "bob")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		q.Submit(running.User, running.ID)
+		q.Submit(waiting.User, waiting.ID)
+		waitFor(t, started, "the first run")
+
+		got, err := s.Cancel(waiting.User, waiting.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Outcome() != OutcomeCancelled {
+			t.Errorf("the answer reads %q, want cancelled at once", got.Outcome())
+		}
+		if n, queued := s.Ahead(waiting.User, waiting.ID); queued || n != 0 {
+			t.Errorf("the cancelled attempt still ranks: %d %v", n, queued)
+		}
+		later := newImport(t, s, "alice")
+		q.Submit(later.User, later.ID)
+		close(release)
+		if id := waitFor(t, started, "the next run"); id != later.ID {
+			t.Errorf("import %s ran after its cancel", id)
+		}
+		q.Close()
+		stored, _ := s.Get(waiting.User, waiting.ID)
+		a := stored.Attempts[0]
+		if a.Status != StatusEnded || a.Outcome != OutcomeCancelled || a.EndedAt == nil || a.Removal != nil || a.Report.Reason == "" {
+			t.Errorf("stored attempt = %+v", a)
+		}
+	})
+
+	t.Run("stops a running attempt before its next package", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, inRun := make(chan string, 1), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			p.Listed(listedReport())
+			first := pendingResults()[0]
+			first.State = importer.Published
+			p.Ended(0, first)
+			close(inRun)
+			<-ctx.Done()
+			second := pendingResults()[1]
+			second.State, second.Kind, second.Reason = importer.Failed, importer.KindInterrupted, "interrupted"
+			p.Ended(1, second)
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{first, second}, Counts: importer.Counts{Published: 1, Failed: 1}}, nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, inRun, "the first package")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		a := got.Attempts[0]
+		if a.Outcome != OutcomeCancelled || a.Report.Outcome != OutcomeCancelled || a.Report.Reason == "" {
+			t.Fatalf("attempt = %s, report %s %q", a.Outcome, a.Report.Outcome, a.Report.Reason)
+		}
+		if p := a.Report.Packages[0]; p.State != importer.Published {
+			t.Errorf("the package in Nexus became %+v", p)
+		}
+		if p := a.Report.Packages[1]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != reasonCancelled {
+			t.Errorf("the package not reached = %+v, want failed interrupted %q", p, reasonCancelled)
+		}
+	})
+
+	t.Run("never removes the archive of a cancelled attempt", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started := make(chan string, 1)
+		removed := false
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, _ importer.Progress) (importer.Report, Remover) {
+			<-ctx.Done()
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, func(context.Context) *Removal {
+				removed = true
+				return &Removal{Removed: true}
+			}
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		if removed || got.Attempts[0].Removal != nil || got.ArchiveRemoved() || got.Outcome() != OutcomeCancelled {
+			t.Errorf("removed %v, attempt %+v", removed, got.Attempts[0])
+		}
+	})
+
+	t.Run("keeps an attempt that ended every package before the cancel as it ended", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, inRun, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			close(inRun)
+			<-release
+			return completeReport(), nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, inRun, "the run")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		q.Close()
+		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete {
+			t.Errorf("outcome %q, want complete", got.Outcome())
+		}
+	})
+
+	t.Run("answers ErrEnded once the latest attempt has ended", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started := make(chan string, 1)
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			return completeReport(), nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
+		q.Close()
+		if _, err := s.Cancel(imp.User, imp.ID); !errors.Is(err, ErrEnded) {
+			t.Errorf("err = %v, want ErrEnded", err)
+		}
+		if _, err := s.Cancel("bob", imp.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("another user: err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("a store with no queue ends a queued attempt and refuses a running one", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		queued, running := newImport(t, s, "alice"), newImport(t, s, "alice")
+		if got, err := s.Cancel(queued.User, queued.ID); err != nil || got.Outcome() != OutcomeCancelled {
+			t.Errorf("queued: outcome %q, err %v", got.Outcome(), err)
+		}
+		if _, _, err := s.Begin(running.User, running.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Cancel(running.User, running.ID); !errors.Is(err, ErrBusy) {
+			t.Errorf("running: err = %v, want ErrBusy", err)
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/MorganKryze/sealift/internal/importer"
@@ -13,17 +14,30 @@ import (
 // ErrBusy answers a retry of an import whose latest attempt is queued or running.
 var ErrBusy = errors.New("imports: an attempt is queued or running")
 
+// ErrRetryList answers a retry whose files are not failed packages of the
+// latest attempt, or name one twice.
+var ErrRetryList = errors.New("imports: the packages to retry must be failed packages of the latest attempt")
+
 // Retry adds a queued attempt numbered one past the latest. Earlier attempts
-// stay as they are; the new one carries nothing over from them.
-func (s *Store) Retry(user, id string) (Import, error) {
+// stay as they are. With no files the new attempt carries nothing over from
+// them; with files it records them as the packages it uploads, each a failed
+// package of the latest attempt, none twice.
+func (s *Store) Retry(user, id string, files ...string) (Import, error) {
 	var out Import
 	_, err := s.update(user, id, func(imp *Import) (string, error) {
 		last := imp.Attempts[len(imp.Attempts)-1]
 		if last.Status != StatusEnded {
 			return "", ErrBusy
 		}
+		var retry []string
+		if len(files) > 0 {
+			if !failedFiles(last.Report.Packages, files) {
+				return "", ErrRetryList
+			}
+			retry = slices.Clone(files)
+		}
 		now := s.clock()
-		imp.Attempts = append(imp.Attempts, Attempt{N: last.N + 1, Status: StatusQueued, QueuedAt: &now})
+		imp.Attempts = append(imp.Attempts, Attempt{N: last.N + 1, Status: StatusQueued, QueuedAt: &now, Retry: retry})
 		out = normalize(*imp)
 		return "", nil
 	})
@@ -74,4 +88,26 @@ func (s *Store) endUnfinished(user, id, outcome, reason, pending string) error {
 		return fmt.Errorf("imports: %w", err)
 	}
 	return nil
+}
+
+// failedFiles reports whether each of files names a failed package of pkgs,
+// none twice. A list longer than pkgs is refused before any is read.
+func failedFiles(pkgs []importer.Result, files []string) bool {
+	if len(files) > len(pkgs) {
+		return false
+	}
+	failed := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		if p.State == importer.Failed {
+			failed[p.File] = true
+		}
+	}
+	seen := make(map[string]bool, len(files))
+	for _, f := range files {
+		if !failed[f] || seen[f] {
+			return false
+		}
+		seen[f] = true
+	}
+	return true
 }

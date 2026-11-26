@@ -172,7 +172,7 @@ type Attempt struct {
 	EndedAt *time.Time `json:"endedAt,omitempty"`
 	N       int        `json:"n"`
 
-	// Outcome complete, incomplete, refused or interrupted once the attempt has ended
+	// Outcome complete, incomplete, refused, interrupted or cancelled once the attempt has ended
 	Outcome  string     `json:"outcome"`
 	QueuedAt *time.Time `json:"queuedAt,omitempty"`
 
@@ -180,7 +180,10 @@ type Attempt struct {
 	Removal *Removal `json:"removal,omitempty"`
 
 	// Report The account of one attempt; a package still pending has not ended
-	Report    Report     `json:"report"`
+	Report Report `json:"report"`
+
+	// Retry The file names this attempt was asked to upload, the packages of one cause. Absent on a first attempt, on a whole retry, and on an attempt recorded by sealift 0.7.0 or earlier.
+	Retry     *[]string  `json:"retry,omitempty"`
 	StartedAt *time.Time `json:"startedAt,omitempty"`
 
 	// Status queued, running or ended
@@ -241,6 +244,9 @@ type Import struct {
 	// Outcome The latest attempt's outcome, or queued or running while it has none
 	Outcome string `json:"outcome"`
 
+	// QueueAhead How many attempts run or wait before the latest one in the service's queue, whoever started them. Present only while the latest attempt is queued in this service; never stored, so absent from every import read after it left the queue.
+	QueueAhead *int `json:"queueAhead,omitempty"`
+
 	// Signature A MinIO object as it was when the import was created
 	Signature *Object `json:"signature,omitempty"`
 }
@@ -265,7 +271,7 @@ type ImportList struct {
 type LatestImport struct {
 	Id string `json:"id"`
 
-	// Outcome queued, running, complete, incomplete, refused or interrupted
+	// Outcome queued, running, complete, incomplete, refused, interrupted or cancelled
 	Outcome string `json:"outcome"`
 }
 
@@ -328,11 +334,13 @@ type Report struct {
 	Crossing *Crossing `json:"crossing,omitempty"`
 
 	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
-	Ecosystem     *Ecosystem      `json:"ecosystem,omitempty"`
-	ImportVersion string          `json:"importVersion"`
-	Nexus         ReportNexus     `json:"nexus"`
-	Outcome       string          `json:"outcome"`
-	Packages      []ReportPackage `json:"packages"`
+	Ecosystem     *Ecosystem  `json:"ecosystem,omitempty"`
+	ImportVersion string      `json:"importVersion"`
+	Nexus         ReportNexus `json:"nexus"`
+
+	// Outcome complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs
+	Outcome  string          `json:"outcome"`
+	Packages []ReportPackage `json:"packages"`
 
 	// PublicKeySha256 The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
 	PublicKeySha256 *string      `json:"publicKeySha256,omitempty"`
@@ -397,6 +405,12 @@ type ReportTarget struct {
 	Python *string `json:"python,omitempty"`
 }
 
+// RetryImport An empty object retries the whole import.
+type RetryImport struct {
+	// Packages The file names of the packages to upload, each a failed package of the latest attempt, none twice. Absent or empty retries the whole import.
+	Packages *[]string `json:"packages,omitempty"`
+}
+
 // StartImport defines model for StartImport.
 type StartImport struct {
 	// Archive The archive's object key, under packages/npm/ or packages/pip/
@@ -406,14 +420,17 @@ type StartImport struct {
 	ExpectedSha256 *string `json:"expectedSha256,omitempty"`
 }
 
-// RetryImportJSONBody defines parameters for RetryImport.
-type RetryImportJSONBody = map[string]interface{}
+// CancelImportJSONBody defines parameters for CancelImport.
+type CancelImportJSONBody = map[string]interface{}
 
 // StartImportJSONRequestBody defines body for StartImport for application/json ContentType.
 type StartImportJSONRequestBody = StartImport
 
+// CancelImportJSONRequestBody defines body for CancelImport for application/json ContentType.
+type CancelImportJSONRequestBody = CancelImportJSONBody
+
 // RetryImportJSONRequestBody defines body for RetryImport for application/json ContentType.
-type RetryImportJSONRequestBody = RetryImportJSONBody
+type RetryImportJSONRequestBody = RetryImport
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -429,6 +446,9 @@ type ServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(w http.ResponseWriter, r *http.Request, importId string)
+	// CancelImport Cancel the latest attempt of an import
+	// (POST /imports/{importId}/cancel)
+	CancelImport(w http.ResponseWriter, r *http.Request, importId string)
 	// RetryImport Add an attempt to an import
 	// (POST /imports/{importId}/retry)
 	RetryImport(w http.ResponseWriter, r *http.Request, importId string)
@@ -505,6 +525,32 @@ func (siw *ServerInterfaceWrapper) GetImport(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetImport(w, r, importId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelImport operation middleware
+func (siw *ServerInterfaceWrapper) CancelImport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "importId" -------------
+	var importId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "importId", r.PathValue("importId"), &importId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "importId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelImport(w, r, importId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -680,6 +726,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports", wrapper.StartImport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports/{importId}", wrapper.GetImport)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports/{importId}/retry", wrapper.RetryImport)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports/{importId}/cancel", wrapper.CancelImport)
 
 	return m
 }
@@ -854,6 +901,60 @@ func (response GetImportdefaultApplicationProblemPlusJSONResponse) VisitGetImpor
 	return err
 }
 
+type CancelImportRequestObject struct {
+	ImportId string `json:"importId"`
+	Body     *CancelImportJSONRequestBody
+}
+
+type CancelImportResponseObject interface {
+	VisitCancelImportResponse(w http.ResponseWriter) error
+}
+
+type CancelImport202JSONResponse Import
+
+func (response CancelImport202JSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelImport409ApplicationProblemPlusJSONResponse ImportConflict
+
+func (response CancelImport409ApplicationProblemPlusJSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelImportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CancelImportdefaultApplicationProblemPlusJSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RetryImportRequestObject struct {
 	ImportId string `json:"importId"`
 	Body     *RetryImportJSONRequestBody
@@ -960,6 +1061,9 @@ type StrictServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(ctx context.Context, request GetImportRequestObject) (GetImportResponseObject, error)
+	// CancelImport Cancel the latest attempt of an import
+	// (POST /imports/{importId}/cancel)
+	CancelImport(ctx context.Context, request CancelImportRequestObject) (CancelImportResponseObject, error)
 	// RetryImport Add an attempt to an import
 	// (POST /imports/{importId}/retry)
 	RetryImport(ctx context.Context, request RetryImportRequestObject) (RetryImportResponseObject, error)
@@ -1105,6 +1209,39 @@ func (sh *strictHandler) GetImport(w http.ResponseWriter, r *http.Request, impor
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetImportResponseObject); ok {
 		if err := validResponse.VisitGetImportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelImport operation middleware
+func (sh *strictHandler) CancelImport(w http.ResponseWriter, r *http.Request, importId string) {
+	var request CancelImportRequestObject
+
+	request.ImportId = importId
+
+	var body CancelImportJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelImport(ctx, request.(CancelImportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelImport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelImportResponseObject); ok {
+		if err := validResponse.VisitCancelImportResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

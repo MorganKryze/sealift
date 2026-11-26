@@ -97,7 +97,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Import"
         "409":
-          description: The archive already has an import that is queued, running, incomplete or interrupted, or MinIO is not configured
+          description: The archive already has an import that is queued, running, incomplete, interrupted or cancelled, or MinIO is not configured
           content:
             application/problem+json:
               schema:
@@ -134,13 +134,19 @@ paths:
       summary: Add an attempt to an import
       description: >
         Queues a new attempt that reads the archive and the manifest again,
-        checks them again and reads every package from Nexus again; nothing
-        carries over from an earlier attempt. Accepted whatever the last
-        outcome was, while no attempt is queued or running and the archive is
-        still in MinIO. 409 otherwise. The attempt ends refused, publishing
-        nothing, when the archive or the manifest changed in MinIO since the
-        import was created. Another user's id answers 404 like a missing one.
-        The guard against cross-site requests is the one of startImport.
+        checks them again and reads every package from Nexus again. With no
+        packages it may upload any package, and nothing carries over from an
+        earlier attempt. With packages it uploads only those files; every other
+        package is read from Nexus and never uploaded, and one Nexus lacks
+        stays failed with the kind and reason the latest attempt recorded.
+        Accepted whatever the last outcome was, while no attempt is queued or
+        running and the archive is still in MinIO. 409 otherwise. 400 when
+        packages names anything but failed packages of the latest attempt, or
+        one twice; the answer repeats none of them and nothing changes. The
+        attempt ends refused, publishing nothing, when the archive or the
+        manifest changed in MinIO since the import was created. Another user's
+        id answers 404 like a missing one. The guard against cross-site
+        requests is the one of startImport.
       parameters:
         - name: importId
           in: path
@@ -152,8 +158,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              description: An empty object
+              $ref: "#/components/schemas/RetryImport"
       responses:
         "202":
           description: The import, with its new attempt queued
@@ -169,13 +174,57 @@ paths:
                 $ref: "#/components/schemas/ImportConflict"
         default:
           $ref: "#/components/responses/Problem"
+  /imports/{importId}/cancel:
+    post:
+      operationId: cancelImport
+      tags:
+        - imports
+      summary: Cancel the latest attempt of an import
+      description: >
+        A queued attempt leaves the queue and ends cancelled at once. A running
+        attempt stops before its next package and ends cancelled; its packages
+        not reached fail with the kind interrupted. Every package already in
+        Nexus stays there, and a cancelled attempt removes nothing from MinIO.
+        An attempt that ended every package before the cancel keeps the outcome
+        it ends with. A cancelled import takes a retry and blocks a new start
+        of its archive like an incomplete one. 409 once the latest attempt has
+        ended. Another user's id answers 404 like a missing one. The guard
+        against cross-site requests is the one of startImport.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: An empty object
+      responses:
+        "202":
+          description: The import, its latest attempt cancelled or stopping before its next package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        "409":
+          description: The latest attempt has ended
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ImportConflict"
+        default:
+          $ref: "#/components/responses/Problem"
 components:
   responses:
     Problem:
       description: >
         Error. 401 when the token fails a check (the detail names the check),
-        403 when its preferred_username cannot name a user folder or a start
-        looks cross-site, 404 for an unknown import or an archive outside the
+        403 when its preferred_username cannot name a user folder or a start,
+        a retry or a cancel looks cross-site, 404 for an unknown import or an archive outside the
         user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503
         when the realm's keys cannot be had or the service is stopping.
       content:
@@ -409,7 +458,7 @@ components:
           type: string
         outcome:
           type: string
-          description: queued, running, complete, incomplete, refused or interrupted
+          description: queued, running, complete, incomplete, refused, interrupted or cancelled
       required:
         - id
         - outcome
@@ -424,6 +473,18 @@ components:
           description: The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused
       required:
         - archive
+    RetryImport:
+      type: object
+      description: An empty object retries the whole import.
+      properties:
+        packages:
+          type: array
+          description: >
+            The file names of the packages to upload, each a failed package of
+            the latest attempt, none twice. Absent or empty retries the whole
+            import.
+          items:
+            type: string
     ImportList:
       type: object
       properties:
@@ -477,6 +538,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Attempt"
+        queueAhead:
+          type: integer
+          description: >
+            How many attempts run or wait before the latest one in the
+            service's queue, whoever started them. Present only while the
+            latest attempt is queued in this service; never stored, so absent
+            from every import read after it left the queue.
       required:
         - id
         - createdAt
@@ -505,7 +573,15 @@ components:
           format: date-time
         outcome:
           type: string
-          description: complete, incomplete, refused or interrupted once the attempt has ended
+          description: complete, incomplete, refused, interrupted or cancelled once the attempt has ended
+        retry:
+          type: array
+          description: >
+            The file names this attempt was asked to upload, the packages of
+            one cause. Absent on a first attempt, on a whole retry, and on an
+            attempt recorded by sealift 0.7.0 or earlier.
+          items:
+            type: string
         report:
           $ref: "#/components/schemas/Report"
         removal:
@@ -532,6 +608,7 @@ components:
       properties:
         outcome:
           type: string
+          description: complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs
         reason:
           type: string
         unencrypted:

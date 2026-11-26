@@ -16,6 +16,7 @@ import (
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importer"
 	"github.com/MorganKryze/sealift/internal/store/imports"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 var zeta = testPkg{"zeta", "2.0.0"}
@@ -721,4 +722,237 @@ func TestOldImportRetryIsUnsigned(t *testing.T) {
 	if r.nexus.uploadCount() != 0 || len(r.deletes()) != 0 {
 		t.Errorf("%d uploads, deletes %v: nothing may be published or removed", r.nexus.uploadCount(), r.deletes())
 	}
+}
+
+var mocha = testPkg{"mocha", "10.0.0"}
+
+func fileOf(t *testing.T, p testPkg) string {
+	t.Helper()
+	file, err := npm.PackFileName(p.name, p.version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// inNexus puts the package's tarball in Nexus, as an earlier upload would have.
+func (r *importRig) inNexus(t *testing.T, p testPkg) {
+	t.Helper()
+	body := tarballOf(t, p.name, p.version)
+	r.nexus.mu.Lock()
+	defer r.nexus.mu.Unlock()
+	r.nexus.tarballs[npm.TarballURL("/repository/"+testRepo, p.name, p.version)] = body
+}
+
+// failedFirst seeds b and records an import of it whose first attempt failed
+// the packages of kinds, each with the reason "earlier <kind>", and found every
+// other package in Nexus, which holds them.
+func (r *importRig) failedFirst(t *testing.T, b testBundle, kinds map[testPkg]importer.Kind) string {
+	t.Helper()
+	r.seed(archiveKey, manifestKey, b)
+	imp, err := r.store.Create("alice",
+		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey), Size: int64(len(b.archive))},
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey), Size: int64(len(b.manifest))},
+		&imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey), Size: int64(len(b.signature))}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.store.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep := importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}
+	for _, p := range b.pkgs {
+		res := importer.Result{Name: p.name, Version: p.version, File: fileOf(t, p), State: importer.Present}
+		if kind, ok := kinds[p]; ok {
+			res.State, res.Kind, res.Reason = importer.Failed, kind, "earlier "+string(kind)
+			rep.Counts.Failed++
+		} else {
+			r.inNexus(t, p)
+			rep.Counts.Present++
+		}
+		rep.Packages = append(rep.Packages, res)
+	}
+	if err := r.store.Finish("alice", imp.ID, 1, rep, nil); err != nil {
+		t.Fatal(err)
+	}
+	return imp.ID
+}
+
+// retryBody sends a retry with body as alice.
+func (r *importRig) retryBody(id, body string) *httptest.ResponseRecorder {
+	return r.postTo("/api/imports/"+id+"/retry", "t", body)
+}
+
+func retryOf(t *testing.T, files ...string) string {
+	t.Helper()
+	b, err := json.Marshal(RetryImport{Packages: &files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func resultsByName(rep importer.Report) map[string]importer.Result {
+	out := map[string]importer.Result{}
+	for _, p := range rep.Packages {
+		out[p.Name] = p
+	}
+	return out
+}
+
+func TestRetryOfOneCause(t *testing.T) {
+	t.Run("uploads only the files of the retried cause", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta, mocha}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta, mocha), map[testPkg]importer.Kind{
+			leftPad: importer.KindNexus, zeta: importer.KindNexus, mocha: importer.KindConflict,
+		})
+		answer := importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad), fileOf(t, zeta))), http.StatusAccepted)
+		if got := answer.Attempts[1].Retry; got == nil || len(*got) != 2 || (*got)[0] != fileOf(t, leftPad) || (*got)[1] != fileOf(t, zeta) {
+			t.Errorf("the answer's list = %v", got)
+		}
+		done := waitEnded(t, r.store, id)
+		a := done.Attempts[1]
+		if len(a.Retry) != 2 {
+			t.Errorf("the stored list = %v", a.Retry)
+		}
+		got := resultsByName(a.Report)
+		if got["left-pad"].State != importer.Published || got["zeta"].State != importer.Published {
+			t.Errorf("the retried packages = %+v", a.Report.Packages)
+		}
+		if n := r.nexus.uploadCount(); n != 2 {
+			t.Errorf("%d uploads, want 2", n)
+		}
+		if a.Outcome != importer.OutcomeIncomplete || a.Report.Counts.Published != 2 || a.Report.Counts.Failed != 1 {
+			t.Errorf("attempt 2 = %s %+v", a.Outcome, a.Report.Counts)
+		}
+	})
+
+	t.Run("keeps an unlisted package Nexus lacks failed with its earlier cause", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{
+			leftPad: importer.KindNexus, zeta: importer.KindConflict,
+		})
+		reads := r.nexus.readCount(zeta)
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad))), http.StatusAccepted)
+		a := waitEnded(t, r.store, id).Attempts[1]
+		z := resultsByName(a.Report)["zeta"]
+		if z.State != importer.Failed || z.Kind != importer.KindConflict || z.Reason != "earlier conflict" || z.File != fileOf(t, zeta) {
+			t.Errorf("zeta = %+v, want failed as conflict with the earlier reason", z)
+		}
+		if r.nexus.readCount(zeta) <= reads {
+			t.Error("zeta was not read from Nexus")
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if a.Outcome != importer.OutcomeIncomplete || a.Report.Counts.Failed != 1 {
+			t.Errorf("attempt 2 = %s %+v", a.Outcome, a.Report.Counts)
+		}
+	})
+
+	t.Run("fails an unlisted package Nexus lost since the earlier attempt", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{leftPad: importer.KindNexus})
+		r.nexus.lose(zeta)
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad))), http.StatusAccepted)
+		done := waitEnded(t, r.store, id)
+		z := resultsByName(done.Attempts[1].Report)["zeta"]
+		if z.State != importer.Failed || z.Kind != importer.KindNexus || z.Reason == "" {
+			t.Errorf("zeta = %+v, want failed", z)
+		}
+		if done.ArchiveRemoved() || len(r.deletes()) != 0 {
+			t.Error("the archive left MinIO with a package missing from Nexus")
+		}
+	})
+
+	t.Run("reads an unlisted package from Nexus and never uploads it", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{
+			leftPad: importer.KindNexus, zeta: importer.KindConflict,
+		})
+		r.inNexus(t, zeta)
+		reads := r.nexus.readCount(zeta)
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad))), http.StatusAccepted)
+		a := waitEnded(t, r.store, id).Attempts[1]
+		if z := resultsByName(a.Report)["zeta"]; z.State != importer.Present {
+			t.Errorf("zeta = %+v, want present", z)
+		}
+		if r.nexus.readCount(zeta) <= reads {
+			t.Error("zeta was not read from Nexus")
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want only left-pad's", n)
+		}
+	})
+
+	t.Run("removes the archive only when a retry of one cause leaves every package in Nexus", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{
+			leftPad: importer.KindNexus, zeta: importer.KindConflict,
+		})
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, leftPad))), http.StatusAccepted)
+		if got := waitEnded(t, r.store, id); got.ArchiveRemoved() || len(r.deletes()) != 0 {
+			t.Fatalf("the archive left MinIO while zeta is not in Nexus: %v", r.deletes())
+		}
+		r.inNexus(t, zeta)
+		importOf(t, r.retryBody(id, retryOf(t, fileOf(t, zeta))), http.StatusAccepted)
+		done := waitEnded(t, r.store, id)
+		if a := done.Attempts[2]; a.Outcome != importer.OutcomeComplete || !done.ArchiveRemoved() || len(r.deletes()) != 3 {
+			t.Errorf("attempt 3 = %s %+v, removed %v, deletes %v", a.Outcome, a.Report.Counts, done.ArchiveRemoved(), r.deletes())
+		}
+	})
+
+	t.Run("refuses a file that names no failed package with no echo", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{leftPad: importer.KindNexus})
+		for name, body := range map[string]string{
+			"an unknown file":    retryOf(t, "evil-9.9.9.tgz"),
+			"a package in Nexus": retryOf(t, fileOf(t, zeta)),
+			"more than listed":   retryOf(t, fileOf(t, leftPad), "evil-1.tgz", "evil-2.tgz"),
+		} {
+			rec := r.retryBody(id, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status = %d, want 400; body %s", name, rec.Code, rec.Body)
+			}
+			if d := detailOf(problemOf(t, rec)); d != "the packages to retry must be failed packages of the latest attempt" {
+				t.Errorf("%s: detail %q", name, d)
+			}
+			if raw := rec.Body.String() + r.logs.String(); strings.Contains(raw, "evil") || strings.Contains(raw, "zeta") {
+				t.Errorf("%s: the answer or the log repeats the list", name)
+			}
+		}
+		if got, _ := r.store.Get("alice", id); len(got.Attempts) != 1 {
+			t.Errorf("a refused list left %d attempts", len(got.Attempts))
+		}
+		if n := r.nexus.uploadCount(); n != 0 {
+			t.Errorf("a refused list uploaded %d packages", n)
+		}
+	})
+
+	t.Run("refuses a duplicate", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+		id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{leftPad: importer.KindNexus, zeta: importer.KindNexus})
+		rec := r.retryBody(id, retryOf(t, fileOf(t, leftPad), fileOf(t, leftPad)))
+		if rec.Code != http.StatusBadRequest || detailOf(problemOf(t, rec)) != "the packages to retry must be failed packages of the latest attempt" {
+			t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+		}
+		if got, _ := r.store.Get("alice", id); len(got.Attempts) != 1 {
+			t.Errorf("a refused list left %d attempts", len(got.Attempts))
+		}
+	})
+
+	t.Run("retries the whole import on an empty body", func(t *testing.T) {
+		for _, body := range []string{"{}", `{"packages":[]}`} {
+			r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}})
+			id := r.failedFirst(t, buildBundle(t, leftPad, zeta), map[testPkg]importer.Kind{leftPad: importer.KindNexus, zeta: importer.KindConflict})
+			if answer := importOf(t, r.retryBody(id, body), http.StatusAccepted); answer.Attempts[1].Retry != nil {
+				t.Errorf("%s: the answer lists %v", body, *answer.Attempts[1].Retry)
+			}
+			done := waitEnded(t, r.store, id)
+			a := done.Attempts[1]
+			if a.Retry != nil || a.Outcome != importer.OutcomeComplete || a.Report.Counts.Published != 2 || !done.ArchiveRemoved() {
+				t.Errorf("%s: attempt 2 = %s %+v list %v removed %v", body, a.Outcome, a.Report.Counts, a.Retry, done.ArchiveRemoved())
+			}
+		}
+	})
 }

@@ -93,9 +93,29 @@ export interface paths {
         put?: never;
         /**
          * Add an attempt to an import
-         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again; nothing carries over from an earlier attempt. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again. With no packages it may upload any package, and nothing carries over from an earlier attempt. With packages it uploads only those files; every other package is read from Nexus and never uploaded, and one Nexus lacks stays failed with the kind and reason the latest attempt recorded. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. 400 when packages names anything but failed packages of the latest attempt, or one twice; the answer repeats none of them and nothing changes. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
          */
         post: operations["retryImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/{importId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel the latest attempt of an import
+         * @description A queued attempt leaves the queue and ends cancelled at once. A running attempt stops before its next package and ends cancelled; its packages not reached fail with the kind interrupted. Every package already in Nexus stays there, and a cancelled attempt removes nothing from MinIO. An attempt that ended every package before the cancel keeps the outcome it ends with. A cancelled import takes a retry and blocks a new start of its archive like an incomplete one. 409 once the latest attempt has ended. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         */
+        post: operations["cancelImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -207,7 +227,7 @@ export interface components {
         /** @description The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since */
         LatestImport: {
             id: string;
-            /** @description queued, running, complete, incomplete, refused or interrupted */
+            /** @description queued, running, complete, incomplete, refused, interrupted or cancelled */
             outcome: string;
         };
         StartImport: {
@@ -215,6 +235,11 @@ export interface components {
             archive: string;
             /** @description The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused */
             expectedSha256?: string;
+        };
+        /** @description An empty object retries the whole import. */
+        RetryImport: {
+            /** @description The file names of the packages to upload, each a failed package of the latest attempt, none twice. Absent or empty retries the whole import. */
+            packages?: string[];
         };
         ImportList: {
             imports: components["schemas"]["Import"][];
@@ -239,6 +264,8 @@ export interface components {
             /** @description Whether an attempt removed the archive from MinIO. A complete attempt removes the archive and its manifest only after checking that both still carry the ETags it read; its removal says why not. */
             archiveRemoved: boolean;
             attempts: components["schemas"]["Attempt"][];
+            /** @description How many attempts run or wait before the latest one in the service's queue, whoever started them. Present only while the latest attempt is queued in this service; never stored, so absent from every import read after it left the queue. */
+            queueAhead?: number;
         };
         Attempt: {
             n: number;
@@ -250,8 +277,10 @@ export interface components {
             startedAt?: string;
             /** Format: date-time */
             endedAt?: string;
-            /** @description complete, incomplete, refused or interrupted once the attempt has ended */
+            /** @description complete, incomplete, refused, interrupted or cancelled once the attempt has ended */
             outcome: string;
+            /** @description The file names this attempt was asked to upload, the packages of one cause. Absent on a first attempt, on a whole retry, and on an attempt recorded by sealift 0.7.0 or earlier. */
+            retry?: string[];
             report: components["schemas"]["Report"];
             removal?: components["schemas"]["Removal"];
         };
@@ -262,6 +291,7 @@ export interface components {
         };
         /** @description The account of one attempt; a package still pending has not ended */
         Report: {
+            /** @description complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs */
             outcome: string;
             reason: string;
             /** @description True when Nexus, MinIO or the key set is reached over plain http */
@@ -352,7 +382,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description Error. 401 when the token fails a check (the detail names the check), 403 when its preferred_username cannot name a user folder or a start looks cross-site, 404 for an unknown import or an archive outside the user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503 when the realm's keys cannot be had or the service is stopping. */
+        /** @description Error. 401 when the token fails a check (the detail names the check), 403 when its preferred_username cannot name a user folder or a start, a retry or a cancel looks cross-site, 404 for an unknown import or an archive outside the user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503 when the realm's keys cannot be had or the service is stopping. */
         Problem: {
             headers: {
                 [name: string]: unknown;
@@ -454,7 +484,7 @@ export interface operations {
                     "application/json": components["schemas"]["Import"];
                 };
             };
-            /** @description The archive already has an import that is queued, running, incomplete or interrupted, or MinIO is not configured */
+            /** @description The archive already has an import that is queued, running, incomplete, interrupted or cancelled, or MinIO is not configured */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -500,7 +530,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["RetryImport"];
             };
         };
         responses: {
@@ -514,6 +544,42 @@ export interface operations {
                 };
             };
             /** @description An attempt is queued or running, the archive is no longer in MinIO, or MinIO is not configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ImportConflict"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    cancelImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The import, its latest attempt cancelled or stopping before its next package */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Import"];
+                };
+            };
+            /** @description The latest attempt has ended */
             409: {
                 headers: {
                     [name: string]: unknown;
