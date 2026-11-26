@@ -325,6 +325,53 @@ func TestAFailedAnalysisStillRecordsEachBlockedPin(t *testing.T) {
 	}
 }
 
+// A frozen file pins every package, so a pin with no wheel is often one
+// another pin needs. uv gets it as a constraint, which holds it at its
+// version without requiring it; a resolution that still brings it back at
+// another version fails on the blocked pin, never on a changed pin.
+func TestABlockedPinAnotherPackageNeedsFailsTheAnalysis(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	ix.Add(piptest.Dist{Name: "zeta", Version: "1.0.0", Tag: "py3-none-any", Requires: []string{"gamma>=1.0"}})
+	ix.Add(piptest.Dist{Name: "gamma", Version: "1.0.0"})
+	ix.Add(piptest.Dist{Name: "gamma", Version: "1.1.0", Tag: "py3-none-any"})
+	a, st := newPipAnalysis(t, ix.URL, store.DefaultPipTarget, reqFile("requirements.txt", "zeta==1.0.0\ngamma==1.0.0\n"))
+	uv := &fakeUv{lock: "gamma==1.1.0\nzeta==1.0.0\n", set: resolved("gamma", "1.1.0", "zeta", "1.0.0")}
+	a.Uv = uv
+
+	if err := a.Run(context.Background(), func(Event) {}); err == nil {
+		t.Fatal("Run succeeded, want resolve to fail on gamma")
+	}
+	status, _ := readStatus(t, st, a)
+	if want := []string{"validate:done", "prepare-tools:done", "check-pins:done", "resolve:failed"}; !slices.Equal(stepNames(status.Steps), want) {
+		t.Fatalf("steps = %v, want %v", stepNames(status.Steps), want)
+	}
+	msg := status.Steps[3].Error
+	want := "1 package has no wheel the target can install and another package needs it: gamma==1.0.0 (requirements.txt): source distribution only"
+	if msg != want {
+		t.Errorf("resolve error = %q, want %q", msg, want)
+	}
+	calls := uv.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("uv ran %d times, want once", len(calls))
+	}
+	in := calls[0]
+	if string(in.Requirements) != "zeta==1.0.0\n" || string(in.Constraints) != "gamma==1.0.0\n" {
+		t.Errorf("uv input = %q and %q, want zeta required and gamma held to its version", in.Requirements, in.Constraints)
+	}
+	if !slices.Equal(in.Exempt, []string{"gamma", "zeta"}) {
+		t.Errorf("exempt = %v, want gamma and zeta: the age must not hide gamma's version from uv", in.Exempt)
+	}
+	res, _ := readPipResult(t, st, a)
+	wantBlocking := []PipBlocking{{Name: "gamma", Version: "1.0.0", Kind: "source-only", Detail: "source distribution only",
+		PinnedAt: []PipPlace{{File: "requirements.txt", Line: 2}}}}
+	if !reflect.DeepEqual(res.Blocking, wantBlocking) {
+		t.Errorf("blocking = %+v, want %+v", res.Blocking, wantBlocking)
+	}
+	if res.Packages == nil || len(res.Packages) != 0 {
+		t.Errorf("packages = %#v, want an empty list: no scan stands behind them", res.Packages)
+	}
+}
+
 // uv never sees a constraint's --hash options, so choose-wheels is the only
 // step that holds a constraint reaching the set to them.
 func TestChooseWheelsHoldsAConstraintToItsHashes(t *testing.T) {

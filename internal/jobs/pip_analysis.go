@@ -334,8 +334,8 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 	return trivyVersion, dbDate, err
 }
 
-// stepResolve resolves every file together with uv, leaving out the lines
-// of the pins check-pins blocked, and writes project/requirements.lock.
+// stepResolve resolves every file together with uv, holding the pins
+// check-pins blocked as constraints, and writes project/requirements.lock.
 // Every package is held to the minimum release age, except those the
 // target's pins fix. Each blocked pin then joins the set at its version,
 // without a wheel. When uv itself names a package with no wheel the target
@@ -349,13 +349,23 @@ func (r *pipRun) stepResolve() error {
 		}
 		defer os.RemoveAll(dir)
 
+		// A blocked pin's line becomes a constraint: nothing requires it,
+		// but should another package need it, uv keeps its version and
+		// stops on it rather than resolving a version the pin rules out.
 		input := r.set
-		input.Requirements = slices.DeleteFunc(slices.Clone(r.set.Requirements), func(p pip.Pin) bool { return r.blocked(p.Key) })
+		input.Requirements = nil
+		input.Constraints = slices.Clone(r.set.Constraints)
+		for _, p := range r.set.Requirements {
+			if r.blocked(p.Key) {
+				input.Constraints = append(input.Constraints, p)
+			} else {
+				input.Requirements = append(input.Requirements, p)
+			}
+		}
+		slices.SortStableFunc(input.Constraints, func(a, b pip.Pin) int { return strings.Compare(a.Key, b.Key) })
 		exempt := make([]string, 0, len(r.pins))
 		for _, p := range r.pins {
-			if !r.blocked(p.Key) {
-				exempt = append(exempt, p.Key)
-			}
+			exempt = append(exempt, p.Key)
 		}
 		slices.Sort(exempt)
 		res, err := r.a.Uv.Compile(r.ctx, runner.CompileInput{
@@ -686,11 +696,22 @@ func (r *pipRun) targetPins() []pip.Pin {
 
 // checkPins refuses a resolution that gave one of pins another version, or
 // left out a requirement whose line has no marker. A constraint only limits
-// a package something else needs, so it may be absent.
+// a package something else needs, so it may be absent. A blocked pin that
+// came back at another version is a package another one needs, and the
+// refusal names it with why it has no wheel.
 func (r *pipRun) checkPins(set []runner.Resolved, pins []pip.Pin) error {
 	resolved := make(map[string]string, len(set))
 	for _, p := range set {
 		resolved[p.Name] = p.Version
+	}
+	var needed []PipBlocking
+	for _, b := range r.blocking {
+		if version, ok := resolved[b.Name]; ok && !pip.SameVersion(version, b.Version) {
+			needed = append(needed, b)
+		}
+	}
+	if len(needed) > 0 {
+		return r.neededBlocking(needed)
 	}
 	for _, p := range pins {
 		if version, ok := resolved[p.Key]; ok && !pip.SameVersion(version, p.Version) {
@@ -703,4 +724,21 @@ func (r *pipRun) checkPins(set []runner.Resolved, pins []pip.Pin) error {
 		}
 	}
 	return nil
+}
+
+// neededBlocking fails a resolution on blocked packages another package
+// needs, naming the first shownProblems with the files that pin them and
+// why. The result lists every one.
+func (r *pipRun) neededBlocking(blocking []PipBlocking) error {
+	shown := make([]string, 0, shownProblems)
+	for _, b := range blocking[:min(len(blocking), shownProblems)] {
+		shown = append(shown, r.describeBlocking(b))
+	}
+	msg := fmt.Sprintf("%d %s no wheel the target can install and %s: %s", len(blocking),
+		plural(len(blocking), "package has", "packages have"),
+		plural(len(blocking), "another package needs it", "other packages need them"), strings.Join(shown, "; "))
+	if len(blocking) > shownProblems {
+		msg += "; the result lists every one"
+	}
+	return errors.New(msg)
 }
