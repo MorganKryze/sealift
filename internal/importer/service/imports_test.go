@@ -1388,6 +1388,40 @@ func TestCancelImport(t *testing.T) {
 		}
 	})
 
+	t.Run("lets the wheel in flight finish its upload and its read back", func(t *testing.T) {
+		n := importtest.NewPyPINexus(t, pipRepo)
+		uploaded, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{settings: onPyPI(n, true), publisher: func(p importer.Publisher) importer.Publisher {
+			return &slowAnswer{Publisher: p, uploaded: uploaded, release: release}
+		}})
+		r.seedPip(t, pipArchiveKey, pipManifestKey, pipWheels(t)...)
+		id := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted).Id
+		select {
+		case <-uploaded:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no upload reached Nexus")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		close(release)
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Removal != nil || a.Report.Ecosystem != "pip" {
+			t.Fatalf("attempt = %s (%s), removal %+v", a.Outcome, a.Report.Ecosystem, a.Removal)
+		}
+		got := resultsByName(a.Report)
+		if p := got["six"]; p.State != importer.Published {
+			t.Errorf("the wheel Nexus stored during the cancel = %+v, want published", p)
+		}
+		if p := got["idna"]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the wheel after the cancel = %+v", p)
+		}
+		if u := n.Uploads(); u != 1 {
+			t.Errorf("%d uploads, want 1", u)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
 	t.Run("answers 409 to a cancel of an ended import", func(t *testing.T) {
 		r := newImportRig(t, rigOptions{})
 		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
