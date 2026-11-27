@@ -172,13 +172,13 @@ func pipFindingLine(f rank.Finding) string {
 	return oneLine(line)
 }
 
-// oneLine turns every control and format character of s into a space and
-// trims the ends. Trivy's text and the analysis's warnings come from
+// oneLine turns every control, format and line or paragraph separator
+// character of s into a space and trims the ends. Trivy's text and the analysis's warnings come from
 // outside, and a line break in them would start a line of its own, such
 // as a second SHA-256.
 func oneLine(s string) string {
 	return strings.TrimSpace(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return ' '
 		}
 		return r
