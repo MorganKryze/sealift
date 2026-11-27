@@ -8,6 +8,7 @@ import { queueExport, type Analysis, type Project } from "@/api/projects"
 import type { components } from "@/api/schema"
 import { ProblemNotice } from "@/components/problem-notice"
 import { PUBLISHES } from "@/components/session/analysis-screen"
+import { useInstance } from "@/components/ephemeral"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
 import { PipWheels } from "@/components/session/pip-wheels"
 import { ReadySummary } from "@/components/session/ready-summary"
@@ -125,7 +126,11 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
   const [opened, setOpened] = useState<Opened | null>(null)
   const causeId = useId()
   const result = analysis.pipResult
-  const needed = result ? pipNeededReasons(result) : []
+  // Under review.yanked: refuse a yanked release takes no reason: Review says so before Seal.
+  const yankedRefused = useInstance().data?.policy.review.yanked === "refuse"
+  const asked = result ? pipNeededReasons(result) : []
+  const needed = yankedRefused ? asked.filter((need) => need.kind !== "yanked") : asked
+  const refused = yankedRefused ? asked.filter((need) => need.kind === "yanked").map((need) => need.name) : []
 
   const sealMutation = useMutation({
     mutationFn: () => queueExport(project.id, analysis.id, { selection: {}, includeProject: false, reasons: pipReasonsToSend(needed, reasons.reasons) }),
@@ -156,16 +161,19 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
   }
 
   const waiting = pipWaiting(result, reasons.reasons)
+  waiting.missing = needed.filter((need) => !pipReasonWritten(reasons.reasons[need.key])).map((need) => need.name)
   const groups = pipGroups(result)
   const totals = pipCveTotals(result)
-  const things = waiting.noWheel.length + waiting.missing.length
+  const things = waiting.noWheel.length + refused.length + waiting.missing.length
   const ready = things === 0
   const title = ready ? "Ready to seal" : things === 1 ? "One thing needs you" : `${plural(things, "thing", "things")} need you`
   const waitingNames = [...new Set(waiting.missing)]
   const cause =
     waiting.noWheel.length > 0
       ? `Opens once ${andList(waiting.noWheel)} ${waiting.noWheel.length === 1 ? "has" : "have"} a wheel for the target.`
-      : waitingNames.length > 0
+      : refused.length > 0
+        ? `This instance refuses every yanked release: ${andList(refused)} cannot cross.`
+        : waitingNames.length > 0
         ? `Opens once ${andList(waitingNames)} ${waitingNames.length === 1 ? "has" : "have"} a reason.`
         : undefined
 
@@ -233,6 +241,7 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
       <PipReasons
         result={result}
         needed={needed}
+        refused={refused}
         reasons={reasons.reasons}
         explainSeverity={!ready}
         onOpen={(kind, name) => setOpened({ kind, name })}
@@ -344,6 +353,8 @@ function NoWheelBlock({ result, names, onReplace }: { result: PipAnalysisResult;
 interface PipReasonsProps {
   result: PipAnalysisResult
   needed: PipNeededReason[]
+  /** The yanked releases the instance's policy refuses: shown without a reason to write. */
+  refused: string[]
   reasons: Record<string, string>
   /** False on Ready, whose head explains the severities. */
   explainSeverity: boolean
@@ -351,14 +362,15 @@ interface PipReasonsProps {
 }
 
 /** The three bands of reasons, as npm draws its two: major jumps, CVEs with no fix, yanked releases. */
-function PipReasons({ result, needed, reasons, explainSeverity, onOpen }: PipReasonsProps) {
+function PipReasons({ result, needed, refused, reasons, explainSeverity, onOpen }: PipReasonsProps) {
   const id = useId()
-  if (needed.length === 0) return null
+  if (needed.length === 0 && refused.length === 0) return null
   const byName = new Map(result.packages.map((pkg) => [pkg.name, pkg]))
   const rows = (kind: PipNeededReason["kind"]) => needed.filter((need) => need.kind === kind).flatMap((need) => (byName.has(need.name) ? [{ need, pkg: byName.get(need.name) as PipPackage }] : []))
   const jumps = rows("major-jump")
   const cves = rows("cve-without-fix")
   const yanked = rows("yanked")
+  const refusedRows = refused.flatMap((name) => (byName.has(name) ? [byName.get(name) as PipPackage] : []))
   const carried = (list: { need: PipNeededReason }[]) => {
     const n = list.filter(({ need }) => pipReasonWritten(reasons[need.key])).length
     return n > 0 ? `, carried with ${plural(n, "reason", "reasons")}` : ""
@@ -448,6 +460,28 @@ function PipReasons({ result, needed, reasons, explainSeverity, onOpen }: PipRea
                   <PackageLine pkg={pkg} />
                   <PinnedIn pkg={pkg} className="text-[12.5px] text-ink-2" />
                 </ReasonRow>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {refusedRows.length > 0 ? (
+          <div role="group" aria-labelledby={`${id}-refused`} className={cn((jumps.length > 0 || cves.length > 0) && "border-t border-rule")}>
+            <ReasonBand tone="warn">
+              <PackageX aria-hidden="true" className="size-4 flex-none text-bad" />
+              <p id={`${id}-refused`} className="text-[13px] text-ink-2">
+                <span className="figure text-ink">{plural(refusedRows.length, "yanked release", "yanked releases")}</span>, refused by this instance
+              </p>
+              <Term id="yanked" />
+            </ReasonBand>
+            <ul className="flex flex-col gap-1.5 p-1.5">
+              {refusedRows.map((pkg) => (
+                <li key={pkg.name} data-refused-row className="tinted-bad grid grid-cols-1 gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
+                  <div className="min-w-0">
+                    <PackageLine pkg={pkg} />
+                    <PinnedIn pkg={pkg} className="text-[12.5px] text-ink-2" />
+                  </div>
+                  <p className="min-w-0 text-[13px] text-ink sm:border-l sm:border-bad-line/60 sm:pl-3">Refused by this instance's policy</p>
+                </li>
               ))}
             </ul>
           </div>

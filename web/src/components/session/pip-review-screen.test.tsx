@@ -60,12 +60,14 @@ const WRITTEN = {
   "yanked:requests": "Our client tests run on 2.32.0; the move to 2.32.3 is #214",
 }
 
-function renderReview(result: PipAnalysisResult, reasons?: Record<string, string>) {
+function renderReview(result: PipAnalysisResult, reasons?: Record<string, string>, yankedRule?: "reason" | "refuse") {
   const analysis = analysisOf(result)
   if (reasons) sessionStorage.setItem(`sealift:reasons:${analysis.id}`, JSON.stringify(reasons))
   const onNavigateStep = vi.fn()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  if (yankedRule) client.setQueryData(["instance"], { policy: { review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason", yanked: yankedRule } } })
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <QueryClientProvider client={client}>
       <PipReviewScreen project={projectOf(analysis)} analysis={analysis} onNavigateStep={onNavigateStep} />
     </QueryClientProvider>,
   )
@@ -160,6 +162,19 @@ describe("what holds Seal", () => {
     renderReview(resultOf(PACKAGES))
     expect(seal().getAttribute("aria-disabled")).toBe("true")
     expect(screen.getByText("Opens once django, ecdsa and requests have a reason.")).toBeDefined()
+  })
+
+  it("states a yanked release refused by the instance before Seal, with no reason to write", () => {
+    renderReview(resultOf(PACKAGES), WRITTEN, "refuse")
+    const reasons = screen.getByRole("region", { name: "Reasons" })
+    const yanked = within(reasons).getByRole("group", { name: "1 yanked release, refused by this instance" })
+    expect(within(yanked).getByText("Refused by this instance's policy")).toBeDefined()
+    expect(within(reasons).queryByRole("button", { name: /requests$/ })).toBeNull()
+    expect(screen.getByRole("heading", { level: 1, name: "One thing needs you" })).toBeDefined()
+    expect(seal().getAttribute("aria-disabled")).toBe("true")
+    expect(screen.getByText("This instance refuses every yanked release: requests cannot cross.")).toBeDefined()
+    fireEvent.click(seal())
+    expect(queueExport).not.toHaveBeenCalled()
   })
 
   it("never reads Ready while a package has no wheel", () => {

@@ -132,6 +132,15 @@ const review = (made, name) => async (page) => {
   if (made.reasons) await stored(page, made.reasons)
 }
 
+// The seeded instance's answer with review.yanked set to refuse.
+const refusing = (before) => async (page) => {
+  await before(page)
+  await page.route((url) => url.pathname === "/api/instance", async (route) => {
+    const json = await (await route.fetch()).json()
+    await route.fulfill({ json: { ...json, policy: { ...json.policy, review: { ...json.policy.review, yanked: "refuse" } } } })
+  })
+}
+
 // One frame per event, as internal/api writes them.
 const frame = (kind, data) => `event: ${kind}\ndata: ${JSON.stringify({ kind, job: "analysis-9", storeId: AT, data })}\n\n`
 const ORDER = ["validate", "prepare-tools", "check-pins", "resolve", "choose-wheels", "scan"]
@@ -186,6 +195,7 @@ export const states = [
   { path: PATH, name: "review with three packages with no wheel", before: review(ledger({ noWheel: 3 })), click: [button("What a wheel is")], ready: WHEEL_TEXT },
   { path: PATH, name: "review, the worst case", before: review(worst(), LONG_NAME), click: [button(/packages unchanged/)], ready: "21 things need you" },
   { path: PATH, name: "review, mlflow's CVEs open", before: review(worst(), LONG_NAME), click: [button("9 CVEs of mlflow")], ready: "CVE-2024-37060" },
+  { path: PATH, name: "review under a policy that refuses yanked releases", before: refusing(review(ledger({ written: true }))), ready: "This instance refuses every yanked release: requests cannot cross." },
   { path: PATH, name: "decide for a yanked release", before: review(ledger()), click: [button("Decide requests")], ready: "“Yanked due to conflicts with CVE-2024-35195 mitigation”" },
   { path: PATH, name: "decide for a CVE", before: review(ledger()), click: [button("Decide ecdsa")], ready: "ecdsa: Minerva timing attack on P-256 in python-ecdsa" },
   { path: PATH, name: "jump empty", before: review(ledger()), click: [button("Jump django")], ready: "Write a reason to record." },
