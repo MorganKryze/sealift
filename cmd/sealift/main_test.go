@@ -1096,7 +1096,7 @@ func TestRunHandsTheReviewRulesToTheAnalyses(t *testing.T) {
 	_, stop := startRun(t, filepath.Join(t.TempDir(), "data"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	stop()
 
-	want := policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse}
+	want := policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse, Yanked: policy.AskReason}
 	select {
 	case got := <-reviews:
 		if got != want {

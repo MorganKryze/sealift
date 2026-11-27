@@ -42,8 +42,8 @@ type Policy struct {
 	Defaulted []string
 }
 
-// Rule is what a selection that carries a major jump or a CVE without fix
-// needs to cross.
+// Rule is what a selection that carries a major jump, a CVE without fix or
+// a yanked release needs to cross.
 type Rule string
 
 const (
@@ -60,12 +60,15 @@ type Review struct {
 	ProposeOtherMajors bool
 	MajorJump          Rule
 	CVEWithoutFix      Rule
+	// Yanked is what a pip export that carries a yanked release needs; an
+	// npm set has none.
+	Yanked Rule
 }
 
 // DefaultReview proposes inside the current line only and asks a reason
-// for a major jump and for a CVE without fix.
+// for a major jump, a CVE without fix and a yanked release.
 func DefaultReview() Review {
-	return Review{MajorJump: AskReason, CVEWithoutFix: AskReason}
+	return Review{MajorJump: AskReason, CVEWithoutFix: AskReason, Yanked: AskReason}
 }
 
 // StoredError reports a value the settings of an older release hold, which
@@ -93,6 +96,7 @@ type rawReview struct {
 	// Nodes, since a *string reads an explicit null as a key left out.
 	MajorJump     yaml.Node `yaml:"majorJump"`
 	CVEWithoutFix yaml.Node `yaml:"cveWithoutFix"`
+	Yanked        yaml.Node `yaml:"yanked"`
 }
 
 type rawTargets struct {
@@ -291,6 +295,7 @@ func (r rawReview) review() (Review, error) {
 	}{
 		{"review.majorJump", r.MajorJump, &out.MajorJump},
 		{"review.cveWithoutFix", r.CVEWithoutFix, &out.CVEWithoutFix},
+		{"review.yanked", r.Yanked, &out.Yanked},
 	} {
 		if f.value.Kind == 0 {
 			continue

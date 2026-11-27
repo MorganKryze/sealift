@@ -134,12 +134,13 @@ The counts in this example are made up. Each count vector holds the number of CV
 | `kept[]` | A dependency kept on its line: `name`, `version`, and `jump`, the version outside the line it could take |
 | `jumps[]` | A family, or a lone dependency, the selection takes out of its line: `family` (absent for a lone dependency), `packages[]` with `name`, `from` and `to`, and the `reason` given for the jump |
 | `left[]` | A CVE the project keeps: the `dependency` and the `version` it keeps, the CVE `id`, its `severity`, the `package` Trivy found it in (empty when unknown), `fixedIn`, the versions Trivy names as fixing it (empty when none), and the `reason` given when no version fixes it |
+| `yanked[]` | A release its index has yanked that a pip set carries: the `dependency` and its `version`, `indexReason`, the reason the index gave (absent when it gave none), and the `reason` given for carrying it. Absent when the set carries no yanked release, so an npm review never holds it. Also absent when the analysis recorded no yanked mark, as one written by sealift 0.7.0, so an absent list proves nothing |
 | `unchanged` | The number of other dependencies, which the selection leaves as they are |
 
-The review changes nothing the import must check, so it keeps `formatVersion` 2, as rule 6 of [What `sealift import` checks](#what-sealift-import-checks) allows. The import of sealift 0.7.0 ignores the key. Imports after 0.7.0 read it by these rules:
+The review changes nothing the import must check, so the manifest keeps its `formatVersion`, 2 for npm and 3 for pip, as rule 6 of [What `sealift import` checks](#what-sealift-import-checks) allows. The import of sealift 0.7.0 ignores the key, and ignores `yanked` inside it. Imports after 0.7.0 read it by these rules:
 
 1. The review is read within the manifest's 16 MiB bound. Each list holds at most 100,000 entries, and `cves.before` is present.
-2. Each `name`, `dependency` and `package` is a valid package name, and each version an exact version of at most 256 bytes, as rule 4 reads them. `id`, `fixedIn` and `family` are at most 256 bytes of printable characters, as rule 5 reads text. `severity` is one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` and `UNKNOWN`. Each count vector holds 5 counts of zero or more.
+2. Each `name`, `dependency` and `package` is a valid package name, and each version an exact version of at most 256 bytes, as rule 4 reads them. `id`, `fixedIn` and `family` are at most 256 bytes of printable characters, as rule 5 reads text. `indexReason` is empty or at most 200 printable characters, by the characters rule 3 allows. `severity` is one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` and `UNKNOWN`. Each count vector holds 5 counts of zero or more.
 3. A reason holds 1 to 300 characters once trimmed, on one line, within 4,800 bytes. Letters, marks, numbers, punctuation, symbols, the plain space and the no-break spaces U+00A0, U+202F and U+3000 pass. A control character, a line or paragraph separator (U+2028, U+2029), a bidirectional override or any other format character breaks the rule. `archive.CheckReason` is that rule, the one a writer of the review applies too.
 4. A review that breaks a rule is kept out with a problem that names the field and repeats no value, such as `review.left[1].severity is not one of CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN`. The import still checks and publishes the packages as before: a review never refuses an archive.
 
@@ -335,7 +336,22 @@ The digests in this example are made up and match no published wheel.
 | `packages[].sha256` | The hex sha256 the package index published for the wheel |
 | `packages[].shippedSha512` | Hex sha512 of the file under `out/`, the same bytes as `sha256` |
 
-The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. A pip manifest may carry a `review` read by the rules of [The review](#the-review), with pip's names and versions. A pip export writes none. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+The pip manifest lists no source URL, no requirements file and no wheel tag: the import needs none of them. `manifest.json.sig` signs a pip manifest as it signs an npm one, with the same key and the same Ed25519 scheme. The manifest is written as indented JSON and signed over those exact bytes.
+
+A pip export writes a `review`, read by the rules of [The review](#the-review), with pip's normalized names and versions. It compares the set with the previous crossing the analysis recorded, and reads nothing else:
+
+| Field | What a pip export writes |
+| --- | --- |
+| `cves.before` | The CVE counts of the previous crossing's set, as the analysis scanned it, the packages that left included. With no previous crossing, the counts of `cves.after` |
+| `cves.after` | The CVE counts of the set, each id counted once at its most serious severity |
+| `updates[]` | Each package whose version moved inside its major since the previous crossing |
+| `kept[]` | Empty: the export carries the set as the analysis resolved it |
+| `jumps[]` | One entry per package that left its major since the previous crossing, with no `family` |
+| `left[]` | Every CVE the set keeps |
+| `yanked[]` | Each release of the set its index yanked. An export of a 0.7.0 analysis lists none, whatever its set carries |
+| `unchanged` | The packages the previous crossing held at the same version. 0 with no previous crossing, since nothing was compared. On a first crossing, the review compares the set with its requirements files only: `cves.before` equals `cves.after` and `unchanged` is 0 |
+
+A package new since the previous crossing counts in neither `updates` nor `unchanged`. An analysis written by sealift 0.7.0 recorded no previous crossing, so its export signs a review that compares nothing. It recorded no yanked mark either, so the review lists no yanked release whatever the set carries.
 
 ## Telling the formats apart
 

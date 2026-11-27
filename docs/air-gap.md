@@ -61,7 +61,7 @@ What a valid signature shows: the manifest was made by the holder of the private
 
 ## The review in the manifest
 
-The `manifest.json` of an npm export carries a `review`: what the selection decided, and the reasons given for it. The signature covers it with the rest of the manifest, so the import side reads the reasons as the connected side signed them. The review holds:
+The `manifest.json` of an npm or a pip export carries a `review`: what the selection decided, and the reasons given for it. The signature covers it with the rest of the manifest, so the import side reads the reasons as the connected side signed them. The review holds:
 
 - the project's CVE counts by severity, before the selection and once it applies;
 - each dependency the selection moves inside its line, with the counts of the CVEs the move fixes and leaves;
@@ -70,9 +70,11 @@ The `manifest.json` of an npm export carries a `review`: what the selection deci
 - each CVE the project keeps, with the package Trivy found it in, the versions that fix it, and the reason when no version does;
 - the number of other dependencies, left as they are.
 
-The review names no person: the connected side has no login. Reasons and review leave the archive's bytes alone, so the same selection gives the same sha256 whatever the reasons say. A pip export writes no review yet.
+The review names no person: the connected side has no login. Reasons and review leave the archive's bytes alone, so the same selection gives the same sha256 whatever the reasons say.
 
-An import that predates the review reads such an archive as before. The review adds a key and keeps `formatVersion` 2, and the import of sealift 0.7.0 ignores keys it does not know. A newer import reads the review by fixed rules. One it cannot read is kept out with the field at fault, and the import checks and publishes the packages as before: a review never refuses an archive. An archive from 0.7.0 or earlier has no review, and imports as before. Neither the import report nor the import screens show the review yet. [Archive format](dev/archive-format.md#the-review) gives every field and each reading rule.
+A pip export compares its whole set with the previous crossing of the project, which the analysis recorded. Its review keeps no dependency on its line, and lists each yanked release the set carries, with the reason the index gave and the reason given for carrying it. With no previous crossing, the CVE counts before equal those after and no package counts as unchanged, since nothing was compared. An export of an analysis written by sealift 0.7.0 lists no yanked release, whatever its set carries.
+
+An import that predates the review reads such an archive as before. The review adds a key and keeps the format version, 2 for npm and 3 for pip, and the import of sealift 0.7.0 ignores keys it does not know. A newer import reads the review by fixed rules. One it cannot read is kept out with the field at fault, and the import checks and publishes the packages as before: a review never refuses an archive. An archive from 0.7.0 or earlier has no review, and imports as before. Neither the import report nor the import screens show the review yet. [Archive format](dev/archive-format.md#the-review) gives every field and each reading rule.
 
 Proven in the lab at commit 9557a5a: the `sealift import` of 0.7.0 checked and published an archive whose manifest carries a review with its reasons, and ended `import complete` with 0 failed. An analysis written by 0.7.0, exported again with the reasons it needed, gave the archive sha256 that 0.7.0 gave for the same selection.
 

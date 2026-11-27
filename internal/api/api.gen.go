@@ -141,6 +141,7 @@ func (e PreparingItemState) Valid() bool {
 const (
 	CveWithoutFix ReasonKind = "cve-without-fix"
 	MajorJump     ReasonKind = "major-jump"
+	Yanked        ReasonKind = "yanked"
 )
 
 // Valid indicates whether the value is a known member of the ReasonKind enum.
@@ -149,6 +150,8 @@ func (e ReasonKind) Valid() bool {
 	case CveWithoutFix:
 		return true
 	case MajorJump:
+		return true
+	case Yanked:
 		return true
 	default:
 		return false
@@ -223,7 +226,7 @@ type Analysis struct {
 	Failure *Failure `json:"failure,omitempty"`
 	Id      string   `json:"id"`
 
-	// PipResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+	// PipResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. A done analysis may hold a package without a wheel and a non-empty blocking list, which no export takes. Every field an analysis from 0.7.0 lacks is absent from its answer, never read as empty or false.
 	PipResult *PipAnalysisResult `json:"pipResult,omitempty"`
 
 	// PnpmVersion pnpm version the analysis used, absent when it did not record one
@@ -410,12 +413,12 @@ type Export struct {
 	State State `json:"state"`
 }
 
-// ExportRequest A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and ignores the flag.
+// ExportRequest A selection of versions per dependency, plus the project tree flag. A pip export takes an empty selection and the reasons its set needs, and ignores the flag.
 type ExportRequest struct {
 	// IncludeProject Add the current project tree to an npm export. A pip export ignores it.
 	IncludeProject *bool `json:"includeProject,omitempty"`
 
-	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. The signed manifest carries them in its review. At most 10,000.
+	// Reasons The reasons the selection needs: one for each family or lone dependency it takes out of its line, and one for each dependency whose kept version carries a CVE that no version fixes. A pip export needs one reason per package for each major jump since the previous crossing, each CVE that no version fixes and each yanked release, and refuses a reason that is missing, repeated or covers nothing. The signed manifest carries them in its review. At most 10,000.
 	Reasons *[]Reason `json:"reasons,omitempty"`
 
 	// Selection Dependency name to the list of its versions to include. An empty or absent list selects nothing for that dependency. A pip export carries the analysis's whole set, so its selection is empty. At most 10,000 dependencies, each name at most 214 bytes; a request past either bound is refused with 400. Every JSON request body is read within 16 MiB; a larger one is refused with 413, and a body of another type with 415.
@@ -482,12 +485,12 @@ type LogData struct {
 	Line string `json:"line"`
 }
 
-// PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version.
+// PipAnalysisResult What a pip analysis writes to pip-result.json: the set resolved from the project's files, each package with its findings. A pip analysis proposes no other version. A done analysis may hold a package without a wheel and a non-empty blocking list, which no export takes. Every field an analysis from 0.7.0 lacks is absent from its answer, never read as empty or false.
 type PipAnalysisResult struct {
 	// Advisories What each CVE id that the packages' cves lists name does, keyed by id, from the Trivy report. Absent from an analysis written before advisories were kept, and when no CVE has a title, a description or a date.
 	Advisories *map[string]Advisory `json:"advisories,omitempty"`
 
-	// Blocking Packages with no wheel the target can install
+	// Blocking Packages with no wheel the target can install. A done analysis lists each of them in packages too, without a wheel; a failed one lists no package.
 	Blocking []PipBlocking `json:"blocking"`
 
 	// Files Every requirements file the set was resolved from
@@ -496,17 +499,26 @@ type PipAnalysisResult struct {
 	// Packages The resolved set, sorted by normalized name
 	Packages []PipPackage `json:"packages"`
 
+	// Previous The latest done export, created before this analysis started, of a pip project with the same name, trimmed and compared without case, this project included. Absent when there is none, when it could not be read, and from an analysis written before crossings were compared.
+	Previous *PipPreviousCrossing `json:"previous,omitempty"`
+
+	// Removed Each package of the previous crossing that this set no longer holds, sorted by name. Absent with no previous crossing, and when no package left.
+	Removed *[]PipRemoved `json:"removed,omitempty"`
+
 	// Target The system a pip resolution is prepared for
 	Target   PipTarget `json:"target"`
 	Warnings []string  `json:"warnings"`
 }
 
-// PipBlocking A package the target cannot install from a wheel
+// PipBlocking A package the target cannot install from a wheel. A done analysis may hold one: the package stays in its set without a wheel, and no export takes the set.
 type PipBlocking struct {
-	Detail  string          `json:"detail"`
-	Kind    PipBlockingKind `json:"kind"`
-	Name    string          `json:"name"`
-	Version string          `json:"version"`
+	Detail string          `json:"detail"`
+	Kind   PipBlockingKind `json:"kind"`
+	Name   string          `json:"name"`
+
+	// PinnedAt Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded.
+	PinnedAt *[]PipPlace `json:"pinnedAt,omitempty"`
+	Version  string      `json:"version"`
 }
 
 // PipBlockingKind defines model for PipBlocking.Kind.
@@ -534,11 +546,59 @@ type PipPackage struct {
 	Files []string `json:"files"`
 
 	// Name Normalized name
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name string `json:"name"`
 
-	// Wheel The wheel chosen for a package, as the index lists it
+	// PinnedAt Each file and line that pins it, sorted by file then line. A requirement line that repeats the one before it in this order, with the same version, marker and extras, counts once; only the first constraint line of a package counts, and none of a required package. Absent for a transitive package and from an analysis written before places were recorded.
+	PinnedAt *[]PipPlace `json:"pinnedAt,omitempty"`
+
+	// Previous The package as the previous crossing held it. Absent for a package new since then, and when the analysis records no previous crossing.
+	Previous *PipPrevious `json:"previous,omitempty"`
+	Version  string       `json:"version"`
+
+	// Wheel The wheel chosen for a package, as the index lists it. A package of a done analysis may have none: its blocking entry says why, and no export takes the set.
 	Wheel *PipWheel `json:"wheel,omitempty"`
+
+	// Yanked The chosen file is yanked on the index: its publisher withdrew it. Absent when the index keeps the release, and from an analysis written before the mark was recorded, whose warnings may name the release instead.
+	Yanked *PipYanked `json:"yanked,omitempty"`
+}
+
+// PipPlace A line of a requirements file that pins a package
+type PipPlace struct {
+	File string `json:"file"`
+
+	// Line 1 for the first line
+	Line int `json:"line"`
+}
+
+// PipPrevious The package as the previous crossing held it. Absent for a package new since then, and when the analysis records no previous crossing.
+type PipPrevious struct {
+	// Cves Its findings at that version, from this analysis's own scan, sorted by severity, then id
+	Cves []PipFinding `json:"cves"`
+
+	// MajorJump The first release segment, epoch first, differs between that version and this one. A segment of 1000 or more, as in a calendar version, never counts.
+	MajorJump bool   `json:"majorJump"`
+	Version   string `json:"version"`
+}
+
+// PipPreviousCrossing The latest done export, created before this analysis started, of a pip project with the same name, trimmed and compared without case, this project included. Absent when there is none, when it could not be read, and from an analysis written before crossings were compared.
+type PipPreviousCrossing struct {
+	AnalysisId  string `json:"analysisId"`
+	ExportId    string `json:"exportId"`
+	ProjectId   string `json:"projectId"`
+	ProjectName string `json:"projectName"`
+
+	// SealedAt When that export was created
+	SealedAt time.Time `json:"sealedAt"`
+}
+
+// PipRemoved A package of the previous crossing that the set no longer holds
+type PipRemoved struct {
+	// Cves Its findings at that version, from this analysis's own scan, sorted by severity, then id
+	Cves []PipFinding `json:"cves"`
+	Name string       `json:"name"`
+
+	// Version Its version in the previous crossing
+	Version string `json:"version"`
 }
 
 // PipTarget The system a pip resolution is prepared for
@@ -555,7 +615,7 @@ type PipTarget struct {
 	UvVer  string `json:"uvVer"`
 }
 
-// PipWheel The wheel chosen for a package, as the index lists it
+// PipWheel The wheel chosen for a package, as the index lists it. A package of a done analysis may have none: its blocking entry says why, and no export takes the set.
 type PipWheel struct {
 	File string `json:"file"`
 
@@ -563,8 +623,17 @@ type PipWheel struct {
 	Sha256 string `json:"sha256"`
 
 	// Size Bytes
-	Size int64  `json:"size"`
-	Url  string `json:"url"`
+	Size int64 `json:"size"`
+
+	// UploadedAt When the index says the file was uploaded, in UTC. Absent when the index gives none, and from an analysis written before upload times were recorded.
+	UploadedAt *time.Time `json:"uploadedAt,omitempty"`
+	Url        string     `json:"url"`
+}
+
+// PipYanked The chosen file is yanked on the index: its publisher withdrew it. Absent when the index keeps the release, and from an analysis written before the mark was recorded, whose warnings may name the release instead.
+type PipYanked struct {
+	// Reason The index's reason, plain text that a client renders as text. Kept to printable characters and cut to 200 code points. Empty when the index gives none.
+	Reason string `json:"reason"`
 }
 
 // Policy The defaults and limits the deployment sets for every new project and analysis.
@@ -694,9 +763,9 @@ type ProjectSummary struct {
 	Target *Target `json:"target,omitempty"`
 }
 
-// Reason Why a selection takes a jump or keeps a CVE that no version fixes.
+// Reason Why a selection takes a jump, keeps a CVE that no version fixes, or carries a yanked release. `yanked` is for a pip export only: an npm export refuses it.
 type Reason struct {
-	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes.
+	// Dependencies The dependencies the reason covers, by name, each at most 214 bytes. A pip reason names one package.
 	Dependencies []string   `json:"dependencies"`
 	Kind         ReasonKind `json:"kind"`
 
@@ -717,6 +786,9 @@ type ReviewPolicy struct {
 
 	// ProposeOtherMajors Whether an analysis proposes versions outside the current line.
 	ProposeOtherMajors bool `json:"proposeOtherMajors"`
+
+	// Yanked reason lets the selection cross with a reason written for it; refuse stops it.
+	Yanked ReviewRule `json:"yanked"`
 }
 
 // ReviewRule reason lets the selection cross with a reason written for it; refuse stops it.

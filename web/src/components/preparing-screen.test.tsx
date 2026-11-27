@@ -28,7 +28,7 @@ function instance(preparing: Instance["preparing"], brand: Brand = DEFAULT_BRAND
       minReleaseAgeDays: 14,
       resolveParallelism: 4,
       downloadParallelism: 16,
-      review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason" },
+      review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason", yanked: "reason" },
     },
     tools: { trivy: "0.76.2", pnpm: [], uv: [] },
   }

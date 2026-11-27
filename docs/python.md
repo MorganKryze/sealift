@@ -22,7 +22,7 @@ python3 -VV
 ldd --version
 ```
 
-The first line of each gives the Python version and the glibc version. sealift records one wheel per package for that target. A package with no wheel the target can install, such as one published as a source distribution only, fails the analysis, which names it and the file that pins it.
+The first line of each gives the Python version and the glibc version. sealift records one wheel per package for that target. A package with no wheel the target can install, such as one published as a source distribution only, is listed with the review, with the file and line that pin it, and the export of that set is refused. When another package needs it and no wheel of its version installs on the target, the analysis fails and names it.
 
 ## Analyse and export
 
@@ -77,5 +77,5 @@ The lab ran this crossing at commit f5c6f46 with a project of two requirements f
 ## Limits
 
 - One wheel per package, for one target: `linux`, `x86_64` and glibc. No macOS, Windows or musl wheels.
-- No source distribution: a package without a wheel for the target is refused.
+- No source distribution: a package without a wheel for the target is listed with the review, and its export is refused. One that another package needs fails the analysis.
 - No collection screen yet: the API carries the connected side's steps.

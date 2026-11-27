@@ -60,6 +60,7 @@ export function PolicySection({ policy, ephemeral, idleMinutes }: PolicySectionP
     ["Proposals", policy.review.proposeOtherMajors ? "Any version" : "Inside the current line"],
     ["Major jump", rule(policy.review.majorJump)],
     ["CVE without fix", rule(policy.review.cveWithoutFix)],
+    ["Yanked release", rule(policy.review.yanked)],
     [
       "Projects",
       ephemeral ? (
