@@ -82,6 +82,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 ### Fixed
 
 - An import refused because the sha256 typed at its start differs now says the archive matches its manifest and asks to check the value copied from the Sealed page, instead of asking to download a good archive again.
+- A project left with no analysis, such as one whose queued analysis was cancelled, shows Analyse on its page and on its Check step, and analyses the files it holds. Before, a new upload was the only way on.
 - A version whose `engines` held a value that is not a string, such as `"npm": 7`, lost its Node range too and could be proposed for a Node it does not support. Its Node range now counts.
 - A version whose `engines.node` is not a string, such as `18` or `[">=18"]`, is flagged as a Node mismatch, as pnpm 10 and 11 match no Node against it. It used to read as a version with no Node range.
 - An analysis with the project's own lockfile failed when that lockfile gave a package `engines` holding an object or a list, which pnpm 10 and 11 write. Such engines now read as a packument's do: a `node` value that is not a string counts as a Node mismatch.

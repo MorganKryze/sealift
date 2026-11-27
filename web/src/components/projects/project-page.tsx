@@ -5,6 +5,7 @@ import { useState } from "react"
 import type { Analysis, Export, Project } from "@/api/projects"
 import { CrossingFiles } from "@/components/projects/crossing-files"
 import { StateChip, StateIcon } from "@/components/projects/projects-list"
+import { StartAnalysis } from "@/components/projects/start-analysis"
 import { crossingName, crossingState } from "@/lib/crossings"
 import { cn, latestByDate } from "@/lib/utils"
 
@@ -65,7 +66,9 @@ export function ProjectPage({ project }: { project: Project }) {
             />
           ))}
         </ol>
-      ) : null}
+      ) : (
+        <StartAnalysis projectId={project.id} />
+      )}
     </div>
   )
 }

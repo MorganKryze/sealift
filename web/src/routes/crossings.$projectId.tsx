@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
 import { getProject, getProjectManifest, type Analysis, type Project } from "@/api/projects"
+import { StartAnalysis } from "@/components/projects/start-analysis"
 import { SessionLoadError } from "@/components/route-error"
 import { AnalysisScreen } from "@/components/session/analysis-screen"
 import { CheckBlock } from "@/components/session/check-block"
@@ -84,8 +85,17 @@ function CrossingRoute() {
 
   const pip = project.ecosystem === "pip"
   if (step === "check" || !analysis) {
-    if (pip) return <PipCrossingCheck project={project} analysis={analysis} onNavigateStep={goToStep} />
-    return <CheckStep project={project} analysis={analysis} onNavigateStep={goToStep} />
+    const check = pip ? <PipCrossingCheck project={project} analysis={analysis} onNavigateStep={goToStep} /> : <CheckStep project={project} analysis={analysis} onNavigateStep={goToStep} />
+    if (analysis) return check
+    // A project whose only analysis was cancelled while queued has none: Analyse is its way on.
+    return (
+      <>
+        {check}
+        <div className="mx-auto w-full max-w-190 px-5 pb-9">
+          <StartAnalysis projectId={project.id} />
+        </div>
+      </>
+    )
   }
 
   if (step !== "review" && analysis.state !== "done") {

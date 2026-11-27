@@ -44,6 +44,13 @@ beforeEach(() => {
 })
 
 describe("the crossing route", () => {
+  it("offers Analyse on the Check step of a project with no analysis", async () => {
+    search.current = {}
+    vi.mocked(getProject).mockResolvedValue({ ...sealed, analyses: [], exports: [] } as unknown as Project)
+    renderCrossing()
+    expect(await screen.findByRole("button", { name: "Analyse" })).toBeInTheDocument()
+  })
+
   it("opens Seal on a crossing whose export is done", async () => {
     search.current = {}
     renderCrossing()
