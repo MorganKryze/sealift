@@ -127,6 +127,9 @@ importers:
       clsx:
         specifier: 2.1.1
         version: 2.1.1
+      get-nonce:
+        specifier: 1.0.1
+        version: 1.0.1
       lucide-react:
         specifier: 1.69.0
         version: 1.69.0(@types/react@19.3.0)(react@19.3.1)

@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +17,7 @@ import (
 // wantPolicy is written out so a change to the constant fails here.
 const wantPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 
-const testShell = "<!doctype html><title>screens</title>"
+const testShell = "<!doctype html><html><head><title>screens</title></head></html>"
 
 func testScreens() fstest.MapFS {
 	return fstest.MapFS{
@@ -34,11 +36,11 @@ func TestScreensServeOnlyTheirRoutes(t *testing.T) {
 		wantBody string
 		wantType string
 	}{
-		{"/", 200, testShell, "text/html"},
-		{"/imports", 200, testShell, "text/html"},
-		{"/imports/20261106T101500Z-3f9a0c1d", 200, testShell, "text/html"},
-		{"/instance", 200, testShell, "text/html"},
-		{"/import", 200, testShell, "text/html"},
+		{"/", 200, "<title>screens</title>", "text/html"},
+		{"/imports", 200, "<title>screens</title>", "text/html"},
+		{"/imports/20261106T101500Z-3f9a0c1d", 200, "<title>screens</title>", "text/html"},
+		{"/instance", 200, "<title>screens</title>", "text/html"},
+		{"/import", 200, "<title>screens</title>", "text/html"},
 		{"/assets/app.js", 200, "console.log(1)", "javascript"},
 		{"/favicon.svg", 200, "<svg/>", "svg"},
 		{"/settings", 404, "", ""},
@@ -95,6 +97,9 @@ func TestScreensHeaders(t *testing.T) {
 				t.Fatalf("GET %s = %d, want %d", tt.path, rec.Code, tt.status)
 			}
 			h := rec.Header()
+			if tt.name == "shell" {
+				return
+			}
 			if got := h.Get("Content-Security-Policy"); got != wantPolicy {
 				t.Errorf("Content-Security-Policy = %q, want %q", got, wantPolicy)
 			}
@@ -106,11 +111,11 @@ func TestScreensHeaders(t *testing.T) {
 			}
 		})
 	}
-	if got := r.get("/", "").Header().Get("Cache-Control"); got != "no-cache" {
-		t.Errorf("the shell's Cache-Control = %q, want no-cache", got)
+	if got := r.get("/", "").Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("the shell's Cache-Control = %q, want no-store", got)
 	}
-	if got := r.get("/imports", "").Header().Get("Cache-Control"); got != "no-cache" {
-		t.Errorf("the shell at /imports has Cache-Control = %q, want no-cache", got)
+	if got := r.get("/imports", "").Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("the shell at /imports has Cache-Control = %q, want no-store", got)
 	}
 }
 
@@ -119,6 +124,49 @@ func TestScreensPolicyForbidsFraming(t *testing.T) {
 		if !strings.Contains(ScreensPolicy, part) {
 			t.Errorf("the policy lacks %q", part)
 		}
+	}
+}
+
+var nonceMeta = regexp.MustCompile(`<meta name="csp-nonce" content="([A-Za-z0-9+/=]+)">`)
+
+// shellNonce returns the nonce the page's meta tag and its policy name, and
+// fails the test when they differ.
+func shellNonce(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	m := nonceMeta.FindStringSubmatch(rec.Body.String())
+	if m == nil {
+		t.Fatalf("the shell %q holds no nonce meta tag", rec.Body.String())
+	}
+	raw, err := base64.StdEncoding.DecodeString(m[1])
+	if err != nil || len(raw) < 16 {
+		t.Fatalf("nonce %q is not base64 of at least 16 bytes", m[1])
+	}
+	want := strings.Replace(wantPolicy, "style-src 'self'", "style-src 'self' 'nonce-"+m[1]+"'", 1)
+	if got := rec.Header().Get("Content-Security-Policy"); got != want {
+		t.Fatalf("Content-Security-Policy = %q, want %q", got, want)
+	}
+	return m[1]
+}
+
+func TestShellCarriesAFreshStyleNonce(t *testing.T) {
+	r := newRig(t, fakeVerifier{})
+	seen := map[string]bool{}
+	for _, path := range []string{"/", "/", "/imports", "/imports/20261106T101500Z-3f9a0c1d", "/instance", "/import"} {
+		rec := r.get(path, "")
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("GET %s Cache-Control = %q, want the shell never reused", path, got)
+		}
+		if strings.Contains(rec.Header().Get("Content-Security-Policy"), "unsafe-inline") {
+			t.Errorf("GET %s allows unsafe-inline", path)
+		}
+		n := shellNonce(t, rec)
+		if seen[n] {
+			t.Errorf("GET %s reused nonce %q", path, n)
+		}
+		seen[n] = true
+	}
+	if got := r.get("/assets/app.js", "").Header().Get("Content-Security-Policy"); got != wantPolicy {
+		t.Errorf("an asset's policy = %q, want the plain one %q", got, wantPolicy)
 	}
 }
 
