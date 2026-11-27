@@ -144,10 +144,13 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
   const steps = sessionSteps({ project, analysis, current: "review", onNavigate: onNavigateStep })
   const replace = () => void navigate({ to: "/update", search: { from: project.id } })
 
-  if (!result) {
+  // Only a finished analysis has a scan to report: a failed one may still carry what it blocked on.
+  if (!result || analysis.state !== "done") {
+    const noWheel = result ? pipWaiting(result, {}).noWheel : []
     return (
       <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
         <StepBar steps={steps} />
+        {result && noWheel.length > 0 ? <NoWheelBlock result={result} names={noWheel} onReplace={replace} /> : null}
         <div className="flex flex-col items-start gap-3">
           <p className="text-muted">
             {analysis.state === "failed" || analysis.state === "cancelled" || analysis.state === "interrupted"

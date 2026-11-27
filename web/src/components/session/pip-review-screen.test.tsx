@@ -7,11 +7,14 @@ import { ProblemError } from "@/api/client"
 import { getProject, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
 import { PipReviewScreen } from "@/components/session/pip-review-screen"
 import type { PipAnalysisResult, PipPackage } from "@/lib/pipReview"
+import { Route as RootRoute } from "@/routes/__root"
 import { Route } from "@/routes/crossings.$projectId"
 
 const router = vi.hoisted(() => ({ navigate: vi.fn(), search: {} as Record<string, string> }))
 
 vi.mock("@tanstack/react-router", () => ({
+  createRootRoute: (options: object) => ({ options }),
+  redirect: (options: object) => options,
   createFileRoute: () => (options: object) => ({ options, useParams: () => ({ projectId: "ledger-service" }), useSearch: () => router.search }),
   useNavigate: () => router.navigate,
   Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
@@ -388,6 +391,42 @@ describe("the crossing route for pip", () => {
     renderCrossing()
     expect(await screen.findByRole("heading", { level: 1, name: "3 things need you" })).toBeDefined()
     expect(screen.queryByText("export screen")).toBeNull()
+  })
+
+  it("shows no CVE figure on a failed analysis opened at its review", async () => {
+    const failed = { ...analysisOf(resultOf(PACKAGES)), state: "failed" } as Analysis
+    vi.mocked(getProject).mockResolvedValue(projectOf(failed))
+    router.search = { step: "review" }
+    renderCrossing()
+    expect(await screen.findByText("This analysis did not finish, so there is nothing to review.")).toBeDefined()
+    expect(screen.queryByText("Known CVEs")).toBeNull()
+    expect(screen.queryByRole("button", { name: /^Seal/ })).toBeNull()
+  })
+
+  it("keeps the no-wheel block on a failed analysis that carries one", async () => {
+    const failed = { ...analysisOf(withNoWheel), state: "failed" } as Analysis
+    vi.mocked(getProject).mockResolvedValue(projectOf(failed))
+    router.search = { step: "review" }
+    renderCrossing()
+    expect(await screen.findByRole("region", { name: "1 package with no wheel for the target" })).toBeDefined()
+    expect(screen.queryByText("Known CVEs")).toBeNull()
+  })
+
+  it("sends an earlier review address on a failed analysis to the same screen", async () => {
+    const beforeLoad = (RootRoute as unknown as { options: { beforeLoad: (ctx: { location: { pathname: string; search: object } }) => void } }).options.beforeLoad
+    let sent: unknown
+    try {
+      beforeLoad({ location: { pathname: "/sessions/ledger-service/review", search: {} } })
+    } catch (thrown) {
+      sent = thrown
+    }
+    expect(sent).toMatchObject({ to: "/crossings/$projectId", params: { projectId: "ledger-service" }, search: { step: "review" } })
+    const failed = { ...analysisOf(resultOf(PACKAGES)), state: "failed" } as Analysis
+    vi.mocked(getProject).mockResolvedValue(projectOf(failed))
+    router.search = (sent as { search: Record<string, string> }).search
+    renderCrossing()
+    expect(await screen.findByText("This analysis did not finish, so there is nothing to review.")).toBeDefined()
+    expect(screen.queryByText("Known CVEs")).toBeNull()
   })
 
   it("lists the files and target on the crossing's Check", async () => {
