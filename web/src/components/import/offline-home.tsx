@@ -74,10 +74,12 @@ function importRow(imp: Import, name: string, newer: boolean, midnight: Date): {
       if (newer) return null
       const missing = c.failed + c.notFinished + c.pending
       const detail = missing > 0 ? `${plural(missing, "package")} not in Nexus` : attempt.report.reason || "Reason not recorded"
-      const lead = imp.outcome === "interrupted" ? "Interrupted, " : ""
-      const shown = missing > 0 ? missingText(missing, lead) : `${lead}${detail}`
+      // An older record's reason can be the state's own word, which needs no repeating.
+      const same = imp.outcome === "interrupted" && missing === 0 && detail.trim().toLowerCase() === "interrupted"
+      const lead = imp.outcome === "interrupted" && !same ? "Interrupted, " : ""
+      const shown = missing > 0 ? missingText(missing, lead) : same ? "Interrupted" : `${lead}${detail}`
       if (imp.outcome === "cancelled") return { group: "needs", placed: placed(ended(imp), { icon: CircleDashed, detail, state: { label: "Cancelled", tone: "warn" } }), detail: shown }
-      return { group: "needs", placed: placed(ended(imp), { icon: CircleX, detail: `${lead}${detail}`, state: { label: "Failed", tone: "bad" } }), detail: shown }
+      return { group: "needs", placed: placed(ended(imp), { icon: CircleX, detail: same ? "Interrupted" : `${lead}${detail}`, state: { label: "Failed", tone: "bad" } }), detail: shown }
     }
     case "complete":
       if (time(ended(imp)) < midnight.getTime()) return null

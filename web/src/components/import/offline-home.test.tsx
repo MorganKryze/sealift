@@ -179,7 +179,16 @@ describe("the offline home", () => {
     expect(screen.queryByRole("region", { name: "In progress" })).not.toBeInTheDocument()
   })
 
-  it("shows a refused archive's reason on its row and no Import", async () => {
+  it("names an older interrupted record's state once", async () => {
+  const old = imp("i-old", "second-2026-11-08", "interrupted", at(25, 10), [], "interrupted")
+  renderHome({ archives: folderList([archive("second-2026-11-08", at(24, 9), { latestImport: { id: "i-old", outcome: "interrupted" } })]), imports: [old] })
+  await screen.findByRole("region", { name: "Needs you" })
+  const row = rowOf("second-2026-11-08/")
+  expect(row).toHaveTextContent("Interrupted")
+  expect(row).not.toHaveTextContent(/interrupted, interrupted/i)
+})
+
+it("shows a refused archive's reason on its row and no Import", async () => {
     const refusedImport = imp("i-refused", "pdf-renderer-2026-11-18", "refused", at(25, 8), [], "signed with a key this side does not trust")
     renderHome({
       archives: folderList([
