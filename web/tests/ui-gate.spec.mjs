@@ -37,7 +37,8 @@ const PREPARING = {
     "review": {
       "cveWithoutFix": "reason",
       "majorJump": "reason",
-      "proposeOtherMajors": false
+      "proposeOtherMajors": false,
+      "yanked": "reason"
     },
     "target": {
       "cpu": "x64",

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/piptest"
 	"github.com/MorganKryze/sealift/internal/policy"
 	"github.com/MorganKryze/sealift/internal/runner"
@@ -955,7 +956,9 @@ func TestQueueExportRefusesAPipAnalysisNotDone(t *testing.T) {
 	}
 }
 
-func TestQueueExportRefusesAPipAnalysisWithoutEveryWheel(t *testing.T) {
+// A set with a package the target cannot install is refused before any
+// rule or reason, under the strictest rules too, with each package named.
+func TestPipExportRefusesASetWithABlockingPackage(t *testing.T) {
 	tests := []struct {
 		name   string
 		result func(PipResult) any
@@ -965,28 +968,49 @@ func TestQueueExportRefusesAPipAnalysisWithoutEveryWheel(t *testing.T) {
 			r.Packages = clonePipPackages(r.Packages)
 			r.Packages[1].Wheel = nil
 			return r
-		}, "1 of 3 packages has no wheel"},
+		}, "1 package has no wheel for the target, so the set cannot cross: idna 3.10"},
 		{"two packages without a wheel", func(r PipResult) any {
 			r.Packages = clonePipPackages(r.Packages)
 			r.Packages[0].Wheel, r.Packages[2].Wheel = nil, nil
 			return r
-		}, "2 of 3 packages have no wheel"},
+		}, "2 packages have no wheel for the target, so the set cannot cross: certifi 2024.8.30 and requests 2.32.3"},
+		{"a blocking entry beside wheels for every package", func(r PipResult) any {
+			r.Blocking = []PipBlocking{{Name: "numpy", Version: "2.1.3", Kind: "source-only", Detail: "the index lists a source distribution only"}}
+			return r
+		}, "1 package has no wheel for the target, so the set cannot cross: numpy 2.1.3"},
+		{"a blocking entry for a package without a wheel", func(r PipResult) any {
+			r.Packages = clonePipPackages(r.Packages)
+			r.Packages[1].Wheel = nil
+			r.Blocking = []PipBlocking{{Name: "idna", Version: "3.10", Kind: "source-only", Detail: "the index lists a source distribution only"}}
+			return r
+		}, "1 package has no wheel for the target, so the set cannot cross: idna 3.10"},
 		{"a result that is no JSON object", func(PipResult) any { return []string{"not", "a", "result"} }, "has no readable result"},
 	}
 	f := donePipAnalysis(t, piptest.NewIndex(t))
+	f.svc.Review = policy.Review{MajorJump: policy.Refuse, CVEWithoutFix: policy.Refuse, Yanked: policy.Refuse}
 	path := filepath.Join(f.ref.Dir, "pip-result.json")
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := f.st.WriteJSON(path, tc.result(f.ref.Result)); err != nil {
 				t.Fatal(err)
 			}
-			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+			reasons := []Reason{{Kind: YankedReason, Dependencies: []string{"idna"}, Text: "We need it."}}
+			_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}, Reasons: reasons})
 			if !errors.Is(err, ErrPipNotExportable) || !strings.Contains(err.Error(), tc.reason) {
 				t.Fatalf("QueueExport = %v, want ErrPipNotExportable saying %q", err, tc.reason)
 			}
 			noExportReserved(t, f.project)
 		})
 	}
+
+	t.Run("in the job", func(t *testing.T) {
+		e := f.newPipExport(t)
+		e.Analysis.Result.Blocking = []PipBlocking{{Name: "numpy", Version: "2.1.3", Kind: "source-only"}}
+		_, err := e.packageList((&stepRecorder{}).emit)
+		if err == nil || err.Error() != "jobs: numpy==2.1.3 has no wheel for the target" {
+			t.Fatalf("packageList = %v, want the blocked package named", err)
+		}
+	})
 }
 
 func TestQueueExportRefusesPipWithoutTheIndex(t *testing.T) {
@@ -1658,24 +1682,42 @@ func TestQueueExportLetsAPipCVEWithAFixCrossUnderRefuse(t *testing.T) {
 	}
 }
 
-func TestQueueExportLetsAPipCVEWithoutFixCrossUnderReason(t *testing.T) {
+func TestQueuePipExportTakesTheReasonsItsSetNeeds(t *testing.T) {
 	f := donePipAnalysis(t, piptest.NewIndex(t))
 	withPipCVE(t, f, nil)
 	f.svc.Review = policy.DefaultReview()
-	f.svc.Review.CVEWithoutFix = policy.AskReason
-	if _, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{}); err != nil {
-		t.Fatalf("QueueExport = %v, want queued: pip asks no reason", err)
-	}
-}
 
-func TestQueueExportRefusesReasonsForPip(t *testing.T) {
-	f := donePipAnalysis(t, piptest.NewIndex(t))
-	reasons := []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"requests"}, Text: "Only our build calls it."}}
-	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Reasons: reasons})
-	if !errors.Is(err, ErrPipSelection) || !strings.Contains(err.Error(), "pip export takes no reasons") {
-		t.Fatalf("QueueExport = %v, want a 400 saying pip takes no reasons", err)
+	_, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}})
+	var invalid *ErrInvalidReasons
+	if !errors.As(err, &invalid) {
+		t.Fatalf("QueueExport = %v, want ErrInvalidReasons", err)
 	}
+	assertProblems(t, invalid.Problems, []string{"certifi 2024.8.30 keeps CVE-2025-9999, which no version fixes, and needs a reason"})
 	noExportReserved(t, f.project)
+
+	events, unsubscribe := f.svc.Subscribe()
+	defer unsubscribe()
+	reasons := []Reason{{Kind: CVEWithoutFixReason, Dependencies: []string{"certifi"}, Text: "Only our build calls it."}}
+	queued, err := f.svc.QueueExport(f.project.ID, f.ref.ID, ExportRequest{Selection: map[string][]string{}, Reasons: reasons})
+	if err != nil {
+		t.Fatalf("QueueExport with the reason = %v, want queued", err)
+	}
+	for e := range events {
+		if e.Kind == "end" && e.StoreID == queued.ID {
+			break
+		}
+	}
+	info, err := f.st.ExportInfo(f.project.ID, queued.ID)
+	if err != nil || info.State != store.Done {
+		t.Fatalf("ExportInfo = %+v, %v; want done", info, err)
+	}
+	m, err := archive.ParsePipManifest(readFile(t, filepath.Join(f.project.Dir, "exports", queued.ID, "manifest.json")))
+	if err != nil || m.Review == nil {
+		t.Fatalf("ParsePipManifest = %v, review %v (%q)", err, m.Review, m.ReviewProblem)
+	}
+	if left := m.Review.Left; len(left) != 1 || left[0].ID != "CVE-2025-9999" || left[0].Reason != "Only our build calls it." {
+		t.Errorf("review.left = %+v, want CVE-2025-9999 with its reason", left)
+	}
 }
 
 // The queue reads the analysis's lockfile scan when the project tree

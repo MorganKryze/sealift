@@ -46,29 +46,72 @@ func (a *PipAnalysis) ProjectID() string { return a.Project.ID }
 // PipResult is what a pip analysis writes to pip-result.json, and what the
 // API returns as pipResult. Field names match the contract's schemas.
 type PipResult struct {
-	Target     store.PipTarget     `json:"target"`
-	Files      []string            `json:"files"`    // every requirements file the set was resolved from
-	Packages   []PipPackage        `json:"packages"` // sorted by normalized name
-	Blocking   []PipBlocking       `json:"blocking"`
-	Warnings   []string            `json:"warnings"`
-	Advisories map[string]Advisory `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
+	Target     store.PipTarget      `json:"target"`
+	Files      []string             `json:"files"`    // every requirements file the set was resolved from
+	Packages   []PipPackage         `json:"packages"` // sorted by normalized name
+	Blocking   []PipBlocking        `json:"blocking"`
+	Warnings   []string             `json:"warnings"`
+	Advisories map[string]Advisory  `json:"advisories,omitempty"` // by CVE id; a result without the key predates advisories
+	Previous   *PipPreviousCrossing `json:"previous,omitempty"`   // absent when none reads, and before crossings were compared
+	Removed    []PipRemoved         `json:"removed,omitempty"`    // the previous crossing's packages the set no longer holds
 }
 
-// PipPackage is one package of the resolved set.
+// PipPackage is one package of the resolved set. A done analysis may hold
+// a package without a wheel, which blocking names and no export takes.
 type PipPackage struct {
+	Name     string       `json:"name"`
+	Version  string       `json:"version"`
+	Files    []string     `json:"files"`              // project files that pin it, empty for a transitive package
+	PinnedAt []PipPlace   `json:"pinnedAt,omitempty"` // the set's pins; absent for a transitive package and before places were recorded
+	Wheel    *PipWheel    `json:"wheel,omitempty"`    // absent until chosen, and for a blocked package
+	CVEs     []PipFinding `json:"cves"`               // sorted by severity, then id
+	Yanked   *PipYanked   `json:"yanked,omitempty"`   // absent when the index keeps the release
+	Previous *PipPrevious `json:"previous,omitempty"` // absent for a new package and with no previous crossing
+}
+
+// PipPrevious is a package as the previous crossing held it.
+type PipPrevious struct {
+	Version   string       `json:"version"`
+	CVEs      []PipFinding `json:"cves"` // at that version, from this analysis's scan
+	MajorJump bool         `json:"majorJump"`
+}
+
+// PipPreviousCrossing names the export a pip analysis compares its set
+// with.
+type PipPreviousCrossing struct {
+	ProjectID   string    `json:"projectId"`
+	ProjectName string    `json:"projectName"`
+	ExportID    string    `json:"exportId"`
+	AnalysisID  string    `json:"analysisId"`
+	SealedAt    time.Time `json:"sealedAt"`
+}
+
+// PipRemoved is a package of the previous crossing the set no longer
+// holds.
+type PipRemoved struct {
 	Name    string       `json:"name"`
 	Version string       `json:"version"`
-	Files   []string     `json:"files"`           // project files that pin it, empty for a transitive package
-	Wheel   *PipWheel    `json:"wheel,omitempty"` // absent until chosen, and for a blocked package
-	CVEs    []PipFinding `json:"cves"`            // sorted by severity, then id
+	CVEs    []PipFinding `json:"cves"` // at that version, from this analysis's scan
+}
+
+// PipPlace is a line of a requirements file that pins a package.
+type PipPlace struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+}
+
+// PipYanked marks a package whose chosen file the index has yanked.
+type PipYanked struct {
+	Reason string `json:"reason"` // empty when the index gives none
 }
 
 // PipWheel is the wheel chosen for a package, as the index lists it.
 type PipWheel struct {
-	File   string `json:"file"`
-	URL    string `json:"url"`
-	Sha256 string `json:"sha256"`
-	Size   int64  `json:"size"`
+	File       string     `json:"file"`
+	URL        string     `json:"url"`
+	Sha256     string     `json:"sha256"`
+	Size       int64      `json:"size"`
+	UploadedAt *time.Time `json:"uploadedAt,omitempty"` // in UTC; absent when the index gives none
 }
 
 // PipFinding is one known vulnerability of a package.
@@ -81,10 +124,11 @@ type PipFinding struct {
 
 // PipBlocking is a package the target cannot install from a wheel.
 type PipBlocking struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Kind    string `json:"kind"` // source-only, other-platforms, no-files, hash-mismatch
-	Detail  string `json:"detail"`
+	Name     string     `json:"name"`
+	Version  string     `json:"version"`
+	Kind     string     `json:"kind"` // source-only, other-platforms, no-files, hash-mismatch
+	Detail   string     `json:"detail"`
+	PinnedAt []PipPlace `json:"pinnedAt,omitempty"` // absent for a transitive package
 }
 
 // shownProblems bounds the items a failure or a warning names: requirements
@@ -96,14 +140,17 @@ const shownProblems = 3
 type pipRun struct {
 	stepLog
 	a          *PipAnalysis
-	start      time.Time
+	createdAt  time.Time // when the run started
+	start      time.Time // createdAt to the second
 	set        pip.Set
 	files      []string  // the project's file names, in upload order
 	pins       []pip.Pin // the pins the target installs
 	uvBin      string
-	resolved   []runner.Resolved
+	resolved   []runner.Resolved          // with each blocked pin at its version
 	indexFiles map[string][]pip.IndexFile // by name@version, each page read once
 	wheels     map[string]PipWheel        // by normalized name
+	yanked     map[string]PipYanked       // by normalized name
+	blocking   []PipBlocking              // every package with no wheel the target can install
 	warnings   []string
 }
 
@@ -116,10 +163,13 @@ func (r *pipRun) releaseCut() time.Time {
 	return r.start.Add(-time.Duration(r.a.Settings.MinReleaseAgeDays) * 24 * time.Hour)
 }
 
-// Run validates the project's files, installs the target's uv, checks
-// that every pin has a wheel, resolves the files together, records one
-// wheel per package and scans the set. Like the npm analysis, it always commits the
-// pending directory, so a failed or cancelled run keeps its log.
+// Run validates the project's files, installs the target's uv, records
+// each pin with no wheel, resolves the other lines together, records one
+// wheel per package, or blocking where there is none, and scans the whole
+// set. Like the npm analysis, it always commits the pending directory, so
+// a failed or cancelled run keeps its log. A run that fails after a
+// package was found with no wheel still writes pip-result.json, listing
+// every such package and no other, so the failure never hides one.
 func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	logFile, ferr := openLog(filepath.Join(a.Dir, "log.txt"))
 	if ferr != nil {
@@ -137,7 +187,7 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 		return fmt.Errorf("jobs: write initial status.json: %w", withoutPath(werr))
 	}
 
-	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, start: createdAt.Truncate(time.Second)}
+	r := &pipRun{stepLog: stepLog{ctx: ctx, root: a.Store.Root(), emit: emit, logFile: logFile}, a: a, createdAt: createdAt, start: createdAt.Truncate(time.Second)}
 	uvVersion, trivyVersion, trivyDBDate := "", "", time.Time{}
 	defer func() {
 		state := store.Done
@@ -171,6 +221,19 @@ func (a *PipAnalysis) Run(ctx context.Context, emit func(Event)) (err error) {
 	if err := r.stepCheckPins(); err != nil {
 		return err
 	}
+	if err := r.resolveAndScan(); err != nil {
+		if len(r.blocking) > 0 && ctx.Err() == nil {
+			if werr := r.writeFailedResult(r.blocking); werr != nil {
+				err = errors.Join(err, werr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// resolveAndScan runs the steps after check-pins.
+func (r *pipRun) resolveAndScan() error {
 	if err := r.stepResolve(); err != nil {
 		return err
 	}
@@ -271,10 +334,13 @@ func (r *pipRun) stepPrepareTools() (trivyVersion string, dbDate time.Time, err 
 	return trivyVersion, dbDate, err
 }
 
-// stepResolve resolves every file together with uv and writes
-// project/requirements.lock. Every package is held to the minimum release
-// age, except those the target's pins fix. When uv names a package with no
-// wheel the target can install, pip-result.json records it.
+// stepResolve resolves every file together with uv, holding the pins
+// check-pins blocked as constraints, and writes project/requirements.lock.
+// Every package is held to the minimum release age, except those the
+// target's pins fix. Each blocked pin then joins the set at its version,
+// without a wheel. When uv itself names a package with no wheel the target
+// can install, it gives no set: the step fails, and the package joins
+// blocking.
 func (r *pipRun) stepResolve() error {
 	return r.runStep("resolve", func() error {
 		dir, err := r.a.Store.NewResolveDir()
@@ -283,6 +349,20 @@ func (r *pipRun) stepResolve() error {
 		}
 		defer os.RemoveAll(dir)
 
+		// A blocked pin's line becomes a constraint: nothing requires it,
+		// but should another package need it, uv keeps its version and
+		// stops on it rather than resolving a version the pin rules out.
+		input := r.set
+		input.Requirements = nil
+		input.Constraints = slices.Clone(r.set.Constraints)
+		for _, p := range r.set.Requirements {
+			if r.blocked(p.Key) {
+				input.Constraints = append(input.Constraints, p)
+			} else {
+				input.Requirements = append(input.Requirements, p)
+			}
+		}
+		slices.SortStableFunc(input.Constraints, func(a, b pip.Pin) int { return strings.Compare(a.Key, b.Key) })
 		exempt := make([]string, 0, len(r.pins))
 		for _, p := range r.pins {
 			exempt = append(exempt, p.Key)
@@ -291,8 +371,8 @@ func (r *pipRun) stepResolve() error {
 		res, err := r.a.Uv.Compile(r.ctx, runner.CompileInput{
 			Bin:          r.uvBin,
 			Dir:          dir,
-			Requirements: r.set.RequirementsIn(),
-			Constraints:  r.set.ConstraintsTxt(),
+			Requirements: input.RequirementsIn(),
+			Constraints:  input.ConstraintsTxt(),
 			Target:       r.a.Project.PipTarget,
 			Index:        r.a.Index.Index,
 			ExcludeNewer: r.releaseCut(),
@@ -305,21 +385,25 @@ func (r *pipRun) stepResolve() error {
 			}
 		}
 		if err != nil {
-			if b, ok := blockingFromUv(res.Output); ok {
-				r.log(r.describeBlocking(b))
-				if werr := r.writeFailedResult([]PipBlocking{b}); werr != nil {
-					err = errors.Join(err, werr)
-				}
+			if b, ok := blockingFromUv(res.Output); ok && !r.blocked(b.Name) {
+				r.block(b)
 			}
 			if named := r.pinsNamedIn(err.Error()); named != "" {
 				return fmt.Errorf("%w; pinned by %s", err, named)
 			}
 			return err
 		}
-		if err := r.checkPins(res.Set, r.pins); err != nil {
+		set := slices.Clone(res.Set)
+		for _, b := range r.blocking {
+			if !slices.ContainsFunc(set, func(p runner.Resolved) bool { return p.Name == b.Name }) {
+				set = append(set, runner.Resolved{Name: b.Name, Version: b.Version})
+			}
+		}
+		slices.SortStableFunc(set, func(a, b runner.Resolved) int { return strings.Compare(a.Name, b.Name) })
+		if err := r.checkPins(set, r.pins); err != nil {
 			return err
 		}
-		r.resolved = res.Set
+		r.resolved = set
 		if err := os.MkdirAll(filepath.Join(r.a.Dir, "project"), 0o770); err != nil {
 			return err
 		}
@@ -327,14 +411,20 @@ func (r *pipRun) stepResolve() error {
 	})
 }
 
-// stepScan scans the resolved set with Trivy, keeping the report as
-// project.trivy.json, and writes pip-result.json. A scan failure stops the
-// job, so a done analysis never stands for a scan that did not run.
+// stepScan scans the resolved set with Trivy, together with each version
+// the previous crossing held, keeping the report as project.trivy.json,
+// and writes pip-result.json. A scan failure stops the job, so a done
+// analysis never stands for a scan that did not run.
 func (r *pipRun) stepScan() error {
 	return r.runStep("scan", func() error {
-		components := make([]sbom.Component, 0, len(r.resolved))
-		for _, p := range r.resolved {
-			components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
+		previous, earlier := r.previousCrossing()
+		components := make([]sbom.Component, 0, len(r.resolved)+len(earlier))
+		scanned := map[string]bool{}
+		for _, p := range slices.Concat(r.resolved, earlier) {
+			if key := p.Name + "@" + p.Version; !scanned[key] {
+				scanned[key] = true
+				components = append(components, sbom.PyPIComponents(p.Name, p.Version)...)
+			}
 		}
 		findings, err := scanComponents(r.ctx, r.a.Trivy, components, filepath.Join(r.a.Dir, "project.trivy.json"))
 		if err != nil {
@@ -353,24 +443,47 @@ func (r *pipRun) stepScan() error {
 			Target:   r.a.Project.PipTarget,
 			Files:    nonNil(r.files),
 			Packages: make([]PipPackage, 0, len(r.resolved)),
-			Blocking: []PipBlocking{},
+			Blocking: sortedBlocking(r.blocking),
 			Warnings: nonNil(r.warnings),
+			Previous: previous,
 		}
 		advisories := map[string]Advisory{}
+		findingsOf := func(name, version string) []PipFinding {
+			return pipFindingsOf(r.root, index.Set([]string{name + "@" + version}), advisories, r.logDropped)
+		}
+		earlierVersion := make(map[string]string, len(earlier))
 		matched := map[string]bool{}
+		for _, p := range earlier {
+			earlierVersion[p.Name] = p.Version
+			matched[p.Name+"@"+p.Version] = true
+		}
+		current := make(map[string]bool, len(r.resolved))
 		for _, p := range r.resolved {
 			key := p.Name + "@" + p.Version
 			matched[key] = true
 			pkg := PipPackage{
-				Name:    p.Name,
-				Version: p.Version,
-				Files:   nonNil(r.set.FilesOf(p.Name)),
-				CVEs:    pipFindingsOf(r.root, index.Set([]string{key}), advisories, r.logDropped),
+				Name:     p.Name,
+				Version:  p.Version,
+				Files:    nonNil(r.set.FilesOf(p.Name)),
+				PinnedAt: r.placesOf(p.Name),
+				CVEs:     findingsOf(p.Name, p.Version),
 			}
 			if w, ok := r.wheels[p.Name]; ok {
 				pkg.Wheel = &w
 			}
+			if y, ok := r.yanked[p.Name]; ok {
+				pkg.Yanked = &y
+			}
+			if v, ok := earlierVersion[p.Name]; ok {
+				pkg.Previous = &PipPrevious{Version: v, CVEs: findingsOf(p.Name, v), MajorJump: pipMajorJump(v, p.Version)}
+			}
+			current[p.Name] = true
 			result.Packages = append(result.Packages, pkg)
+		}
+		for _, p := range earlier {
+			if !current[p.Name] {
+				result.Removed = append(result.Removed, PipRemoved{Name: p.Name, Version: p.Version, CVEs: findingsOf(p.Name, p.Version)})
+			}
 		}
 		if len(advisories) > 0 {
 			result.Advisories = advisories
@@ -392,6 +505,27 @@ func (r *pipRun) stepScan() error {
 		}
 		return r.a.Store.WriteJSON(r.resultPath(), result)
 	})
+}
+
+// previousCrossing finds the set this analysis compares with, sorted by
+// name, and logs what it found. One that does not read adds a warning and
+// counts as none.
+func (r *pipRun) previousCrossing() (*PipPreviousCrossing, []runner.Resolved) {
+	previous, earlier, err := previousCrossing(r.a.Store, r.a.Project, r.createdAt)
+	switch {
+	case err != nil:
+		r.log(causeText(r.root, err.Error()))
+		r.warnings = append(r.warnings, causeText(r.root, fmt.Sprintf(
+			"The previous crossing %s could not be read, so nothing is compared", cleanName(strings.TrimSpace(r.a.Project.Name)))))
+		return nil, nil
+	case previous == nil:
+		r.log("no previous crossing: no pip project of this name has a done export from before this analysis")
+		return nil, nil
+	}
+	r.log(fmt.Sprintf("previous crossing: export %s of project %s, %d %s", previous.ExportID, previous.ProjectID,
+		len(earlier), plural(len(earlier), "package", "packages")))
+	slices.SortStableFunc(earlier, func(a, b runner.Resolved) int { return strings.Compare(a.Name, b.Name) })
+	return previous, earlier
 }
 
 // outsideWarning tells how many findings matched no package of the set,
@@ -562,11 +696,22 @@ func (r *pipRun) targetPins() []pip.Pin {
 
 // checkPins refuses a resolution that gave one of pins another version, or
 // left out a requirement whose line has no marker. A constraint only limits
-// a package something else needs, so it may be absent.
+// a package something else needs, so it may be absent. A blocked pin that
+// came back at another version is a package another one needs, and the
+// refusal names it with why it has no wheel.
 func (r *pipRun) checkPins(set []runner.Resolved, pins []pip.Pin) error {
 	resolved := make(map[string]string, len(set))
 	for _, p := range set {
 		resolved[p.Name] = p.Version
+	}
+	var needed []PipBlocking
+	for _, b := range r.blocking {
+		if version, ok := resolved[b.Name]; ok && !pip.SameVersion(version, b.Version) {
+			needed = append(needed, b)
+		}
+	}
+	if len(needed) > 0 {
+		return r.neededBlocking(needed)
 	}
 	for _, p := range pins {
 		if version, ok := resolved[p.Key]; ok && !pip.SameVersion(version, p.Version) {
@@ -579,4 +724,21 @@ func (r *pipRun) checkPins(set []runner.Resolved, pins []pip.Pin) error {
 		}
 	}
 	return nil
+}
+
+// neededBlocking fails a resolution on blocked packages another package
+// needs, naming the first shownProblems with the files that pin them and
+// why. The result lists every one.
+func (r *pipRun) neededBlocking(blocking []PipBlocking) error {
+	shown := make([]string, 0, shownProblems)
+	for _, b := range blocking[:min(len(blocking), shownProblems)] {
+		shown = append(shown, r.describeBlocking(b))
+	}
+	msg := fmt.Sprintf("%d %s no wheel the target can install and %s: %s", len(blocking),
+		plural(len(blocking), "package has", "packages have"),
+		plural(len(blocking), "another package needs it", "other packages need them"), strings.Join(shown, "; "))
+	if len(blocking) > shownProblems {
+		msg += "; the result lists every one"
+	}
+	return errors.New(msg)
 }

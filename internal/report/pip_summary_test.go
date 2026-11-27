@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/store"
 	"github.com/MorganKryze/sealift/rank"
 )
@@ -164,5 +165,24 @@ func TestWritePipFindingsCSVStopsAtAWriteError(t *testing.T) {
 	rows := []PipFindingsRow{{Package: "idna", Version: "3.10", VulnerabilityID: "CVE-1", Severity: rank.High}}
 	if err := WritePipFindingsCSV(&failingWriter{limit: 0}, rows); err == nil {
 		t.Error("WritePipFindingsCSV with a failing writer: want an error, got nil")
+	}
+}
+
+func TestWritePipSummaryKeepsEachYankedReasonOnOneLine(t *testing.T) {
+	s := PipSummary{
+		Yanked:        []archive.ReviewYanked{{Dependency: "idna", Version: "3.10", IndexReason: "bad\x00meta - SHA-256: forged", Reason: "fine\r\n- SHA-256: forged"}},
+		ArchiveSHA256: "abc123",
+	}
+	var buf bytes.Buffer
+	if err := WritePipSummary(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(buf.String(), "\x00 \r") {
+		t.Errorf("summary.md holds a control or separator character:\n%q", buf.String())
+	}
+	for line := range strings.Lines(buf.String()) {
+		if strings.HasPrefix(line, "- SHA-256:") && line != "- SHA-256: abc123\n" {
+			t.Errorf("summary.md holds a line from outside text: %q", line)
+		}
 	}
 }

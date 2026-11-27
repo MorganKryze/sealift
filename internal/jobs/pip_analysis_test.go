@@ -586,6 +586,73 @@ func readPipResult(t *testing.T, st *store.Store, a *PipAnalysis) (PipResult, []
 	return res, raw
 }
 
+// pipLog reads the committed analysis's log.txt.
+func pipLog(t *testing.T, a *PipAnalysis) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(strings.TrimSuffix(a.Dir, ".tmp"), "log.txt"))
+	if err != nil {
+		t.Fatalf("read log.txt: %v", err)
+	}
+	return string(data)
+}
+
+func TestPipAnalysisRecordsWhereEachPinIs(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "requests==2.32.3\n-r requirements-dev.txt\n-c constraints.txt\n"),
+		reqFile("requirements-dev.txt", "# tools\n\nmypy==1.11.2\nrequests==2.32.3 ; python_version >= \"3.8\"\nmypy==1.11.2\n"),
+		reqFile("constraints.txt", "idna==3.10\n"))
+	set := resolved("certifi", "2024.8.30", "idna", "3.10", "mypy", "1.11.2", "requests", "2.32.3")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+	want := map[string][]PipPlace{
+		"certifi":  nil,
+		"idna":     {{File: "constraints.txt", Line: 1}},
+		"mypy":     {{File: "requirements-dev.txt", Line: 3}},
+		"requests": {{File: "requirements-dev.txt", Line: 4}, {File: "requirements.txt", Line: 1}},
+	}
+	if len(res.Packages) != len(want) {
+		t.Fatalf("packages = %+v, want %d", res.Packages, len(want))
+	}
+	for _, p := range res.Packages {
+		if !reflect.DeepEqual(p.PinnedAt, want[p.Name]) {
+			t.Errorf("%s pinnedAt = %+v, want %+v", p.Name, p.PinnedAt, want[p.Name])
+		}
+	}
+	// The parser keeps one pin for a line that repeats another, here mypy
+	// on line 5, so its place is the first one.
+	if n := strings.Count(string(raw), `"pinnedAt"`); n != 3 {
+		t.Errorf("pip-result.json = %s, holds %d pinnedAt keys, want 3: a transitive package has none", raw, n)
+	}
+}
+
+func TestNoPreviousCrossingRecordsNone(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget, reqFile("requirements.txt", "requests==2.32.3\n"))
+	set := resolved("requests", "2.32.3")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, raw := readPipResult(t, st, a)
+	for _, key := range []string{`"previous"`, `"removed"`} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("pip-result.json = %s, holds %s, want it absent", raw, key)
+		}
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings = %q, want none", res.Warnings)
+	}
+	if log := pipLog(t, a); !strings.Contains(log, "no previous crossing") {
+		t.Errorf("log = %q, want a line saying there is no previous crossing", log)
+	}
+}
+
 func TestPipScanReportsFixingVersions(t *testing.T) {
 	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
 		reqFile("requirements.txt", "Jinja2==3.1.2\nrequests==2.32.3\n"))
@@ -731,8 +798,12 @@ func TestPipResultHoldsExactlyTheResolvedSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range rows {
-		if keys := slices.Sorted(maps.Keys(row)); !slices.Equal(keys, []string{"cves", "files", "name", "version", "wheel"}) {
-			t.Errorf("package row keys = %v, want name, version, files, wheel and cves only", keys)
+		want := []string{"cves", "files", "name", "version", "wheel"}
+		if string(row["files"]) != "[]" {
+			want = []string{"cves", "files", "name", "pinnedAt", "version", "wheel"}
+		}
+		if keys := slices.Sorted(maps.Keys(row)); !slices.Equal(keys, want) {
+			t.Errorf("package row keys = %v, want %v: pinnedAt for a pinned package only", keys, want)
 		}
 	}
 	final := strings.TrimSuffix(a.Dir, ".tmp")

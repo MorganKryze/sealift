@@ -45,6 +45,9 @@ type Review struct {
 	Jumps     []ReviewJump   `json:"jumps"`
 	Left      []ReviewCVE    `json:"left"`
 	Unchanged int            `json:"unchanged"`
+	// Yanked is left out when the set carries no yanked release, so such a
+	// review, npm's among them, keeps the bytes it had before the list.
+	Yanked []ReviewYanked `json:"yanked,omitempty"`
 }
 
 // ReviewCVEs counts the project's CVEs before the selection and once it
@@ -98,6 +101,19 @@ type ReviewCVE struct {
 	FixedIn    string `json:"fixedIn"`
 	Reason     string `json:"reason,omitempty"`
 }
+
+// ReviewYanked is a release its index has yanked that a pip export carries,
+// with the index's reason, if it gave one, and the reason given for it.
+type ReviewYanked struct {
+	Dependency  string `json:"dependency"`
+	Version     string `json:"version"`
+	IndexReason string `json:"indexReason,omitempty"`
+	Reason      string `json:"reason"`
+}
+
+// maxIndexReasonRunes bounds the index's reason for a yanked release, as
+// the analysis records it.
+const maxIndexReasonRunes = 200
 
 // CheckReason is the one rule a reason's text follows, at export and at
 // import: 1 to MaxReasonRunes characters once trimmed, printable characters
@@ -155,6 +171,18 @@ func reasonRule(text string) string {
 	return ""
 }
 
+// indexReasonRule names the rule an index's yank reason breaks, or returns
+// "": empty, or at most maxIndexReasonRunes characters a reason may hold.
+func indexReasonRule(text string) string {
+	if len(text) > utf8.UTFMax*maxIndexReasonRunes || utf8.RuneCountInString(text) > maxIndexReasonRunes {
+		return fmt.Sprintf("is longer than %d characters", maxIndexReasonRunes)
+	}
+	if !utf8.ValidString(text) || strings.IndexFunc(text, func(r rune) bool { return !reasonRune(r) }) >= 0 {
+		return "holds a control, line-separating, bidirectional or format character"
+	}
+	return ""
+}
+
 func reasonRune(r rune) bool {
 	return unicode.IsPrint(r) || r == '\u00a0' || r == '\u202f' || r == '\u3000'
 }
@@ -187,9 +215,10 @@ type rawReview struct {
 		Fixed []*int `json:"fixed"`
 		Left  []*int `json:"left"`
 	} `json:"updates"`
-	Kept  []ReviewKept `json:"kept"`
-	Jumps []ReviewJump `json:"jumps"`
-	Left  []ReviewCVE  `json:"left"`
+	Kept   []ReviewKept   `json:"kept"`
+	Jumps  []ReviewJump   `json:"jumps"`
+	Left   []ReviewCVE    `json:"left"`
+	Yanked []ReviewYanked `json:"yanked"`
 	// Unchanged is a pointer so a negative count is told apart from none.
 	Unchanged *int `json:"unchanged"`
 }
@@ -225,7 +254,7 @@ func checkReview(raw rawReview, rules nameRules) (*Review, string) {
 	for _, l := range []struct {
 		name string
 		n    int
-	}{{"updates", len(raw.Updates)}, {"kept", len(raw.Kept)}, {"jumps", len(raw.Jumps)}, {"left", len(raw.Left)}} {
+	}{{"updates", len(raw.Updates)}, {"kept", len(raw.Kept)}, {"jumps", len(raw.Jumps)}, {"left", len(raw.Left)}, {"yanked", len(raw.Yanked)}} {
 		if l.n > maxReviewEntries {
 			return nil, fmt.Sprintf("review.%s holds more than %d entries", l.name, maxReviewEntries)
 		}
@@ -292,6 +321,12 @@ func checkReview(raw rawReview, rules nameRules) (*Review, string) {
 		}
 	}
 	r.Left = raw.Left
+	for i, y := range raw.Yanked {
+		if problem := rules.yanked(fmt.Sprintf("review.yanked[%d]", i), y); problem != "" {
+			return nil, problem
+		}
+	}
+	r.Yanked = raw.Yanked
 	return r, ""
 }
 
@@ -313,6 +348,20 @@ func readProject(data json.RawMessage) string {
 		return ""
 	}
 	return name
+}
+
+func (rules nameRules) yanked(at string, y ReviewYanked) string {
+	problem := firstProblem(rules.packageName(at+".dependency", y.Dependency), rules.exactVersion(at+".version", y.Version))
+	if problem != "" {
+		return problem
+	}
+	if rule := indexReasonRule(y.IndexReason); rule != "" {
+		return at + ".indexReason " + rule
+	}
+	if rule := reasonRule(y.Reason); rule != "" {
+		return at + ".reason " + rule
+	}
+	return ""
 }
 
 func (rules nameRules) jump(at string, j ReviewJump) string {

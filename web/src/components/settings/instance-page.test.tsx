@@ -34,7 +34,7 @@ const INSTANCE: Instance = {
     minReleaseAgeDays: 14,
     resolveParallelism: 4,
     downloadParallelism: 16,
-    review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "refuse" },
+    review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "refuse", yanked: "reason" },
   },
   tools: { trivy: "0.76.2", trivyDbDate: DB_DATE, pnpm: ["10.34.5"], uv: ["0.13.7"] },
 }
@@ -123,6 +123,16 @@ describe("InstancePage", () => {
     const policy = region("Policy")
     expect(policy).toHaveTextContent("Set at deploy")
     expect(policy.querySelector("input, select, textarea, button, form, [role=button], [contenteditable]")).toBeNull()
+  })
+
+  it("shows the yanked rule read-only", async () => {
+    const view = await renderPage()
+    const term = () => within(region("Policy")).getByText("Yanked release", { selector: "dt" })
+    expect(term().nextElementSibling).toHaveTextContent(/^Needs a reason$/)
+    view.unmount()
+    await renderPage({ ...INSTANCE, policy: { ...INSTANCE.policy, review: { ...INSTANCE.policy.review, yanked: "refuse" } } })
+    expect(term().nextElementSibling).toHaveTextContent(/^Refused$/)
+    expect(term().parentElement?.querySelector("input, select, textarea, button, [role=button], [contenteditable]")).toBeNull()
   })
 
   it("holds the theme choice", async () => {

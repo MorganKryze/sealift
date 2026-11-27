@@ -271,7 +271,7 @@ func TestInstanceReportsThePolicy(t *testing.T) {
 	want := Policy{
 		Target: targetToAPI(npmTarget), PipTarget: pipTargetToAPI(pipTarget),
 		MinReleaseAgeDays: 30, ResolveParallelism: 2, DownloadParallelism: 5,
-		Review: ReviewPolicy{ProposeOtherMajors: false, MajorJump: RuleReason, CveWithoutFix: RuleReason},
+		Review: ReviewPolicy{ProposeOtherMajors: false, MajorJump: RuleReason, CveWithoutFix: RuleReason, Yanked: RuleReason},
 	}
 	if got != want {
 		t.Errorf("policy = %+v, want %+v", got, want)
@@ -283,8 +283,8 @@ func TestInstanceReportsTheReviewPolicy(t *testing.T) {
 		review policy.Review
 		want   ReviewPolicy
 	}{
-		{policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.AskReason}, ReviewPolicy{ProposeOtherMajors: true, MajorJump: RuleRefuse, CveWithoutFix: RuleReason}},
-		{policy.Review{MajorJump: policy.AskReason, CVEWithoutFix: policy.Refuse}, ReviewPolicy{MajorJump: RuleReason, CveWithoutFix: RuleRefuse}},
+		{policy.Review{ProposeOtherMajors: true, MajorJump: policy.Refuse, CVEWithoutFix: policy.AskReason, Yanked: policy.AskReason}, ReviewPolicy{ProposeOtherMajors: true, MajorJump: RuleRefuse, CveWithoutFix: RuleReason, Yanked: RuleReason}},
+		{policy.Review{MajorJump: policy.AskReason, CVEWithoutFix: policy.Refuse, Yanked: policy.Refuse}, ReviewPolicy{MajorJump: RuleReason, CveWithoutFix: RuleRefuse, Yanked: RuleRefuse}},
 	} {
 		srv, h := newTestServer(t)
 		h.Policy.Review = c.review

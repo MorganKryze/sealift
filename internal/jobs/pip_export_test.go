@@ -2097,3 +2097,192 @@ func TestPipExportDownloadCauseNamesNoDataDirectory(t *testing.T) {
 		}
 	}
 }
+
+// signedReviewResult gives the fixture's set what a review signs: idna
+// takes a major jump from 2.10, requests moves from 2.31.0 and keeps a CVE
+// no version fixes on a release the index yanked, and certifi stays.
+func signedReviewResult(r PipResult, indexReason string) PipResult {
+	r.Packages = clonePipPackages(r.Packages)
+	r.Previous = &PipPreviousCrossing{
+		ProjectID: "data-tools", ProjectName: "Data tools", ExportID: "20261001T090000Z", AnalysisID: "20261001T080000Z",
+		SealedAt: time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC),
+	}
+	r.Packages[0].Previous = &PipPrevious{Version: "2024.8.30", CVEs: []PipFinding{}}
+	r.Packages[1].Previous = &PipPrevious{Version: "2.10", CVEs: []PipFinding{}, MajorJump: true}
+	r.Packages[2].Previous = &PipPrevious{Version: "2.31.0", CVEs: []PipFinding{}}
+	r.Packages[2].CVEs = []PipFinding{{ID: "CVE-2099-0001", Severity: "HIGH", FixedVersions: []string{}}}
+	r.Packages[2].Yanked = &PipYanked{Reason: indexReason}
+	return r
+}
+
+// signedReviewReasons are the three reasons signedReviewResult needs.
+func signedReviewReasons(jump string) []Reason {
+	return []Reason{
+		{Kind: MajorJumpReason, Dependencies: []string{"idna"}, Text: jump},
+		{Kind: CVEWithoutFixReason, Dependencies: []string{"requests"}, Text: "No request leaves the proxy."},
+		{Kind: YankedReason, Dependencies: []string{"requests"}, Text: "The yank concerned a wheel we do not use."},
+	}
+}
+
+func TestPipExportSignsItsReview(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	e.Analysis.Result = signedReviewResult(f.ref.Result, "Broken release, use 2.32.4")
+	e.Reasons = signedReviewReasons("idna 3 reads the same names.")
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	manifest := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+	if err := archive.CheckSignature(manifest, readFile(t, filepath.Join(e.Dir, archive.SignatureFile)), publicKey(t, f.st.SigningKey())); err != nil {
+		t.Fatalf("CheckSignature: %v", err)
+	}
+	m, err := archive.ParsePipManifest(manifest)
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	if m.Review == nil {
+		t.Fatalf("the import keeps no review (%q):\n%s", m.ReviewProblem, manifest)
+	}
+	after := [5]int{0, 1, 0, 0, 0}
+	want := archive.Review{
+		CVEs:    archive.ReviewCVEs{Before: [5]int{}, After: &after},
+		Updates: []archive.ReviewUpdate{{Name: "requests", From: "2.31.0", To: "2.32.3", Left: [5]int{0, 1, 0, 0, 0}}},
+		Kept:    []archive.ReviewKept{},
+		Jumps:   []archive.ReviewJump{{Packages: []archive.ReviewMove{{Name: "idna", From: "2.10", To: "3.10"}}, Reason: "idna 3 reads the same names."}},
+		Left: []archive.ReviewCVE{
+			{Dependency: "requests", Version: "2.32.3", ID: "CVE-2099-0001", Severity: "HIGH", Package: "requests", Reason: "No request leaves the proxy."},
+		},
+		Unchanged: 1,
+		Yanked: []archive.ReviewYanked{
+			{Dependency: "requests", Version: "2.32.3", IndexReason: "Broken release, use 2.32.4", Reason: "The yank concerned a wheel we do not use."},
+		},
+	}
+	if !reflect.DeepEqual(*m.Review, want) {
+		t.Errorf("signed review =\n%+v\nwant\n%+v", *m.Review, want)
+	}
+
+	summary := string(readFile(t, filepath.Join(e.Dir, "summary.md")))
+	wantYanked := "## Yanked releases\n\n- requests==2.32.3 is yanked on the index (Broken release, use 2.32.4). Reason given: The yank concerned a wheel we do not use.\n\n"
+	if !strings.Contains(summary, wantYanked) {
+		t.Errorf("summary.md lacks %q:\n%s", wantYanked, summary)
+	}
+
+	t.Run("an index reason the import would keep out", func(t *testing.T) {
+		e := f.newPipExport(t)
+		e.Analysis.Result = signedReviewResult(f.ref.Result, strings.Repeat("x", 201))
+		e.Reasons = signedReviewReasons("idna 3 reads the same names.")
+		_, err := runPipExport(context.Background(), e)
+		if err == nil || !strings.Contains(err.Error(), "review.yanked[0].indexReason") {
+			t.Fatalf("Run = %v, want the review refused by its field", err)
+		}
+		if _, err := os.Stat(filepath.Join(e.Dir, "manifest.json")); !os.IsNotExist(err) {
+			t.Errorf("manifest.json was written: %v", err)
+		}
+	})
+
+	t.Run("a first crossing signs no package as unchanged", func(t *testing.T) {
+		e := f.newPipExport(t)
+		if e.Analysis.Result.Previous != nil {
+			t.Fatalf("the fixture records a previous crossing: %+v", e.Analysis.Result.Previous)
+		}
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		m, err := archive.ParsePipManifest(readFile(t, filepath.Join(e.Dir, "manifest.json")))
+		if err != nil || m.Review == nil {
+			t.Fatalf("ParsePipManifest = %v, review %v (%q)", err, m.Review, m.ReviewProblem)
+		}
+		r := *m.Review
+		if r.Unchanged != 0 || len(r.Updates) != 0 || len(r.Jumps) != 0 {
+			t.Errorf("unchanged %d, updates %v, jumps %v; want none of each, since no comparison ran", r.Unchanged, r.Updates, r.Jumps)
+		}
+		if r.CVEs.After == nil || r.CVEs.Before != *r.CVEs.After {
+			t.Errorf("cves = %+v, want before equal to after", r.CVEs)
+		}
+	})
+}
+
+func TestPipExportSummaryLeavesOutYankedReleasesWhenNoneCrosses(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	e := f.newPipExport(t)
+	if _, err := runPipExport(context.Background(), e); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary := string(readFile(t, filepath.Join(e.Dir, "summary.md"))); strings.Contains(summary, "Yanked") {
+		t.Errorf("summary.md names yanked releases for a set with none:\n%s", summary)
+	}
+}
+
+func TestSamePipSetSameArchiveWhateverTheReasons(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	var archives, manifests [2][]byte
+	for i, jump := range []string{"idna 3 reads the same names.", "Our tests pass on idna 3, and the proxy pins it."} {
+		e := f.newPipExport(t)
+		e.Analysis.Result = signedReviewResult(f.ref.Result, "Broken release")
+		e.Reasons = signedReviewReasons(jump)
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		archives[i] = readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile))
+		manifests[i] = readFile(t, filepath.Join(e.Dir, "manifest.json"))
+		for name, body := range readArchive(t, archives[i]) {
+			if strings.Contains(body, jump) {
+				t.Errorf("export %d: the archive's %s holds the reason", i, name)
+			}
+		}
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("two exports of one set with different reasons wrote different archives")
+	}
+	for i, m := range manifests {
+		var got report.PipManifest
+		if err := json.Unmarshal(m, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Archive.SHA256 != sha256Hex(archives[0]) {
+			t.Errorf("manifest %d names sha256 %s, want %s", i, got.Archive.SHA256, sha256Hex(archives[0]))
+		}
+		if got.Review == nil || len(got.Review.Jumps) != 1 || !strings.Contains(string(m), got.Review.Jumps[0].Reason) {
+			t.Errorf("manifest %d signs no jump reason: %s", i, m)
+		}
+	}
+}
+
+// The previous crossing is what the analysis recorded: the export never
+// reads the earlier analysis, so its review stands when that analysis
+// says otherwise or is gone.
+func TestPipExportReadsNoOtherAnalysis(t *testing.T) {
+	f := donePipAnalysis(t, piptest.NewIndex(t))
+	exportID, analysisID := sealedCrossing(t, f.st, f.project.ID, time.Now().Add(-48*time.Hour), store.Done,
+		sealedPkg("certifi", "2023.7.22"), sealedPkg("idna", "2.9"), sealedPkg("requests", "2.28.0"))
+	res := signedReviewResult(f.ref.Result, "")
+	res.Previous.ProjectID, res.Previous.ExportID, res.Previous.AnalysisID = f.project.ID, exportID, analysisID
+
+	var manifests [2][]byte
+	for i := range manifests {
+		if i == 1 {
+			if err := os.RemoveAll(filepath.Join(f.project.Dir, "analyses", analysisID)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		e := f.newPipExport(t)
+		e.Analysis.Result = res
+		e.Reasons = signedReviewReasons("idna 3 reads the same names.")
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+		manifest := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+		m, err := archive.ParsePipManifest(manifest)
+		if err != nil || m.Review == nil {
+			t.Fatalf("export %d: ParsePipManifest = %v, review %v (%q)", i, err, m.Review, m.ReviewProblem)
+		}
+		if got := m.Review.Jumps; len(got) != 1 || got[0].Packages[0].From != "2.10" {
+			t.Errorf("export %d: jumps = %+v, want idna from 2.10 as the analysis recorded", i, got)
+		}
+		manifests[i] = createdAtLine.ReplaceAll(manifest, nil)
+	}
+	if !bytes.Equal(manifests[0], manifests[1]) {
+		t.Errorf("the manifest changed once the earlier analysis was gone:\n%s\n%s", manifests[0], manifests[1])
+	}
+}
