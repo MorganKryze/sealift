@@ -48,6 +48,27 @@ const mono = "font-mono text-[12.5px] [font-variant-ligatures:none] [overflow-wr
 const FIRST_ROWS = 12
 
 /** The deployment's pip target in one line; on Check, its info button with the two commands that check it. */
+
+const RELEASE = /^v?(\d+(?:\.\d+)*)(.*)$/
+// A pre-release (a, b, rc, dev) comes before its release, any other suffix (post) after it.
+const suffixRank = (rest: string) => (rest === "" ? 0 : /^[-_.]?(a|b|c|rc|alpha|beta|pre|preview|dev)/i.test(rest) ? -1 : 1)
+
+/** Versions in version order, so 1.26.5 comes before 1.26.17; an unreadable one goes last, as written. */
+export function sortVersions(versions: string[]): string[] {
+  return [...versions].sort((a, b) => {
+    const x = RELEASE.exec(a.trim())
+    const y = RELEASE.exec(b.trim())
+    if (!x || !y) return x ? -1 : y ? 1 : a.localeCompare(b)
+    const p = x[1].split(".").map(Number)
+    const q = y[1].split(".").map(Number)
+    for (let i = 0; i < Math.max(p.length, q.length); i++) {
+      const d = (p[i] ?? 0) - (q[i] ?? 0)
+      if (d !== 0) return d
+    }
+    return suffixRank(x[2]) - suffixRank(y[2]) || x[2].localeCompare(y[2], undefined, { numeric: true })
+  })
+}
+
 export function PipTargetLine({ target, explain = false }: { target: PipTarget; explain?: boolean }) {
   return (
     <span>
@@ -513,7 +534,7 @@ function FixesBlock({ packages }: { packages: PipPackage[] }) {
         {packages.map((pkg) => {
           const fixable = pkg.cves.filter((cve) => !withoutFix(cve))
           const single = fixable.length === 1 ? pipCve(fixable[0]) : undefined
-          const fixes = [...new Set(fixable.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))]
+          const fixes = sortVersions([...new Set(fixable.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))])
           return (
             <li key={pkg.name} className="rounded-lg px-3 py-2.5">
               <PackageLine pkg={pkg} />
@@ -749,7 +770,7 @@ function Group({ kind, first, packages, open, onToggle, severityAt, explainWheel
             <tbody>
               {rows.map((pkg) => {
                 const vector = rowVector(kind, pkg)
-                const fixes = kind === "changed" ? [] : [...new Set(pkg.cves.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))]
+                const fixes = kind === "changed" ? [] : sortVersions([...new Set(pkg.cves.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))])
                 return (
                   <tr key={pkg.name} className="border-b border-rule last:border-b-0">
                     <td className="py-2 pr-3 align-top font-medium text-ink [overflow-wrap:anywhere]">{pipName(pkg)}</td>
