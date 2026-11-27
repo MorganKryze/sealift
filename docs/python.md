@@ -62,7 +62,7 @@ Sealed is the npm page with the wheels counted, such as `packages_pip.tar.gz · 
 
 ![Sealed: the three files to carry and the fingerprint](assets/pip-sealed.png)
 
-The lab ran this crossing at commit 30a417b on PyPI's live index: requests 2.32.0 is yanked and psycopg2 2.9.10 publishes Windows wheels only, so the first Review showed psycopg2 in the red block. The archive's sha256 matched the fingerprint, and the import of sealift 0.7.0 published its 14 wheels.
+A lab run of this crossing on PyPI's live index, at commit 30a417b, showed the following. Later commits were not run in the lab. requests 2.32.0 is yanked and psycopg2 2.9.10 publishes Windows wheels only, so the first Review showed psycopg2 in the red block. The archive's sha256 matched the fingerprint, and the import of sealift 0.7.0 published its 14 wheels.
 
 ## Wheels
 
