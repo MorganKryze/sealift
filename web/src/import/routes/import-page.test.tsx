@@ -56,9 +56,13 @@ async function openPage(first: Import) {
     </QueryClientProvider>,
   )
   await screen.findByRole("heading", { level: 1 })
-  const poll = (next: Import) => {
+  // The query client tells its observers on the next tick, so the poll waits for it.
+  const poll = async (next: Import) => {
     current = next
-    act(() => void client.setQueryData(["imports", ID], next))
+    await act(async () => {
+      client.setQueryData(["imports", ID], next)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
   }
   return { poll }
 }
@@ -69,4 +73,20 @@ it("names the import in the breadcrumb by its crossing", async () => {
   expect(within(crumbs).getByRole("link", { name: "Imports" })).toBeInTheDocument()
   expect(crumbs).toHaveTextContent("web-portal · 25 Nov")
   expect(crumbs).not.toHaveTextContent(/Import$/)
+})
+
+it("keeps the progress node while one attempt moves from its checks to publishing", async () => {
+  const { poll } = await openPage(make([attempt(1, false)]))
+  const before = screen.getByRole("heading", { level: 1 })
+  await poll(make([attempt(1, true, 1)]))
+  expect(document.body).toHaveTextContent("1 of 4 packages in Nexus")
+  expect(screen.getByRole("heading", { level: 1 })).toBe(before)
+})
+
+it("draws a new progress node when a new attempt starts", async () => {
+  const { poll } = await openPage(make([attempt(1, true, 1)]))
+  const before = screen.getByRole("heading", { level: 1 })
+  await poll(make([{ ...attempt(1, true, 1), status: "ended", outcome: "incomplete" }, attempt(2, true, 2)]))
+  expect(document.body).toHaveTextContent("2 of 4 packages in Nexus")
+  expect(screen.getByRole("heading", { level: 1 })).not.toBe(before)
 })
