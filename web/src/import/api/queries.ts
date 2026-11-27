@@ -94,12 +94,15 @@ export function useStartImport(): UseMutationResult<Import, Error, { archive: st
   })
 }
 
-/** Where a retry's answer goes: the new attempt shows in place, and its title takes focus once drawn. */
-export function useRetryImport(id: string): UseMutationResult<Import, Error, void> {
+/**
+ * Retries the import: with packages, only those files are uploaded and every other one is read from Nexus; with none,
+ * the whole import. The new attempt shows in place, and its title takes focus once drawn.
+ */
+export function useRetryImport(id: string): UseMutationResult<Import, Error, { packages?: string[] } | void> {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: () =>
-      importFetch<Import>(`/imports/${encodeURIComponent(id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    mutationFn: (body: { packages?: string[] } | void) =>
+      importFetch<Import>(`/imports/${encodeURIComponent(id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) }),
     onSuccess: (imp) => {
       client.setQueryData(["imports", id], imp)
       void client.invalidateQueries({ queryKey: ["imports"], exact: true })
