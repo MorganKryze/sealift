@@ -1,7 +1,8 @@
+import { QueryClient } from "@tanstack/react-query"
 import { describe, expect, it } from "vitest"
 
 import type { ReportPackage } from "../lib/outcome"
-import { importPollInterval, importsPollInterval, retryGroups } from "./queries"
+import { followCancel, importPollInterval, importsPollInterval, retryGroups } from "./queries"
 import type { Import, ImportList } from "./queries"
 
 const imp = (outcome: string) => ({ id: outcome, outcome }) as unknown as ImportList["imports"][number]
@@ -77,3 +78,23 @@ describe("retryGroups", () => {
   })
 })
 
+
+describe("followCancel", () => {
+  it("reads the import again until the cancelled attempt has ended", async () => {
+    const client = new QueryClient()
+    const answers = [single("running", ""), single("running", ""), single("ended", "cancelled"), single("ended", "cancelled")]
+    let reads = 0
+    await client.fetchQuery({ queryKey: ["imports", "x"], queryFn: async () => answers[reads++] })
+    await followCancel(client, "x", 1)
+    expect(reads).toBe(3)
+    expect(client.getQueryData<Import>(["imports", "x"])?.outcome).toBe("cancelled")
+  })
+
+  it("reads nothing when the cancel's answer has already ended", async () => {
+    const client = new QueryClient()
+    let reads = 0
+    await client.fetchQuery({ queryKey: ["imports", "x"], queryFn: async () => (reads++, single("ended", "cancelled")) })
+    await followCancel(client, "x", 1)
+    expect(reads).toBe(1)
+  })
+})

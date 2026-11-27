@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query"
 
 import { ImportApiError, importFetch, SessionEnded } from "./client"
 import type { components } from "./schema"
@@ -129,8 +129,23 @@ export function useCancelImport(id: string): UseMutationResult<Import, Error, vo
       client.setQueryData(["imports", id], imp)
       void client.invalidateQueries({ queryKey: ["imports"], exact: true })
       void client.invalidateQueries({ queryKey: ["archives"] })
+      void followCancel(client, id)
     },
   })
+}
+
+/**
+ * Reads the import again every wait ms until its latest attempt has ended: the service accepts a cancel
+ * while the package in flight finishes, and the page's 2 s poll would show running that long after. It
+ * gives up after 40 reads and leaves the page's poll to carry on.
+ */
+export async function followCancel(client: QueryClient, id: string, wait = 250): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    const imp = client.getQueryData<Import>(["imports", id])
+    if (!imp || latestAttempt(imp).status === "ended") return
+    await new Promise((resolve) => setTimeout(resolve, wait))
+    await client.refetchQueries({ queryKey: ["imports", id], exact: true })
+  }
 }
 
 /**
