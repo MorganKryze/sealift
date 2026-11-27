@@ -94,7 +94,7 @@ export function useStartImport(): UseMutationResult<Import, Error, { archive: st
   })
 }
 
-/** Where a retry's answer goes: the new attempt shows in place, and its status region takes focus once drawn. */
+/** Where a retry's answer goes: the new attempt shows in place, and its title takes focus once drawn. */
 export function useRetryImport(id: string): UseMutationResult<Import, Error, void> {
   const client = useQueryClient()
   return useMutation({
@@ -103,12 +103,29 @@ export function useRetryImport(id: string): UseMutationResult<Import, Error, voi
     onSuccess: (imp) => {
       client.setQueryData(["imports", id], imp)
       void client.invalidateQueries({ queryKey: ["imports"], exact: true })
-      requestAnimationFrame(() => document.querySelector<HTMLElement>("[role=status]")?.focus())
+      requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-attempt-title]")?.focus())
     },
     onError: (error) => {
       if (error instanceof ImportApiError && error.status === 409) {
         void client.invalidateQueries({ queryKey: ["imports", id] })
       }
+    },
+  })
+}
+
+/**
+ * Cancels the import's latest attempt: a queued one leaves the queue, a running one stops before its next
+ * package. The answer shows in place, and the lists read again.
+ */
+export function useCancelImport(id: string): UseMutationResult<Import, Error, void> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      importFetch<Import>(`/imports/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    onSuccess: (imp) => {
+      client.setQueryData(["imports", id], imp)
+      void client.invalidateQueries({ queryKey: ["imports"], exact: true })
+      void client.invalidateQueries({ queryKey: ["archives"] })
     },
   })
 }

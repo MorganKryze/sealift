@@ -7,7 +7,12 @@ import type { Archive, ArchiveList, Import } from "@/import/api/queries"
 
 import { greeting, OfflineHome } from "./offline-home"
 
+// The home's address: a refused row's Open sets `refused` to its archive's key.
+const address = vi.hoisted(() => ({ search: {} as Record<string, string>, navigate: vi.fn() }))
+
 vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => address.search,
+  useNavigate: () => address.navigate,
   Link: ({ to, search, children, ...rest }: { to: string; search?: Record<string, string>; children: ReactNode }) => (
     <a href={search ? `${to}?${new URLSearchParams(search).toString()}` : to} {...rest}>
       {children}
@@ -25,6 +30,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  address.search = {}
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -167,6 +173,7 @@ describe("the offline home", () => {
     const row = rowOf("admin-console-2026-11-19/")
     expect(row).toHaveTextContent("Failed")
     expect(row).toHaveTextContent("3 packages not in Nexus")
+    expect(within(row).getByText("3").tagName).toBe("B")
     expect(within(row).getByRole("link", { name: "Open admin-console-2026-11-19/" })).toHaveAttribute("href", "/imports/i-failed")
     expect(within(row).queryByRole("link", { name: /^Import/ })).not.toBeInTheDocument()
     expect(screen.queryByRole("region", { name: "In progress" })).not.toBeInTheDocument()
@@ -186,12 +193,23 @@ describe("the offline home", () => {
     expect(listed).toHaveTextContent("Refused")
     expect(listed).toHaveTextContent("no manifest.json.sig in its folder")
     expect(within(listed).getAllByRole("link")).toHaveLength(1)
-    expect(within(listed).getByRole("link", { name: "Open billing-api-2026-11-18/" })).toHaveAttribute("href", "/import")
+    expect(within(listed).getByRole("link", { name: "Open billing-api-2026-11-18/" })).toHaveAttribute("href", `/?${new URLSearchParams({ refused: "packages/npm/billing-api-2026-11-18/packages_npm.tar.gz" })}`)
     const imported = rowOf("pdf-renderer-2026-11-18/")
     expect(imported).toHaveTextContent("Refused")
     expect(imported).toHaveTextContent("signed with a key this side does not trust")
     expect(within(imported).getAllByRole("link")).toHaveLength(1)
     expect(within(imported).getByRole("link", { name: "Open pdf-renderer-2026-11-18/" })).toHaveAttribute("href", "/imports/i-refused")
+  })
+
+  it("opens the refused panel from a refused row's Open, titled by the row's name", async () => {
+    const key = "packages/npm/billing-api-2026-11-18/packages_npm.tar.gz"
+    address.search = { refused: key }
+    renderHome({ archives: folderList([archive("billing-api-2026-11-18", at(24, 9), { importable: false, reason: "no manifest.json.sig in its folder", signature: "unsigned" })]), imports: [] })
+    const dialog = await screen.findByRole("dialog", { name: "Refused" })
+    expect(within(dialog).getByRole("heading", { level: 3 })).toHaveTextContent("billing-api-2026-11-18/")
+    expect(dialog).toHaveTextContent("No manifest.json.sig in its folder.")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }))
+    expect(address.navigate).toHaveBeenCalledWith({ to: "/", replace: true })
   })
 
   it("names an archive by its folder and file when its folder holds another", async () => {

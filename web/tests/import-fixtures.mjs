@@ -45,7 +45,41 @@ export const IDS = {
   legacy: "20261030T080000Z-a100000a",
   longKey: "20261020T170000Z-a100000b",
   pipComplete: "20261020T090000Z-a100000d",
+  cancelled: "20261107T090000Z-a100000f",
 }
+
+// The live states: the server ends every queued or running attempt it finds at its start, so the page's
+// read of a seeded record is answered with the server's own answer, changed as the store writes that state.
+const live = (id, change) => async (page) => {
+  await page.route((url) => url.pathname === `/api/imports/${id}`, async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    change(body, body.attempts[body.attempts.length - 1])
+    await route.fulfill({ response, json: body })
+  })
+}
+const checking = live(IDS.running, (_, a) => {
+  a.report.archiveChecked = false
+  a.report.packages = a.report.packages.map((p) => ({ ...p, state: "pending", reason: "", note: "" }))
+})
+const ranked = live(IDS.queued, (imp) => {
+  imp.queueAhead = 1
+})
+// The worst case of publishing: pip, 4,206 packages, 2,015 ended, 3 failed on the way, one Nexus answer of 600 characters.
+const NUMPY = "numpy-2.1.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+const worstPublishing = live(IDS.running, (imp, a) => {
+  imp.archive.key = "packages/pip/analytics-ingest-pipeline-airflow-worker-2026-11-25/packages_pip.tar.gz"
+  imp.archive.size = 4_090_000_000
+  a.report.ecosystem = "pip"
+  a.report.packages = Array.from({ length: 4206 }, (_, i) => {
+    const name = i === 7 ? "numpy" : `package-${String(i).padStart(4, "0")}`
+    const file = i === 7 ? NUMPY : `${name}-1.0.0-py3-none-any.whl`
+    const failed = i === 3 || i === 900 || i === 2010
+    const state = i >= 2015 ? "pending" : failed ? "failed" : i % 5 === 0 ? "present" : "published"
+    const reason = failed ? `502 from the gateway in front of Nexus, 3 attempts: ${"<html><body>Bad gateway ".repeat(30)}`.slice(0, 600) : ""
+    return { name, version: i === 7 ? "2.1.3" : "1.0.0", file, state, reason, note: "", ...(failed ? { kind: "nexus" } : {}) }
+  })
+})
 
 // The import role: the shipped import-server behind a real token check. A route names the user whose
 // token the page sends as the gateway does, an optional control to press once the page has its
@@ -78,19 +112,32 @@ export const IMPORT = {
     { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Archive kept in MinIO" },
     { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking the archive's removal" },
     { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
-    { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Refused before the first package" },
-    { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Refused before the first package" },
-    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Refused before the first package" },
+    { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Nothing reached Nexus." },
+    { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Nothing reached Nexus." },
+    { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Nothing reached Nexus." },
     { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
-    { path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101" },
-    { path: `/imports/${IDS.queued}`, user: "alice", ready: "The archive's checks have not run yet." },
+    // Queued, checking, publishing and its cancel confirm, then cancelled.
+    { path: `/imports/${IDS.queued}`, user: "alice", ready: "Waiting its turn" },
+    { path: `/imports/${IDS.queued}`, user: "alice", before: ranked, name: "ranked", ready: "import ahead of this one" },
+    { path: `/imports/${IDS.running}`, user: "alice", before: checking, name: "checking", ready: "Checking the archive" },
+    { path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left" },
+    { path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left", open: { role: "button", name: "Compliant", opens: { role: "list", name: "3 checks passed" } } },
+    { path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left", open: { role: "button", name: "Cancel", opens: { role: "button", name: "Keep running" } } },
+    { path: `/imports/${IDS.running}`, user: "alice", before: worstPublishing, name: "worst pip", ready: "3 packages failed" },
+    { path: `/imports/${IDS.cancelled}`, user: "alice", ready: "Import cancelled" },
     {
-      path: `/imports/${IDS.incomplete}`, user: "alice", ready: "Archive sha256 check",
-      open: { role: "button", name: "Show full reason of package-099@1.0.0", opens: { role: "region", name: "Full reason of package-099@1.0.0" } },
-    },
-    {
-      path: `/imports/${IDS.running}`, user: "alice", ready: "Publishing packages: 37 of 101",
+      path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left",
       open: { role: "button", name: "Earlier attempts (1)", opens: { role: "list", name: "Earlier attempts" } },
+    },
+    // The refused panel, one per cause the folder holds: another key, a signature that does not match, an archive
+    // whose size differs, no manifest, two archives in one folder.
+    ...["2026-10-31-regenerated", "2026-11-01-portal", "2026-11-05-reports", "2026-10-27-no-manifest"].map((folder) => ({
+      path: `/?refused=${encodeURIComponent(`${FOLDER}${folder}/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
+    })),
+    { path: `/?refused=${encodeURIComponent(`${FOLDER}2026-10-28-two-archives/first.tar.gz`)}`, user: "alice", ready: "Nothing reached Nexus." },
+    {
+      path: `/?refused=${encodeURIComponent(`${FOLDER}2026-10-31-regenerated/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
+      open: { role: "button", name: "Compare", opens: { role: "textbox", name: "sha256 from the connected side" } },
     },
     { path: `/imports/${IDS.legacy}`, user: "alice", ready: "Archive sha256 check" },
     { path: `/imports/${IDS.longKey}`, user: "alice", ready: "Archive sha256 check" },
@@ -249,6 +296,9 @@ function aliceRecords() {
     ]),
     record(IDS.longKey, `${longFolder}/`, [ended(1, iso(IDS.longKey), "complete", packages(30, 20, 10))], { archiveKey: longKey }),
     pipRecord(),
+    record(IDS.cancelled, "2026-11-07-search-indexer/", [
+      { ...ended(1, iso(IDS.cancelled), "cancelled", packages(101, 40, 20, Array.from({ length: 41 }, () => ({ kind: "interrupted", reason: "cancelled before it was published" })))), outcome: "cancelled" },
+    ]),
   ]
 }
 

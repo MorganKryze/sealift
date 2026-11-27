@@ -55,7 +55,7 @@ function Page() {
   }
   return (
     <>
-      <AttemptProgress attempt={latestAttempt(imp)} />
+      <AttemptProgress key={latestAttempt(imp).n} imp={imp} attempt={latestAttempt(imp)} />
       <EndState imp={imp} />
       {imp.outcome === "incomplete" || imp.outcome === "interrupted" ? <RetryCard imp={imp} /> : null}
     </>
@@ -124,13 +124,13 @@ describe("RetryCard", () => {
     expect(card.lastElementChild).toContainElement(button)
   })
 
-  it("retry answers: a 202 shows the new attempt in place with focus on its status", async () => {
+  it("retry answers: a 202 shows the new attempt in place with focus on its title", async () => {
     const next = make([...incomplete().attempts, attempt(2, "queued", "", [])])
     const fetchMock = renderPage(() => json(next, 202), incomplete())
     fireEvent.click(await screen.findByRole("button", { name: "Retry import" }))
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Waiting its turn"))
-    const status = screen.getByRole("status")
-    await waitFor(() => expect(status).toHaveFocus())
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Waiting its turn"))
+    const title = screen.getByRole("heading", { level: 1 })
+    await waitFor(() => expect(title).toHaveFocus())
     expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
     const post = fetchMock.mock.calls.find((c) => c[0] === `/api/imports/${ID}/retry`)
     expect(post?.[1]).toMatchObject({ method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })

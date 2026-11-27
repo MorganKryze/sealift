@@ -90,7 +90,7 @@ export function usableAccent(accent: string | undefined, page: string): { color:
 }
 
 /** The last resort after a failure: who to see, from the brand's contact when it names one. It offers no action. */
-export function ContactCard() {
+export function ContactCard({ caption = "Still failing after a few tries?" }: { caption?: string }) {
   const brand = useBrand()
   return (
     <div className="mt-4 grid grid-cols-[40px_minmax(0,1fr)] items-center gap-3.5 rounded-xl border border-dashed border-rule px-3.5 py-3">
@@ -98,7 +98,7 @@ export function ContactCard() {
         <Users aria-hidden="true" className="size-4.5" />
       </span>
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-muted">Still failing after a few tries?</p>
+        <p className="text-xs font-semibold text-muted">{caption}</p>
         <p className="font-semibold text-ink [overflow-wrap:anywhere]">{brand.contact?.label ?? "See your administrators"}</p>
       </div>
     </div>

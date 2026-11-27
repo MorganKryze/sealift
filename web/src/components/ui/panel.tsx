@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils"
 interface PanelProps {
   open: boolean
   onClose: () => void
-  /** The header band's state colour: warn for a decision, info for a jump. */
-  tone: "warn" | "info"
+  /** The header band's state colour: warn for a decision, info for a jump, bad for a refusal. */
+  tone: "warn" | "info" | "bad"
   heading: string
   icon: LucideIcon
   children: ReactNode
@@ -19,6 +19,8 @@ interface PanelProps {
 const TONES = {
   warn: "border-warn-line bg-warn-tint text-warn",
   info: "border-info-line bg-info-tint text-info",
+  // A refusal is the loudest panel: the band is filled.
+  bad: "border-bad bg-bad text-bg",
 }
 
 /**

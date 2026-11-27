@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router"
 import { describe, expect, it } from "vitest"
 
@@ -6,7 +6,9 @@ import type { Attempt, Import } from "@/import/lib/outcome"
 
 import { ArchiveRow } from "./archive-row"
 import { ImportPageHeader } from "./import-header"
-import { ReportList } from "./report-list"
+import { LogBlock } from "@/components/job-progress"
+
+import { attemptLog } from "./progress"
 
 const HOSTILE = "<img src=x onerror=alert(1)> javascript:alert(1)"
 
@@ -47,15 +49,14 @@ describe("text from a report renders as text", () => {
     archive: { key: `packages/npm/${hostile("folder")}/packages_npm.tar.gz`, etag: '"e"', size: 1 }, manifest: { key: "m", etag: '"e"', size: 1 }, attempts: [attempt],
   }
 
-  it("names, versions, notes and reasons with markup stay text", () => {
+  it("names, versions and reasons with markup stay text", () => {
     render(
       <>
         <ImportPageHeader imp={imp} />
-        <ReportList attempt={attempt} />
+        <LogBlock lines={attemptLog(attempt)} defaultOpen />
       </>,
     )
-    fireEvent.click(screen.getByRole("button", { name: /^All/ }))
-    for (const what of ["name", "version", "note", "reason", "folder", "os", "url", "repository"]) {
+    for (const what of ["name", "version", "reason", "folder", "os", "url", "repository"]) {
       expect(screen.getAllByText(new RegExp(`<img src=x onerror=alert\\(1\\)> ${what}`)).length).toBeGreaterThan(0)
     }
     expect(document.querySelector("img")).toBeNull()

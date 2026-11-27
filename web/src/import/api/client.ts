@@ -44,7 +44,7 @@ const gatewayProblem = (status: number): Problem =>
       }
 
 // The only paths the screens may call: an import id starts with a letter or digit, so it never reads as a dot segment.
-const CONTRACT = /^\/(me|archives|imports(\/[A-Za-z0-9][A-Za-z0-9._-]*(\/retry)?)?)$/
+const CONTRACT = /^\/(me|archives|imports(\/[A-Za-z0-9][A-Za-z0-9._-]*(\/(retry|cancel))?)?)$/
 
 const JSON_TYPES = ["application/json", "application/problem+json"]
 

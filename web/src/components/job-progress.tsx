@@ -34,6 +34,8 @@ interface JobProgressProps {
   live: boolean
   note?: string
   cancel: CancelWords
+  /** What sits between the bar and the log, such as the archive being read. */
+  aside?: ReactNode
 }
 
 // Still on purpose: a moving stripe would read as progress the server never reported.
@@ -46,7 +48,7 @@ const STRIPES: CSSProperties = {
  * track, the log open with its count, and Cancel with its in-place confirm. Every node stays mounted
  * for the whole run, so a screen reader hears the title change and the log keeps its scroll.
  */
-export function JobProgress({ title, counted, progress, estimating = false, log, logCount, live, note, cancel }: JobProgressProps) {
+export function JobProgress({ title, counted, progress, estimating = false, log, logCount, live, note, cancel, aside }: JobProgressProps) {
   const titleId = useId()
   const share = progress && progress.total > 0 ? Math.min(1, progress.done / progress.total) : 0
 
@@ -71,7 +73,8 @@ export function JobProgress({ title, counted, progress, estimating = false, log,
           style={{ transform: `scaleX(${estimating ? 0 : share})` }}
         />
       </div>
-      <LogBlock className="mt-6" lines={log} count={logCount} live={live} defaultOpen />
+      {aside}
+      <LogBlock className={aside ? "mt-3" : "mt-6"} lines={log} count={logCount} live={live} defaultOpen />
       <CancelRow note={note} cancel={cancel} />
     </div>
   )
