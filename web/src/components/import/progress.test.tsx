@@ -155,7 +155,7 @@ describe("an import that publishes", () => {
   })
 
   it("asks in place and focuses Keep running", async () => {
-    const fetchMock = vi.fn(async () => json({}, 202))
+    const fetchMock = vi.fn(async () => json(make(attempt("ended", packages(1284, 700, 96), { outcome: "cancelled" }, true), { outcome: "cancelled" }), 202))
     vi.stubGlobal("fetch", fetchMock)
     setup(make(attempt("running", packages(1284, 700, 96), {}, true)))
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
@@ -176,7 +176,7 @@ describe("an import that publishes", () => {
     // The word it had stays in the button, hidden, so the width holds.
     expect(button.querySelector("[aria-hidden=true].invisible")).toHaveTextContent("Cancel")
     expect(screen.queryByText("Keeps running if you leave this page")).toBeNull()
-    answer(json({}, 202))
+    answer(json(make(attempt("ended", packages(1284, 700, 96), { outcome: "cancelled" }, true), { outcome: "cancelled" }), 202))
   })
 })
 

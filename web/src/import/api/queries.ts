@@ -137,14 +137,19 @@ export function useCancelImport(id: string): UseMutationResult<Import, Error, vo
 /**
  * Reads the import again every wait ms until its latest attempt has ended: the service accepts a cancel
  * while the package in flight finishes, and the page's 2 s poll would show running that long after. It
- * gives up after 40 reads and leaves the page's poll to carry on.
+ * gives up after 40 reads, or at a failed read, and leaves the page's poll to carry on.
  */
 export async function followCancel(client: QueryClient, id: string, wait = 250): Promise<void> {
   for (let i = 0; i < 40; i++) {
     const imp = client.getQueryData<Import>(["imports", id])
-    if (!imp || latestAttempt(imp).status === "ended") return
+    if (!imp || !Array.isArray(imp.attempts) || latestAttempt(imp).status === "ended") return
     await new Promise((resolve) => setTimeout(resolve, wait))
-    await client.refetchQueries({ queryKey: ["imports", id], exact: true })
+    try {
+      await client.refetchQueries({ queryKey: ["imports", id], exact: true })
+    } catch {
+      // A failed read leaves the page's own poll to carry on.
+      return
+    }
   }
 }
 

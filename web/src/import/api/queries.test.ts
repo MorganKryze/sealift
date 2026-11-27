@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { ReportPackage } from "../lib/outcome"
 import { followCancel, importPollInterval, importsPollInterval, retryGroups } from "./queries"
@@ -96,5 +96,17 @@ describe("followCancel", () => {
     await client.fetchQuery({ queryKey: ["imports", "x"], queryFn: async () => (reads++, single("ended", "cancelled")) })
     await followCancel(client, "x", 1)
     expect(reads).toBe(1)
+  })
+  it("stops without a rejection when a read fails", async () => {
+    const client = new QueryClient()
+    await client.fetchQuery({ queryKey: ["imports", "x"], queryFn: async () => single("running", "") })
+    vi.spyOn(client, "refetchQueries").mockRejectedValue(new Error("502"))
+    await expect(followCancel(client, "x", 1)).resolves.toBeUndefined()
+  })
+
+  it("stops without a rejection when the answer is not an import", async () => {
+    const client = new QueryClient()
+    client.setQueryData(["imports", "x"], {})
+    await expect(followCancel(client, "x", 1)).resolves.toBeUndefined()
   })
 })
