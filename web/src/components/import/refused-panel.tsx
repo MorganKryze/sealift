@@ -15,9 +15,10 @@ import { crossingLabel, folderLabel, uploaded } from "./archive-row"
 const HEX = /^[0-9a-f]{64}$/
 // The archive check's own words for a digest that differs (archive/verify.go). Any other reason is shown as a sentence:
 // a sha256 is never read out of free text.
-const SHA_REFUSAL = /^archive sha256 ([0-9a-f]{64}) differs from the (?:manifest's|expected sha256) ([0-9a-f]{64})$/
+const SHA_REFUSAL = /^archive sha256 ([0-9a-f]{64}) differs from the (manifest's|expected sha256) ([0-9a-f]{64})$/
 
-type Cause = "key" | "signature" | "archive" | "folder" | "other"
+// "expected": the archive matches its manifest, the sha256 the user typed differs (archive/verify.go checks the manifest first).
+type Cause = "key" | "signature" | "archive" | "expected" | "folder" | "other"
 type FileState = "not-checked" | "passed" | "do-not-match" | "differs" | "missing" | "unreadable"
 
 const WORD: Record<FileState, string> = {
@@ -69,7 +70,7 @@ function factsOf(archive: Archive | undefined, imp: Import | undefined, name: st
   const title = name ?? (project ? crossingLabel(project, at, [at]) : folderLabel(key))
 
   let cause: Cause = "other"
-  if (sha) cause = "archive"
+  if (sha) cause = sha[2] === "manifest's" ? "archive" : "expected"
   else if (signature === "unknown-key") cause = "key"
   else if (signature === "mismatch") cause = "signature"
   else if (archive?.reason === "the archive does not match its manifest") cause = "archive"
@@ -81,9 +82,11 @@ function factsOf(archive: Archive | undefined, imp: Import | undefined, name: st
         ? "The signature does not match the manifest."
         : cause === "archive"
           ? "The archive does not match its manifest."
+          : cause === "expected"
+            ? "The archive matches its manifest. The sha256 you typed differs."
           : sentence(reason || "Reason not recorded")
   const stop =
-    cause === "key" || cause === "signature" || signature === "unsigned" || signature === "unreadable" ? "signature" : cause === "archive" ? "archive" : cause === "folder" ? "folder" : undefined
+    cause === "key" || cause === "signature" || signature === "unsigned" || signature === "unreadable" ? "signature" : cause === "archive" || cause === "expected" ? "archive" : cause === "folder" ? "folder" : undefined
 
   // The folder's files as MinIO lists them, else the objects the import read; neither on an archive of 0.7.0.
   const listed = archive?.files
@@ -96,12 +99,13 @@ function factsOf(archive: Archive | undefined, imp: Import | undefined, name: st
     if (!entry && known) state = "missing"
     else if (cause === "signature") state = i === 0 ? "not-checked" : "do-not-match"
     else if (cause === "archive") state = i === 0 ? "differs" : "passed"
+    else if (cause === "expected") state = "passed"
     else if (signature === "unreadable") state = (i === 1 && reason === "its manifest cannot be read") || (i === 2 && reason.includes("manifest.json.sig cannot be read")) ? "unreadable" : "not-checked"
     else if (cause === "folder" && signature === "verified" && i > 0) state = "passed"
     return { name: n, size: entry?.size, modified: entry?.modified, state }
   })
 
-  const expected = sha?.[2] ?? (imp && HEX.test(imp.expectedSha256) ? imp.expectedSha256 : undefined)
+  const expected = sha?.[3] ?? (imp && HEX.test(imp.expectedSha256) ? imp.expectedSha256 : undefined)
   return {
     name: title,
     path,
@@ -111,7 +115,7 @@ function factsOf(archive: Archive | undefined, imp: Import | undefined, name: st
     modified: cause === "key" ? archive?.modified : undefined,
     files,
     signer: archive?.signerKeySha256 && HEX.test(archive.signerKeySha256) ? archive.signerKeySha256 : undefined,
-    sha: sha ? { got: sha[1], want: sha[2] } : undefined,
+    sha: sha ? { got: sha[1], want: sha[3] } : undefined,
     wantSize: archive?.declaredSize !== undefined && archive.declaredSize !== archive.size ? archive.declaredSize : undefined,
     expected,
   }
@@ -183,15 +187,15 @@ function Marked({ value, other, testId }: { value: string; other: string; testId
 }
 
 /** Both sha256 one over the other, the characters that differ marked in each. */
-function ShaCompare({ got, want }: { got: string; want: string }) {
+function ShaCompare({ got, want, typed = false }: { got: string; want: string; typed?: boolean }) {
   return (
     <div data-testid="sha256-compare" className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-2">
       <span className="pt-0.5 text-muted">In MinIO</span>
       <Marked value={got} other={want} testId="in-minio" />
       <CopyControl text={got} label="the sha256 in MinIO" compact />
-      <span className="pt-0.5 text-muted">Expected</span>
+      <span className="pt-0.5 text-muted">{typed ? "Typed" : "Expected"}</span>
       <Marked value={want} other={got} testId="expected" />
-      <CopyControl text={want} label="the expected sha256" compact />
+      <CopyControl text={want} label={typed ? "the sha256 you typed" : "the expected sha256"} compact />
     </div>
   )
 }
@@ -200,8 +204,8 @@ function ArchiveMore({ facts }: { facts: Facts }) {
   if (facts.sha) {
     return (
       <>
-        <p className="text-muted">Same size as the manifest says</p>
-        <ShaCompare got={facts.sha.got} want={facts.sha.want} />
+        {facts.cause === "archive" ? <p className="text-muted">Same size as the manifest says</p> : null}
+        <ShaCompare got={facts.sha.got} want={facts.sha.want} typed={facts.cause === "expected"} />
       </>
     )
   }
@@ -234,7 +238,7 @@ function Files({ facts, trusted }: { facts: Facts; trusted: string }) {
   })
   const line = (row: FileRow, index: number, chip: boolean) => (
     <FileLine key={row.name} row={row} index={index} chip={chip}>
-      {index === 0 && facts.cause === "archive" ? <ArchiveMore facts={facts} /> : null}
+      {index === 0 && (facts.cause === "archive" || facts.cause === "expected") ? <ArchiveMore facts={facts} /> : null}
     </FileLine>
   )
   return (
@@ -327,7 +331,7 @@ function detailsText(facts: Facts, trusted: string, sides: { online: string; off
     return lines.join("\n")
   }
   if (facts.wantSize !== undefined) lines.push(`The manifest says: ${formatBytes(facts.wantSize)}`)
-  if (facts.sha) lines.push(`sha256 in MinIO: ${facts.sha.got}`, `Expected sha256: ${facts.sha.want}`)
+  if (facts.sha) lines.push(`sha256 in MinIO: ${facts.sha.got}`, `${facts.cause === "expected" ? "Typed" : "Expected"} sha256: ${facts.sha.want}`)
   else if (facts.expected) lines.push(`Expected sha256: ${facts.expected}`)
   const nameWidth = Math.max(...facts.files.map((f) => f.name.length))
   const sizes = facts.files.map((f) => (f.size !== undefined ? formatBytes(f.size) : ""))
@@ -394,6 +398,7 @@ function WhatToDo({ facts }: { facts: Facts }) {
   const bad = facts.files.filter((f) => BAD.has(f.state))
   const words = [...new Set(bad.map((f) => WORD[f.state]))]
   if (facts.cause === "key") return <p className="text-sm text-ink-2">Send your administrators the details, then remove the three files from your folder.</p>
+  if (facts.cause === "expected") return <p className="text-sm text-ink-2">Check the value you copied from the Sealed page.</p>
   if (bad.length > 0) {
     return (
       <p className="text-sm text-ink-2">
