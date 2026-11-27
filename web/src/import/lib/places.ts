@@ -12,11 +12,11 @@ export const OFFLINE_PLACES: Place[] = [
 
 export const OFFLINE_INSTANCE: Place = { to: "/instance", label: "Instance", icon: ServerCog }
 
-/** The breadcrumb for a path of the import side: an import's page sits under Imports, the archives to choose from under Home. */
-export function offlineCrumbs(pathname: string): Crumb[] {
+/** The breadcrumb for a path of the import side: an import's page sits under Imports, named once its record is read; the archives to choose from under Home. */
+export function offlineCrumbs(pathname: string, importName?: string): Crumb[] {
   if (pathname === "/instance") return [{ label: OFFLINE_INSTANCE.label }]
   if (pathname === "/import") return [{ label: "Home", to: "/" }, { label: "Import" }]
-  if (pathname.startsWith("/imports/")) return [{ label: "Imports", to: "/imports" }, { label: "Import" }]
+  if (pathname.startsWith("/imports/")) return [{ label: "Imports", to: "/imports" }, { label: importName ?? "Import" }]
   if (pathname === "/imports") return [{ label: "Imports" }]
   return [{ label: "Home" }]
 }

@@ -14,12 +14,18 @@ function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`
 }
 
+/** The import's name on the list and in its page's breadcrumb: its signed crossing, else its folder. */
+export function importName(imp: Import): string {
+  const project = latestAttempt(imp).report.crossing?.project
+  return project ? crossingLabel(project, imp.createdAt, [imp.createdAt]) : folderLabel(imp.archive.key)
+}
+
 /** One import of the list: a single link to the import, named by its signed crossing as on the home, with what its latest attempt did. */
 export function ImportRow({ imp }: { imp: Import }) {
   const attempt = latestAttempt(imp)
   const { file } = archiveName(imp.archive.key)
   const project = attempt.report.crossing?.project
-  const name = project ? crossingLabel(project, imp.createdAt, [imp.createdAt]) : folderLabel(imp.archive.key)
+  const name = importName(imp)
   const path = imp.archive.key.slice(0, imp.archive.key.length - file.length)
   return (
     <li className="border-t border-line first:border-t-0">
