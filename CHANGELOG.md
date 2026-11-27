@@ -23,6 +23,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - An info button explains CVE, a severity and major jump where each first appears on a screen, in two sentences with a link to its section of [How sealift chooses](docs/how-sealift-chooses.md#terms).
 - An analysis answer carries `advisories`: for each CVE id it lists, the title, a short summary and the publication date from the Trivy report, for npm and pip. An analysis from an earlier release answers without them.
 - `review.yanked` in the policy file: by default, a pip export that carries a release its index yanked needs a reason for it, and `refuse` stops such an export whatever its reason. `GET /api/instance` and the Instance page report it. [Settings](docs/settings.md#review-rules) lists it.
+- A pip crossing in the web, from requirements files dropped on Update: Check reads each file and its five checks, and shows the target with the two commands that read it on an Offline machine. Analyse shows the pip steps and each failure's cause. Review compares the set with the previous crossing of the same project and asks each reason. Ready to seal counts the wheels per platform, and Sealed counts the wheels. [Python projects](docs/python.md#cross-in-the-web) walks through one.
+- Info buttons explain a yanked release, a wheel and the target where each first appears, with a link to its section of [Python projects](docs/python.md).
+- Decide shows a What the flaw does row: the title and publication date of the advisory behind each CVE the dependency carries, for npm and pip.
+- Under `review.yanked: refuse`, Review shows each yanked release as refused by the instance before **Seal**, and asks no reason for it.
 
 ### Changed
 
@@ -91,6 +95,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 
 ### Security
 
+- The image takes the Debian security fixes published after its base image was built, which closes CVE-2025-6020 in linux-pam.
 - Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.
 - No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them. A project's target can still name another pnpm or uv, and both are held to the minimum release age.
 - `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.

@@ -62,6 +62,30 @@ describe("ReadySummary", () => {
     expect(screen.getByText("direct dependency", { exact: false })).toHaveTextContent("1 direct dependency")
   })
 
+  it("shows a count by severity with no before and after for a pinned set", () => {
+    render(<ReadySummary after={[0, 1, 1, 0, 0]} checkedTogether pins={{ pins: 212, files: 3 }} />)
+    expect(screen.getByText("pins in", { exact: false })).toHaveTextContent("212 pins in 3 requirements files")
+    expect(screen.queryByText(/direct dependenc/)).toBeNull()
+    const total = head().querySelector("[data-total]") as HTMLElement
+    expect(total).toHaveTextContent(/^2$/)
+    expect(within(total).getByText("2")).toHaveClass("font-semibold")
+    expect(head()).not.toHaveTextContent(" to ")
+    expect(head().querySelector("[data-delta]")).toBeNull()
+    expect(head().querySelector(".lucide-arrow-right")).toBeNull()
+    expect(severity("critical")).toHaveTextContent(/^critical\s*0$/)
+    expect(severity("high")).toHaveTextContent(/^high\s*1$/)
+    expect(within(severity("high")).getByText("1")).toHaveClass("font-semibold")
+    expect(screen.queryByText("unknown", { selector: "[data-severity] *" })).toBeNull()
+    expect(screen.getAllByRole("button", { name: "What a CVE is" })).toHaveLength(1)
+    expect(screen.getAllByRole("button", { name: "What a severity is" })).toHaveLength(1)
+  })
+
+  it("counts one pin in one requirements file", () => {
+    render(<ReadySummary after={[0, 0, 0, 0, 1]} checkedTogether pins={{ pins: 1, files: 1 }} />)
+    expect(screen.getByText("pin in", { exact: false })).toHaveTextContent("1 pin in 1 requirements file")
+    expect(severity("unknown")).toHaveTextContent(/^unknown\s*1$/)
+  })
+
   it("explains Known CVEs and the severities from the head", () => {
     render(<ReadySummary before={before} after={after} checkedTogether directDependencies={150} />)
     const cve = screen.getAllByRole("button", { name: "What a CVE is" })

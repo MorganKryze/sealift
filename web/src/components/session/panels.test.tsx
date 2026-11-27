@@ -4,7 +4,8 @@ import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { getProjectManifest, type Analysis, type Candidate, type DependencyResult, type Project } from "@/api/projects"
-import { DecidePanel, JumpPanel } from "@/components/session/review-panels"
+import { DecidePanel, JumpPanel, PipDecidePanel, PipJumpPanel } from "@/components/session/review-panels"
+import type { PipPackage } from "@/lib/pipReview"
 import { ReviewScreen } from "@/components/session/review-screen"
 
 vi.mock("@/api/projects", async () => {
@@ -209,5 +210,132 @@ describe("the panels on the review", () => {
     fireEvent.keyDown(within(panel()).getByLabelText(/^Reason/), { key: "Escape" })
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
     await waitFor(() => expect(decide).toHaveFocus())
+  })
+})
+
+describe("the advisory row in Decide", () => {
+  const minifier: DependencyResult = {
+    name: "html-minifier", current: "4.0.0", vector: [0, 1, 0, 0, 0], candidates: [],
+    cves: [noFix("CVE-2022-37620", "HIGH", "html-minifier@4.0.0")],
+  }
+
+  it("says what the flaw does with its date when the analysis carries it", () => {
+    const advisories = { "CVE-2022-37620": { title: "html-minifier: ReDoS in the candidate parser", published: "2022-10-31T07:15:00Z" } }
+    render(<DecidePanel dependency={minifier} dev={false} reason="" advisories={advisories} onRecord={() => {}} onClose={() => {}} />)
+    const flaw = within(panel()).getByText("What the flaw does").parentElement as HTMLElement
+    expect(within(flaw).getByText("html-minifier: ReDoS in the candidate parser")).toBeInTheDocument()
+    expect(within(flaw).getByText("31 Oct 2022")).toBeInTheDocument()
+  })
+
+  it("leaves the row out when the analysis carries none", () => {
+    render(<DecidePanel dependency={minifier} dev={false} reason="" onRecord={() => {}} onClose={() => {}} />)
+    expect(within(panel()).queryByText("What the flaw does")).toBeNull()
+  })
+})
+
+describe("the pip panels", () => {
+  const wheel = (name: string, version: string) => ({ file: `${name}-${version}-py3-none-any.whl`, url: `https://files.example/${name}`, sha256: "a".repeat(64), size: 1000 })
+  const requests: PipPackage = {
+    name: "requests", version: "2.32.0", files: ["requirements.txt"], pinnedAt: [{ file: "requirements.txt", line: 6 }],
+    wheel: wheel("requests", "2.32.0"), cves: [], yanked: { reason: "Yanked due to conflicts with CVE-2024-35195 mitigation" },
+  }
+  const ecdsa: PipPackage = {
+    name: "ecdsa", version: "0.19.1", files: [], wheel: wheel("ecdsa", "0.19.1"),
+    cves: [{ id: "CVE-2024-23342", severity: "HIGH", fixedVersions: [] }, { id: "CVE-2024-0001", severity: "LOW", fixedVersions: ["0.20.0"] }],
+  }
+  const django: PipPackage = {
+    name: "django", version: "5.1.4", files: ["requirements.txt"], pinnedAt: [{ file: "requirements.txt", line: 3 }],
+    wheel: { ...wheel("django", "5.1.4"), uploadedAt: "2025-03-31T14:00:00Z" }, cves: [],
+    previous: { version: "4.2.16", cves: [{ id: "CVE-2024-45230", severity: "HIGH", fixedVersions: ["4.2.17"] }, { id: "CVE-2024-45231", severity: "MEDIUM", fixedVersions: ["4.2.17"] }], majorJump: true },
+  }
+
+  it("decides a yanked release with the index's reason, where it is pinned and its wheel", () => {
+    const onReplace = vi.fn()
+    render(<PipDecidePanel pkg={requests} kind="yanked" reason="" onRecord={() => {}} onReplace={onReplace} onClose={() => {}} />)
+    const dialog = panel()
+    expect(within(dialog).getByRole("heading", { name: "Decision" })).toBeInTheDocument()
+    expect(within(dialog).getByText("Yanked")).toBeInTheDocument()
+    expect(within(dialog).getByText("“Yanked due to conflicts with CVE-2024-35195 mitigation”")).toBeInTheDocument()
+    expect(within(dialog).getByText("requirements.txt, line 6")).toBeInTheDocument()
+    expect(within(dialog).getByText("requests-2.32.0-py3-none-any.whl")).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/^Reason/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace files" }))
+    expect(onReplace).toHaveBeenCalled()
+  })
+
+  it("says No reason given when the index gives none", () => {
+    render(<PipDecidePanel pkg={{ ...requests, yanked: { reason: "" } }} kind="yanked" reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    expect(within(panel()).getByText("No reason given")).toBeInTheDocument()
+  })
+
+  it("shows the index's reason as text", () => {
+    const markup = '<img src=x onerror="alert(1)"><b>bold</b>'
+    render(<PipDecidePanel pkg={{ ...requests, yanked: { reason: markup } }} kind="yanked" reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    expect(within(panel()).getByText(`“${markup}”`)).toBeInTheDocument()
+    expect(panel().querySelector("img, b")).toBeNull()
+  })
+
+  it("decides a CVE with no fix with its advisory, and a dependency pinned by no file", () => {
+    const advisories = { "CVE-2024-23342": { title: "ecdsa: Minerva timing attack on P-256", published: "2024-01-23T00:15:00Z" } }
+    render(<PipDecidePanel pkg={ecdsa} kind="cve-without-fix" advisories={advisories} reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    const dialog = panel()
+    expect(within(dialog).getByRole("link", { name: "CVE-2024-23342" })).toHaveAttribute("href", "https://nvd.nist.gov/vuln/detail/CVE-2024-23342")
+    expect(within(dialog).getByText("No fixed version")).toBeInTheDocument()
+    expect(within(dialog).queryByText("CVE-2024-0001")).toBeNull()
+    expect(within(dialog).getByText("ecdsa: Minerva timing attack on P-256")).toBeInTheDocument()
+    expect(within(dialog).getByText("23 Jan 2024")).toBeInTheDocument()
+    expect(within(dialog).getByText("dependency")).toBeInTheDocument()
+  })
+
+  it("leaves the flaw out of a pip Decide when the analysis carries none", () => {
+    render(<PipDecidePanel pkg={ecdsa} kind="cve-without-fix" reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    expect(within(panel()).queryByText("What the flaw does")).toBeNull()
+  })
+
+  it("offers no Carry or Leave out for pip", () => {
+    const onRecord = vi.fn()
+    render(<PipDecidePanel pkg={requests} kind="yanked" reason="" onRecord={onRecord} onReplace={() => {}} onClose={() => {}} />)
+    expect(screen.queryByRole("radio")).toBeNull()
+    expect(screen.queryByText("Carry")).toBeNull()
+    expect(screen.queryByText("Leave out")).toBeNull()
+    const record = screen.getByRole("button", { name: "Record" })
+    expect(record).toHaveAttribute("aria-disabled", "true")
+    expect(record).toHaveAccessibleDescription("Write a reason to record.")
+    fireEvent.change(screen.getByLabelText(/^Reason/), { target: { value: "  Client tests pin 2.32.0 " } })
+    fireEvent.click(record)
+    expect(onRecord).toHaveBeenCalledWith("Client tests pin 2.32.0")
+  })
+
+  it("jumps with its facts and no Keep or Jump choice", () => {
+    const onRecord = vi.fn()
+    const onReplace = vi.fn()
+    render(<PipJumpPanel pkg={django} reason="" onRecord={onRecord} onReplace={onReplace} onClose={() => {}} />)
+    const dialog = panel()
+    expect(within(dialog).getByRole("heading", { name: "Major jump" })).toBeInTheDocument()
+    const change = within(dialog).getByText("4.2.16").closest("[data-version-change]") as HTMLElement
+    expect(change).toHaveTextContent(/4\.2\.16\s*to\s*5\.1\.4/)
+    expect(within(dialog).getByText("Release age")).toBeInTheDocument()
+    expect(within(dialog).getByText("Known CVEs").nextElementSibling).toHaveTextContent(/1 high\s*1 medium\s*to\s*0/)
+    expect(within(dialog).getByText("requirements.txt, line 3")).toBeInTheDocument()
+    expect(within(dialog).getByText("django-5.1.4-py3-none-any.whl")).toBeInTheDocument()
+    expect(screen.queryByRole("radio")).toBeNull()
+    expect(screen.getByRole("button", { name: "Record" })).toHaveAttribute("aria-disabled", "true")
+    fireEvent.change(screen.getByLabelText(/^Reason/), { target: { value: "Moved in branch django-5" } })
+    fireEvent.click(screen.getByRole("button", { name: "Record" }))
+    expect(onRecord).toHaveBeenCalledWith("Moved in branch django-5")
+    fireEvent.click(screen.getByRole("button", { name: "Replace files" }))
+    expect(onReplace).toHaveBeenCalled()
+  })
+
+  it("explains CVE and yanked in Decide and major jump in Jump", () => {
+    const { unmount } = render(<PipDecidePanel pkg={{ ...requests, cves: ecdsa.cves }} kind="yanked" reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    expect(within(panel()).getAllByRole("button", { name: "What a yanked release is" })).toHaveLength(1)
+    unmount()
+    const second = render(<PipDecidePanel pkg={ecdsa} kind="cve-without-fix" reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    expect(within(panel()).getAllByRole("button", { name: "What a CVE is" })).toHaveLength(1)
+    second.unmount()
+    render(<PipJumpPanel pkg={django} reason="" onRecord={() => {}} onReplace={() => {}} onClose={() => {}} />)
+    const change = within(panel()).getByText("4.2.16").closest("[data-version-change]") as HTMLElement
+    expect(within(change.parentElement as HTMLElement).getAllByRole("button", { name: "What a major jump is" })).toHaveLength(1)
   })
 })

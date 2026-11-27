@@ -17,7 +17,7 @@ The collection's routes are file-based, in `web/src/routes/`:
 | Route | Screen |
 | --- | --- |
 | `/` | Home: Start a crossing, Needs you and In progress |
-| `/update` | Update a project: the drop zone and the Check step |
+| `/update` | Update a project: the drop zone and the Check step, for a `package.json` or requirements files. `?from=<project>` opens it on that project's next crossing, with its name kept and no name field |
 | `/projects` | Projects, newest crossing first or by name |
 | `/projects/$projectId` | A project and its crossings, To carry and Reports |
 | `/instance` | Instance: readiness, policy, signing key, appearance |
@@ -40,6 +40,8 @@ The import entry has its own tree in `web/src/import/routes/`, with its generate
 The import code sits in `web/src/import/` (entry, routes, API client) and `web/src/components/import/` (components). The API types come from `api/import.yaml` into `web/src/import/api/schema.d.ts`, and `pnpm -C web run generate` writes both schemas. The shell's policy allows no inline style and no `data:` URI, so the build inlines no asset, and a dialog of the import entry is a native `<dialog>`, because Radix Dialog adds a style element when it locks scrolling. `index.css` in the import entry lists the folders Tailwind scans, because that build's root is `web/import`.
 
 A dropped file has no route until the crossing exists: its checks are state on the Update screen, and **Analyse** creates the project.
+
+A pip crossing uses the same routes. Its Check reads the requirements files in the browser (`lib/requirementsPreview.ts`), its Review is `components/session/pip-review-screen.tsx` with the groups and reasons of `lib/pipReview.ts`, and Ready to seal adds the wheels per platform (`components/session/pip-wheels.tsx`). Review reads `review.yanked` from `GET /api/instance`, so a refused yanked release shows before **Seal**. **Replace files** opens `/update?from=<project>`.
 
 ## The frame
 

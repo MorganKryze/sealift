@@ -1269,3 +1269,37 @@ func TestPipScanLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
 		t.Errorf("log = %q, want %q", lines, want)
 	}
 }
+
+func TestPipResultKeepsTheSpellingTheFilesDeclare(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "Pillow==10.4.0\nSQLAlchemy==2.0.36\nidna==3.10\n"))
+	set := resolved("idna", "3.10", "pillow", "10.4.0", "six", "1.16.0", "sqlalchemy", "2.0.36")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, _ := readPipResult(t, st, a)
+	want := map[string]string{"idna": "", "pillow": "Pillow", "six": "", "sqlalchemy": "SQLAlchemy"}
+	for _, p := range res.Packages {
+		if p.Declared != want[p.Name] {
+			t.Errorf("%s declared = %q, want %q", p.Name, p.Declared, want[p.Name])
+		}
+	}
+}
+
+// The declared spelling reaches the screen as written, so a name the pip
+// grammar does not allow is never declared, whatever the parser let through.
+func TestDeclaredOfKeepsOnlyAValidName(t *testing.T) {
+	r := &pipRun{set: pip.Set{Requirements: []pip.Pin{
+		{Name: "Pil\u202elow", Key: "pil-low"},
+		{Name: "\x1bname", Key: "name"},
+		{Name: "Pillow", Key: "pillow"},
+	}}}
+	for key, want := range map[string]string{"pil-low": "", "name": "", "pillow": "Pillow"} {
+		if got := r.declaredOf(key); got != want {
+			t.Errorf("declaredOf(%q) = %q, want %q", key, got, want)
+		}
+	}
+}

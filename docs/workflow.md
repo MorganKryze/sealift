@@ -43,7 +43,7 @@ A sealed or cancelled crossing leaves the home: Projects keeps it. A group shows
 
 ## Update
 
-**Update** opens Update a project, with the drop zone: Drop a package.json, and **Choose file**. A dropped file opens the Check step.
+**Update** opens Update a project, with the drop zone: Drop a package.json or requirements files, and **Choose files**. A dropped `package.json`, or the requirements files of a Python project dropped together, opens the Check step. [Python projects](python.md#cross-in-the-web) walks through a pip crossing, its [wheels](python.md#wheels) and its [yanked releases](python.md#yanked-releases), and [the target](python.md#the-target) it resolves for.
 
 ## Projects
 

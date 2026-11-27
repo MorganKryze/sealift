@@ -91,7 +91,7 @@ The file parses, but holds an array, a string or a number at its top level.
 
 ## Analyse
 
-When an analysis stops, the screen reads Analysis stopped, and its block names one of four causes.
+When an analysis stops, the screen reads Analysis stopped, and its block names one of four causes. A pip analysis has three more: problems in the requirements files, a package with no wheel, and no answer from the index. The database and any other cause read as they do for npm.
 
 ### A pinned version is not on npm
 
@@ -110,6 +110,18 @@ The scan needs Trivy's database, and its download failed. The file is not the ca
 ### Any other cause
 
 The block's title is the first line of the tool's message, such as a package name pnpm does not find (`ERR_PNPM_FETCH_404`): sealift reads the public registry, or the mirror set in [Deployment](deployment.md#outbound-access). The log holds the whole message. Fix what it names, then press **Retry**.
+
+### 3 problems in the requirements files
+
+A pip analysis read lines it does not take. The block lists each one with its file, its line, the line as written and the reason, such as `requirements.txt line 3: Django>=4.2,<5: not pinned with ==`. A retry gives the same answer. Fix the files, then press **Replace files**.
+
+### A package has no wheel for the target
+
+The resolver needs a package that publishes no wheel the target installs. The block names the package and its version, then what the index publishes, such as psycopg2 publishes a source distribution only. Pin a version with a wheel, or set another target ([Python projects](python.md#wheels)), then press **Replace files**. A package your files pin shows in Review's red block instead.
+
+### No answer from pypi.org
+
+A fetch to the index timed out or was refused. The title names the host, or reads No answer from the index. Your requirements files passed their checks, so they are not the cause. Check that sealift reaches pypi.org, as [Deployment](deployment.md#outbound-access) lists, then press **Retry**.
 
 ### The cause was not recorded
 

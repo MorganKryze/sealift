@@ -256,6 +256,7 @@ export function ReviewScreen({ project, analysis, onNavigateStep }: ReviewScreen
           dependency={openedDependency}
           version={picked(openedDependency)}
           dev={dev}
+          advisories={result.advisories}
           reason={reasons.reasons[`cve-without-fix:${openedDependency.name}`] ?? ""}
           onClose={() => setOpened(null)}
           onRecord={(choice) => {

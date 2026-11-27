@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, Check, LoaderCircle, RotateCcw } from "lucide-react"
 import { useEffect, useId, useState, type ReactNode } from "react"
 
-import { ApiError } from "@/api/client"
+import { ApiError, ProblemError } from "@/api/client"
 import { cancelExport, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
 import { EraseProject, useInstance } from "@/components/ephemeral"
 import { FailureBlock } from "@/components/failure-block"
@@ -11,6 +11,7 @@ import { CancelRow, JobProgress, type CancelWords } from "@/components/job-progr
 import { ProblemNotice } from "@/components/problem-notice"
 import { CrossingFiles } from "@/components/projects/crossing-files"
 import { hostIn, NO_ANSWER } from "@/components/session/analysis-screen"
+import { PipSealRefusal, pipRefusal } from "@/components/session/pip-review-screen"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
 import { useJobEvents } from "@/hooks/use-job-events"
@@ -18,6 +19,7 @@ import { useReasons, useSelection } from "@/hooks/use-selection"
 import { timeLeft } from "@/lib/analysisEvents"
 import { crossingName, readSeal } from "@/lib/crossings"
 import { exportSelection } from "@/lib/exportSelection"
+import { pipNeededReasons, pipReasonsToSend } from "@/lib/pipReview"
 import { reasonsToSend, requiredReasons } from "@/lib/requiredReasons"
 import { sessionSteps } from "@/lib/sessionSteps"
 
@@ -90,13 +92,18 @@ const DOING: Record<string, string> = {
   reports: "Signing the manifest and writing the reports",
 }
 
-const doing = (step: string | undefined) => (step ? (DOING[step] ?? `Running ${step}`) : "Sealing")
+// A pip export downloads wheels; every other step reads as npm's.
+const PIP_DOING: Record<string, string> = { ...DOING, download: "Downloading and verifying each wheel" }
+
+const doingIn = (words: Record<string, string>) => (step: string | undefined) => (step ? (words[step] ?? `Running ${step}`) : "Sealing")
 const lower = (words: string) => words.charAt(0).toLowerCase() + words.slice(1)
 
 const COUNT = new Intl.NumberFormat("en-GB")
 const figure = (n: number) => <span className="figure text-ink">{COUNT.format(n)}</span>
 
+// A pip crossing seals its whole set, so only its reasons are the developer's.
 const KEPT = "Your selection and its reasons are kept."
+const PIP_KEPT = "Your reasons are kept."
 
 interface SealProgressProps {
   project: Project
@@ -112,6 +119,10 @@ interface SealProgressProps {
  * same cause a beat before the next poll refreshes exportRecord.
  */
 function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateStep }: SealProgressProps) {
+  const navigate = useNavigate()
+  const pip = project.ecosystem === "pip"
+  const doing = doingIn(pip ? PIP_DOING : DOING)
+  const kept = pip ? PIP_KEPT : KEPT
   const selection = useSelection(analysis.id)
   const reasons = useReasons(analysis.id)
   const [cancelError, setCancelError] = useState<ApiError | null>(null)
@@ -127,13 +138,18 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
 
   const retry = useMutation({
     mutationFn: () => {
+      if (pip) {
+        const needed = analysis.pipResult ? pipNeededReasons(analysis.pipResult) : []
+        return queueExport(project.id, analysis.id, { selection: {}, includeProject: false, reasons: pipReasonsToSend(needed, reasons.reasons) })
+      }
       const toExport = exportSelection(analysis.result?.dependencies ?? [], selection.selection)
       const needed = analysis.result ? requiredReasons(analysis.result, toExport) : []
       return queueExport(project.id, analysis.id, { selection: toExport, includeProject: false, reasons: reasonsToSend(needed, reasons.reasons) })
     },
     onSuccess: onChanged,
   })
-  const retryError = retry.error instanceof ApiError ? retry.error : null
+  const retryError = retry.error instanceof ApiError || retry.error instanceof ProblemError ? retry.error : null
+  const refusal = pip ? pipRefusal(retry.error) : undefined
 
   async function cancelRun() {
     setCancelError(null)
@@ -183,7 +199,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         projectId={project.id}
         analysisId={analysis.id}
         heading="Sealing stopped"
-        sub={KEPT}
+        sub={kept}
         cause={{ title, diagnosis: `It stopped while ${lower(doing(failure.step))}.` }}
         tone="failure"
         log={events.log}
@@ -203,7 +219,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         projectId={project.id}
         analysisId={analysis.id}
         heading={interrupted ? "Sealing interrupted" : "Sealing stopped"}
-        sub={interrupted ? `The server restarted while it ran. ${KEPT}` : `The version that ran it did not record why. ${KEPT}`}
+        sub={interrupted ? `The server restarted while it ran. ${kept}` : `The version that ran it did not record why. ${kept}`}
         tone={interrupted ? "neutral" : "failure"}
         log={events.log}
         actions={
@@ -221,7 +237,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
           Waits for the running job
         </h1>
         <p className="mt-1.5 text-[15px] text-muted">One job runs at a time.</p>
-        <CancelRow note="Keeps its place if you leave this page" cancel={cancel({ lost: `It leaves the queue. ${KEPT}`, keep: "Keep its place" })} />
+        <CancelRow note="Keeps its place if you leave this page" cancel={cancel({ lost: `It leaves the queue. ${kept}`, keep: "Keep its place" })} />
       </div>
     )
   } else {
@@ -237,7 +253,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         counted={
           download ? (
             <>
-              {figure(download.done)} of {figure(download.total)} packages downloaded
+              {figure(download.done)} of {figure(download.total)} {pip ? "wheels" : "packages"} downloaded
             </>
           ) : undefined
         }
@@ -247,7 +263,7 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
         logCount={events.logCount}
         live
         note="Keeps running if you leave this page"
-        cancel={cancel({ lost: `The downloads so far stop here. ${KEPT}`, keep: "Keep sealing" })}
+        cancel={cancel({ lost: `The downloads so far stop here. ${kept}`, keep: "Keep sealing" })}
       />
     )
   }
@@ -256,7 +272,11 @@ function SealProgress({ project, analysis, exportRecord, onChanged, onNavigateSt
     <>
       {body}
       {cancelError ? <ProblemNotice status={cancelError.status} problem={cancelError.problem} className="mt-4" /> : null}
-      {retryError ? <ProblemNotice status={retryError.status} problem={retryError.problem} className="mt-4" /> : null}
+      {refusal ? (
+        <PipSealRefusal rules={refusal} onReplace={() => void navigate({ to: "/update", search: { from: project.id } })} />
+      ) : retryError ? (
+        <ProblemNotice status={retryError.status} problem={retryError.problem} className="mt-4" />
+      ) : null}
     </>
   )
 }
