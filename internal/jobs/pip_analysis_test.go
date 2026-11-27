@@ -1288,3 +1288,18 @@ func TestPipResultKeepsTheSpellingTheFilesDeclare(t *testing.T) {
 		}
 	}
 }
+
+// The declared spelling reaches the screen as written, so a name the pip
+// grammar does not allow is never declared, whatever the parser let through.
+func TestDeclaredOfKeepsOnlyAValidName(t *testing.T) {
+	r := &pipRun{set: pip.Set{Requirements: []pip.Pin{
+		{Name: "Pil\u202elow", Key: "pil-low"},
+		{Name: "\x1bname", Key: "name"},
+		{Name: "Pillow", Key: "pillow"},
+	}}}
+	for key, want := range map[string]string{"pil-low": "", "name": "", "pillow": "Pillow"} {
+		if got := r.declaredOf(key); got != want {
+			t.Errorf("declaredOf(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
