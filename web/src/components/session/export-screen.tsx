@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ArrowLeft, Check, LoaderCircle, RotateCcw } from "lucide-react"
-import { useEffect, useId, useState, type ReactNode } from "react"
+import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 
 import { ApiError, ProblemError } from "@/api/client"
 import { cancelExport, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
@@ -40,6 +40,17 @@ interface ExportScreenProps {
  */
 export function ExportScreen({ project, analysis, relatedExport, previousArchive, onChanged, onNavigateStep }: ExportScreenProps) {
   const steps = sessionSteps({ project, analysis, current: "export", onNavigate: onNavigateStep })
+  const frame = useRef<HTMLDivElement>(null)
+  const shown = `${relatedExport?.id ?? ""} ${relatedExport?.state ?? ""}`
+  // Seal unmounts with Review, and each state swaps the screen: a keyboard user would restart from the top.
+  useEffect(() => {
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    const heading = frame.current?.querySelector("h1")
+    if (!heading) return
+    heading.tabIndex = -1
+    heading.focus({ preventScroll: true })
+  }, [shown])
 
   let body: ReactNode
   if (!relatedExport) {
@@ -62,7 +73,7 @@ export function ExportScreen({ project, analysis, relatedExport, previousArchive
   }
 
   return (
-    <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
+    <div ref={frame} className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
       <StepBar steps={steps} />
       {body}
       {previousArchive ? (
