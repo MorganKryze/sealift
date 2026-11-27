@@ -23,14 +23,18 @@ const reportRank = (name: string) => (REPORT_ORDER.includes(name) ? REPORT_ORDER
 
 const COUNT = new Intl.NumberFormat("en-GB")
 
-/** "1,284 packages · 96.5 MB", each figure only when manifest.json holds it; nothing when it holds neither. */
-function archiveFigures(figures: SealFigures | undefined): ReactNode {
+/**
+ * "1,284 packages · 96.5 MB", or "243 wheels" for a pip archive, each figure only when manifest.json holds it;
+ * nothing when it holds neither.
+ */
+function archiveFigures(figures: SealFigures | undefined, pip: boolean): ReactNode {
   if (!figures) return undefined
   const parts: ReactNode[] = []
   if (figures.packages !== undefined) {
+    const [one, many] = pip ? ["wheel", "wheels"] : ["package", "packages"]
     parts.push(
       <span key="packages">
-        <span className="figure text-ink">{COUNT.format(figures.packages)}</span> {figures.packages === 1 ? "package" : "packages"}
+        <span className="figure text-ink">{COUNT.format(figures.packages)}</span> {figures.packages === 1 ? one : many}
       </span>,
     )
   }
@@ -171,7 +175,7 @@ export function CrossingFiles({ project, exported, downloadAllPrimary = false, o
                 name={name}
                 note={
                   name === archive
-                    ? archiveFigures(seal.data?.figures)
+                    ? archiveFigures(seal.data?.figures, project.ecosystem === "pip")
                     : name === "manifest.json"
                       ? project.ecosystem === "pip"
                         ? "every wheel with its sha256"

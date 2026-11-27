@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ComponentType, ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ProblemError } from "@/api/client"
 import { getProject, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
 import { PipReviewScreen } from "@/components/session/pip-review-screen"
 import type { PipAnalysisResult, PipPackage } from "@/lib/pipReview"
@@ -93,9 +94,10 @@ describe("the pip review's head", () => {
   })
 
   it("shows a count only with no previous crossing", () => {
-    renderReview(resultOf([pkg("ecdsa", "0.19.1", { cves: [finding("CVE-2024-23342", "HIGH", ["0.20.0"])] })], { previous: undefined }))
+    // future's CVE with no fix waits for a reason, so the page reads Review, not Ready.
+    renderReview(resultOf([pkg("ecdsa", "0.19.1", { cves: [finding("CVE-2024-23342", "HIGH", ["0.20.0"])] }), pkg("future", "1.0.0", { cves: [finding("CVE-2024-1001", "MEDIUM")] })], { previous: undefined }))
     const known = document.querySelector("[data-known-cves]") as HTMLElement
-    expect(known.textContent).toMatch(/Known CVEs\s*1/)
+    expect(known.textContent).toMatch(/Known CVEs\s*2/)
     expect(known.textContent).not.toMatch(/ to /)
     expect(screen.getByRole("button", { name: /^1 package with a fix in a newer release/ })).toBeDefined()
     expect(screen.queryByRole("button", { name: /unchanged/ })).toBeNull()
@@ -164,12 +166,20 @@ describe("what holds Seal", () => {
     renderReview(withNoWheel, WRITTEN)
     expect(screen.getByRole("heading", { level: 1, name: "One thing needs you" })).toBeDefined()
     expect(screen.queryByText("Ready to seal")).toBeNull()
+    expect(screen.queryByRole("region", { name: /^Wheels for/ })).toBeNull()
+    expect(seal().getAttribute("aria-disabled")).toBe("true")
   })
 
   it("sends an empty selection and the reasons shown, word for word", async () => {
     vi.mocked(queueExport).mockResolvedValue({ id: "20261125T092000Z", projectId: "ledger-service", analysisId: ID, state: "queued", createdAt: "2026-11-25T09:20:00Z" } as Export)
-    const { onNavigateStep } = renderReview(resultOf(PACKAGES), WRITTEN)
+    // A reason as typed, spaces around it included: the row shows it and the request sends it the same way.
+    const typed = { ...WRITTEN, "yanked:requests": "  Our client tests run on 2.32.0; the move to 2.32.3 is #214  " }
+    const { onNavigateStep } = renderReview(resultOf(PACKAGES), typed)
     expect(screen.getByRole("heading", { level: 1, name: "Ready to seal" })).toBeDefined()
+    const shown = Array.from(document.querySelectorAll("[data-reason-row] p"))
+      .map((p) => p.textContent ?? "")
+      .filter((text) => text.startsWith("“"))
+      .map((text) => text.slice(1, -1))
     fireEvent.click(seal())
     await waitFor(() => expect(onNavigateStep).toHaveBeenCalledWith("export"))
     expect(queueExport).toHaveBeenCalledWith("ledger-service", ID, {
@@ -181,7 +191,82 @@ describe("what holds Seal", () => {
         { kind: "yanked", dependencies: ["requests"], text: WRITTEN["yanked:requests"] },
       ],
     })
+    expect(vi.mocked(queueExport).mock.calls[0][2].reasons?.map((reason) => reason.text)).toEqual(shown)
   })
+})
+
+const GUNICORN = pkg("gunicorn", "22.0.0", { pinnedAt: at("requirements.txt", 8), cves: [finding("CVE-2024-6827", "HIGH", ["23.0.0"])], previous: same("22.0.0", [finding("CVE-2024-6827", "HIGH", ["23.0.0"])]) })
+const READY = resultOf([...PACKAGES, GUNICORN].sort((a, b) => a.name.localeCompare(b.name)))
+
+describe("Ready to seal", () => {
+  it("reads Ready to seal once nothing needs you", () => {
+    renderReview(READY, WRITTEN)
+    expect(screen.getByRole("heading", { level: 1, name: "Ready to seal" })).toBeDefined()
+    expect(screen.getByText("pins in", { exact: false })).toHaveTextContent("6 pins in 2 requirements files")
+    const known = screen.getByRole("region", { name: "Known CVEs" })
+    expect(known.querySelector("[data-total]")).toHaveTextContent(/^2$/)
+    expect(known).not.toHaveTextContent(" to ")
+    expect(document.querySelector("[data-known-cves]")).toBeNull()
+    // The packages that keep a CVE a newer release fixes, each with that release.
+    const keep = screen.getByRole("region", { name: "1 package keeps known CVEs a newer release fixes" })
+    const row = within(keep).getByText("gunicorn").closest("li") as HTMLElement
+    expect(row).toHaveTextContent("22.0.0")
+    expect(row).toHaveTextContent("CVE-2024-6827")
+    expect(row).toHaveTextContent(/fixed in\s*23\.0\.0/)
+    expect(screen.getByRole("region", { name: /^Wheels for Python 3\.11\.2/ })).toBeDefined()
+    // Ready shows no group of the set: Review keeps them.
+    expect(document.querySelector("[data-group]")).toBeNull()
+    expect(seal().getAttribute("aria-disabled")).toBeNull()
+    const actions = seal().parentElement as HTMLElement
+    expect(actions).toHaveClass("justify-end")
+    for (const name of ["What a CVE is", "What a severity is", "What a wheel is", "What a major jump is", "What a yanked release is"]) {
+      expect(screen.getAllByRole("button", { name })).toHaveLength(1)
+    }
+    expect(known).toContainElement(screen.getByRole("button", { name: "What a severity is" }))
+    expect(screen.getByRole("region", { name: /^Wheels for/ })).toContainElement(screen.getByRole("button", { name: "What a wheel is" }))
+  })
+
+  it("shows each reason as it will be signed with Change", () => {
+    renderReview(READY, WRITTEN)
+    const reasons = screen.getByRole("region", { name: "Reasons" })
+    for (const [key, text] of Object.entries(WRITTEN)) {
+      const name = key.split(":")[1]
+      const row = within(reasons).getByText(`“${text}”`).closest("[data-reason-row]") as HTMLElement
+      expect(within(row).getByRole("button", { name: `Change ${name}` })).toBeDefined()
+    }
+    expect(within(reasons).queryByText("Reason missing")).toBeNull()
+  })
+
+  it("names the refusing rule and its packages when the server refuses Seal", async () => {
+    const detail = "jobs: review.majorJump is refuse: django 4.2.16 to 5.1.4 is a major jump and cannot cross; review.yanked is refuse: requests 2.32.0 is yanked on the index and cannot cross"
+    vi.mocked(queueExport).mockRejectedValue(new ProblemError(409, { type: "about:blank", title: "queue export", status: 409, detail }))
+    renderReview(READY, WRITTEN)
+    fireEvent.click(seal())
+    const alert = await screen.findByRole("alert")
+    const jump = within(alert).getByText("This instance refuses every major jump").closest("[data-refusal]") as HTMLElement
+    expect(within(jump).getByText("django")).toBeDefined()
+    expect(within(jump).getByText("4.2.16 to 5.1.4")).toBeDefined()
+    expect(jump).toHaveTextContent("1 package")
+    const yanked = within(alert).getByText("This instance refuses every yanked release").closest("[data-refusal]") as HTMLElement
+    expect(within(yanked).getByText("requests")).toBeDefined()
+    expect(within(yanked).getByText("2.32.0")).toBeDefined()
+    expect(alert).not.toHaveTextContent("review.majorJump")
+    expect(alert).not.toHaveTextContent("jobs:")
+    fireEvent.click(within(alert).getByRole("button", { name: "Replace files" }))
+    expect(router.navigate).toHaveBeenCalledWith({ to: "/update", search: { from: "ledger-service" } })
+  })
+
+  it("lists the reasons the server did not take", async () => {
+    const detail = "django 4.2.16 to 5.1.4 is a major jump and needs a reason; reason 3 (yanked) repeats the reason for requests"
+    vi.mocked(queueExport).mockRejectedValue(new ProblemError(400, { type: "about:blank", title: "invalid export reasons", status: 400, detail }))
+    renderReview(READY, WRITTEN)
+    fireEvent.click(seal())
+    const alert = await screen.findByRole("alert")
+    expect(within(alert).getByText("The server did not take these reasons")).toBeDefined()
+    expect(within(alert).getByText("django 4.2.16 to 5.1.4 is a major jump and needs a reason")).toBeDefined()
+    expect(within(alert).getByText("reason 3 (yanked) repeats the reason for requests")).toBeDefined()
+  })
+
 })
 
 describe("the groups", () => {
@@ -205,7 +290,9 @@ describe("the groups", () => {
 
   it("lists the first 12 rows of the worst case, then all of them", () => {
     const many = Array.from({ length: 1284 }, (_, i) => pkg(`ingest-lib-${String(i).padStart(4, "0")}`, "1.0.0", { previous: same("1.0.0") }))
-    renderReview(resultOf([...many, pkg("pandas-stubs", "2.2.3.241126", { previous: same("1.5.3.230321") })]))
+    // ecdsa's CVE with no fix keeps the page on Review, where the groups show.
+    const ecdsa = pkg("ecdsa", "0.19.1", { cves: [finding("CVE-2024-23342", "HIGH")], previous: same("0.19.1", [finding("CVE-2024-23342", "HIGH")]) })
+    renderReview(resultOf([...many, ecdsa, pkg("pandas-stubs", "2.2.3.241126", { previous: same("1.5.3.230321") })]))
     fireEvent.click(screen.getByRole("button", { name: /^1,284 packages unchanged/ }))
     const group = screen.getByRole("button", { name: /^1,284 packages unchanged/ }).closest("[data-group]") as HTMLElement
     expect(within(group).getAllByRole("row")).toHaveLength(13)
@@ -233,6 +320,15 @@ describe("a pip analysis 0.7.0 recorded", () => {
     expect(screen.getByText("requests==2.32.0 is yanked on the index: Yanked due to conflicts with CVE-2024-35195 mitigation")).toBeDefined()
     expect(screen.queryByRole("region", { name: "Reasons" })).toBeNull()
     expect(screen.getByRole("heading", { level: 1, name: "Ready to seal" })).toBeDefined()
+    // 0.7.0 recorded files, never lines: requests is the one pin.
+    expect(screen.getByText("pin in", { exact: false })).toHaveTextContent("1 pin in 1 requirements file")
+    expect(within(screen.getByRole("region", { name: "1 package keeps known CVEs a newer release fixes" })).getByText("jinja2")).toBeDefined()
+  })
+
+  it("reads Pinned in from the files of a 0.7.0 analysis", () => {
+    const ecdsa = { name: "ecdsa", version: "0.19.1", files: ["requirements.txt"], wheel: wheel("ecdsa", "0.19.1"), cves: [{ id: "CVE-2024-23342", severity: "HIGH", fixedVersions: [] }] }
+    renderReview({ ...legacy, packages: [...legacy.packages, ecdsa] })
+    expect(screen.getByRole("heading", { level: 1, name: "One thing needs you" })).toBeDefined()
     fireEvent.click(screen.getByRole("button", { name: /^1 package$/ }))
     const row = screen.getByText("requests").closest("tr") as HTMLElement
     expect(within(row).getByText("requirements.txt")).toBeDefined()

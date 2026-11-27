@@ -3,12 +3,14 @@ import { useNavigate } from "@tanstack/react-router"
 import { ArrowRight, ArrowUpRight, ChevronDown, CircleAlert, CircleX, Cpu, FileText, FileUp, LoaderCircle, Lock, Minus, Package, PackageX, Plus, Shield } from "lucide-react"
 import { useId, useState, type ReactNode } from "react"
 
-import { ProblemError } from "@/api/client"
+import { ApiError, ProblemError } from "@/api/client"
 import { queueExport, type Analysis, type Project } from "@/api/projects"
 import type { components } from "@/api/schema"
 import { ProblemNotice } from "@/components/problem-notice"
 import { PUBLISHES } from "@/components/session/analysis-screen"
 import { AnalysisWarnings } from "@/components/session/analysis-warnings"
+import { PipWheels } from "@/components/session/pip-wheels"
+import { ReadySummary } from "@/components/session/ready-summary"
 import { CveTable, ReasonBand, ReasonRow } from "@/components/session/reasons-block"
 import { PinnedIn, PipDecidePanel, PipJumpPanel, SeverityCounts, SeverityMark, VersionChange, pipCve, severityOf } from "@/components/session/review-panels"
 import { StepBar, type StepId } from "@/components/step-bar"
@@ -23,6 +25,7 @@ import {
   pipReasonWritten,
   pipVector,
   pipWaiting,
+  pinnedPlaces,
   wheelPlatform,
   withoutFix,
   type PipAnalysisResult,
@@ -132,6 +135,7 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
     },
   })
   const sealError = sealMutation.error instanceof ProblemError ? sealMutation.error : null
+  const refusal = pipRefusal(sealMutation.error)
   const steps = sessionSteps({ project, analysis, current: "review", onNavigate: onNavigateStep })
   const replace = () => void navigate({ to: "/update", search: { from: project.id } })
 
@@ -155,7 +159,8 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
   const groups = pipGroups(result)
   const totals = pipCveTotals(result)
   const things = waiting.noWheel.length + waiting.missing.length
-  const title = things === 0 ? "Ready to seal" : things === 1 ? "One thing needs you" : `${plural(things, "thing", "things")} need you`
+  const ready = things === 0
+  const title = ready ? "Ready to seal" : things === 1 ? "One thing needs you" : `${plural(things, "thing", "things")} need you`
   const waitingNames = [...new Set(waiting.missing)]
   const cause =
     waiting.noWheel.length > 0
@@ -197,8 +202,9 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
     <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
       <StepBar steps={steps} />
 
-      <div className="mb-5">
+      <div className={ready ? "mb-1" : "mb-5"}>
         <h1 className="text-[28px] font-bold tracking-tight text-ink">{title}</h1>
+        {ready ? null : (
         <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[15px] text-muted">
           <span data-known-cves className="inline-flex flex-wrap items-center gap-x-1.5">
             <span>Known CVEs</span>
@@ -216,7 +222,9 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
           <Cpu aria-hidden="true" className="size-3.5" />
           <PipTargetLine target={result.target} />
         </p>
+        )}
       </div>
+      {ready ? <ReadySummary after={totals.after} checkedTogether pins={{ pins: result.packages.filter((pkg) => pinnedPlaces(pkg).length > 0).length, files: result.files.length }} /> : null}
 
       <AnalysisWarnings warnings={result.warnings} />
 
@@ -226,10 +234,14 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
         result={result}
         needed={needed}
         reasons={reasons.reasons}
+        explainSeverity={!ready}
         onOpen={(kind, name) => setOpened({ kind, name })}
       />
 
-      {shown.length > 0 ? (
+      {ready ? <FixesBlock packages={result.packages.filter((pkg) => pkg.cves.some((cve) => !withoutFix(cve)))} /> : null}
+      {ready ? <PipWheels result={result} /> : null}
+
+      {!ready && shown.length > 0 ? (
         <div className="overflow-hidden rounded-xl border border-rule bg-bg">
           {shown.map((key, index) => (
             <Group
@@ -264,7 +276,7 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
           {sealMutation.isPending ? "Sealing" : "Seal"}
         </Button>
       </div>
-      {sealError ? <ProblemNotice status={sealError.status} problem={sealError.problem} className="mt-3" /> : null}
+      {refusal ? <PipSealRefusal rules={refusal} onReplace={replace} /> : sealError ? <ProblemNotice status={sealError.status} problem={sealError.problem} className="mt-3" /> : null}
 
       {opened && openedPkg && opened.kind === "major-jump" ? (
         <PipJumpPanel
@@ -333,11 +345,13 @@ interface PipReasonsProps {
   result: PipAnalysisResult
   needed: PipNeededReason[]
   reasons: Record<string, string>
+  /** False on Ready, whose head explains the severities. */
+  explainSeverity: boolean
   onOpen: (kind: PipNeededReason["kind"], name: string) => void
 }
 
 /** The three bands of reasons, as npm draws its two: major jumps, CVEs with no fix, yanked releases. */
-function PipReasons({ result, needed, reasons, onOpen }: PipReasonsProps) {
+function PipReasons({ result, needed, reasons, explainSeverity, onOpen }: PipReasonsProps) {
   const id = useId()
   if (needed.length === 0) return null
   const byName = new Map(result.packages.map((pkg) => [pkg.name, pkg]))
@@ -410,7 +424,7 @@ function PipReasons({ result, needed, reasons, onOpen }: PipReasonsProps) {
                       ) : (
                         <SeverityCounts vector={pipVector(pkg.cves.filter(withoutFix))} />
                       )}
-                      {need.key === firstSeverities ? <Term id="severity" /> : null}
+                      {explainSeverity && need.key === firstSeverities ? <Term id="severity" /> : null}
                     </div>
                   </ReasonRow>
                 )
@@ -440,6 +454,158 @@ function PipReasons({ result, needed, reasons, onOpen }: PipReasonsProps) {
         ) : null}
       </div>
     </section>
+  )
+}
+
+/** Ready's packages that keep a known CVE a newer release fixes, each with the releases that fix it. */
+function FixesBlock({ packages }: { packages: PipPackage[] }) {
+  const id = useId()
+  if (packages.length === 0) return null
+  return (
+    <section aria-labelledby={id} className="mb-3 overflow-hidden rounded-xl border border-rule bg-bg">
+      <ReasonBand tone="warn">
+        <CircleAlert aria-hidden="true" className="size-4 flex-none text-warn" />
+        <p id={id} className="text-[13px] text-ink-2">
+          <span className="figure text-ink">{plural(packages.length, "package", "packages")}</span> {packages.length === 1 ? "keeps" : "keep"} known CVEs a newer release fixes
+        </p>
+      </ReasonBand>
+      <ul className="flex flex-col gap-1.5 p-1.5">
+        {packages.map((pkg) => {
+          const fixable = pkg.cves.filter((cve) => !withoutFix(cve))
+          const single = fixable.length === 1 ? pipCve(fixable[0]) : undefined
+          const fixes = [...new Set(fixable.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))]
+          return (
+            <li key={pkg.name} className="rounded-lg px-3 py-2.5">
+              <PackageLine pkg={pkg} />
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2">
+                {single ? (
+                  <>
+                    <span className="font-mono text-xs text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{single.id}</span>
+                    <SeverityMark severity={severityOf(single)} />
+                  </>
+                ) : (
+                  <SeverityCounts vector={pipVector(fixable)} />
+                )}
+              </div>
+              <p className="mt-0.5 text-xs text-muted [overflow-wrap:anywhere]">
+                fixed in <strong className={cn(mono, "font-semibold text-ink")}>{fixes.join(", ")}</strong>
+              </p>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
+interface RefusalRule {
+  title: string
+  items: { name: string; value: string }[]
+  /** Packages the server counted past the ones it named. */
+  more: number
+  /** The server's own lines, for a refusal that names reasons rather than packages. */
+  lines?: string[]
+  recovery: string
+  /** Whether new files clear it. */
+  replace: boolean
+}
+
+// internal/jobs words each refuse rule by its policy key; the screen names it in words.
+const REFUSE_RULES: Record<string, string> = {
+  "review.majorJump": "This instance refuses every major jump",
+  "review.cveWithoutFix": "This instance refuses every known CVE with no fixed version",
+  "review.yanked": "This instance refuses every yanked release",
+}
+const MORE = /^(?:and )?(\d+) more$/
+
+function namedPackage(text: string): { name: string; value: string } {
+  const jump = text.match(/^(\S+) (\S+) to (\S+) /)
+  if (jump) return { name: jump[1], value: `${jump[2]} to ${jump[3]}` }
+  const [name, value = ""] = text.split(" ")
+  return { name, value }
+}
+
+function rulesOf(items: string[]): Pick<RefusalRule, "items" | "more"> {
+  const more = items.map((item) => item.match(MORE)).find((match) => match !== null)
+  return { items: items.filter((item) => !MORE.test(item)).map(namedPackage), more: more ? Number(more[1]) : 0 }
+}
+
+/**
+ * The server's refusal of a pip export, rule by rule with the packages each names, read from the problem
+ * internal/api answers: 400 for reasons it does not take, 409 for a set with no wheel or under a refuse
+ * rule. Undefined for any other failure, which the problem notice shows as it came.
+ */
+export function pipRefusal(error: unknown): RefusalRule[] | undefined {
+  if (!(error instanceof ProblemError || error instanceof ApiError)) return undefined
+  const detail = error.problem?.detail ?? ""
+  if (error.status === 400 && error.problem?.title === "invalid export reasons" && detail !== "") {
+    return [{ title: "The server did not take these reasons", items: [], more: 0, lines: detail.split("; "), recovery: "Change each reason named here, then Seal again.", replace: false }]
+  }
+  if (error.status !== 409) return undefined
+  const text = detail.replace(/^jobs: /, "")
+  const noWheel = text.match(/^(\d+) packages? ha(?:s|ve) no wheel for the target, so the set cannot cross: (.+)$/)
+  if (noWheel) {
+    const n = Number(noWheel[1])
+    const { items } = rulesOf(noWheel[2].replace(/ and (?=[^,]*$)/, ", ").split(", "))
+    return [{ title: `${plural(n, "package has", "packages have")} no wheel for the target`, items, more: n - items.length, recovery: "Replace the files with pins that have a wheel for the target.", replace: true }]
+  }
+  const parts = text.split(/(?:^|; )(review\.[A-Za-z]+) is refuse: /)
+  if (parts.length < 3 || parts[0] !== "") return undefined
+  const rules: RefusalRule[] = []
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    const title = REFUSE_RULES[parts[i]]
+    if (!title) return undefined
+    rules.push({ title, ...rulesOf(parts[i + 1].split("; ")), recovery: "No reason lifts this rule: replace the files with other pins.", replace: true })
+  }
+  return rules
+}
+
+/** A refused Seal in the failure block's words: each rule, the packages it names, and how to clear it. */
+export function PipSealRefusal({ rules, onReplace }: { rules: RefusalRule[]; onReplace: () => void }) {
+  const last = rules.map((rule) => rule.replace).lastIndexOf(true)
+  return (
+    <div role="alert" className="animate-enter mt-4 flex flex-col gap-2">
+      {rules.map((rule, index) => (
+        <div key={rule.title} data-refusal className="tinted-bad grid grid-cols-[20px_minmax(0,1fr)] items-start gap-x-3 gap-y-3 px-4 py-3.5 sm:grid-cols-[20px_minmax(0,1fr)_auto]">
+          <CircleX aria-hidden="true" className="mt-0.5 size-5 text-bad" />
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="font-semibold text-ink [overflow-wrap:anywhere]">{rule.title}</span>
+              {rule.items.length > 0 ? (
+                <span className="rounded-full border border-bad-line bg-bg px-2 text-xs leading-5 font-semibold text-bad">{plural(rule.items.length + rule.more, "package", "packages")}</span>
+              ) : null}
+            </p>
+            {rule.items.length > 0 ? (
+              <ul className="mt-2 flex flex-wrap gap-2">
+                {rule.items.map((item) => (
+                  <li key={`${item.name}@${item.value}`} className="flex flex-wrap items-baseline gap-x-1.5 rounded-md border border-bad-line bg-bg px-2 py-0.5 text-[12.5px]">
+                    <span className="font-semibold text-ink [overflow-wrap:anywhere]">{item.name}</span>
+                    {item.value ? <span className={cn(mono, "text-ink-2")}>{item.value}</span> : null}
+                  </li>
+                ))}
+                {rule.more > 0 ? <li className="px-1 py-0.5 text-[12.5px] text-ink-2">{`and ${rule.more.toLocaleString("en-US")} more`}</li> : null}
+              </ul>
+            ) : null}
+            {rule.lines ? (
+              <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-sm text-ink">
+                {rule.lines.map((line) => (
+                  <li key={line} className="[overflow-wrap:anywhere]">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="mt-2 text-sm text-ink-2">{rule.recovery}</p>
+          </div>
+          {index === last ? (
+            <Button type="button" variant="outline" className="justify-self-start" onClick={onReplace}>
+              <FileUp aria-hidden="true" />
+              Replace files
+            </Button>
+          ) : null}
+        </div>
+      ))}
+    </div>
   )
 }
 
