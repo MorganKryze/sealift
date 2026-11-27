@@ -16,6 +16,8 @@ const FOLDER = "packages/npm/"
 const ARCHIVE = "packages_npm.tar.gz"
 const PIP_FOLDER = "packages/pip/"
 const PIP_ARCHIVE = "packages_pip.tar.gz"
+const UNKNOWN_KEY_FOLDER = "2026-10-20-customer-portal-frontend-app-shell-regenerated/"
+const PIP_SIZE_FOLDER = "2026-10-20-analytics-ingest-batches-weekly-reports/"
 
 // Ten minutes before the run, or local midnight when that falls yesterday, so the home counts the
 // import that ends then as done today.
@@ -65,6 +67,10 @@ const checking = live(IDS.running, (_, a) => {
 const ranked = live(IDS.queued, (imp) => {
   imp.queueAhead = 1
 })
+// A cancel the server never answers, so Cancelling stays on screen.
+const holdCancel = async (page) => {
+  await page.route((url) => url.pathname === `/api/imports/${IDS.running}/cancel`, () => new Promise(() => {}))
+}
 // The worst case of publishing: pip, 4,206 packages, 2,015 ended, 3 failed on the way, one Nexus answer of 600 characters.
 const NUMPY = "numpy-2.1.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
 const worstPublishing = live(IDS.running, (imp, a) => {
@@ -124,6 +130,10 @@ export const IMPORT = {
     { path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left", open: { role: "button", name: "Compliant", opens: { role: "list", name: "3 checks passed" } } },
     { path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left", open: { role: "button", name: "Cancel", opens: { role: "button", name: "Keep running" } } },
     { path: `/imports/${IDS.running}`, user: "alice", before: worstPublishing, name: "worst pip", ready: "3 packages failed" },
+    {
+      path: `/imports/${IDS.running}`, user: "alice", before: holdCancel, name: "cancelling", ready: "Estimating time left",
+      open: { role: "button", name: "Cancel", opens: { role: "button", name: "Keep running" }, then: { role: "button", name: "Cancel import", opens: { role: "button", name: "Cancelling" } } },
+    },
     { path: `/imports/${IDS.cancelled}`, user: "alice", ready: "Import cancelled" },
     {
       path: `/imports/${IDS.running}`, user: "alice", ready: "Estimating time left",
@@ -135,6 +145,12 @@ export const IMPORT = {
       path: `/?refused=${encodeURIComponent(`${FOLDER}${folder}/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
     })),
     { path: `/?refused=${encodeURIComponent(`${FOLDER}2026-10-28-two-archives/first.tar.gz`)}`, user: "alice", ready: "Nothing reached Nexus." },
+    { path: `/?refused=${encodeURIComponent(`${FOLDER}${UNKNOWN_KEY_FOLDER}${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus." },
+    { path: `/?refused=${encodeURIComponent(`${PIP_FOLDER}${PIP_SIZE_FOLDER}${PIP_ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus." },
+    {
+      path: `/?refused=${encodeURIComponent(`${FOLDER}2026-11-05-reports/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
+      open: { role: "button", name: "Copy details", opens: { role: "button", name: "Copied" } },
+    },
     {
       path: `/?refused=${encodeURIComponent(`${FOLDER}2026-10-31-regenerated/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
       open: { role: "button", name: "Compare", opens: { role: "textbox", name: "sha256 from the connected side" } },
@@ -343,11 +359,11 @@ function seal(objects) {
     const eco = folder.startsWith(PIP_FOLDER) ? "pip" : "npm"
     const at = m.modified ?? "2026-11-06T08:00:00.000Z"
     // A 0.7.0 export carries no review; another folder states a size its archive does not have.
-    const body = manifestFor(eco, (archive?.size ?? 1) + (name === "2026-11-05-reports" ? 1 : 0), at, name === "2026-11-02-payments" ? "" : project)
+    const body = manifestFor(eco, (archive?.size ?? 1) + (name.endsWith("-reports") ? 1 : 0), at, name === "2026-11-02-payments" ? "" : project)
     Object.assign(m, { body, size: body.length, etag: tag(body) })
     if (!sig) continue
     // Signed by a regenerated key, or signed over other bytes.
-    const sigBody = name === "2026-10-31-regenerated" ? signatureFile(body, otherKey, otherKey.sha) : signatureFile(name === "2026-11-01-portal" ? Buffer.concat([body, Buffer.from(" ")]) : body, trustedKey, trustedKeySha)
+    const sigBody = name.endsWith("-regenerated") ? signatureFile(body, otherKey, otherKey.sha) : signatureFile(name === "2026-11-01-portal" ? Buffer.concat([body, Buffer.from(" ")]) : body, trustedKey, trustedKeySha)
     Object.assign(sig, { body: sigBody, size: sigBody.length, etag: tag(sigBody) })
   }
   return objects
@@ -395,6 +411,12 @@ function aliceObjects() {
   pip(PIP_ARCHIVE, 81_920)
   pip("manifest.json", 1_342)
   pip("manifest.json.sig", 214)
+  // The panel's worst cases: another key under a 57-character folder, and a pip archive whose size differs under a 50-character one.
+  for (const [base, folder, file] of [[FOLDER, UNKNOWN_KEY_FOLDER, ARCHIVE], [PIP_FOLDER, PIP_SIZE_FOLDER, PIP_ARCHIVE]]) {
+    for (const [name, size] of [[file, 3_400_000], ["manifest.json", 1_000], ["manifest.json.sig", 300]]) {
+      objects.push({ key: `${base}${folder}${name}`, etag: `"${sha(folder + name).slice(0, 32)}"`, size, modified: "2026-10-20T08:00:00.000Z" })
+    }
+  }
   return seal(objects)
 }
 

@@ -722,6 +722,11 @@ for (const route of IMPORT.routes) {
               } else {
                 await p.getByRole("dialog").waitFor()
               }
+              // A second press, once the first brought up its control: a confirm, say.
+              if (route.open.then) {
+                await p.getByRole(route.open.then.role, { name: route.open.then.name, exact: true }).click()
+                await p.getByRole(route.open.then.opens.role, { name: route.open.then.opens.name }).waitFor()
+              }
             }
           },
           extra: async (p) => {
