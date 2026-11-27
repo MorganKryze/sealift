@@ -700,6 +700,8 @@ for (const route of IMPORT.routes) {
               const { pathname } = new URL(req.url())
               if (COLLECTION_API.test(pathname)) stray.push(`${where} · ${pathname}: a collection route was called`)
             })
+            // The browser denies the clipboard unless the context grants it; the panel would then select its text.
+            if (route.grant) await p.context().grantPermissions(route.grant, { origin: IMPORT.baseURL })
             // A state the server cannot hold, answered as the store writes it (import-fixtures.mjs).
             await route.before?.(p)
             if (route.hold) {

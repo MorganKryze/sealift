@@ -88,7 +88,7 @@ const worstPublishing = live(IDS.running, (imp, a) => {
 })
 
 // The import role: the shipped import-server behind a real token check. A route names the user whose
-// token the page sends as the gateway does, an optional control to press once the page has its
+// token the page sends as the gateway does, the browser permissions the page needs (`grant`), an optional control to press once the page has its
 // content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
 // shows (`hold`), and the text that proves the data arrived (`ready`).
 export const IMPORT = {
@@ -149,6 +149,7 @@ export const IMPORT = {
     { path: `/?refused=${encodeURIComponent(`${PIP_FOLDER}${PIP_SIZE_FOLDER}${PIP_ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus." },
     {
       path: `/?refused=${encodeURIComponent(`${FOLDER}2026-11-05-reports/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
+      grant: ["clipboard-read", "clipboard-write"],
       open: { role: "button", name: "Copy details", opens: { role: "button", name: "Copied" } },
     },
     {
