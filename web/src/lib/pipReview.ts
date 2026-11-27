@@ -119,6 +119,11 @@ export function pipReasonsToSend(needed: PipNeededReason[], reasons: Record<stri
 }
 
 /** Where a package is pinned: each file and line, each file a 0.7.0 analysis names, or none for a dependency. */
+/** The name as the requirements file writes it; the normalized name stays the key for every match. */
+export function pipName(pkg: { name: string; declared?: string }): string {
+  return pkg.declared || pkg.name
+}
+
 export function pinnedPlaces(pkg: { pinnedAt?: { file: string; line: number }[]; files?: string[] }): string[] {
   if (pkg.pinnedAt && pkg.pinnedAt.length > 0) return pkg.pinnedAt.map((place) => `${place.file}, line ${place.line.toLocaleString("en-US")}`)
   return pkg.files ?? []

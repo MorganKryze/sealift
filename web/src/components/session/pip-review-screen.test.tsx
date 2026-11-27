@@ -374,6 +374,25 @@ describe("the panels on the pip review", () => {
   })
 })
 
+describe("package names", () => {
+  it("shows the spelling the requirements file declares", async () => {
+    const declared = resultOf([
+      pkg("django", "5.1.4", { declared: "Django", pinnedAt: at("requirements.txt", 3), previous: { version: "4.2.16", cves: [], majorJump: true } }),
+      pkg("pillow", "10.4.0", { declared: "Pillow", pinnedAt: at("requirements.txt", 7), previous: same("10.4.0") }),
+      pkg("sqlalchemy", "2.0.36", { declared: "SQLAlchemy", pinnedAt: at("requirements.txt", 8), previous: same("2.0.36") }),
+    ])
+    renderReview(declared)
+    expect(screen.getByText("Opens once Django has a reason.")).toBeDefined()
+    fireEvent.click(screen.getByRole("button", { name: /unchanged/ }))
+    expect(screen.getByText("Pillow")).toBeDefined()
+    expect(screen.getByText("SQLAlchemy")).toBeDefined()
+    expect(screen.queryByText("pillow")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Jump Django" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Django", { selector: "p" })).toBeDefined()
+  })
+})
+
 describe("the crossing route for pip", () => {
   const renderCrossing = () => {
     const Crossing = (Route as unknown as { options: { component: ComponentType } }).options.component

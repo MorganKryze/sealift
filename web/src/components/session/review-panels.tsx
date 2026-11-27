@@ -5,7 +5,7 @@ import type { DependencyResult } from "@/api/projects"
 import { Button } from "@/components/ui/button"
 import { Panel } from "@/components/ui/panel"
 import { Term } from "@/components/ui/term"
-import { pinnedPlaces, pipVector, withoutFix, type PipFinding, type PipPackage } from "@/lib/pipReview"
+import { pinnedPlaces, pipName, pipVector, withoutFix, type PipFinding, type PipPackage } from "@/lib/pipReview"
 import { MAX_REASON_CHARACTERS, reasonProblem } from "@/lib/requiredReasons"
 import { cveFix, cvesOf, distinctCves, type Cve, type Family } from "@/lib/reviewGroups"
 import { cn } from "@/lib/utils"
@@ -575,7 +575,7 @@ export function PipDecidePanel({ pkg, kind, advisories, reason, onRecord, onRepl
   return (
     <Panel open onClose={onClose} tone="warn" heading="Decision" icon={CircleAlert}>
       <p className="flex flex-wrap items-baseline gap-x-2 text-[22px] font-semibold tracking-tight text-ink">
-        <span className="[overflow-wrap:anywhere]">{pkg.name}</span>
+        <span className="[overflow-wrap:anywhere]">{pipName(pkg)}</span>
         <span className="font-mono text-base font-normal text-muted [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pkg.version}</span>
       </p>
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -638,7 +638,7 @@ export function PipJumpPanel({ pkg, reason, onRecord, onReplace, onClose }: PipJ
   return (
     <Panel open onClose={onClose} tone="info" heading="Major jump" icon={ArrowUpRight}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <p className="text-[22px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{pkg.name}</p>
+        <p className="text-[22px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{pipName(pkg)}</p>
         <VersionChange before={pkg.previous?.version ?? pkg.version} after={pkg.version} className="text-[15px]" />
         <Term id="major-jump" />
       </div>

@@ -27,6 +27,7 @@ import {
   pipVector,
   pipWaiting,
   pinnedPlaces,
+  pipName,
   wheelPlatform,
   withoutFix,
   type PipAnalysisResult,
@@ -170,12 +171,14 @@ export function PipReviewScreen({ project, analysis, onNavigateStep }: PipReview
   const things = waiting.noWheel.length + refused.length + waiting.missing.length
   const ready = things === 0
   const title = ready ? "Ready to seal" : things === 1 ? "One thing needs you" : `${plural(things, "thing", "things")} need you`
-  const waitingNames = [...new Set(waiting.missing)]
+  const shownNames = new Map(result.packages.map((pkg) => [pkg.name, pipName(pkg)]))
+  const shownOf = (names: string[]) => names.map((name) => shownNames.get(name) ?? name)
+  const waitingNames = shownOf([...new Set(waiting.missing)])
   const cause =
     waiting.noWheel.length > 0
-      ? `Opens once ${andList(waiting.noWheel)} ${waiting.noWheel.length === 1 ? "has" : "have"} a wheel for the target.`
+      ? `Opens once ${andList(shownOf(waiting.noWheel))} ${waiting.noWheel.length === 1 ? "has" : "have"} a wheel for the target.`
       : refused.length > 0
-        ? `This instance refuses every yanked release: ${andList(refused)} cannot cross.`
+        ? `This instance refuses every yanked release: ${andList(shownOf(refused))} cannot cross.`
         : waitingNames.length > 0
         ? `Opens once ${andList(waitingNames)} ${waitingNames.length === 1 ? "has" : "have"} a reason.`
         : undefined
@@ -339,7 +342,7 @@ function NoWheelBlock({ result, names, onReplace }: { result: PipAnalysisResult;
             <li key={name} className="tinted-bad grid grid-cols-1 gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
               <div className="min-w-0">
                 <p className="flex flex-wrap items-baseline gap-x-1.5">
-                  <span className="font-semibold text-ink [overflow-wrap:anywhere]">{name}</span>
+                  <span className="font-semibold text-ink [overflow-wrap:anywhere]">{pkg ? pipName(pkg) : name}</span>
                   <span className={cn(mono, "text-ink-2")}>{version}</span>
                 </p>
                 <PinnedIn pkg={{ pinnedAt: blocking?.pinnedAt ?? pkg?.pinnedAt, files: pkg?.files }} className="text-[12.5px] text-ink-2" />
@@ -396,9 +399,9 @@ function PipReasons({ result, needed, refused, reasons, explainSeverity, onOpen 
             </ReasonBand>
             <ul className="flex flex-col gap-1.5 p-1.5">
               {jumps.map(({ need, pkg }) => (
-                <ReasonRow key={need.key} text={reasons[need.key]} label={pkg.name} action="Jump" onAction={() => onOpen("major-jump", pkg.name)}>
+                <ReasonRow key={need.key} text={reasons[need.key]} label={pipName(pkg)} action="Jump" onAction={() => onOpen("major-jump", pkg.name)}>
                   <p data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
-                    {pkg.name}
+                    {pipName(pkg)}
                   </p>
                   <VersionChange before={pkg.previous?.version ?? pkg.version} after={pkg.version} />
                 </ReasonRow>
@@ -424,10 +427,10 @@ function PipReasons({ result, needed, refused, reasons, explainSeverity, onOpen 
                   <ReasonRow
                     key={need.key}
                     text={reasons[need.key]}
-                    label={pkg.name}
+                    label={pipName(pkg)}
                     action="Decide"
                     onAction={() => onOpen("cve-without-fix", pkg.name)}
-                    more={single ? undefined : { label: `${plural(kept.length, "CVE", "CVEs")} of ${pkg.name}`, content: <CveTable cves={kept} />, ruled: true }}
+                    more={single ? undefined : { label: `${plural(kept.length, "CVE", "CVEs")} of ${pipName(pkg)}`, content: <CveTable cves={kept} />, ruled: true }}
                   >
                     <PackageLine pkg={pkg} />
                     <div className="flex flex-wrap items-center gap-x-2">
@@ -459,7 +462,7 @@ function PipReasons({ result, needed, refused, reasons, explainSeverity, onOpen 
             </ReasonBand>
             <ul className="flex flex-col gap-1.5 p-1.5">
               {yanked.map(({ need, pkg }) => (
-                <ReasonRow key={need.key} text={reasons[need.key]} label={pkg.name} action="Decide" onAction={() => onOpen("yanked", pkg.name)}>
+                <ReasonRow key={need.key} text={reasons[need.key]} label={pipName(pkg)} action="Decide" onAction={() => onOpen("yanked", pkg.name)}>
                   <PackageLine pkg={pkg} />
                   <PinnedIn pkg={pkg} className="text-[12.5px] text-ink-2" />
                 </ReasonRow>
@@ -650,7 +653,7 @@ function PackageLine({ pkg }: { pkg: PipPackage }) {
   return (
     <p className="flex flex-wrap items-baseline gap-x-1.5">
       <span data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
-        {pkg.name}
+        {pipName(pkg)}
       </span>
       <span className={cn(mono, "text-ink-2")}>{pkg.version}</span>
     </p>
@@ -749,7 +752,7 @@ function Group({ kind, first, packages, open, onToggle, severityAt, explainWheel
                 const fixes = kind === "changed" ? [] : [...new Set(pkg.cves.flatMap((cve) => cve.fixedVersions.filter((v) => v.trim() !== "")))]
                 return (
                   <tr key={pkg.name} className="border-b border-rule last:border-b-0">
-                    <td className="py-2 pr-3 align-top font-medium text-ink [overflow-wrap:anywhere]">{pkg.name}</td>
+                    <td className="py-2 pr-3 align-top font-medium text-ink [overflow-wrap:anywhere]">{pipName(pkg)}</td>
                     <td className="py-2 pr-3 align-top">
                       {kind === "changed" && pkg.previous ? <VersionChange before={pkg.previous.version} after={pkg.version} /> : <span className={cn(mono, "text-ink-2")}>{pkg.version}</span>}
                     </td>
