@@ -228,6 +228,12 @@ type AssetFacts struct {
 func (c *Client) Asset(ctx context.Context, name, version string) (AssetFacts, bool, error) {
 	want := strings.TrimPrefix(npm.TarballURL("", name, version), "/")
 	q := url.Values{"repository": {c.repo}, "name": {name}, "version": {version}}
+	// Nexus stores a scoped npm package as group "scope" and name "bare";
+	// a search on the full "@scope/bare" name lists nothing.
+	if scope, bare, ok := strings.Cut(strings.TrimPrefix(name, "@"), "/"); ok && strings.HasPrefix(name, "@") {
+		q.Set("group", scope)
+		q.Set("name", bare)
+	}
 	return c.searchAsset(ctx, q, func(path string) bool { return strings.TrimPrefix(path, "/") == want })
 }
 

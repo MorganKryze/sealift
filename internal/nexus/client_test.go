@@ -515,7 +515,18 @@ func TestAssetReadsUploaderAndDate(t *testing.T) {
 		t.Fatalf("facts = %+v", facts)
 	}
 	q := queries[0]
-	if q.Get("repository") != "npm-hosted" || q.Get("name") != "@types/node" || q.Get("version") != "22.10.2" {
+	if q.Get("repository") != "npm-hosted" || q.Get("group") != "types" || q.Get("name") != "node" || q.Get("version") != "22.10.2" {
+		t.Fatalf("query = %v", q)
+	}
+}
+
+func TestAssetSendsNoGroupForAnUnscopedName(t *testing.T) {
+	var queries []url.Values
+	srv := searchServer(t, `{"items":[]}`, &queries)
+	if _, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0"); err != nil || found {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if q := queries[0]; q.Has("group") || q.Get("name") != "left-pad" {
 		t.Fatalf("query = %v", q)
 	}
 }
