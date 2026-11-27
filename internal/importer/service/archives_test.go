@@ -1009,3 +1009,28 @@ func TestListRefusesASignatureOverItsBoundUnreadAndUncounted(t *testing.T) {
 		t.Errorf("verified %d of the 50 folders beside it, want 50: the refusal took a read", verified)
 	}
 }
+
+func TestListRemembersNoCheckOfAnObjectThatEndsShort(t *testing.T) {
+	f := newFakeMinio()
+	folder := base + "short/"
+	m := manifestOf(t, "short", 1)
+	seedFolder(f, bucketAlice, folder, 2048, m, signManifest(t, testPriv, m))
+	f.mu.Lock()
+	f.data[dataKey(bucketAlice, folder+manifestName)] = m[:len(m)-1]
+	f.mu.Unlock()
+	r := keyRig(t, f)
+	a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if signatureOf(a) != ArchiveSignatureNotChecked || a.Crossing != nil {
+		t.Errorf("a manifest that ended short: signature %q crossing %+v, want not checked", signatureOf(a), a.Crossing)
+	}
+	f.mu.Lock()
+	f.data[dataKey(bucketAlice, folder+manifestName)] = m
+	f.mu.Unlock()
+	a = byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if signatureOf(a) != ArchiveSignatureVerified || !a.Importable {
+		t.Errorf("the next list: signature %q importable %v, want verified", signatureOf(a), a.Importable)
+	}
+	if n := f.gets(folder + manifestName); n != 2 {
+		t.Errorf("the manifest was read %d times, want 2", n)
+	}
+}
