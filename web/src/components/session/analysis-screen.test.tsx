@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -12,8 +12,8 @@ import { AnalysisScreen, analysisCause } from "./analysis-screen"
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
-  Link: ({ children, to, params, ...rest }: { children: ReactNode; to: string; params?: Record<string, string> }) => (
-    <a href={Object.entries(params ?? {}).reduce((path, [key, value]) => path.replace(`$${key}`, value), to)} {...rest}>
+  Link: ({ children, to, params, search, ...rest }: { children: ReactNode; to: string; params?: Record<string, string>; search?: Record<string, string> }) => (
+    <a href={`${Object.entries(params ?? {}).reduce((path, [key, value]) => path.replace(`$${key}`, value), to)}${search ? `?${new URLSearchParams(search)}` : ""}`} {...rest}>
       {children}
     </a>
   ),
@@ -48,11 +48,11 @@ const tried = (done: number, total: number, estimatedRemainingMs?: number): JobE
 
 let events: Record<string, AnalysisEventsState> = {}
 
-function renderScreen(analysis: Analysis, { onNavigateStep = vi.fn(), onChanged = vi.fn() } = {}) {
+function renderScreen(analysis: Analysis, { onNavigateStep = vi.fn(), onChanged = vi.fn(), project = projectWith } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const ui = (shown: Analysis) => (
     <QueryClientProvider client={client}>
-      <AnalysisScreen projectId="web-portal" project={projectWith(shown)} analysis={shown} onChanged={onChanged} onNavigateStep={onNavigateStep} />
+      <AnalysisScreen projectId={project(shown).id} project={project(shown)} analysis={shown} onChanged={onChanged} onNavigateStep={onNavigateStep} />
     </QueryClientProvider>
   )
   const utils = render(ui(analysis))
@@ -317,6 +317,87 @@ describe("a stopped analysis", () => {
     expect(screen.getByText("The server restarted while it ran. Your package.json is kept.")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Start again" })).toBeInTheDocument()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+})
+
+describe("a pip analysis", () => {
+  const pipTarget = { python: "3.11.2", os: "linux", cpu: "x86_64", glibc: "2.28", uvVer: "0.13.7" }
+  const pipProject = (analysis: Analysis) => ({ id: "ledger-service", name: "ledger-service", ecosystem: "pip", pipTarget, analyses: [analysis] }) as unknown as Project
+  const renderPip = (analysis: Analysis) => renderScreen({ ...analysis, projectId: "ledger-service" }, { project: pipProject })
+  const pages = (step: string, done: number, total: number, estimatedRemainingMs?: number): JobEvent => ({
+    kind: "progress",
+    job: "3",
+    storeId: ID,
+    data: { step, done, total, ...(estimatedRemainingMs === undefined ? {} : { estimatedRemainingMs }) },
+  })
+  const failedPip = (step: string, message: string, more: Partial<Analysis> = {}) => analysisIn("failed", { failure: { step, message }, ...more })
+
+  it("titles a pip step in words and counts index pages read", () => {
+    events[ID] = ran([...ended("validate", "prepare-tools"), pages("check-pins", 212, 486)])
+    renderPip(analysisIn("running"))
+    expect(screen.getByRole("heading", { level: 1, name: "Checking a wheel for each pin" })).toBeInTheDocument()
+    expect(counted("212 of 486 index pages read")).toBeInTheDocument()
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "44")
+  })
+
+  it("names each pip step in words", () => {
+    const words = ["Reading the requirements files", "Preparing uv and the CVE database", "Checking a wheel for each pin", "Resolving the set", "Choosing a wheel per package", "Scanning for known CVEs"]
+    const order = ["validate", "prepare-tools", "check-pins", "resolve", "choose-wheels", "scan"]
+    for (const [i, title] of words.entries()) {
+      cleanup()
+      events[ID] = ran(ended(...order.slice(0, i)))
+      renderPip(analysisIn("running"))
+      expect(screen.getByRole("heading", { level: 1, name: title })).toBeInTheDocument()
+    }
+  })
+
+  it("gives no time left for pip", () => {
+    events[ID] = ran([...ended("validate", "prepare-tools", "check-pins", "resolve"), pages("choose-wheels", 40, 120, 300_000)])
+    renderPip(analysisIn("running"))
+    expect(screen.getByRole("heading", { level: 1, name: "Choosing a wheel per package" })).toBeInTheDocument()
+    expect(screen.queryByText(/left$/)).toBeNull()
+    expect(screen.queryByText("Estimating time left")).toBeNull()
+  })
+
+  it("lists the requirements problems with Replace files", () => {
+    renderPip(failedPip("validate", "2 problems in the requirements files: requirements.txt line 3: Django>=4.2: not pinned with ==; constraints.txt: not valid UTF-8"))
+    const cause = screen.getByRole("alert")
+    expect(within(cause).getByText("2 problems in the requirements files")).toBeInTheDocument()
+    expect(within(cause).getByText("requirements.txt line 3: Django>=4.2")).toBeInTheDocument()
+    expect(within(cause).getByText("not pinned with ==")).toBeInTheDocument()
+    expect(within(cause).getByText("constraints.txt")).toBeInTheDocument()
+    expect(within(cause).getByText("not valid UTF-8")).toBeInTheDocument()
+    expect(within(cause).getByRole("link", { name: "Replace files" })).toHaveAttribute("href", "/update?from=ledger-service")
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+    expect(counted("Your requirements files are kept.")).toBeInTheDocument()
+  })
+
+  it("names a package with no wheel with Replace files", () => {
+    const pipResult = {
+      target: pipTarget, files: ["requirements.txt"], packages: [], warnings: [],
+      blocking: [{ name: "psycopg2", version: "2.9.10", kind: "source-only", detail: "source distribution only", pinnedAt: [{ file: "requirements.txt", line: 4 }] }],
+    } as unknown as Analysis["pipResult"]
+    renderPip(failedPip("resolve", "uv pip compile: exit status 1; pinned by requirements.txt", { pipResult }))
+    const cause = screen.getByRole("alert")
+    expect(within(cause).getByText("A package has no wheel for the target")).toBeInTheDocument()
+    expect(within(cause).getByText("psycopg2")).toBeInTheDocument()
+    expect(within(cause).getByText("2.9.10")).toBeInTheDocument()
+    expect(within(cause).getByText(/psycopg2 publishes a source distribution only\./)).toBeInTheDocument()
+    expect(within(cause).getByRole("link", { name: "Replace files" })).toHaveAttribute("href", "/update?from=ledger-service")
+  })
+
+  it("says no answer from the index with Retry", () => {
+    renderPip(failedPip("check-pins", 'Get "https://pypi.org/pypi/django/5.1.4/json": dial tcp: lookup pypi.org: no such host'))
+    const cause = screen.getByRole("alert")
+    expect(within(cause).getByText("No answer from pypi.org")).toBeInTheDocument()
+    expect(within(cause).getByText(/while checking a wheel for each pin\. Your requirements files passed their checks/)).toBeInTheDocument()
+    expect(within(cause).getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
+  it("offers Replace files and Start again after a cancel", () => {
+    renderPip(analysisIn("cancelled"))
+    expect(screen.getByRole("link", { name: "Replace files" })).toHaveAttribute("href", "/update?from=ledger-service")
+    expect(screen.getByRole("button", { name: "Start again" })).toBeInTheDocument()
   })
 })
 
