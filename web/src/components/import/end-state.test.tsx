@@ -397,4 +397,19 @@ describe("EndState, packages not in Nexus", () => {
     expect(large.textContent).not.toContain("500 MB")
   })
 
+  it("leads with the first retryable cause's Retry and keeps the others secondary", async () => {
+    const a = attempt("incomplete", [
+      pkg("failed", { name: "a", version: "1.0.0", file: "a-1.0.0.tgz", kind: "nexus", reason: "nexus unreachable: EOF" }),
+      pkg("failed", { name: "b", version: "1.0.0", file: "b-1.0.0.tgz", kind: "nexus", nexusStatus: 500, reason: "upload failed: nexus answered 500" }),
+      pkg("failed", { name: "c", version: "1.0.0", file: "c-1.0.0.tgz", kind: "source", reason: "minio: read failed" }),
+      pkg("failed", { name: "d", version: "1.0.0", file: "d-1.0.0.tgz", kind: "nexus", nexusStatus: 413, reason: "upload failed: nexus answered 413", size: MB }),
+    ])
+    renderEnd(make(a))
+    await screen.findByRole("heading", { name: "4 packages not in Nexus" })
+    const primary = (title: string) => within(block(title)).getByRole("button", { name: `Retry 1 package: ${title}` }).classList.contains("bg-ink")
+    expect(primary("No answer from Nexus")).toBe(true)
+    expect(primary("Nexus refused it")).toBe(false)
+    expect(primary("Could not read the archive from MinIO")).toBe(false)
+    expect(primary("Too large for Nexus")).toBe(false)
+  })
 })

@@ -192,6 +192,9 @@ function FailedEnd({ imp }: { imp: Import }) {
     byCause.set(cause, [...(byCause.get(cause) ?? []), p])
   }
   const log = attemptLog(a)
+  const shown = CAUSES.filter((cause) => byCause.has(cause))
+  // One primary per screen: the first cause a retry clears leads, any other Retry stays secondary.
+  const lead = shown.find((cause) => causeWords(cause).tone === "warn")
   return (
     <section aria-labelledby="end-heading" className="mt-6 max-w-190">
       <h2 id="end-heading" className="text-[28px] font-bold tracking-tight text-ink">
@@ -204,8 +207,8 @@ function FailedEnd({ imp }: { imp: Import }) {
         {" packages in Nexus. The archive stays in MinIO until all are in."}
       </p>
       <div className="mt-5 grid gap-3">
-        {CAUSES.filter((cause) => byCause.has(cause)).map((cause) => (
-          <CauseBlock key={cause} imp={imp} cause={cause} pkgs={byCause.get(cause) ?? []} />
+        {shown.map((cause) => (
+          <CauseBlock key={cause} imp={imp} cause={cause} pkgs={byCause.get(cause) ?? []} lead={cause === lead} />
         ))}
       </div>
       <LogBlock className="mt-3" lines={log} copyText={log.map((line) => [line.step, line.text].join(" ")).join("\n")} />
@@ -214,7 +217,7 @@ function FailedEnd({ imp }: { imp: Import }) {
   )
 }
 
-function CauseBlock({ imp, cause, pkgs }: { imp: Import; cause: Cause; pkgs: ReportPackage[] }) {
+function CauseBlock({ imp, cause, pkgs, lead }: { imp: Import; cause: Cause; pkgs: ReportPackage[]; lead: boolean }) {
   const brand = useBrand()
   const a = latestAttempt(imp)
   const words = causeWords(cause)
@@ -224,7 +227,7 @@ function CauseBlock({ imp, cause, pkgs }: { imp: Import; cause: Cause; pkgs: Rep
   // PyPI publishes several files per version and Nexus takes or refuses each, so these causes name the file.
   const byFile = eco === "pip" && (cause === "too-large" || cause === "conflict" || cause === "refused")
   const warn = words.tone === "warn"
-  const retry = <RetryButton imp={imp} cause={cause} pkgs={pkgs} primary={warn} />
+  const retry = <RetryButton imp={imp} cause={cause} pkgs={pkgs} primary={lead} />
   return (
     <section aria-labelledby={headingId} className={cn("rounded-lg px-4 py-3.5", warn ? "tinted-warn" : "tinted-bad")}>
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
