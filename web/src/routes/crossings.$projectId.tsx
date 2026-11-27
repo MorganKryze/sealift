@@ -147,7 +147,7 @@ function CheckStep({ project, analysis, onNavigateStep }: { project: Project; an
   return (
     <div className="animate-enter mx-auto flex w-full max-w-190 flex-1 flex-col px-5 py-9">
       <StepBar steps={steps} />
-      <h1 className="mb-5 text-[28px] font-bold tracking-tight text-ink [overflow-wrap:anywhere]">{`Update ${manifest?.name ?? project.name}`}</h1>
+      <h1 className="mb-5 text-[28px] font-bold tracking-tight text-ink [overflow-wrap:anywhere]">{`Update ${project.name}`}</h1>
       {manifest ? (
         <CheckBlock manifest={manifest} />
       ) : manifestQuery.isPending ? (
