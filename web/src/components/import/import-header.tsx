@@ -3,6 +3,7 @@ import { TriangleAlert } from "lucide-react"
 import { archiveName, ecosystemOf, latestAttempt, type Import } from "@/import/lib/outcome"
 import { formatBytes, formatWhen } from "@/lib/utils"
 
+import { importName } from "./import-row"
 import { OutcomeBadge } from "./outcome-badge"
 
 const NOT_READ = "Not read"
@@ -16,10 +17,13 @@ function Fact({ label, children, mono }: { label: string; children: string; mono
   )
 }
 
-/** The top of the import page: which archive, where the latest attempt stands and what it reads from. */
+/** The top of the import page: the import named by its signed crossing or its folder, where the latest attempt stands and what it reads from. */
 export function ImportPageHeader({ imp }: { imp: Import }) {
   const attempt = latestAttempt(imp)
   const { folder, file } = archiveName(imp.archive.key)
+  const name = importName(imp)
+  // Under a crossing's name, the archive's place; under a folder's, the file it holds.
+  const place = name === folder ? file : name === file ? "" : `${folder}${file}`
   const { target, nexus, unencrypted } = attempt.report
   // A queued attempt has no report yet: the archive's folder says which target it will read.
   const pip = (attempt.report.ecosystem || ecosystemOf(imp.archive.key)) === "pip"
@@ -28,8 +32,8 @@ export function ImportPageHeader({ imp }: { imp: Import }) {
     <header>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="min-w-0 flex-1">
-          <h1 className="font-mono text-xl font-semibold tracking-tight [overflow-wrap:anywhere]">{file}</h1>
-          {folder ? <p className="mt-1 font-mono text-xs text-muted [overflow-wrap:anywhere]">{folder}</p> : null}
+          <h1 className="text-xl font-semibold tracking-tight [overflow-wrap:anywhere]">{name}</h1>
+          {place ? <p className="mt-1 font-mono text-xs text-muted [overflow-wrap:anywhere]">{place}</p> : null}
         </div>
         <OutcomeBadge outcome={imp.outcome} />
       </div>

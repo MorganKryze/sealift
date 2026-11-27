@@ -7,6 +7,7 @@ import { importPollInterval } from "@/import/api/queries"
 import { latestAttempt, type Attempt, type Import, type ReportPackage } from "@/import/lib/outcome"
 
 import { EndState } from "./end-state"
+import { prComment } from "./pr-comment"
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -43,84 +44,17 @@ function make(a: Attempt, over: Partial<Import> = {}): Import {
   }
 }
 
-function renderEnd(imp: Import) {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })))
+const ME = { user: "lea.martin", minioConfigured: true, bucket: "user-lea.martin", folder: "packages/npm/", publicKeySha256: "7".repeat(64) }
+
+function renderEnd(imp: Import, me = ME) {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith("/me") ? me : {}), { status: 200, headers: { "Content-Type": "application/json" } })))
   const root = createRootRoute({ component: () => <><p>page</p><EndState imp={imp} /></> })
   const archives = createRoute({ getParentRoute: () => root, path: "/archives", component: () => null })
-  const router = createRouter({ routeTree: root.addChildren([archives]), history: createMemoryHistory({ initialEntries: ["/"] }) })
+  const router = createRouter({ routeTree: root.addChildren([archives]), history: createMemoryHistory({ initialEntries: ["/start"] }) })
   return render(<QueryClientProvider client={new QueryClient()}><RouterProvider router={router} /></QueryClientProvider>)
 }
 
 describe("EndState", () => {
-  it("complete, removed: says every package is in Nexus, the three objects went after their ETag check, and shows their ETags", async () => {
-    const a = attempt("complete", [...many(94, "published"), ...many(7, "present")], { removal: { removed: true, reason: "" } })
-    renderEnd(make(a, { archiveRemoved: true }))
-    expect(await screen.findByRole("heading", { name: "Archive removed from MinIO" })).toBeInTheDocument()
-    expect(screen.getByText(/All 101 packages are in Nexus: 94 published, 7 present\./)).toBeInTheDocument()
-    expect(screen.getByText("sealift removed the archive, the manifest and the signature from your folder, after checking that each still carried the ETag it read at the start.")).toBeInTheDocument()
-    expect(screen.getByText(ARCHIVE_ETAG)).toBeInTheDocument()
-    expect(screen.getByText(MANIFEST_ETAG)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Copy archive ETag" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Copy manifest ETag" })).toBeInTheDocument()
-    expect(screen.getByText(SIGNATURE_ETAG)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Copy signature ETag" })).toBeInTheDocument()
-    const titles = screen.getAllByRole("term").map((t) => t.textContent)
-    expect(titles).toEqual(["Archive ETag", "Manifest ETag", "Signature ETag"])
-    expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
-  })
-
-  it("complete, removed: a record without a signature shows two ETags", async () => {
-    const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason: "" } })
-    renderEnd(make(a, { archiveRemoved: true, signature: undefined }))
-    expect(await screen.findByRole("heading", { name: "Archive removed from MinIO" })).toBeInTheDocument()
-    expect(screen.getAllByRole("term").map((t) => t.textContent)).toEqual(["Archive ETag", "Manifest ETag"])
-    expect(screen.queryByText("Signature ETag")).toBeNull()
-    expect(screen.getByText("sealift removed the archive and the manifest from your folder, after checking that each still carried the ETag it read at the start.")).toBeInTheDocument()
-    expect(document.body.textContent ?? "").not.toMatch(/signature/i)
-  })
-
-  it("complete, removed: shows the reason when the manifest could not be removed", async () => {
-    const reason = "the archive was removed, but the manifest could not be and stays in the folder: access denied"
-    const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason } })
-    renderEnd(make(a, { archiveRemoved: true }))
-    expect(await screen.findByText(reason)).toBeInTheDocument()
-    expect(screen.queryByText(/sealift removed the archive/)).toBeNull()
-    expect(screen.getByRole("heading", { name: "Archive removed from MinIO, its manifest or signature kept" })).toBeInTheDocument()
-  })
-
-  it("complete, removed: the title does not say the manifest stayed when only the signature did", async () => {
-    const reason = "the archive and the manifest were removed, but manifest.json.sig could not be and stays in the folder: access denied"
-    const a = attempt("complete", many(3, "published"), { removal: { removed: true, reason } })
-    renderEnd(make(a, { archiveRemoved: true }))
-    expect(await screen.findByText(reason)).toBeInTheDocument()
-    const title = screen.getByRole("heading", { level: 2 }).textContent ?? ""
-    expect(title).toBe("Archive removed from MinIO, its manifest or signature kept")
-    expect(title).not.toBe("Archive removed from MinIO, manifest kept")
-  })
-
-  it("complete, kept: says the archive stays, gives the recorded reason and offers Retry with what it does", async () => {
-    const reason = "the archive's ETag changed after the import read it"
-    const a = attempt("complete", [...many(50, "published"), ...many(10, "present")], { removal: { removed: false, reason } })
-    renderEnd(make(a))
-    expect(await screen.findByRole("heading", { name: "Archive kept in MinIO" })).toBeInTheDocument()
-    expect(screen.getByText(/All 60 packages are in Nexus/)).toBeInTheDocument()
-    expect(screen.getByText(reason)).toBeInTheDocument()
-    expect(screen.getByText(/it checks every package again and removes the archive only if the archive, the manifest and the signature still carry the ETags this import read/)).toBeInTheDocument()
-    expect(screen.getByText(/An archive replaced since is refused/)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Retry import" })).toBeInTheDocument()
-  })
-
-  it("removal being checked: says so, never says removed, and the page keeps polling", async () => {
-    const a = attempt("complete", many(40, "published"))
-    const imp = make(a)
-    renderEnd(imp)
-    expect(await screen.findByText(/The archive's removal is being checked/)).toBeInTheDocument()
-    expect(screen.getByText(/All 40 packages are in Nexus/)).toBeInTheDocument()
-    expect(document.body.textContent ?? "").not.toMatch(/removed/i)
-    expect(screen.queryByRole("button", { name: "Retry import" })).toBeNull()
-    expect(importPollInterval(imp)).toBe(2000)
-  })
-
   it("refused: gives the reason in full, both digests, nothing published, no package read, one action and no Retry", async () => {
     const computed = "c".repeat(64)
     const expected = "e".repeat(64)
@@ -413,3 +347,192 @@ describe("EndState, packages not in Nexus", () => {
     expect(primary("Too large for Nexus")).toBe(false)
   })
 })
+
+const KEY = "7".repeat(64)
+const ARCHIVE_SHA = "fca8560dd0d96461064dad07a7f18269aff31847b39febe7df471bbd16b4861a"
+const REVIEW = { updated: 17, cvesBefore: [2, 8, 10, 5], cvesAfter: [0, 0, 2, 0], carried: 1, jumps: 3 }
+
+/** A complete import of web-portal, created on 26 Nov from a manifest sealed on 20 Oct. */
+function done(over: { published?: number; present?: number; removal?: Attempt["removal"]; crossing?: Attempt["report"]["crossing"] | null; name?: string } = {}): Import {
+  const packages = [...many(over.published ?? 1271, "published"), ...many(over.present ?? 13, "present")]
+  const a = attempt("complete", packages, { removal: over.removal === undefined ? { removed: true, reason: "" } : over.removal })
+  a.report.archive = { file: "web-portal-2026-11-25.tar.gz", sha256: ARCHIVE_SHA, size: mb(96.5) }
+  a.report.publicKeySha256 = KEY
+  a.report.nexus = { url: "https://nexus.example", repository: "npm-internal" }
+  if (over.crossing !== null) a.report.crossing = over.crossing ?? { project: over.name ?? "web-portal", sealedAt: "2026-10-20T09:00:00Z", packages: packages.length, review: REVIEW }
+  return make(a, { createdAt: "2026-11-26T09:00:00Z", archiveRemoved: a.removal?.removed ?? false })
+}
+
+const cells = (markdown: string) => markdown.split("\n").map((line) => line.split("|").slice(1, -1).map((c) => c.trim()))
+const day = (at: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", ...(new Date(at).getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" as const }) }).format(new Date(at))
+
+describe("EndState, every package in Nexus", () => {
+  it("shows Done only when every package is in Nexus", async () => {
+    renderEnd(done())
+    expect(await screen.findByRole("heading", { level: 1, name: "1,284 packages in Nexus" })).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Done" })).toBeInTheDocument()
+    expect(screen.getByText("packages published").parentElement?.textContent).toContain("1,271")
+    expect(screen.getByText("already there").parentElement?.textContent).toContain("13")
+    expect(screen.getByText("npm-internal")).toBeInTheDocument()
+  })
+
+  it.each([
+    ["incomplete", attempt("incomplete", [...many(3, "published"), pkg("failed", { kind: "nexus", reason: "nexus unreachable: EOF" })])],
+    ["interrupted", attempt("interrupted", many(2, "published"))],
+    ["cancelled", attempt("cancelled", many(2, "published"))],
+  ])("shows no Done on a %s attempt", async (_name, a) => {
+    renderEnd(make(a))
+    await screen.findByText("page")
+    expect(screen.queryByRole("link", { name: "Done" })).toBeNull()
+    expect(screen.queryByText(/^Add this comment/)).toBeNull()
+  })
+
+  it("names the crossing by the day of the import", async () => {
+    renderEnd(done())
+    const by = await screen.findByText(/imported by lea\.martin/)
+    expect(by.textContent).toBe(`web-portal · ${day("2026-11-26T09:00:00Z")} · imported by lea.martin`)
+    expect(by.textContent).not.toContain(day("2026-10-20T09:00:00Z"))
+  })
+
+  it("names a 0.7.0 import by its folder", async () => {
+    renderEnd(done({ crossing: null }))
+    expect((await screen.findByText(/imported by lea\.martin/)).textContent).toBe("2026-11-05-hr-forms/ · imported by lea.martin")
+  })
+
+  it("says whether the archive left the folder", async () => {
+    const { unmount } = renderEnd(done())
+    const left = await screen.findByText("removed from your folder")
+    expect(left.closest("[data-archive-row]")?.textContent).toContain("web-portal-2026-11-25.tar.gz")
+    expect(left.closest("[data-archive-row]")?.textContent).toContain("96.5 MB")
+    expect(screen.queryByText("Kept in your folder")).toBeNull()
+    unmount()
+
+    const kept = renderEnd(done({ removal: { removed: false, reason: "a newer upload replaced it" } }))
+    const row = (await screen.findByText("Kept in your folder")).closest("[data-archive-row]") as HTMLElement
+    expect(row).toHaveClass("tinted-info")
+    expect(row.textContent).toContain("a newer upload replaced it")
+    expect(screen.queryByText("removed from your folder")).toBeNull()
+    kept.unmount()
+
+    renderEnd(done({ removal: { removed: true, reason: "the archive was removed, but manifest.json.sig could not be and stays in the folder: access denied" } }))
+    expect(await screen.findByText("removed from your folder")).toBeInTheDocument()
+    expect(screen.getByText(/manifest\.json\.sig could not be/)).toBeInTheDocument()
+  })
+
+  it("says the archive's removal is being checked until it is recorded", async () => {
+    const imp = done({ removal: undefined })
+    latestAttempt(imp).removal = undefined
+    renderEnd(imp)
+    expect(await screen.findByText("Checking whether it left your folder")).toBeInTheDocument()
+    expect(screen.queryByText("removed from your folder")).toBeNull()
+    expect(importPollInterval(imp)).toBe(2000)
+  })
+
+  it("shows the three checks with their fingerprints", async () => {
+    renderEnd(done())
+    expect(await screen.findByText("3 passed", { exact: false })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^signing key's sha256/ })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^archive's sha256/ })).toBeInTheDocument()
+    expect(screen.getByText("1,284 of 1,284")).toBeInTheDocument()
+  })
+
+  it("builds the comment from the signed review", () => {
+    const markdown = prComment({ instance: "sealift", crossing: "web-portal · 26 Nov", inNexus: 1284, review: REVIEW, archiveSha256: ARCHIVE_SHA })
+    expect(cells(markdown)).toEqual([
+      ["sealift", "web-portal · 26 Nov"],
+      [expect.stringMatching(/^-+$/), expect.stringMatching(/^-+$/)],
+      ["Packages in Nexus", "1,284"],
+      ["Packages updated", "17"],
+      ["Known CVEs", "25 → 2"],
+      ["Carried with a reason", "1"],
+      ["Major jumps", "3"],
+      ["Archive sha256", ARCHIVE_SHA],
+    ])
+    expect(new Set(markdown.split("\n").map((line) => line.length)).size).toBe(1)
+    expect(markdown).not.toMatch(/Signals/)
+    const unchecked = prComment({ instance: "sealift", crossing: "x", inNexus: 1, review: { ...REVIEW, cvesAfter: undefined }, archiveSha256: ARCHIVE_SHA })
+    expect(cells(unchecked)[4]).toEqual(["Known CVEs", "25 → not checked together"])
+  })
+
+  it("writes not carried by this archive for a 0.7.0 manifest", async () => {
+    const markdown = prComment({ instance: "sealift", crossing: "2026-11-05-hr-forms/", inNexus: 12, archiveSha256: ARCHIVE_SHA })
+    expect(cells(markdown).slice(2)).toEqual([
+      ["Packages in Nexus", "12"],
+      ["Packages updated", "not carried by this archive"],
+      ["Known CVEs", "not carried by this archive"],
+      ["Carried with a reason", "not carried by this archive"],
+      ["Major jumps", "not carried by this archive"],
+      ["Archive sha256", ARCHIVE_SHA],
+    ])
+    renderEnd(done({ crossing: null }))
+    fireEvent.click(await screen.findByRole("button", { name: "Preview" }))
+    expect(screen.getByTestId("pr-comment").textContent).toContain("not carried by this archive")
+  })
+
+  it("shows no report row and no Open the report", async () => {
+    renderEnd(done())
+    fireEvent.click(await screen.findByRole("button", { name: "Preview" }))
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute("aria-expanded", "true")
+    const preview = screen.getByTestId("pr-comment").textContent ?? ""
+    expect(preview).toContain(`| sealift`)
+    expect(preview).toContain(`web-portal · ${day("2026-11-26T09:00:00Z")}`)
+    expect(preview).not.toMatch(/Import report|https?:/)
+    expect(screen.queryByText(/Open the report/)).toBeNull()
+  })
+
+  it("folds the comment and makes Copy the only primary", async () => {
+    const { container } = renderEnd(done())
+    expect(await screen.findByText("Add this comment to your PR")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Preview" })).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTestId("pr-comment")).toBeNull()
+    expect([...container.querySelectorAll("button, a")].filter((el) => el.classList.contains("bg-ink")).map((el) => el.textContent)).toEqual(["Copy"])
+  })
+
+  it("copies the comment and announces Copied", async () => {
+    const writeText = vi.fn(async () => {})
+    renderEnd(done())
+    const copy = await screen.findByRole("button", { name: "Copy the comment" })
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    fireEvent.click(copy)
+    const said = await screen.findByText("Copied")
+    expect(said.closest("[aria-live=polite]")).not.toBeNull()
+    expect(writeText).toHaveBeenCalledWith(prComment({ instance: "sealift", crossing: `web-portal · ${day("2026-11-26T09:00:00Z")}`, inNexus: 1284, review: REVIEW, archiveSha256: ARCHIVE_SHA }))
+  })
+
+  it("keeps Done enabled and leading Home", async () => {
+    renderEnd(done())
+    const link = await screen.findByRole("link", { name: "Done" })
+    expect(link).toHaveAttribute("href", "/")
+    expect(link).not.toHaveAttribute("aria-disabled")
+  })
+
+  it("ends a one-package import in the singular", async () => {
+    renderEnd(done({ published: 1, present: 0 }))
+    expect(await screen.findByRole("heading", { level: 1, name: "1 package in Nexus" })).toBeInTheDocument()
+    expect(screen.getByText("1 of 1")).toBeInTheDocument()
+  })
+
+  it("keeps the worst case readable", async () => {
+    const name = "customer-onboarding-portal-frontend-next"
+    const imp = done({ published: 0, present: 1284, name, removal: { removed: false, reason: "a newer upload replaced it" } })
+    const long = { ...ME, user: "Aleksandra Wiśniewska-Kowalczyk" }
+    renderEnd(imp, long)
+    expect(await screen.findByRole("heading", { level: 1, name: "1,284 packages in Nexus" })).toBeInTheDocument()
+    expect(await screen.findByText(/imported by Aleksandra Wiśniewska-Kowalczyk$/)).toBeInTheDocument()
+    expect(screen.getByText("packages published").parentElement?.textContent).toContain("0")
+    expect(screen.getByText(new RegExp(`^${name} · `))).toHaveClass("[overflow-wrap:anywhere]")
+    expect(screen.getByText("Kept in your folder")).toBeInTheDocument()
+  })
+
+  it("explains sha512 in a conflict cause", async () => {
+    renderEnd(make(attempt("incomplete", [pkg("failed", { name: "is-number", version: "7.0.0", file: "is-number-7.0.0.tgz", kind: "conflict", reason: conflictReason(sha("a"), sha("b")) })])))
+    const conflict = await screen.findByRole("region", { name: "Another file under the same version" })
+    const info = within(conflict).getByRole("button", { name: "What a sha512 is" })
+    expect(info).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(info)
+    expect(info).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByText("Each package's own fingerprint, listed in the manifest.")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Read more" })).toBeNull()
+  })
+})
+

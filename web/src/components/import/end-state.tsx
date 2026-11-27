@@ -3,19 +3,23 @@ import {
   Archive,
   ArchiveX,
   Ban,
+  Check,
+  CheckCheck,
   CircleAlert,
-  CircleCheck,
   CirclePause,
   CircleQuestionMark,
   CircleX,
   Clock,
   FileDiff,
+  FolderCheck,
+  FolderInput,
   GitCompareArrows,
-  Info,
+  Package,
   PackageX,
   RotateCcw,
   ServerCrash,
   ShieldX,
+  Upload,
   type LucideIcon,
 } from "lucide-react"
 import { Fragment, useId, useState, type ReactNode } from "react"
@@ -24,15 +28,18 @@ import { CopyControl } from "@/components/copy-control"
 import { compareFingerprint, Fingerprint } from "@/components/fingerprint/fingerprint"
 import { ContactCard, useBrand } from "@/components/frame/brand"
 import { LogBlock } from "@/components/job-progress"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Term } from "@/components/ui/term"
 import { ImportApiError } from "@/import/api/client"
-import { useRetryImport } from "@/import/api/queries"
+import { useMe, useRetryImport } from "@/import/api/queries"
 import { CAUSES, causeOf, causeWords, copyRequest, nexusPath, type Cause } from "@/import/lib/kinds"
-import { counts, ecosystemOf, latestAttempt, type Import, type ReportPackage } from "@/import/lib/outcome"
+import { archiveName, counts, ecosystemOf, latestAttempt, type Import, type ReportPackage } from "@/import/lib/outcome"
 import { cn, formatBytes, formatWhen } from "@/lib/utils"
 
 import { attemptLog } from "./progress"
-import { RetryAction } from "./retry-card"
+import { importName } from "./import-row"
+import { PrComment, prComment } from "./pr-comment"
+import { Checks } from "./sha-block"
 
 function Card({ icon: Icon, tone, title, children, panel = "border-line bg-card" }: { icon: LucideIcon; tone: string; title: ReactNode; children: ReactNode; panel?: string }) {
   return (
@@ -48,33 +55,9 @@ function Card({ icon: Icon, tone, title, children, panel = "border-line bg-card"
   )
 }
 
-function Etag({ title, value, label }: { title: string; value: string; label: string }) {
-  return (
-    <div>
-      <dt className="text-sm text-muted">{title}</dt>
-      <dd className="mt-1 flex flex-wrap items-start gap-x-3 gap-y-2">
-        <code className="min-w-0 font-mono text-[13px] [overflow-wrap:anywhere]">{value}</code>
-        <CopyControl text={value} label={label} />
-      </dd>
-    </div>
-  )
-}
-
-/** The words for the counts of a complete attempt. Only a complete attempt says every package is in Nexus. */
-function inNexus(imp: Import): string {
-  const c = counts(latestAttempt(imp))
-  return `All ${c.total} packages are in Nexus: ${c.published} published, ${c.present} present.`
-}
-
-/** The objects the import read and removal guards: a record of sealift 0.4 holds no signature. */
-function objectsOf(imp: Import): string {
-  return imp.signature ? "the archive, the manifest and the signature" : "the archive and the manifest"
-}
-
 /**
- * How the latest attempt ended, in the cases the report and the progress cannot say: a complete
- * attempt and what became of the archive, a refusal, an interruption. An incomplete attempt is the
- * retry card's. The archive's removal is read from the attempt's removal record alone.
+ * How the latest attempt ended, in the cases the progress cannot say: every package in Nexus, the
+ * packages not in Nexus by cause, a refusal, an interruption.
  */
 export function EndState({ imp }: { imp: Import }) {
   const a = latestAttempt(imp)
@@ -82,41 +65,7 @@ export function EndState({ imp }: { imp: Import }) {
     return null
   }
   if (a.outcome === "complete") {
-    if (!a.removal) {
-      return (
-        <Card icon={Info} tone="text-accent" title="Checking the archive's removal">
-          <p>{inNexus(imp)}</p>
-          <p className="text-muted">The archive's removal is being checked. This page updates until the service records what became of it.</p>
-        </Card>
-      )
-    }
-    if (a.removal.removed) {
-      return (
-        <Card icon={CircleCheck} tone="text-severity-resolved-fg" title={a.removal.reason ? "Archive removed from MinIO, its manifest or signature kept" : "Archive removed from MinIO"}>
-          <p>{inNexus(imp)}</p>
-          {a.removal.reason ? (
-            <p className="[overflow-wrap:anywhere]">{a.removal.reason}</p>
-          ) : (
-            <p>{`sealift removed ${objectsOf(imp)} from your folder, after checking that each still carried the ETag it read at the start.`}</p>
-          )}
-          <dl className="mt-2 grid gap-3">
-            <Etag title="Archive ETag" value={imp.archive.etag} label="archive ETag" />
-            <Etag title="Manifest ETag" value={imp.manifest.etag} label="manifest ETag" />
-            {imp.signature ? <Etag title="Signature ETag" value={imp.signature.etag} label="signature ETag" /> : null}
-          </dl>
-        </Card>
-      )
-    }
-    return (
-      <Card icon={Archive} tone="text-accent" title="Archive kept in MinIO">
-        <p>{`${inNexus(imp)} The archive stays in MinIO. Its reason:`}</p>
-        <p className="rounded-md border border-line bg-background p-3 text-sm [overflow-wrap:anywhere]">{a.removal.reason || "Not recorded"}</p>
-        <p className="text-muted">
-          {`Retry adds an attempt: it checks every package again and removes the archive only if ${objectsOf(imp)} still carry the ETags this import read. An archive replaced since is refused.`}
-        </p>
-        <RetryAction imp={imp} />
-      </Card>
-    )
+    return <DoneEnd imp={imp} />
   }
   if (a.outcome === "incomplete") {
     return <FailedEnd imp={imp} />
@@ -361,7 +310,9 @@ function Diagnosis({ cause, pkgs, all, eco }: { cause: Cause; pkgs: ReportPackag
       const origin = eco === "pip" ? "PyPI" : "npm"
       return (
         <p>
-          {`Nexus holds ${held} with a different sha512. `}
+          {`Nexus holds ${held} with a different sha512`}
+          <Term id="sha512" />
+          {". "}
           {one ? `The archive's copy is the one ${origin} published. ` : `The archive's copies are the ones ${origin} published. `}
           {`sealift never overwrites a package, so a retry alone cannot fix ${one ? "it" : "them"}.`}
         </p>
@@ -494,3 +445,103 @@ function RetryButton({ imp, cause, pkgs, primary }: { imp: Import; cause: Cause;
     </span>
   )
 }
+
+/** Where the archive went once every package was in Nexus: its file and size, then removed, kept with its reason, or still being checked. */
+function ArchiveRow({ imp }: { imp: Import }) {
+  const a = latestAttempt(imp)
+  const file = a.report.archive.file || archiveName(imp.archive.key).file
+  const size = a.report.archive.size || imp.archive.size
+  const head = (
+    <span className="min-w-0 [overflow-wrap:anywhere]">
+      <span className="font-mono text-xs text-ink">{file}</span>
+      {" · "}
+      <b className="font-semibold text-ink tabular-nums">{formatBytes(size)}</b>
+    </span>
+  )
+  if (a.removal && !a.removal.removed) {
+    return (
+      <div data-archive-row className="tinted-info m-2 flex items-start gap-3 rounded-lg px-3 py-2.5 text-[13px]">
+        <FolderInput aria-hidden="true" className="mt-0.5 size-4 flex-none text-info" />
+        <span className="grid min-w-0 gap-0.5">
+          {head}
+          <span className="[overflow-wrap:anywhere]">
+            <span className="font-semibold text-info">Kept in your folder</span>
+            {` · ${a.removal.reason || "Not recorded"}`}
+          </span>
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div data-archive-row className="flex items-start gap-3 border-t border-rule px-4 py-3 text-[13px] text-muted">
+      <FolderCheck aria-hidden="true" className="mt-0.5 size-4 flex-none" />
+      <span className="grid min-w-0 gap-0.5">
+        <span className="min-w-0 [overflow-wrap:anywhere]">
+          {head}
+          {" · "}
+          <span>{a.removal ? "removed from your folder" : "Checking whether it left your folder"}</span>
+        </span>
+        {a.removal?.reason ? <span className="[overflow-wrap:anywhere]">{a.removal.reason}</span> : null}
+      </span>
+    </div>
+  )
+}
+
+/** Every package is in Nexus: the total as the title, what went in and what was checked, the comment for the review, then Done. */
+function DoneEnd({ imp }: { imp: Import }) {
+  const brand = useBrand()
+  const me = useMe()
+  const a = latestAttempt(imp)
+  const c = counts(a)
+  const inNexus = c.published + c.present
+  const name = importName(imp)
+  const user = me.data?.user
+  const markdown = prComment({ instance: brand.name, crossing: name, inNexus, review: a.report.crossing?.review, archiveSha256: a.report.archive.sha256 })
+  return (
+    <section aria-labelledby="end-heading" className="mx-auto mt-6 w-full max-w-190">
+      <div className="flex items-start gap-4">
+        <span className="grid size-11 flex-none place-items-center rounded-full bg-ok text-bg">
+          <Check aria-hidden="true" className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h1 id="end-heading" className="text-[28px] font-semibold tracking-tight text-ink">
+            {`${plural(inNexus, "package")} in Nexus`}
+          </h1>
+          <p className="mt-0.5 text-[15px] text-muted [overflow-wrap:anywhere]">{user ? `${name} · imported by ${user}` : name}</p>
+        </div>
+      </div>
+      <div className="mt-5 overflow-hidden rounded-xl border border-rule-2 bg-bg">
+        <p className="flex flex-wrap items-center gap-x-1.5 bg-canvas px-4 py-2.5 text-sm">
+          <Package aria-hidden="true" className="size-4 flex-none text-ink-2" />
+          <span className="font-semibold text-ink">In Nexus</span>
+          <span aria-hidden="true">·</span>
+          <span className="font-mono text-xs text-ink-2 [overflow-wrap:anywhere]">{a.report.nexus.repository || "Not recorded"}</span>
+        </p>
+        <div className="grid border-t border-rule sm:grid-cols-2">
+          <p className="flex items-center gap-2.5 px-4 py-3 text-sm text-ink-2">
+            <Upload aria-hidden="true" className="size-4 flex-none text-muted" />
+            <span>
+              <b className="text-[17px] font-semibold text-ink tabular-nums">{COUNT.format(c.published)}</b> <span>packages published</span>
+            </span>
+          </p>
+          <p className="flex items-center gap-2.5 border-t border-rule px-4 py-3 text-sm text-ink-2 sm:border-t-0 sm:border-l">
+            <CheckCheck aria-hidden="true" className="size-4 flex-none text-muted" />
+            <span>
+              <b className="text-[17px] font-semibold text-ink tabular-nums">{COUNT.format(c.present)}</b> <span>already there</span>
+            </span>
+          </p>
+        </div>
+        <ArchiveRow imp={imp} />
+        <Checks publicKeySha256={a.report.publicKeySha256} archiveSha256={a.report.archive.sha256} packages={{ checked: inNexus, total: c.total }} />
+      </div>
+      <PrComment markdown={markdown} />
+      <div className="mt-7 flex justify-end">
+        <Link to="/" className={buttonVariants({ variant: "outline", size: "page" })}>
+          <Check aria-hidden="true" />
+          Done
+        </Link>
+      </div>
+    </section>
+  )
+}
+

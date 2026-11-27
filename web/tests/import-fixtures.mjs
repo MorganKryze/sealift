@@ -48,6 +48,10 @@ export const IDS = {
   longKey: "20261020T170000Z-a100000b",
   pipComplete: "20261020T090000Z-a100000d",
   cancelled: "20261107T090000Z-a100000f",
+  doneWorst: "20261026T150000Z-a1000010",
+  doneOne: "20261026T100000Z-a1000011",
+  failedWorstNpm: "20261025T150000Z-a1000012",
+  failedWorstPip: "20261025T100000Z-a1000013",
 }
 
 // The live states: the server ends every queued or running attempt it finds at its start, so the page's
@@ -87,6 +91,22 @@ const worstPublishing = live(IDS.running, (imp, a) => {
   })
 })
 
+// The Compare field of a done import's checks, filled once it shows, as a paste would: the value comes from the
+// record, so it is read when the route runs.
+const paste = (value) => async (page) => {
+  await page.addInitScript((text) => {
+    new MutationObserver((_, observer) => {
+      const field = [...document.querySelectorAll("input")].find((i) => i.labels?.[0]?.textContent === "Compare with the connected side")
+      if (!field) return
+      observer.disconnect()
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(field, text)
+      field.dispatchEvent(new Event("input", { bubbles: true }))
+    }).observe(document, { childList: true, subtree: true })
+  }, value())
+}
+const doneArchive = () => sha("archive-101-complete")
+const differing = () => `${doneArchive().slice(0, 28)}${doneArchive()[28] === "0" ? "1" : "0"}${doneArchive().slice(29)}`
+
 // The import role: the shipped import-server behind a real token check. A route names the user whose
 // token the page sends as the gateway does, the browser permissions the page needs (`grant`), an optional control to press once the page has its
 // content (`open`; a `pressed` control is waited on pressed, one with `opens` waits for that role and name, any other opens a dialog), an optional API path to hold until the checks are done so the loading state
@@ -114,14 +134,34 @@ export const IMPORT = {
     { path: "/import", user: "dave", ready: "The archives could not be listed" },
     { path: "/import", user: "alice", hold: "/api/archives", ready: "Reading your folders in MinIO: user-alice/packages/npm/ and packages/pip/" },
     { path: "/imports", user: "alice", ready: "Waiting its turn" },
-    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "Archive removed from MinIO" },
-    { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Archive kept in MinIO" },
-    { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking the archive's removal" },
-    { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 of 101 packages are not in Nexus" },
+    // Every package in Nexus: the checks, the comment folded, open and copied, Compare open, matching and differing, the
+    // checks explained, the key open; then kept, being checked, the worst case and one package.
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder" },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "Preview", opens: { role: "region", name: "The comment" } } },
+    {
+      path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", grant: ["clipboard-read", "clipboard-write"],
+      open: { role: "button", name: "Copy the comment", opens: { role: "button", name: "Copy the comment" } },
+    },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", name: "matching", before: paste(doneArchive), ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", name: "differing", before: paste(differing), ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "What these checks mean", opens: { role: "term" } } },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: /^signing key's sha256 /, opens: { role: "button", name: "Copy signing key's sha256" } } },
+    { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Kept in your folder" },
+    { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking whether it left your folder" },
+    { path: `/imports/${IDS.doneWorst}`, user: "alice", ready: "Kept in your folder" },
+    { path: `/imports/${IDS.doneWorst}`, user: "alice", ready: "Kept in your folder", open: { role: "button", name: "Preview", opens: { role: "region", name: "The comment" } } },
+    { path: `/imports/${IDS.doneOne}`, user: "alice", ready: "1 package in Nexus" },
+    // Failed, at the worst: 40 packages in 3 causes, npm then pip, with what Nexus said of each.
+    { path: `/imports/${IDS.failedWorstNpm}`, user: "alice", ready: "40 packages not in Nexus" },
+    { path: `/imports/${IDS.failedWorstPip}`, user: "alice", ready: "40 packages not in Nexus" },
+    { path: `/imports/${IDS.failedWorstPip}`, user: "alice", ready: "40 packages not in Nexus", open: { role: "button", name: "Compare", opens: { role: "button", name: "What a sha512 is" } } },
+    { path: `/imports/${IDS.failedWorstPip}`, user: "alice", ready: "40 packages not in Nexus", open: { role: "button", name: "Show all 31 packages", opens: { role: "button", name: "Show fewer" } } },
+    { path: `/imports/${IDS.incomplete}`, user: "alice", ready: "3 packages not in Nexus" },
     { path: `/imports/${IDS.refusedDigests}`, user: "alice", ready: "Nothing reached Nexus." },
     { path: `/imports/${IDS.refusedLong}`, user: "alice", ready: "Nothing reached Nexus." },
     { path: `/imports/${IDS.refusedSignature}`, user: "alice", ready: "Nothing reached Nexus." },
-    { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "45 of 101 packages are not in Nexus" },
+    { path: `/imports/${IDS.interrupted}`, user: "alice", ready: "The service stopped or restarted before this attempt ended." },
     // Queued, checking, publishing and its cancel confirm, then cancelled.
     { path: `/imports/${IDS.queued}`, user: "alice", ready: "Waiting its turn" },
     { path: `/imports/${IDS.queued}`, user: "alice", before: ranked, name: "ranked", ready: "import ahead of this one" },
@@ -156,9 +196,10 @@ export const IMPORT = {
       path: `/?refused=${encodeURIComponent(`${FOLDER}2026-10-31-regenerated/${ARCHIVE}`)}`, user: "alice", ready: "Nothing reached Nexus.",
       open: { role: "button", name: "Compare", opens: { role: "textbox", name: "sha256 from the connected side" } },
     },
-    { path: `/imports/${IDS.legacy}`, user: "alice", ready: "Archive sha256 check" },
-    { path: `/imports/${IDS.longKey}`, user: "alice", ready: "Archive sha256 check" },
-    { path: `/imports/${IDS.pipComplete}`, user: "alice", ready: "Python" },
+    { path: `/imports/${IDS.legacy}`, user: "alice", ready: "2 packages not in Nexus" },
+    // Two complete imports of 0.7.0, whose manifests name no crossing: a 1,024-byte key, then pip.
+    { path: `/imports/${IDS.longKey}`, user: "alice", ready: "30 packages in Nexus" },
+    { path: `/imports/${IDS.pipComplete}`, user: "alice", ready: "3 packages in Nexus" },
     { path: "/imports/missing-import", user: "alice", ready: "No such import" },
     { path: "/imports", user: "bob", ready: "No import yet" },
     { path: "/imports", user: "frank", ready: "Your archives in MinIO are untouched." },
@@ -261,6 +302,38 @@ function pipRecord() {
   return record(IDS.pipComplete, "2026-10-20-data-tools/", [ended(1, createdAt, "complete", wheels, over, { removed: true, reason: "" })], { root: PIP_FOLDER, archive: PIP_ARCHIVE })
 }
 
+const REVIEW = { updated: 17, cvesBefore: [2, 8, 10, 5], cvesAfter: [0, 0, 2, 0], carried: 1, jumps: 3 }
+
+// The crossing the store keeps once the signature verifies: the review's figures as the signed manifest states them.
+const crossing = (project, count, review) => ({ project, sealedAt: "2026-10-20T09:00:00Z", packages: count, ...(review ? { review } : {}) })
+
+// 40 packages not in Nexus in 3 causes, among 1,284: 31 with no answer (one with a Nexus answer of 600 characters), 6 too
+// large with their sizes, 3 conflicts with both sha512 and what Nexus says of its copy, the date or the account alone.
+function worstFailed(id, eco) {
+  const pip = eco === "pip"
+  const names = pip
+    ? ["Charset_Normalizer", "zope.interface", "plone.namedfile", "pydantic_core", "opentelemetry-exporter-otlp-proto-grpc", "apache-airflow-providers-amazon"]
+    : ["@babel/plugin-transform-async-generator-functions", "@typescript-eslint/eslint-plugin", "@types/node", "typescript", "lodash", "react-dom"]
+  const fileOf = (name, version) => (pip ? `${name.replace(/[-.]/g, "_")}-${version}-py3-none-any.whl` : `${name.replace("@", "").replace("/", "-")}-${version}.tgz`)
+  const failed = (name, version, extra) => ({ name, version, file: extra.file ?? fileOf(name, version), state: "failed", note: "", ...extra })
+  const digest = (c) => c.repeat(128)
+  const list = [
+    ...Array.from({ length: 1244 }, (_, i) => ({ ...pkg(i, i % 4 === 0 ? "present" : "published"), size: 1_200_000 })),
+    ...Array.from({ length: 31 }, (_, i) => failed(`${names[i % names.length]}${i < names.length ? "" : `-${i}`}`, `1.${i}.0`, {
+      kind: "nexus", reason: i === 0 ? `upload failed: nexus unreachable: ${"<html><body>Gateway timeout ".repeat(30)}`.slice(0, 600) : "upload failed: nexus unreachable: i/o timeout",
+    })),
+    ...[["torch", "2.5.1", 950_000_000], ["tensorflow", "2.18.0", 645_000_000], ["nvidia-cudnn-cu12", "9.1.0.70", 697_000_000], ["pyarrow", "18.0.0", 42_000_000], ["numpy", "2.1.3", 17_000_000], ["scipy", "1.14.1", 41_000_000]].map(([name, version, size]) =>
+      failed(name, version, { kind: "nexus", nexusStatus: 413, reason: "upload failed: nexus answered 413", size, ...(pip && name === "numpy" ? { file: NUMPY } : {}) })),
+    failed("idna", "3.10", { kind: "conflict", reason: `nexus holds this file with other bytes: shipped sha512 ${digest("a")}, nexus sha512 ${digest("b")}`, nexusUploader: "Aleksandra Wiśniewska-Kowalczyk", nexusUploadedAt: "2025-10-03T09:12:44Z" }),
+    failed("PyYAML", "6.0.2", { kind: "conflict", reason: `nexus holds this file with other bytes: shipped sha512 ${digest("c")}, nexus sha512 ${digest("d")}`, nexusUploadedAt: "2025-01-14T10:00:00Z" }),
+    failed("zope.deprecation", "5.0", { kind: "conflict", reason: `nexus holds this file with other bytes: shipped sha512 ${digest("e")}, nexus sha512 ${digest("f")}`, nexusUploader: "jo" }),
+  ]
+  const over = pip
+    ? { ecosystem: "pip", archive: { file: PIP_ARCHIVE, sha256: sha(`worst ${eco}`), size: 4_090_000_000 }, target: { os: "linux", cpu: "x86_64", libc: "", node: "", pnpmVer: "", python: "3.11.2", glibc: "2.28" }, nexus: { url: "http://127.0.0.1:18093", repository: "pypi-gate" } }
+    : {}
+  return record(id, `2026-10-25-analytics-${eco}/`, [ended(1, iso(id), "incomplete", list, { ...over, reason: "40 packages failed", crossing: crossing(`analytics-${eco}`, list.length, REVIEW) })], pip ? { root: PIP_FOLDER, archive: PIP_ARCHIVE } : {})
+}
+
 const longReason = (lead) => `${lead} ${"nexus said no ".repeat(40)}${"x".repeat(1000)}`.slice(0, 1000)
 
 // Alice's records, newest first. Each state the mockups draw has one.
@@ -289,7 +362,7 @@ function aliceRecords() {
       ended(1, runningAt, "incomplete", packages(101, 60, 30, [{ kind: "nexus", reason: "Nexus answered 503" }])),
       { n: 2, status: "running", queuedAt: later(runningAt, 60), startedAt: later(runningAt, 61), outcome: "", report: report("", packages(101, 37, 0)) },
     ]),
-    record(IDS.completeRemoved, "2026-11-05-hr-forms/", [ended(1, iso(IDS.completeRemoved), "complete", packages(101, 80, 21), {}, removed)]),
+    record(IDS.completeRemoved, "2026-11-05-hr-forms/", [ended(1, iso(IDS.completeRemoved), "complete", packages(101, 80, 21), { crossing: crossing("hr-forms", 101, REVIEW) }, removed)]),
     record(IDS.completeKept, "2026-11-05-kiosk-ui/", [ended(1, iso(IDS.completeKept), "complete", packages(60, 50, 10), {}, kept)]),
     record(IDS.completePending, "2026-11-05-reports/", [ended(1, iso(IDS.completePending), "complete", packages(40, 30, 10))]),
     record(IDS.incomplete, "2026-11-04-maps-viewer/", [
@@ -313,6 +386,23 @@ function aliceRecords() {
     ]),
     record(IDS.longKey, `${longFolder}/`, [ended(1, iso(IDS.longKey), "complete", packages(30, 20, 10))], { archiveKey: longKey }),
     pipRecord(),
+    record(IDS.doneWorst, `2026-10-26-${WORST}x-2/`, [
+      ended(1, iso(IDS.doneWorst), "complete", packages(1284, 0, 1284), {
+        archive: { file: `${WORST}x-2026-10-26-2.tar.gz`, sha256: sha("worst archive"), size: 223_000_000 },
+        nexus: { url: "https://nexus.restricted-network-b.internal", repository: "npm-internal-restricted-network-b" },
+        crossing: crossing(`${WORST}x`, 1284, { updated: 133, cvesBefore: [4, 12, 18, 6], cvesAfter: [0, 3, 8, 4], carried: 15, jumps: 15 }),
+      }, { removed: false, reason: "a newer upload replaced the archive after the import read it" }),
+    ]),
+    record(IDS.doneOne, "2026-10-26-cli-tools/", [
+      ended(1, iso(IDS.doneOne), "complete", [{ name: "numpy", version: "2.1.3", file: NUMPY, state: "published", reason: "", note: "", size: 16_300_000 }], {
+        archive: { file: PIP_ARCHIVE, sha256: sha("one wheel"), size: 16_400_000 }, ecosystem: "pip",
+        target: { os: "linux", cpu: "x86_64", libc: "", node: "", pnpmVer: "", python: "3.11.2", glibc: "2.28" },
+        nexus: { url: "http://127.0.0.1:18093", repository: "pypi-gate" },
+        crossing: crossing("cli-tools", 1, { updated: 1, cvesBefore: [0, 1, 0, 0], cvesAfter: [0, 0, 0, 0], carried: 0, jumps: 1 }),
+      }, removed),
+    ], { root: PIP_FOLDER, archive: PIP_ARCHIVE }),
+    worstFailed(IDS.failedWorstNpm, "npm"),
+    worstFailed(IDS.failedWorstPip, "pip"),
     record(IDS.cancelled, "2026-11-07-search-indexer/", [
       { ...ended(1, iso(IDS.cancelled), "cancelled", packages(101, 40, 20, Array.from({ length: 41 }, () => ({ kind: "interrupted", reason: "cancelled before it was published" })))), outcome: "cancelled" },
     ]),
