@@ -470,6 +470,14 @@ describe("EndState, every package in Nexus", () => {
     expect(cells(unchecked)[4]).toEqual(["Known CVEs", "25 → not checked together"])
   })
 
+  it("escapes a backslash before a pipe so a name never opens a column", async () => {
+    const markdown = prComment({ instance: "sea\\|lift", crossing: "a|b\\", inNexus: 1, archiveSha256: ARCHIVE_SHA })
+    const head = markdown.split("\n")[0]
+    expect(head).toContain(String.raw`| sea\\\|lift `)
+    expect(head).toContain(String.raw`| a\|b\\ `)
+    expect(head.match(/(?<!\\)(\\\\)*\|/g)).toHaveLength(3)
+  })
+
   it("writes not carried by this archive for a 0.7.0 manifest", async () => {
     const markdown = prComment({ instance: "sealift", crossing: "2026-11-05-hr-forms/", inNexus: 12, archiveSha256: ARCHIVE_SHA })
     expect(cells(markdown).slice(2)).toEqual([

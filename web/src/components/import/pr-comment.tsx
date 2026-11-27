@@ -28,8 +28,9 @@ export function prComment(input: { instance: string; crossing: string; inNexus: 
     ["Major jumps", review ? COUNT.format(review.jumps) : NOT_CARRIED],
     ["Archive sha256", input.archiveSha256],
   ]
-  // A pipe in a name would open a column; the instance and the crossing come from deploy settings and a signed manifest.
-  const cell = (text: string) => text.replace(/\|/g, "\\|")
+  // A pipe in a name would open a column, and a backslash before it would undo its escape; the instance and the crossing
+  // come from deploy settings and a signed manifest.
+  const cell = (text: string) => text.replace(/[\\|]/g, "\\$&")
   const left = Math.max(...rows.map(([label]) => cell(label).length))
   const right = Math.max(...rows.map(([, value]) => cell(value).length))
   const line = (a: string, b: string) => `| ${cell(a).padEnd(left)} | ${cell(b).padEnd(right)} |`
