@@ -1,10 +1,11 @@
-import { ArrowRight, ArrowUpRight, Check, Circle, CircleAlert, Diamond, Info, Triangle, Wrench } from "lucide-react"
+import { ArrowRight, ArrowUpRight, Check, Circle, CircleAlert, Diamond, FileText, FileUp, Info, PackageX, Triangle, Wrench } from "lucide-react"
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import type { DependencyResult } from "@/api/projects"
 import { Button } from "@/components/ui/button"
 import { Panel } from "@/components/ui/panel"
 import { Term } from "@/components/ui/term"
+import { pinnedPlaces, pipVector, withoutFix, type PipFinding, type PipPackage } from "@/lib/pipReview"
 import { MAX_REASON_CHARACTERS, reasonProblem } from "@/lib/requiredReasons"
 import { cveFix, cvesOf, distinctCves, type Cve, type Family } from "@/lib/reviewGroups"
 import { cn } from "@/lib/utils"
@@ -211,8 +212,8 @@ function ReasonField({ value, onChange, help }: { value: string; onChange: (text
   )
 }
 
-/** Record at the left after the content, its cause above it while it waits. */
-function RecordAction({ cause, onRecord }: { cause?: string; onRecord: () => void }) {
+/** Record at the left after the content, its cause above it while it waits, and what may follow it. */
+function RecordAction({ cause, onRecord, children }: { cause?: string; onRecord: () => void; children?: ReactNode }) {
   const id = useId()
   return (
     <div className="mt-5 flex flex-col items-start gap-2">
@@ -221,18 +222,21 @@ function RecordAction({ cause, onRecord }: { cause?: string; onRecord: () => voi
           {cause}
         </p>
       ) : null}
-      <Button
-        type="button"
-        size="page"
-        aria-disabled={cause ? true : undefined}
-        aria-describedby={cause ? id : undefined}
-        onClick={() => {
-          if (!cause) onRecord()
-        }}
-      >
-        <Check aria-hidden="true" />
-        Record
-      </Button>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          size="page"
+          aria-disabled={cause ? true : undefined}
+          aria-describedby={cause ? id : undefined}
+          onClick={() => {
+            if (!cause) onRecord()
+          }}
+        >
+          <Check aria-hidden="true" />
+          Record
+        </Button>
+        {children}
+      </div>
     </div>
   )
 }
@@ -254,11 +258,69 @@ function Fact({ label, children, className }: { label: string; children: ReactNo
 
 const help = "Signed with the archive and read at import."
 
+/** What a CVE's advisory says, as the analysis keeps it: plain text, never markup. */
+export type Advisories = Record<string, { title?: string; published?: string }>
+
+const PUBLISHED = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
+
+function publishedOn(published: string | undefined): string | undefined {
+  if (!published) return undefined
+  const date = new Date(published)
+  return Number.isNaN(date.getTime()) ? undefined : PUBLISHED.format(date)
+}
+
+/** What each CVE's flaw does and when its advisory was published; left out when the analysis carries none. */
+function FlawFact({ cves, advisories }: { cves: { id: string; title?: string }[]; advisories?: Advisories }) {
+  const flaws = cves.flatMap((cve) => {
+    const advisory = advisories?.[cve.id]
+    const title = advisory?.title ?? cve.title
+    const date = publishedOn(advisory?.published)
+    return title || date ? [{ id: cve.id, title, date }] : []
+  })
+  if (flaws.length === 0) return null
+  return (
+    <Fact label="What the flaw does" className="border-t border-rule">
+      <ul className="flex flex-col gap-1.5">
+        {flaws.map((flaw) => (
+          <li key={flaw.id} className="flex flex-wrap items-baseline gap-x-2">
+            {flaws.length > 1 ? <span className="font-mono text-xs text-muted [font-variant-ligatures:none]">{flaw.id}</span> : null}
+            {flaw.title ? <span className="[overflow-wrap:anywhere]">{flaw.title}</span> : null}
+            {flaw.date ? <span className="text-muted whitespace-nowrap">{flaw.date}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </Fact>
+  )
+}
+
+/** Each CVE with its link, its severity and its fix, under "Known CVEs" and its explanation. */
+function CveList({ cves }: { cves: Cve[] }) {
+  return (
+    <div className="px-3.5 pt-3 pb-1">
+      <p className="flex items-center gap-1 text-xs font-semibold text-muted">
+        Known CVEs
+        <Term id="cve" />
+      </p>
+      <ul className="mt-1 flex flex-col">
+        {cves.map((cve) => (
+          <li key={cve.id} className="flex min-h-8 flex-wrap items-center gap-x-3 border-t border-rule py-1 first:border-t-0">
+            <CveId id={cve.id} />
+            <SeverityMark severity={severityOf(cve)} />
+            <span className="text-[13px] text-muted">{fixWords(cve)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 interface DecidePanelProps {
   dependency: DependencyResult
   /** The version the selection holds, the current one by default. */
   version?: string
   dev: boolean
+  /** What each CVE does, from the analysis, when it carries it. */
+  advisories?: Advisories
   reason: string
   onRecord: (choice: { carry: true; reason: string } | { carry: false }) => void
   onClose: () => void
@@ -268,7 +330,7 @@ interface DecidePanelProps {
  * The decision on a package that keeps a CVE no version fixes: carry it with a reason, or leave it out of
  * the archive, which asks none.
  */
-export function DecidePanel({ dependency, version, dev, reason, onRecord, onClose }: DecidePanelProps) {
+export function DecidePanel({ dependency, version, dev, advisories, reason, onRecord, onClose }: DecidePanelProps) {
   const held = version ?? dependency.current
   const [choice, setChoice] = useState<"carry" | "leave">("carry")
   const [text, setText] = useState(reason)
@@ -293,21 +355,8 @@ export function DecidePanel({ dependency, version, dev, reason, onRecord, onClos
       </div>
 
       <div className="mt-4 rounded-xl border border-rule">
-        <div className="px-3.5 pt-3">
-          <p className="flex items-center gap-1 text-xs font-semibold text-muted">
-            Known CVEs
-            <Term id="cve" />
-          </p>
-          <ul className="mt-1 flex flex-col">
-            {cves.map((cve) => (
-              <li key={cve.id} className="flex min-h-8 flex-wrap items-center gap-x-3 border-t border-rule py-1 first:border-t-0">
-                <CveId id={cve.id} />
-                <SeverityMark severity={severityOf(cve)} />
-                <span className="text-[13px] text-muted">{fixWords(cve)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <CveList cves={cves} />
+        <FlawFact cves={cves} advisories={advisories} />
         <Fact label="Newest version" className="border-t border-rule">
           <span className="font-mono [font-variant-ligatures:none] [overflow-wrap:anywhere]">{newest}</span>
           {newest === held ? <span>, this one</span> : null}
@@ -458,3 +507,161 @@ export function JumpPanel({ dependency, family, members, reason, onRecord, onClo
   )
 }
 
+
+/** A pip finding read as the npm CVE shape, its fixing versions as the record lists them. */
+export function pipCve(finding: PipFinding): Cve {
+  return { id: finding.id, severity: finding.severity, fixedIn: finding.fixedVersions.join(", ") }
+}
+
+/** Where a package is pinned, each file and line, or "dependency" for a package no file pins. */
+export function PinnedIn({ pkg, className }: { pkg: { pinnedAt?: PipPackage["pinnedAt"]; files?: string[] }; className?: string }) {
+  const places = pinnedPlaces(pkg)
+  if (places.length === 0) return <span className={cn("text-muted", className)}>dependency</span>
+  return (
+    <span className={cn("flex flex-col font-mono text-[12.5px] [font-variant-ligatures:none]", className)}>
+      {places.map((place) => (
+        <span key={place} className="[overflow-wrap:anywhere]">
+          {place}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/** The page's way out of a decision the files make: a new crossing of the project. */
+function ReplaceFiles({ onReplace }: { onReplace: () => void }) {
+  return (
+    <Button type="button" variant="outline" size="page" onClick={onReplace}>
+      <FileUp aria-hidden="true" />
+      Replace files
+    </Button>
+  )
+}
+
+/** The panel's facts every pip decision shares: where it is pinned and its wheel. */
+function PipPlaceFacts({ pkg }: { pkg: PipPackage }) {
+  return (
+    <>
+      <Fact label="Pinned in" className="border-t border-rule first:border-t-0">
+        <PinnedIn pkg={pkg} />
+      </Fact>
+      <Fact label="Wheel" className="border-t border-rule">
+        {pkg.wheel ? <span className="font-mono text-[12.5px] [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pkg.wheel.file}</span> : <span className="text-muted">none for the target</span>}
+      </Fact>
+    </>
+  )
+}
+
+interface PipDecidePanelProps {
+  pkg: PipPackage
+  kind: "cve-without-fix" | "yanked"
+  advisories?: Advisories
+  reason: string
+  onRecord: (reason: string) => void
+  onReplace: () => void
+  onClose: () => void
+}
+
+/**
+ * A pip package that keeps a CVE no version fixes, or whose release the index yanked: a reason, or new
+ * files. A pip export carries the whole set, so there is no Carry or Leave out.
+ */
+export function PipDecidePanel({ pkg, kind, advisories, reason, onRecord, onReplace, onClose }: PipDecidePanelProps) {
+  const [text, setText] = useState(reason)
+  const cves = pkg.cves.filter(withoutFix).map(pipCve)
+  const cause = reasonCause(text)
+  const indexReason = pkg.yanked?.reason.trim() ?? ""
+
+  return (
+    <Panel open onClose={onClose} tone="warn" heading="Decision" icon={CircleAlert}>
+      <p className="flex flex-wrap items-baseline gap-x-2 text-[22px] font-semibold tracking-tight text-ink">
+        <span className="[overflow-wrap:anywhere]">{pkg.name}</span>
+        <span className="font-mono text-base font-normal text-muted [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pkg.version}</span>
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {kind === "yanked" ? (
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-warn-line bg-warn-tint px-2.5 text-[13px] font-semibold text-warn">
+              <PackageX aria-hidden="true" className="size-3.5" />
+              Yanked
+            </span>
+            <Term id="yanked" />
+          </span>
+        ) : (
+          <SeverityCounts vector={pipVector(pkg.cves.filter(withoutFix))} />
+        )}
+        <span className="inline-flex min-h-7 items-center gap-1.5 rounded-full border border-rule-2 px-2.5 text-[13px] text-ink-2">
+          <FileText aria-hidden="true" className="size-3.5 flex-none" />
+          <PinnedIn pkg={pkg} className="font-sans" />
+        </span>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-rule">
+        {kind === "yanked" ? (
+          <Fact label="Index reason">{indexReason ? <span className="[overflow-wrap:anywhere]">{`“${indexReason}”`}</span> : <span className="text-muted">No reason given</span>}</Fact>
+        ) : (
+          <>
+            <CveList cves={cves} />
+            <FlawFact cves={pkg.cves.filter(withoutFix)} advisories={advisories} />
+          </>
+        )}
+        <Fact label="Wheel" className="border-t border-rule">
+          {pkg.wheel ? <span className="font-mono text-[12.5px] [font-variant-ligatures:none] [overflow-wrap:anywhere]">{pkg.wheel.file}</span> : <span className="text-muted">none for the target</span>}
+        </Fact>
+      </div>
+
+      <ReasonField value={text} onChange={setText} help={help} />
+      <RecordAction cause={cause} onRecord={() => onRecord(text.trim())}>
+        <ReplaceFiles onReplace={onReplace} />
+      </RecordAction>
+    </Panel>
+  )
+}
+
+interface PipJumpPanelProps {
+  pkg: PipPackage
+  reason: string
+  onRecord: (reason: string) => void
+  onReplace: () => void
+  onClose: () => void
+}
+
+/** A pin that left its major since the previous crossing: a reason, or new files. The version comes from the files, so there is no Keep or Jump. */
+export function PipJumpPanel({ pkg, reason, onRecord, onReplace, onClose }: PipJumpPanelProps) {
+  const [text, setText] = useState(reason)
+  const before = pipVector(pkg.previous?.cves ?? [])
+  const after = pipVector(pkg.cves)
+  const sum = (v: number[]) => v.reduce((a, b) => a + b, 0)
+  const age = releaseAge(pkg.wheel?.uploadedAt)
+  const cause = reasonCause(text)
+
+  return (
+    <Panel open onClose={onClose} tone="info" heading="Major jump" icon={ArrowUpRight}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="text-[22px] font-semibold tracking-tight text-ink [overflow-wrap:anywhere]">{pkg.name}</p>
+        <VersionChange before={pkg.previous?.version ?? pkg.version} after={pkg.version} className="text-[15px]" />
+        <Term id="major-jump" />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 rounded-xl border border-rule sm:grid-cols-2">
+        <Fact label="Release age">{age ? <span className="figure">{age}</span> : "no date"}</Fact>
+        <Fact label="Known CVEs" className="border-rule max-sm:border-t sm:border-l">
+          <span className="inline-flex flex-wrap items-center gap-x-1.5">
+            {sum(before) === 0 ? <span className="figure">0</span> : <SeverityCounts vector={before} />}
+            <ArrowRight aria-hidden="true" className="size-3 text-muted" />
+            <span className="sr-only"> to </span>
+            {sum(after) === 0 ? <span className="figure">0</span> : <SeverityCounts vector={after} />}
+          </span>
+        </Fact>
+        <div className="border-t border-rule sm:col-span-2">
+          <PipPlaceFacts pkg={pkg} />
+        </div>
+      </div>
+
+      <ReasonField value={text} onChange={setText} help={help} />
+      <RecordAction cause={cause} onRecord={() => onRecord(text.trim())}>
+        <ReplaceFiles onReplace={onReplace} />
+      </RecordAction>
+    </Panel>
+  )
+}
