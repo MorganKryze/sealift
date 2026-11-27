@@ -169,8 +169,8 @@ var wheelSha256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // packageList is the first step: the analysis's set as it recorded it,
 // refused when a package has no wheel, the analysis blocked one, or the
-// import would refuse the archive. Every name, file and sha256 is checked here, before any path
-// joins them.
+// import would refuse the archive. Every name, file and sha256 is
+// checked here, before any path joins them.
 func (e *PipExport) packageList(emit func(Event)) ([]PipPackage, error) {
 	start := time.Now()
 	emitStep(emit, "package-list", store.Running, 0)
