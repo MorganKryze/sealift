@@ -178,6 +178,13 @@ describe("Frame", () => {
     expect(offline.querySelector("svg.lucide-unplug")).not.toBeNull()
   })
 
+  it("keeps the side label on one line on a phone", () => {
+    render(<SideLabel side="online" />)
+    const pill = screen.getByText("Online").parentElement as HTMLElement
+    expect(pill).toHaveClass("flex-none", "whitespace-nowrap")
+    expect(screen.getByText("Online")).not.toHaveClass("[overflow-wrap:anywhere]")
+  })
+
   it("draws today's mark in the text colour and the crate's teal", () => {
     const { container } = render(<BrandMark size={28} />)
     const paints = [...container.querySelectorAll("svg *")].flatMap((el) => [el.getAttribute("fill"), el.getAttribute("stroke")]).filter((p) => p && p !== "none")

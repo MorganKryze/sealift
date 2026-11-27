@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react"
 import type { ComponentType } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { getProject, type Project } from "@/api/projects"
+import { getProject, getProjectManifest, type Project } from "@/api/projects"
 import { Route } from "@/routes/crossings.$projectId"
 
 const search = vi.hoisted(() => ({ current: {} as Record<string, string> }))
@@ -14,7 +14,7 @@ vi.mock("@tanstack/react-router", () => ({
 }))
 vi.mock("@/api/projects", async () => {
   const actual = await vi.importActual<typeof import("@/api/projects")>("@/api/projects")
-  return { ...actual, getProject: vi.fn() }
+  return { ...actual, getProject: vi.fn(), getProjectManifest: vi.fn() }
 })
 vi.mock("@/components/session/review-screen", () => ({ ReviewScreen: () => <p>review screen</p> }))
 vi.mock("@/components/session/export-screen", () => ({ ExportScreen: () => <p>export screen</p> }))
@@ -44,6 +44,22 @@ beforeEach(() => {
 })
 
 describe("the crossing route", () => {
+  it("titles the Check step with the project's name, not the package.json's", async () => {
+    search.current = { step: "check" }
+    vi.mocked(getProjectManifest).mockResolvedValue(JSON.stringify({ name: "audit-npm", dependencies: { lodash: "4.17.21" } }))
+    renderCrossing()
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("Update kiosk-ui")
+    await vi.waitFor(() => expect(screen.queryByText("Reading the package.json…")).toBeNull())
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Update kiosk-ui")
+  })
+
+  it("offers Analyse on the Check step of a project with no analysis", async () => {
+    search.current = {}
+    vi.mocked(getProject).mockResolvedValue({ ...sealed, analyses: [], exports: [] } as unknown as Project)
+    renderCrossing()
+    expect(await screen.findByRole("button", { name: "Analyse" })).toBeInTheDocument()
+  })
+
   it("opens Seal on a crossing whose export is done", async () => {
     search.current = {}
     renderCrossing()

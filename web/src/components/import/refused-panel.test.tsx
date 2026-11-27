@@ -170,6 +170,16 @@ describe("the refused panel", () => {
     expect(screen.getByRole("button", { name: "Copy details" })).toBeInTheDocument()
   })
 
+  it("tells a typed sha256 that differs from an archive that differs from its manifest", () => {
+    render(<RefusedDetails imp={refusedImport(`archive sha256 ${GOT} differs from the expected sha256 ${WANT}`, { expectedSha256: WANT })} trusted={TRUSTED} />)
+    expect(screen.getByText("The archive matches its manifest. The sha256 you typed differs.")).toBeInTheDocument()
+    expect(screen.queryByText("The archive does not match its manifest.")).toBeNull()
+    expect(rows().map((r) => r.textContent?.includes("Passed"))).toEqual([true, true, true])
+    expect(screen.getByTestId("sha256-compare")).toHaveTextContent("Typed")
+    expect(screen.getByText("What to do").nextElementSibling).toHaveTextContent("Check the value you copied from the Sealed page.")
+    expect(screen.getByText("What to do").nextElementSibling).not.toHaveTextContent("again from")
+  })
+
   it("reads two sha256 only from the archive check's own words", () => {
     const { unmount } = render(<RefusedDetails imp={refusedImport(`archive sha256 ${GOT} differs from the manifest's ${WANT}`)} trusted={TRUSTED} />)
     const pair = screen.getByTestId("sha256-compare")

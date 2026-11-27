@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ProblemError } from "@/api/client"
 import { getProject, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
-import { PipReviewScreen } from "@/components/session/pip-review-screen"
+import { PipReviewScreen, sortVersions } from "@/components/session/pip-review-screen"
 import type { PipAnalysisResult, PipPackage } from "@/lib/pipReview"
 import { Route as RootRoute } from "@/routes/__root"
 import { Route } from "@/routes/crossings.$projectId"
@@ -461,5 +461,12 @@ describe("the crossing route for pip", () => {
     expect(screen.getByText("constraints.txt")).toBeDefined()
     expect(screen.getByText(/pip · Python/).textContent).toMatch(/pip · Python 3\.11\.2 · linux x86_64 · glibc 2\.28/)
     expect(screen.getByRole("button", { name: "What the target is" })).toBeDefined()
+  })
+})
+
+describe("sortVersions", () => {
+  it("orders fixed-in versions by version, not by string", () => {
+    expect(sortVersions(["1.26.5", "2.0.6", "1.26.17", "2.6.0", "2.0.7", "1.26.18"])).toEqual(["1.26.5", "1.26.17", "1.26.18", "2.0.6", "2.0.7", "2.6.0"])
+    expect(sortVersions(["2.0.0", "2.0.0rc1", "10.1", "9.0"])).toEqual(["2.0.0rc1", "2.0.0", "9.0", "10.1"])
   })
 })

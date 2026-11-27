@@ -502,3 +502,25 @@ describe("the Seal step bar on an earlier crossing", () => {
     expect(within(screen.getByRole("navigation", { name: "Session steps" })).queryByText(", cancelled")).toBeNull()
   })
 })
+
+describe("focus on the Seal step", () => {
+  it("moves a focus left on the body to the page's heading when the screen changes", async () => {
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    const { rerender } = renderScreen(exportRecord({ state: "running" }))
+    rerender(
+      <QueryClientProvider client={client()}>
+        <ExportScreen project={project} analysis={analysis} relatedExport={exportRecord({ state: "done" })} onChanged={() => {}} onNavigateStep={() => {}} />
+      </QueryClientProvider>,
+    )
+    await vi.waitFor(() => expect(document.activeElement?.tagName).toBe("H1"))
+  })
+
+  it("leaves a focus the user placed where it is", () => {
+    const outside = document.createElement("button")
+    document.body.append(outside)
+    outside.focus()
+    renderScreen(exportRecord({ state: "done" }))
+    expect(outside).toHaveFocus()
+    outside.remove()
+  })
+})
