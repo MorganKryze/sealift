@@ -35,6 +35,8 @@ On the connected side, from a project's `package.json`:
 - lets you review the proposal, change any version, or keep the current one, and asks a reason for a major jump or a CVE that no version fixes;
 - downloads every package the selection needs, checks each one against the registry's sha512, packs a reproducible archive, and signs its manifest with an Ed25519 key.
 
+A Python project crosses the same way in the web, from its requirements files: one wheel per package for the target, a review against its previous crossing, and a reason for each major jump, CVE with no fix and yanked release. [Python projects](docs/python.md) walks through one.
+
 On the air-gapped side, the team receives:
 
 - `packages_npm.tar.gz`, with every package the new versions need, for the Nexus import;
@@ -75,7 +77,7 @@ Open <http://localhost:8080>. The page shows Preparing this instance until the f
 
 ## Current limits
 
-- pip projects are collected through the API only, with no collection screen yet; the import screens take them. Docker images are not handled.
+- Docker images are not handled.
 - The input is a `package.json` whose direct dependencies are pinned to exact versions. Lockfiles, workspaces, `overrides` and `resolutions` are not read.
 - sealift proposes new versions for direct dependencies. Transitive packages change through them, and the minimum release age does not apply to them.
 - The signature shows that a manifest came from the holder of sealift's private key. It does not show who asked for the export, how old it is, or anything about the reports. A regenerated key, or a lost volume, means carrying a new public key to the import side.

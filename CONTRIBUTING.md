@@ -96,7 +96,9 @@ When a screen changes, re-read the pages that describe it, since they quote its 
 | Projects and a project | `docs/workflow.md` |
 | Analyse | `docs/workflow.md`, `docs/troubleshooting.md` |
 | Review, its panels and info buttons | `docs/workflow.md`, `docs/how-sealift-chooses.md` |
-| Seal and Sealed | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md`, `docs/air-gap.md` |
+| Check, Review and Ready to seal of a pip crossing | `docs/python.md`, `docs/troubleshooting.md`, `docs/how-sealift-chooses.md` |
+| Analyse of a pip crossing | `docs/python.md`, `docs/troubleshooting.md` |
+| Seal and Sealed, npm and pip | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md`, `docs/air-gap.md` |
 | Instance | `docs/settings.md`, `docs/deployment.md`, `docs/getting-started.md` |
 | Home (import service) | `docs/importing.md` |
 | Choose an archive (import service) | `docs/importing.md`, `docs/air-gap.md` |
