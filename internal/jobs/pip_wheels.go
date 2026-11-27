@@ -291,6 +291,17 @@ func (r *pipRun) placesOf(key string) []PipPlace {
 	return places
 }
 
+// declaredOf returns the spelling the first pin of key writes, or "" when
+// it is the normalized name or no file pins it.
+func (r *pipRun) declaredOf(key string) string {
+	for _, p := range slices.Concat(r.set.Requirements, r.set.Constraints) {
+		if p.Key == key && p.Name != key {
+			return p.Name
+		}
+	}
+	return ""
+}
+
 // sortedBlocking returns blocking sorted by name, never nil.
 func sortedBlocking(blocking []PipBlocking) []PipBlocking {
 	sorted := slices.Clone(nonNil(blocking))

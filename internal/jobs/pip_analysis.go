@@ -60,6 +60,7 @@ type PipResult struct {
 // a package without a wheel, which blocking names and no export takes.
 type PipPackage struct {
 	Name     string       `json:"name"`
+	Declared string       `json:"declared,omitempty"` // the files' spelling, when it differs from Name
 	Version  string       `json:"version"`
 	Files    []string     `json:"files"`              // project files that pin it, empty for a transitive package
 	PinnedAt []PipPlace   `json:"pinnedAt,omitempty"` // the set's pins; absent for a transitive package and before places were recorded
@@ -465,6 +466,7 @@ func (r *pipRun) stepScan() error {
 				Name:     p.Name,
 				Version:  p.Version,
 				Files:    nonNil(r.set.FilesOf(p.Name)),
+				Declared: r.declaredOf(p.Name),
 				PinnedAt: r.placesOf(p.Name),
 				CVEs:     findingsOf(p.Name, p.Version),
 			}

@@ -1269,3 +1269,22 @@ func TestPipScanLogsTheKindsOfCharactersAnAdvisoryDropped(t *testing.T) {
 		t.Errorf("log = %q, want %q", lines, want)
 	}
 }
+
+func TestPipResultKeepsTheSpellingTheFilesDeclare(t *testing.T) {
+	a, st := newPipAnalysis(t, newCountingIndex(t).URL(), store.DefaultPipTarget,
+		reqFile("requirements.txt", "Pillow==10.4.0\nSQLAlchemy==2.0.36\nidna==3.10\n"))
+	set := resolved("idna", "3.10", "pillow", "10.4.0", "six", "1.16.0", "sqlalchemy", "2.0.36")
+	a.Uv = &fakeUv{lock: "x==1\n", set: set}
+	serveWheels(t, a, set)
+
+	if err := a.Run(context.Background(), func(Event) {}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	res, _ := readPipResult(t, st, a)
+	want := map[string]string{"idna": "", "pillow": "Pillow", "six": "", "sqlalchemy": "SQLAlchemy"}
+	for _, p := range res.Packages {
+		if p.Declared != want[p.Name] {
+			t.Errorf("%s declared = %q, want %q", p.Name, p.Declared, want[p.Name])
+		}
+	}
+}
