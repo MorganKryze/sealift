@@ -6,6 +6,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-27
+
 ### Added
 
 - sealift prepares itself at start, with no click: it installs the Trivy release its binary pins, downloads the vulnerability database, checks the signing key, and installs the pnpm and uv versions the default targets name. A failed step keeps its cause and tries again every minute. [Deployment](docs/deployment.md#readiness) describes it.
@@ -315,7 +317,8 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 - Web interface to create a project, queue an analysis, choose versions, queue an export, and download the result.
 - Docker image with the web interface built in and Trivy and pnpm installed, ready to run on the connected side and produce archives an air-gapped registry can import.
 
-[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/MorganKryze/sealift/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/MorganKryze/sealift/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/MorganKryze/sealift/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/MorganKryze/sealift/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/MorganKryze/sealift/compare/v0.6.0...v0.6.1

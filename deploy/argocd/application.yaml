@@ -10,7 +10,7 @@ spec:
   sources:
     - repoURL: <harbor-host>/<harbor-project>/charts
       chart: sealift
-      targetRevision: 0.7.0
+      targetRevision: 0.8.0
       helm:
         valueFiles:
           - $values/<values-path>/values.yaml
