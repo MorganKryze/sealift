@@ -630,3 +630,12 @@ func TestClientSearchesAssetsWithinThirtySeconds(t *testing.T) {
 		t.Fatalf("searchTimeout = %v", c.searchTimeout)
 	}
 }
+
+func TestAssetFileMatchesTheWholeFileName(t *testing.T) {
+	srv := searchServer(t, `{"items":[
+		{"path":"packages/six/1.16.0/xsix-1.16.0-py2.py3-none-any.whl","uploader":"other"}
+	]}`, nil)
+	if _, found, err := newClient(t, srv, "").AssetFile(context.Background(), "six", "six-1.16.0-py2.py3-none-any.whl"); err != nil || found {
+		t.Fatalf("a longer file name ending the same way: found %v, err %v", found, err)
+	}
+}

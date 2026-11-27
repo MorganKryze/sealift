@@ -171,11 +171,12 @@ func failedOr(ctx context.Context, pkg Package, kind Kind, reason string) Result
 }
 
 // nexusFailed is failedOr with the reason prefix followed by err's text, and
-// Nexus's HTTP status kept on a nexus failure where Nexus answered one.
+// Nexus's HTTP status kept on a nexus failure where Nexus answered one. A
+// status outside 100 to 599 is no HTTP status, so it is dropped.
 func nexusFailed(ctx context.Context, pkg Package, kind Kind, prefix string, err error) Result {
 	r := failedOr(ctx, pkg, kind, prefix+err.Error())
 	var answer *nexus.Error
-	if r.Kind == KindNexus && errors.As(err, &answer) {
+	if r.Kind == KindNexus && errors.As(err, &answer) && answer.Status >= 100 && answer.Status <= 599 {
 		r.NexusStatus = answer.Status
 	}
 	return r

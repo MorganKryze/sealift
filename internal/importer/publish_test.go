@@ -688,3 +688,27 @@ func TestRetryOfOneCauseKeepsTheEarlierCauseNexusFacts(t *testing.T) {
 		t.Errorf("conflict: %+v", other)
 	}
 }
+
+func TestNexusFailedKeepsOnlyAnHTTPStatusOfANexusFailure(t *testing.T) {
+	pkg := Package{Name: "left-pad", Version: "1.0.0", File: "left-pad-1.0.0.tgz"}
+	cases := []struct {
+		name   string
+		kind   Kind
+		status int
+		want   int
+	}{
+		{"a nexus answer", KindNexus, http.StatusInternalServerError, http.StatusInternalServerError},
+		{"the lowest status", KindNexus, 100, 100},
+		{"the highest status", KindNexus, 599, 599},
+		{"a status below the range", KindNexus, 99, 0},
+		{"a status above the range", KindNexus, 600, 0},
+		{"a local failure", KindLocal, http.StatusInternalServerError, 0},
+		{"a conflict", KindConflict, http.StatusConflict, 0},
+	}
+	for _, tc := range cases {
+		r := nexusFailed(context.Background(), pkg, tc.kind, "upload failed: ", &nexus.Error{Status: tc.status})
+		if r.Kind != tc.kind || r.NexusStatus != tc.want {
+			t.Errorf("%s: kind %q, status %d, want %d", tc.name, r.Kind, r.NexusStatus, tc.want)
+		}
+	}
+}
