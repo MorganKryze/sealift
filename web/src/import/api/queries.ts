@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query"
 
 import { ImportApiError, importFetch, SessionEnded } from "./client"
 import type { components } from "./schema"
@@ -94,16 +94,19 @@ export function useStartImport(): UseMutationResult<Import, Error, { archive: st
   })
 }
 
-/** Where a retry's answer goes: the new attempt shows in place, and its status region takes focus once drawn. */
-export function useRetryImport(id: string): UseMutationResult<Import, Error, void> {
+/**
+ * Retries the import: with packages, only those files are uploaded and every other one is read from Nexus; with none,
+ * the whole import. The new attempt shows in place, and its title takes focus once drawn.
+ */
+export function useRetryImport(id: string): UseMutationResult<Import, Error, { packages?: string[] } | void> {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: () =>
-      importFetch<Import>(`/imports/${encodeURIComponent(id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    mutationFn: (body: { packages?: string[] } | void) =>
+      importFetch<Import>(`/imports/${encodeURIComponent(id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) }),
     onSuccess: (imp) => {
       client.setQueryData(["imports", id], imp)
       void client.invalidateQueries({ queryKey: ["imports"], exact: true })
-      requestAnimationFrame(() => document.querySelector<HTMLElement>("[role=status]")?.focus())
+      requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-attempt-title]")?.focus())
     },
     onError: (error) => {
       if (error instanceof ImportApiError && error.status === 409) {
@@ -111,6 +114,43 @@ export function useRetryImport(id: string): UseMutationResult<Import, Error, voi
       }
     },
   })
+}
+
+/**
+ * Cancels the import's latest attempt: a queued one leaves the queue, a running one stops before its next
+ * package. The answer shows in place, and the lists read again.
+ */
+export function useCancelImport(id: string): UseMutationResult<Import, Error, void> {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      importFetch<Import>(`/imports/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    onSuccess: (imp) => {
+      client.setQueryData(["imports", id], imp)
+      void client.invalidateQueries({ queryKey: ["imports"], exact: true })
+      void client.invalidateQueries({ queryKey: ["archives"] })
+      void followCancel(client, id)
+    },
+  })
+}
+
+/**
+ * Reads the import again every wait ms until its latest attempt has ended: the service accepts a cancel
+ * while the package in flight finishes, and the page's 2 s poll would show running that long after. It
+ * gives up after 40 reads, or at a failed read, and leaves the page's poll to carry on.
+ */
+export async function followCancel(client: QueryClient, id: string, wait = 250): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    const imp = client.getQueryData<Import>(["imports", id])
+    if (!imp || !Array.isArray(imp.attempts) || latestAttempt(imp).status === "ended") return
+    await new Promise((resolve) => setTimeout(resolve, wait))
+    try {
+      await client.refetchQueries({ queryKey: ["imports", id], exact: true })
+    } catch {
+      // A failed read leaves the page's own poll to carry on.
+      return
+    }
+  }
 }
 
 /**

@@ -93,9 +93,29 @@ export interface paths {
         put?: never;
         /**
          * Add an attempt to an import
-         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again; nothing carries over from an earlier attempt. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         * @description Queues a new attempt that reads the archive and the manifest again, checks them again and reads every package from Nexus again. With no packages it may upload any package, and nothing carries over from an earlier attempt. With packages it uploads only those files; every other package is read from Nexus and never uploaded, and one Nexus lacks stays failed with the kind and reason the latest attempt recorded. A package the latest attempt published or found in Nexus, and that Nexus has lost since, fails with the kind nexus and a new reason. Accepted whatever the last outcome was, while no attempt is queued or running and the archive is still in MinIO. 409 otherwise. 400 when packages names anything but failed packages of the latest attempt, or one twice; the answer repeats none of them and nothing changes. The attempt ends refused, publishing nothing, when the archive or the manifest changed in MinIO since the import was created. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
          */
         post: operations["retryImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/imports/{importId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel the latest attempt of an import
+         * @description A queued attempt leaves the queue and ends cancelled at once. A running attempt stops before its next package and ends cancelled; its packages not reached fail with the kind interrupted. Every package already in Nexus stays there, and a cancelled attempt removes nothing from MinIO. An attempt that ended every package before the cancel keeps the outcome it ends with. A cancelled import takes a retry and blocks a new start of its archive like an incomplete one. 409 once the latest attempt has ended, or for a running attempt no queue of this service holds. Another user's id answers 404 like a missing one. The guard against cross-site requests is the one of startImport.
+         */
+        post: operations["cancelImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -148,6 +168,56 @@ export interface components {
             /** @description Why the archive cannot be imported; absent when it can */
             reason?: string;
             latestImport?: components["schemas"]["LatestImport"];
+            crossing?: components["schemas"]["Crossing"];
+            /**
+             * @description What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+             * @enum {string}
+             */
+            signature?: "verified" | "unsigned" | "unknown-key" | "mismatch" | "unreadable" | "not-checked";
+            /** @description The key sha256 that manifest.json.sig names, on an unknown-key archive only, and only when it is 64 lowercase hex digits. It is never trusted. Absent from an archive listed by sealift 0.7.0 or earlier. */
+            signerKeySha256?: string;
+            /**
+             * Format: int64
+             * @description The archive's size as its signed manifest states it, once the signature verifies. Absent otherwise, and from an archive listed by sealift 0.7.0 or earlier.
+             */
+            declaredSize?: number;
+            /** @description The archive, manifest.json and manifest.json.sig of the archive's folder as MinIO lists them, in that order, each when present. Absent from an archive listed by sealift 0.7.0 or earlier. */
+            files?: components["schemas"]["ArchiveFile"][];
+        };
+        /** @description A file of an archive's folder as MinIO lists it */
+        ArchiveFile: {
+            /** @description The file's name in its folder */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When MinIO received the file
+             */
+            modified: string;
+        };
+        /** @description The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before. */
+        Crossing: {
+            /** @description The project's name the manifest's review signs. Absent when the manifest carries no review or no readable name, as a manifest of sealift 0.7.0 or earlier. */
+            project?: string;
+            /** @description The manifest's createdAt, an RFC 3339 time */
+            sealedAt: string;
+            /** @description How many packages the manifest lists */
+            packages: number;
+            review?: components["schemas"]["CrossingReview"];
+        };
+        /** @description The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review. */
+        CrossingReview: {
+            /** @description The packages the review updates, those of its major jumps included */
+            updated: number;
+            /** @description The known CVEs before the update, by severity, critical first */
+            cvesBefore: number[];
+            /** @description The known CVEs after the update, by severity; absent when they were not checked together */
+            cvesAfter?: number[];
+            /** @description The dependencies carried with a reason for the CVEs they keep */
+            carried: number;
+            /** @description The packages its major jumps move */
+            jumps: number;
         };
         /**
          * @description The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
@@ -157,7 +227,7 @@ export interface components {
         /** @description The newest import of the archive and manifest now in MinIO, matched by key and ETag; absent when an upload has replaced either since */
         LatestImport: {
             id: string;
-            /** @description queued, running, complete, incomplete, refused or interrupted */
+            /** @description queued, running, complete, incomplete, refused, interrupted or cancelled */
             outcome: string;
         };
         StartImport: {
@@ -165,6 +235,11 @@ export interface components {
             archive: string;
             /** @description The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused */
             expectedSha256?: string;
+        };
+        /** @description An empty object retries the whole import. */
+        RetryImport: {
+            /** @description The file names of the packages to upload, each a failed package of the latest attempt, none twice. Absent or empty retries the whole import. */
+            packages?: string[];
         };
         ImportList: {
             imports: components["schemas"]["Import"][];
@@ -189,6 +264,8 @@ export interface components {
             /** @description Whether an attempt removed the archive from MinIO. A complete attempt removes the archive and its manifest only after checking that both still carry the ETags it read; its removal says why not. */
             archiveRemoved: boolean;
             attempts: components["schemas"]["Attempt"][];
+            /** @description How many attempts run or wait before the latest one in the service's queue, whoever started them. Present only while the latest attempt is queued in this service; never stored, so absent from every import read after it left the queue. */
+            queueAhead?: number;
         };
         Attempt: {
             n: number;
@@ -200,8 +277,10 @@ export interface components {
             startedAt?: string;
             /** Format: date-time */
             endedAt?: string;
-            /** @description complete, incomplete, refused or interrupted once the attempt has ended */
+            /** @description complete, incomplete, refused, interrupted or cancelled once the attempt has ended */
             outcome: string;
+            /** @description The file names this attempt was asked to upload, the packages of one cause. Absent on a first attempt, on a whole retry, and on an attempt recorded by sealift 0.7.0 or earlier. */
+            retry?: string[];
             report: components["schemas"]["Report"];
             removal?: components["schemas"]["Removal"];
         };
@@ -212,6 +291,7 @@ export interface components {
         };
         /** @description The account of one attempt; a package still pending has not ended */
         Report: {
+            /** @description complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs */
             outcome: string;
             reason: string;
             /** @description True when Nexus, MinIO or the key set is reached over plain http */
@@ -229,6 +309,8 @@ export interface components {
             archiveChecked?: boolean;
             /** @description The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier. */
             publicKeySha256?: string;
+            /** @description The crossing the signed manifest names, set once the signature verifies. Absent before, and from a report written by sealift 0.7.0 or earlier. */
+            crossing?: components["schemas"]["Crossing"];
         };
         ReportArchive: {
             file: string;
@@ -269,6 +351,20 @@ export interface components {
              * @enum {string}
              */
             kind?: "conflict" | "nexus" | "source" | "interrupted" | "mismatch" | "local";
+            /**
+             * Format: int64
+             * @description The size in bytes of the checked file. Absent when the file could not be read, and in a report written by sealift 0.7.0 or earlier.
+             */
+            size?: number;
+            /** @description The HTTP status Nexus answered on a nexus failure. Absent when Nexus did not answer, on any other kind, and in a report written by sealift 0.7.0 or earlier. */
+            nexusStatus?: number;
+            /**
+             * Format: date-time
+             * @description When Nexus received the copy it holds, on a conflict only, as Nexus's asset search tells it. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+             */
+            nexusUploadedAt?: string;
+            /** @description The account that uploaded the copy Nexus holds, on a conflict only, as Nexus's asset search tells it, with control characters removed. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier. */
+            nexusUploader?: string;
         };
         /** @description A Problem that names the import in the way */
         ImportConflict: {
@@ -300,7 +396,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description Error. 401 when the token fails a check (the detail names the check), 403 when its preferred_username cannot name a user folder or a start looks cross-site, 404 for an unknown import or an archive outside the user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503 when the realm's keys cannot be had or the service is stopping. */
+        /** @description Error. 401 when the token fails a check (the detail names the check), 403 when its preferred_username cannot name a user folder or a start, a retry or a cancel looks cross-site, 404 for an unknown import or an archive outside the user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503 when the realm's keys cannot be had or the service is stopping. */
         Problem: {
             headers: {
                 [name: string]: unknown;
@@ -402,7 +498,7 @@ export interface operations {
                     "application/json": components["schemas"]["Import"];
                 };
             };
-            /** @description The archive already has an import that is queued, running, incomplete or interrupted, or MinIO is not configured */
+            /** @description The archive already has an import that is queued, running, incomplete, interrupted or cancelled, or MinIO is not configured */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -448,7 +544,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["RetryImport"];
             };
         };
         responses: {
@@ -462,6 +558,42 @@ export interface operations {
                 };
             };
             /** @description An attempt is queued or running, the archive is no longer in MinIO, or MinIO is not configured */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ImportConflict"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    cancelImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The import, its latest attempt cancelled or stopping before its next package */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Import"];
+                };
+            };
+            /** @description The latest attempt has ended, or it runs where this service cannot stop it */
             409: {
                 headers: {
                     [name: string]: unknown;

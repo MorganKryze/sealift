@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -11,8 +12,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,10 +63,19 @@ type importRig struct {
 }
 
 type rigOptions struct {
-	links    []string
-	hold     bool // runs wait for the test before they read anything
+	links []string
+	hold  bool // runs wait for the test before they read anything
+	// pause holds a run once its first package has ended, until the test
+	// releases it or the run is cancelled; entered then gets the import's id.
+	pause    bool
 	pkgs     []testPkg
 	settings func(*importer.Settings) // changes the settings that point at the fake Nexus
+	// publisher wraps each client of the fake Nexus the service builds.
+	publisher func(importer.Publisher) importer.Publisher
+	// removing runs before each removal of an archive, once the attempt's end is stored.
+	removing func()
+	// submitting runs before each attempt reaches the queue.
+	submitting func()
 }
 
 func newImportRig(t *testing.T, o rigOptions) *importRig {
@@ -85,20 +98,58 @@ func newImportRig(t *testing.T, o rigOptions) *importRig {
 	if o.settings != nil {
 		o.settings(&settings)
 	}
+	publisher := newPublisher
+	if o.publisher != nil {
+		publisher = func(s importer.Settings) (importer.Publisher, error) {
+			p, err := newPublisher(s)
+			if err != nil {
+				return nil, err
+			}
+			return o.publisher(p), nil
+		}
+	}
 	r.rig = newRigConfig(t, Config{
 		Verifier: r.verifier, MinIO: r.minio, UnencryptedLinks: o.links,
-		Store: st, Submit: func(user, id string) bool { return r.queue.Submit(user, id) },
-		Settings: settings, NewPublisher: newPublisher, ImportVersion: "0.3.0",
+		Store: st, Submit: func(user, id string) bool {
+			if o.submitting != nil {
+				o.submitting()
+			}
+			return r.queue.Submit(user, id)
+		},
+		Settings: settings, NewPublisher: publisher, ImportVersion: "0.3.0",
 	})
 	run := func(ctx context.Context, imp imports.Import, dir string, p importer.Progress) (importer.Report, imports.Remover) {
 		if o.hold {
 			r.entered <- imp.ID
 			select {
 			case <-r.release:
+			case <-p.Cancelled:
 			case <-ctx.Done():
 			}
 		}
-		return r.handlers.RunAttempt(ctx, imp, dir, p)
+		if o.pause {
+			ended, paused := p.Ended, false
+			p.Ended = func(i int, res importer.Result) {
+				ended(i, res)
+				if !paused {
+					paused = true
+					r.entered <- imp.ID
+					select {
+					case <-r.release:
+					case <-p.Cancelled:
+					case <-ctx.Done():
+					}
+				}
+			}
+		}
+		rep, remove := r.handlers.RunAttempt(ctx, imp, dir, p)
+		if remove != nil && o.removing != nil {
+			return rep, func(ctx context.Context) *imports.Removal {
+				o.removing()
+				return remove(ctx)
+			}
+		}
+		return rep, remove
 	}
 	r.queue = imports.NewQueue(st, run, slog.New(slog.NewJSONHandler(r.logs, nil)))
 	t.Cleanup(r.queue.Close)
@@ -123,6 +174,23 @@ func (r *importRig) post(tok, body string, header ...string) *httptest.ResponseR
 		req.Header.Set(header[i], header[i+1])
 	}
 	return r.do(req)
+}
+
+// postTo sends a JSON POST to path with the token header set when tok is not empty.
+func (r *importRig) postTo(path, tok, body string, header ...string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if tok != "" {
+		req.Header.Set(TokenHeader, tok)
+	}
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	return r.do(req)
+}
+
+func (r *importRig) cancel(tok, id string, header ...string) *httptest.ResponseRecorder {
+	return r.postTo("/api/imports/"+id+"/cancel", tok, "{}", header...)
 }
 
 func (r *importRig) start(tok, key string) *httptest.ResponseRecorder {
@@ -873,7 +941,7 @@ func TestImportReportKindsReachTheAPI(t *testing.T) {
 		kind    ReportPackageKind
 	}{
 		"complete":    {0, true, ""},
-		"cut archive": {len(good.archive) / 2, false, Source},
+		"cut archive": {len(good.archive) / 2, false, ReportPackageKindSource},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newImportRig(t, rigOptions{})
@@ -1133,4 +1201,503 @@ func TestGetImportServesThePipReport(t *testing.T) {
 		close(r.release)
 		waitEnded(t, r.store, id)
 	})
+}
+
+func TestGetImportAnswersTheCrossingAnAttemptKept(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+	imp, err := r.store.Create("alice",
+		imports.Object{Key: archiveKey, ETag: r.minio.etagOf(archiveKey)},
+		imports.Object{Key: manifestKey, ETag: r.minio.etagOf(manifestKey)},
+		&imports.Object{Key: signatureKey, ETag: r.minio.etagOf(signatureKey)}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.store.Begin("alice", imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	crossing := &importer.Crossing{Project: "web-portal", SealedAt: "2026-11-25T09:00:00Z", Packages: 1, Review: &importer.CrossingReview{
+		Updated: 5, CVEsBefore: [5]int{1, 4, 6, 2, 0}, CVEsAfter: &[5]int{0, 1, 3, 1, 0}, Carried: 2, Jumps: 3,
+	}}
+	rep := importer.Report{Outcome: importer.OutcomeComplete, Packages: []importer.Result{}, Crossing: crossing}
+	if err := r.store.Finish("alice", imp.ID, 1, rep, nil); err != nil {
+		t.Fatal(err)
+	}
+	check := func(where string, got *Crossing) {
+		t.Helper()
+		if got == nil || got.Project == nil || *got.Project != "web-portal" || got.SealedAt != crossing.SealedAt || got.Packages != 1 {
+			t.Fatalf("%s: crossing %+v, want web-portal sealed %s", where, got, crossing.SealedAt)
+		}
+		rv := got.Review
+		if rv == nil || rv.Updated != 5 || rv.Carried != 2 || rv.Jumps != 3 || fmt.Sprint(rv.CvesBefore) != "[1 4 6 2 0]" || rv.CvesAfter == nil || fmt.Sprint(*rv.CvesAfter) != "[0 1 3 1 0]" {
+			t.Errorf("%s: review %+v, want the figures the attempt kept", where, rv)
+		}
+	}
+	check("getImport", importOf(t, r.get("/api/imports/"+imp.ID, "t"), http.StatusOK).Attempts[0].Report.Crossing)
+	list := listOfImports(t, r.get("/api/imports", "t"))
+	if len(list.Imports) != 1 {
+		t.Fatalf("imports %+v", list.Imports)
+	}
+	check("listImports", list.Imports[0].Attempts[0].Report.Crossing)
+}
+
+// answer070 is a 0.7.0 record's import as 0.7.0's getImport answered it.
+const answer070 = `{
+  "id": "20261123T141500Z-0c7e5a19",
+  "createdAt": "2026-11-23T14:15:00Z",
+  "archive": {"key": "packages/pip/data-tools/packages_pip.tar.gz", "etag": "\"6f1ed002ab5595859014ebf0951522d9\"", "size": 81920},
+  "manifest": {"key": "packages/pip/data-tools/manifest.json", "etag": "\"1f3870be274f6c49b3e31a0c6728957f\"", "size": 1342},
+  "signature": {"key": "packages/pip/data-tools/manifest.json.sig", "etag": "\"c4ca4238a0b923820dcc509a6f75849b\"", "size": 214},
+  "expectedSha256": "",
+  "outcome": "complete",
+  "archiveRemoved": true,
+  "attempts": [{
+    "n": 1, "status": "ended", "queuedAt": "2026-11-23T14:15:00Z", "startedAt": "2026-11-23T14:15:01Z", "endedAt": "2026-11-23T14:15:09Z", "outcome": "complete",
+    "report": {
+      "outcome": "complete", "reason": "", "unencrypted": false, "importVersion": "0.7.0",
+      "archive": {"file": "packages_pip.tar.gz", "sha256": "8c2574892063f995fdf756bce07f46c1a5193e54cd52837ed91e32008ccf41ac", "size": 81920},
+      "toolVersion": "0.7.0", "analysisId": "20261123T140210Z", "ecosystem": "pip",
+      "target": {"os": "linux", "cpu": "x86_64", "libc": "", "node": "", "pnpmVer": "", "python": "3.11.2", "glibc": "2.28"},
+      "nexus": {"url": "https://nexus.example:8443", "repository": "pypi-hosted"},
+      "counts": {"published": 1, "present": 1, "failed": 0},
+      "packages": [
+        {"name": "six", "version": "1.16.0", "file": "six-1.16.0-py2.py3-none-any.whl", "state": "published", "reason": "", "note": ""},
+        {"name": "idna", "version": "3.10", "file": "idna-3.10-py3-none-any.whl", "state": "present", "reason": "", "note": ""}
+      ],
+      "archiveChecked": true,
+      "publicKeySha256": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+    },
+    "removal": {"removed": true, "reason": ""}
+  }]
+}`
+
+func TestGetImportKeepsEveryField070Answered(t *testing.T) {
+	r := newImportRig(t, rigOptions{})
+	var record map[string]any
+	if err := json.Unmarshal([]byte(answer070), &record); err != nil {
+		t.Fatal(err)
+	}
+	// The record 0.7.0 wrote: the answer's fields, its format and its user,
+	// without what the answer derives.
+	record["formatVersion"], record["user"] = 1, "alice"
+	delete(record, "outcome")
+	delete(record, "archiveRemoved")
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(r.data, "alice", "20261123T141500Z-0c7e5a19")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "import.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got, want any
+	if err := json.Unmarshal(r.get("/api/imports/20261123T141500Z-0c7e5a19", "t").Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(answer070), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		g, _ := json.Marshal(got)
+		t.Errorf("the answer to a 0.7.0 record differs from 0.7.0's:\n%s", g)
+	}
+}
+
+const (
+	thirdKey = base + "c/packages_npm.tar.gz"
+	thirdMan = base + "c/manifest.json"
+)
+
+func TestCancelImport(t *testing.T) {
+	t.Run("cancels a queued import at once", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		b := buildBundle(t, leftPad)
+		r.seed(archiveKey, manifestKey, b)
+		r.seed(otherKey, otherMan, b)
+		r.seed(thirdKey, thirdMan, b)
+		running := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+		waitEntered(t, r)
+		queued := importOf(t, r.start("t", otherKey), http.StatusAccepted)
+
+		got := importOf(t, r.cancel("t", queued.Id), http.StatusAccepted)
+		if got.Outcome != imports.OutcomeCancelled || got.QueueAhead != nil || got.ArchiveRemoved {
+			t.Errorf("answer: outcome %q, queueAhead %v, removed %v", got.Outcome, got.QueueAhead, got.ArchiveRemoved)
+		}
+		later := importOf(t, r.start("t", thirdKey), http.StatusAccepted)
+		close(r.release)
+		waitEnded(t, r.store, running.Id)
+		if id := waitEntered(t, r); id != later.Id {
+			t.Errorf("import %s ran after its cancel", id)
+		}
+		stored, _ := r.store.Get("alice", queued.Id)
+		if a := stored.Attempts[0]; a.Status != imports.StatusEnded || a.Outcome != imports.OutcomeCancelled || a.StartedAt != nil {
+			t.Errorf("the cancelled attempt = %+v", a)
+		}
+	})
+
+	t.Run("stops a running import before its next package", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{pause: true, pkgs: []testPkg{leftPad, zeta}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad, zeta))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		done := waitEnded(t, r.store, id)
+		a := done.Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || done.ArchiveRemoved() || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		if p := a.Report.Packages[0]; p.State != importer.Published {
+			t.Errorf("the package that reached Nexus = %+v", p)
+		}
+		if p := a.Report.Packages[1]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the package not reached = %+v", p)
+		}
+		if a.Report.Reason != imports.OutcomeCancelled {
+			t.Errorf("reason %q, want %q", a.Report.Reason, imports.OutcomeCancelled)
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("names the cancel as the reason of one that lands during the MinIO check", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		checking, release := make(chan struct{}), make(chan struct{})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		var heads atomic.Int32
+		r.minio.hook = func(op, key string) {
+			// The start heads the archive once; the attempt's check comes next.
+			if op == "head" && key == archiveKey && heads.Add(1) == 2 {
+				close(checking)
+				<-release
+			}
+		}
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-checking:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the attempt never checked the archive in MinIO")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		free()
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Report.Reason != imports.OutcomeCancelled || a.Removal != nil {
+			t.Errorf("outcome %q reason %q removal %+v, want cancelled for both", a.Outcome, a.Report.Reason, a.Removal)
+		}
+		if n := r.nexus.uploadCount(); n != 0 {
+			t.Errorf("%d uploads, want none", n)
+		}
+	})
+
+	t.Run("lets the package in flight finish its upload and its read back", func(t *testing.T) {
+		uploaded, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{pkgs: []testPkg{leftPad, zeta}, publisher: func(p importer.Publisher) importer.Publisher {
+			return &slowAnswer{Publisher: p, uploaded: uploaded, release: release}
+		}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad, zeta))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-uploaded:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no upload reached Nexus")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		close(release)
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		got := resultsByName(a.Report)
+		if p := got["left-pad"]; p.State != importer.Published {
+			t.Errorf("the package Nexus stored during the cancel = %+v, want published", p)
+		}
+		if p := got["zeta"]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the package after the cancel = %+v", p)
+		}
+		if n := r.nexus.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("lets the wheel in flight finish its upload and its read back", func(t *testing.T) {
+		n := importtest.NewPyPINexus(t, pipRepo)
+		uploaded, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{settings: onPyPI(n, true), publisher: func(p importer.Publisher) importer.Publisher {
+			return &slowAnswer{Publisher: p, uploaded: uploaded, release: release}
+		}})
+		r.seedPip(t, pipArchiveKey, pipManifestKey, pipWheels(t)...)
+		id := importOf(t, r.start("t", pipArchiveKey), http.StatusAccepted).Id
+		select {
+		case <-uploaded:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no upload reached Nexus")
+		}
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		close(release)
+		a := waitEnded(t, r.store, id).Attempts[0]
+		if a.Outcome != imports.OutcomeCancelled || a.Removal != nil || a.Report.Ecosystem != "pip" {
+			t.Fatalf("attempt = %s (%s), removal %+v", a.Outcome, a.Report.Ecosystem, a.Removal)
+		}
+		got := resultsByName(a.Report)
+		if p := got["six"]; p.State != importer.Published {
+			t.Errorf("the wheel Nexus stored during the cancel = %+v, want published", p)
+		}
+		if p := got["idna"]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != "cancelled before it was published" {
+			t.Errorf("the wheel after the cancel = %+v", p)
+		}
+		if u := n.Uploads(); u != 1 {
+			t.Errorf("%d uploads, want 1", u)
+		}
+		if d := r.deletes(); len(d) != 0 {
+			t.Errorf("a cancelled import deleted %v", d)
+		}
+	})
+
+	t.Run("waits for a start to queue its attempt before it cancels", func(t *testing.T) {
+		submitting, release := make(chan struct{}), make(chan struct{})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		r := newImportRig(t, rigOptions{hold: true, submitting: func() {
+			close(submitting)
+			<-release
+		}})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		started := make(chan *httptest.ResponseRecorder, 1)
+		go func() { started <- r.start("t", archiveKey) }()
+		select {
+		case <-submitting:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the start never reached the queue")
+		}
+		list, err := r.store.List("alice")
+		if err != nil || len(list) != 1 {
+			t.Fatalf("imports during the start: %v, %v", list, err)
+		}
+		cancelled := make(chan *httptest.ResponseRecorder, 1)
+		go func() { cancelled <- r.cancel("t", list[0].ID) }()
+		select {
+		case rec := <-cancelled:
+			t.Fatalf("the cancel answered %d before the start queued its attempt", rec.Code)
+		case <-time.After(100 * time.Millisecond):
+		}
+		free()
+		importOf(t, <-started, http.StatusAccepted)
+		importOf(t, <-cancelled, http.StatusAccepted)
+		if done := waitEnded(t, r.store, list[0].ID); done.Outcome() != imports.OutcomeCancelled {
+			t.Errorf("outcome %q, want cancelled", done.Outcome())
+		}
+	})
+
+	t.Run("logs a refused cancel by its kind", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := r.endedImport(t, importer.OutcomeComplete)
+		if rec := r.cancel("t", id); rec.Code != http.StatusConflict {
+			t.Fatalf("ended: status %d", rec.Code)
+		}
+		if rec := r.cancel("t", "20261106T090000Z-ffffffff"); rec.Code != http.StatusNotFound {
+			t.Fatalf("unknown: status %d", rec.Code)
+		}
+		if rec := r.cancel("t", "not-an-id"); rec.Code != http.StatusNotFound {
+			t.Fatalf("malformed: status %d", rec.Code)
+		}
+		logs := r.logs.String()
+		for _, want := range []string{
+			`"msg":"refused a cancel","user":"alice","id":"` + id + `","check":"ended"`,
+			`"msg":"refused a cancel","user":"alice","id":"20261106T090000Z-ffffffff","check":"not found"`,
+		} {
+			if !strings.Contains(logs, want) {
+				t.Errorf("the log lacks %s:\n%s", want, logs)
+			}
+		}
+		if strings.Contains(logs, "not-an-id") {
+			t.Error("the log repeats an id that is not one")
+		}
+	})
+
+	t.Run("answers 409 to a cancel of an ended import", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		for _, outcome := range []string{importer.OutcomeIncomplete, importer.OutcomeComplete, importer.OutcomeRefused} {
+			id := r.endedImport(t, outcome)
+			rec := r.cancel("t", id)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("%s: status = %d, want 409; body %s", outcome, rec.Code, rec.Body)
+			}
+			var c ImportConflict
+			if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || c.ImportId == nil || *c.ImportId != id {
+				t.Errorf("%s: body %s", outcome, rec.Body)
+			}
+			if got, _ := r.store.Get("alice", id); got.Outcome() != outcome {
+				t.Errorf("%s: the import now reads %q", outcome, got.Outcome())
+			}
+		}
+	})
+
+	t.Run("answers 409 to a cancel that lands after the run returned", func(t *testing.T) {
+		removing, release := make(chan struct{}), make(chan struct{})
+		r := newImportRig(t, rigOptions{removing: func() {
+			close(removing)
+			<-release
+		}})
+		free := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(free)
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		select {
+		case <-removing:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the archive was never removed")
+		}
+		rec := r.cancel("t", id)
+		free()
+		if rec.Code != http.StatusConflict || detailOf(problemOf(t, rec)) != "the latest attempt of this import has ended" {
+			t.Errorf("a cancel during the removal answered %d %s, want 409", rec.Code, rec.Body)
+		}
+		if done := waitEnded(t, r.store, id); done.Outcome() != importer.OutcomeComplete || !done.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", done.Outcome(), done.ArchiveRemoved())
+		}
+	})
+
+	t.Run("keeps a cancelled import blocking a new start", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		importOf(t, r.cancel("t", id), http.StatusAccepted)
+		if got := waitEnded(t, r.store, id); got.Outcome() != imports.OutcomeCancelled {
+			t.Fatalf("outcome %q, want cancelled", got.Outcome())
+		}
+		rec := r.start("t", archiveKey)
+		var c ImportConflict
+		if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &c) != nil || c.ImportId == nil || *c.ImportId != id {
+			t.Fatalf("a new start answered %d %s, want 409 naming %s", rec.Code, rec.Body, id)
+		}
+		if again := importOf(t, r.retry("t", id), http.StatusAccepted); len(again.Attempts) != 2 {
+			t.Errorf("the retry of a cancelled import = %+v", again)
+		}
+	})
+
+	t.Run("refuses a cross-site cancel", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		for _, h := range [][]string{
+			{"Origin", "https://evil.example"},
+			{"Sec-Fetch-Site", "cross-site"},
+			{"Content-Type", "text/plain"},
+		} {
+			rec := r.cancel("t", id, h...)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%v: status = %d, want 403", h, rec.Code)
+			}
+			if d := detailOf(problemOf(t, rec)); strings.Contains(d, "evil") {
+				t.Errorf("detail %q repeats the request", d)
+			}
+		}
+		if rec := r.cancel("", id); rec.Code != http.StatusUnauthorized {
+			t.Errorf("no token: status = %d, want 401", rec.Code)
+		}
+		if got, _ := r.store.Get("alice", id); got.Outcome() != string(imports.StatusRunning) {
+			t.Errorf("a refused cancel left the import %q", got.Outcome())
+		}
+		close(r.release)
+		if got := waitEnded(t, r.store, id); got.Outcome() != importer.OutcomeComplete {
+			t.Errorf("outcome %q, want complete", got.Outcome())
+		}
+	})
+
+	t.Run("answers another user's import 404 on cancel", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		r.seed(archiveKey, manifestKey, buildBundle(t, leftPad))
+		id := importOf(t, r.start("t", archiveKey), http.StatusAccepted).Id
+		waitEntered(t, r)
+		for _, target := range []string{id, "20260101T000000Z-00000000"} {
+			if rec := r.cancel("b", target); rec.Code != http.StatusNotFound || detailOf(problemOf(t, rec)) != "no such import" {
+				t.Errorf("%s: status = %d, body %s", target, rec.Code, rec.Body)
+			}
+		}
+		if got, _ := r.store.Get("alice", id); got.Outcome() != string(imports.StatusRunning) {
+			t.Errorf("bob's cancel left alice's import %q", got.Outcome())
+		}
+		close(r.release)
+		waitEnded(t, r.store, id)
+	})
+}
+
+func TestQueueRankOnTheImport(t *testing.T) {
+	t.Run("gives the queue rank only while queued", func(t *testing.T) {
+		r := newImportRig(t, rigOptions{hold: true})
+		b := buildBundle(t, leftPad)
+		r.seed(archiveKey, manifestKey, b)
+		r.seed(otherKey, otherMan, b)
+		running := importOf(t, r.start("t", archiveKey), http.StatusAccepted)
+		waitEntered(t, r)
+		queued := importOf(t, r.start("t", otherKey), http.StatusAccepted)
+		if queued.QueueAhead == nil || *queued.QueueAhead != 1 {
+			t.Errorf("the start's answer ranks %v, want 1", queued.QueueAhead)
+		}
+		if got := importOf(t, r.get("/api/imports/"+queued.Id, "t"), http.StatusOK); got.QueueAhead == nil || *got.QueueAhead != 1 {
+			t.Errorf("the queued import ranks %v, want 1", got.QueueAhead)
+		}
+		if got := importOf(t, r.get("/api/imports/"+running.Id, "t"), http.StatusOK); got.QueueAhead != nil {
+			t.Errorf("the running import ranks %d", *got.QueueAhead)
+		}
+		for _, imp := range listOfImports(t, r.get("/api/imports", "t")).Imports {
+			want := imp.Id == queued.Id
+			if (imp.QueueAhead != nil) != want || want && *imp.QueueAhead != 1 {
+				t.Errorf("the list ranks %s at %v", imp.Id, imp.QueueAhead)
+			}
+		}
+		if raw := r.get("/api/imports/"+running.Id, "t").Body.String(); strings.Contains(raw, "queueAhead") {
+			t.Errorf("the running import's answer names queueAhead: %s", raw)
+		}
+		close(r.release)
+		waitEnded(t, r.store, running.Id)
+		waitEntered(t, r)
+		waitEnded(t, r.store, queued.Id)
+		if got := importOf(t, r.get("/api/imports/"+queued.Id, "t"), http.StatusOK); got.QueueAhead != nil {
+			t.Errorf("the ended import ranks %d", *got.QueueAhead)
+		}
+	})
+}
+
+// slowAnswer holds Nexus's answer to the first upload, which Nexus has stored,
+// until the test releases it or the upload's context ends, as a slow network
+// would.
+type slowAnswer struct {
+	importer.Publisher
+	uploaded chan<- struct{}
+	release  <-chan struct{}
+	once     sync.Once
+}
+
+func (s *slowAnswer) Upload(ctx context.Context, file string, r io.Reader) error {
+	if err := s.Publisher.Upload(ctx, file, r); err != nil {
+		return err
+	}
+	first := false
+	s.once.Do(func() { first = true })
+	if !first {
+		return nil
+	}
+	close(s.uploaded)
+	select {
+	case <-s.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

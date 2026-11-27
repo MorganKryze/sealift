@@ -1,13 +1,22 @@
 package service
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/MorganKryze/sealift/archive"
@@ -300,7 +309,7 @@ func TestListStaysInTheUsersFolder(t *testing.T) {
 	f.put("user-bob", base+"his.tar.gz", 1)
 	f.put("user-bob", base+"manifest.json", 1)
 	f.put("user-bob", base+"manifest.json.sig", 1)
-	r := minioRig(t, f)
+	r := keyRig(t, f)
 
 	// A query parameter or a header must not move the bucket.
 	rec := r.get("/api/archives?bucket=user-bob&user=bob&prefix=elsewhere/", "t", "X-Auth-Request-Preferred-Username", "bob")
@@ -312,11 +321,11 @@ func TestListStaysInTheUsersFolder(t *testing.T) {
 		t.Errorf("the answer shows what alice does not own: %s", rec.Body)
 	}
 	calls := f.recorded()
-	if len(calls) != 3 || calls[0].Op != "list" || calls[0].Prefix != base || calls[1].Op != "list" || calls[1].Prefix != "packages/pip/" {
-		t.Fatalf("calls = %+v, want a list of each folder and a read of alice's manifest", calls)
+	if len(calls) != 4 || calls[0].Op != "list" || calls[0].Prefix != base || calls[1].Op != "list" || calls[1].Prefix != "packages/pip/" {
+		t.Fatalf("calls = %+v, want a list of each folder and a read of alice's manifest and signature", calls)
 	}
 	for _, c := range calls {
-		if c.Bucket != "user-alice" || c.Op == "list" && c.Max != MaxListed || c.Op == "get" && c.Key != base+"manifest.json" {
+		if c.Bucket != "user-alice" || c.Op == "list" && c.Max != MaxListed || c.Op == "get" && c.Key != base+"manifest.json" && c.Key != base+"manifest.json.sig" {
 			t.Errorf("call %+v", c)
 		}
 	}
@@ -429,7 +438,6 @@ func TestBadParameterAnswersAProblem(t *testing.T) {
 const pipBase = "packages/pip/"
 
 var (
-	npmManifest = []byte(`{"formatVersion": 2}`)
 	pipManifest = []byte(`{"formatVersion": 3, "ecosystem": "pip"}`)
 )
 
@@ -532,111 +540,152 @@ func TestListsBothFolders(t *testing.T) {
 	}
 }
 
-func TestListMarksAnArchiveInTheWrongFolder(t *testing.T) {
-	const (
-		npmHere = "its manifest is an npm archive's: keep the three files under packages/npm/"
-		pipHere = "its manifest is a pip archive's: keep the three files under packages/pip/"
-	)
-	seed := func(f *fakeMinio, folder string, manifest []byte) {
-		f.put(bucketAlice, folder+"x.tar.gz", 1)
-		f.putData(folder+"manifest.json", manifest)
-		f.put(bucketAlice, folder+"manifest.json.sig", 1)
+const (
+	reasonWrongNPM = "its manifest is an npm archive's: keep the three files under packages/npm/"
+	reasonWrongPip = "its manifest is a pip archive's: keep the three files under packages/pip/"
+	sealedAt       = "2026-11-25T09:00:00Z"
+)
+
+var otherPub, otherPriv = func() (ed25519.PublicKey, ed25519.PrivateKey) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
 	}
-	t.Run("marks", func(t *testing.T) {
-		f := newFakeMinio()
-		seed(f, pipBase+"npm-inside/", npmManifest)
-		seed(f, base+"pip-inside/", pipManifest)
-		seed(f, pipBase+"right/", pipManifest)
-		seed(f, base+"right/", npmManifest)
-		seed(f, pipBase+"garbled/", []byte("not a manifest"))
-		seed(f, pipBase+"unreadable/", npmManifest)
-		f.readErr[dataKey(bucketAlice, pipBase+"unreadable/manifest.json")] = errors.New("connection reset")
-		// Past archive.MaxManifestSize, 16 MiB: never read.
-		f.put(bucketAlice, pipBase+"huge/x.tar.gz", 1)
-		f.put(bucketAlice, pipBase+"huge/manifest.json", 16<<20+1)
-		f.put(bucketAlice, pipBase+"huge/manifest.json.sig", 1)
-		r := minioRig(t, f)
-		want := map[string]string{
-			pipBase + "npm-inside/x.tar.gz": npmHere,
-			base + "pip-inside/x.tar.gz":    pipHere,
-			pipBase + "right/x.tar.gz":      "",
-			base + "right/x.tar.gz":         "",
-			pipBase + "garbled/x.tar.gz":    "",
-			pipBase + "unreadable/x.tar.gz": "",
-			pipBase + "huge/x.tar.gz":       "",
-		}
-		for round := 1; round <= 2; round++ {
-			got := byKey(listOf(t, r.get("/api/archives", "t")))
-			for key, reason := range want {
-				if a := got[key]; a.Importable != (reason == "") || reasonOf(a) != reason {
-					t.Errorf("list %d, %s: importable %v reason %q, want %q", round, key, a.Importable, reasonOf(a), reason)
-				}
-			}
-		}
-		for _, folder := range []string{pipBase + "npm-inside/", base + "pip-inside/", pipBase + "right/", base + "right/", pipBase + "garbled/"} {
-			if n := f.gets(folder + "manifest.json"); n != 1 {
-				t.Errorf("%smanifest.json read %d times over two lists, want 1", folder, n)
-			}
-		}
-		if n := f.gets(pipBase + "huge/manifest.json"); n != 0 {
-			t.Errorf("a manifest over 16 MiB was read %d times", n)
-		}
-		for _, c := range f.recorded() {
-			if c.Op == "get" && c.ETag == "" {
-				t.Errorf("a manifest read without its listed ETag: %+v", c)
-			}
-		}
-	})
-	t.Run("at most 50 new manifests a list", func(t *testing.T) {
-		f := newFakeMinio()
-		for i := 0; i < 51; i++ {
-			seed(f, pipBase+"f"+strings.Repeat("0", 2-len(strconv.Itoa(i)))+strconv.Itoa(i)+"/", npmManifest)
-		}
-		r := minioRig(t, f)
-		count := func(l ArchiveList) (marked int, last Archive) {
-			for _, a := range l.Archives {
-				if reasonOf(a) == npmHere {
-					marked++
-				}
-			}
-			return marked, l.Archives[len(l.Archives)-1]
-		}
-		marked, last := count(listOf(t, r.get("/api/archives", "t")))
-		if marked != 50 || !last.Importable || last.Key != pipBase+"f50/x.tar.gz" {
-			t.Errorf("first list: %d marked, last %+v; want 50 marked and f50 left importable", marked, last)
-		}
-		if marked, _ := count(listOf(t, r.get("/api/archives", "t"))); marked != 51 {
-			t.Errorf("second list: %d marked, want 51", marked)
-		}
-		gets := 0
-		for _, c := range f.recorded() {
-			if c.Op == "get" {
-				gets++
-			}
-		}
-		if gets != 51 {
-			t.Errorf("%d manifest reads over two lists, want 51", gets)
-		}
+	return pub, priv
+}()
+
+// keyRig is a service for alice and bob over objects that trusts testPub.
+func keyRig(t *testing.T, objs Objects) rig {
+	t.Helper()
+	return newRigConfig(t, Config{
+		Verifier: fakeVerifier{claims: map[string]token.Claims{"t": named("alice"), "b": named("bob")}},
+		MinIO:    objs,
+		Settings: importer.Settings{PublicKey: testPub, PublicKeySHA256: archive.PublicKeySHA256(testPub)},
 	})
 }
 
-func TestListMarksEachUsersOwnManifest(t *testing.T) {
-	// The fake derives an ETag from the key, so both manifests share one,
-	// as two objects may on a real MinIO.
-	f := newFakeMinio()
-	folder := pipBase + "x/"
-	f.put(bucketAlice, folder+"x.tar.gz", 1)
-	f.putData(folder+"manifest.json", npmManifest)
-	f.put(bucketAlice, folder+"manifest.json.sig", 1)
-	f.put("user-bob", folder+"x.tar.gz", 1)
-	f.putDataIn("user-bob", folder+"manifest.json", pipManifest)
-	f.put("user-bob", folder+"manifest.json.sig", 1)
-	r := minioRig(t, f)
-	if a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]; a.Importable {
-		t.Fatalf("alice's npm manifest under %s left the row importable", pipBase)
+// manifestOf is an npm manifest of n packages for an archive of 2048 bytes,
+// with a review that names project when project is not empty.
+func manifestOf(t *testing.T, project string, n int) []byte {
+	t.Helper()
+	pkgs := make([]map[string]any, n)
+	for i := range pkgs {
+		name := "pkg-" + strconv.Itoa(i)
+		sum := sha512.Sum512([]byte(name))
+		pkgs[i] = map[string]any{
+			"name": name, "version": "1.0.0", "file": name + "-1.0.0.tgz",
+			"originalIntegrity": "sha512-" + base64.StdEncoding.EncodeToString(sum[:]),
+			"shippedSha512":     hex.EncodeToString(sum[:]), "publishConfigStripped": false,
+		}
 	}
-	if a := byKey(listOf(t, r.get("/api/archives", "b")))[folder+"x.tar.gz"]; !a.Importable || reasonOf(a) != "" {
-		t.Errorf("bob's pip archive: importable %v reason %q, want importable", a.Importable, reasonOf(a))
+	doc := map[string]any{
+		"formatVersion": 2, "toolVersion": "0.8.0", "analysisId": "20261125T085500Z", "createdAt": sealedAt,
+		"target":   map[string]any{"os": "linux", "cpu": "x64", "libc": "glibc", "node": "22.17.1", "pnpmVer": "10.34.5"},
+		"archive":  map[string]any{"sha256": strings.Repeat("ab", 32), "size": 2048},
+		"packages": pkgs,
+	}
+	if project != "" {
+		doc["review"] = map[string]any{"project": project, "cves": map[string]any{"before": []int{0, 1, 0, 0, 0}}}
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// seedFolder puts an archive of size bytes and manifest in folder, with
+// sig as manifest.json.sig when it is not nil.
+func seedFolder(f *fakeMinio, bucket, folder string, size int64, manifest, sig []byte) {
+	f.put(bucket, folder+"x.tar.gz", size)
+	f.putDataIn(bucket, folder+manifestName, manifest)
+	if sig != nil {
+		f.putDataIn(bucket, folder+signatureName, sig)
+	}
+}
+
+// sigNaming is a signature file of manifest made by priv that names the key
+// sha256 named.
+func sigNaming(t *testing.T, priv ed25519.PrivateKey, manifest []byte, named string) []byte {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{
+		"algorithm": "ed25519", "publicKeySha256": named, "signature": base64.StdEncoding.EncodeToString(ed25519.Sign(priv, manifest)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func signatureOf(a Archive) ArchiveSignature {
+	if a.Signature == nil {
+		return ""
+	}
+	return *a.Signature
+}
+
+func TestListChecksASignatureOncePerManifestAndSignatureAsStored(t *testing.T) {
+	f := newFakeMinio()
+	folder := base + "web-portal/"
+	m := manifestOf(t, "web-portal", 3)
+	seedFolder(f, bucketAlice, folder, 2048, m, signManifest(t, testPriv, m))
+	r := keyRig(t, f)
+	for round := 1; round <= 3; round++ {
+		a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+		if signatureOf(a) != ArchiveSignatureVerified || !a.Importable {
+			t.Fatalf("list %d: signature %q importable %v reason %q, want verified", round, signatureOf(a), a.Importable, reasonOf(a))
+		}
+	}
+	if n, s := f.gets(folder+manifestName), f.gets(folder+signatureName); n != 1 || s != 1 {
+		t.Errorf("three lists read the manifest %d times and the signature %d times, want once each", n, s)
+	}
+	for _, c := range f.recorded() {
+		if c.Op == "get" && c.ETag != f.etagOf(c.Key) {
+			t.Errorf("a read without the listed ETag: %+v", c)
+		}
+	}
+	f.change(folder + manifestName)
+	listOf(t, r.get("/api/archives", "t"))
+	if n := f.gets(folder + manifestName); n != 2 {
+		t.Errorf("a replaced manifest was read %d times in all, want 2", n)
+	}
+}
+
+func TestListReadsAManifestAgainOnceItsSignatureChanges(t *testing.T) {
+	f := newFakeMinio()
+	folder := base + "web-portal/"
+	m := manifestOf(t, "web-portal", 3)
+	seedFolder(f, bucketAlice, folder, 2048, m, signManifest(t, testPriv, m))
+	r := keyRig(t, f)
+	listOf(t, r.get("/api/archives", "t"))
+	// Another key signs the same manifest: only the signature file changes.
+	f.putData(folder+signatureName, signManifest(t, otherPriv, m))
+	f.change(folder + signatureName)
+	a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if n := f.gets(folder + manifestName); n != 2 {
+		t.Errorf("the manifest was read %d times, want again once its signature changed", n)
+	}
+	if signatureOf(a) != ArchiveSignatureUnknownKey || a.Importable || a.Crossing != nil {
+		t.Errorf("signature %q importable %v crossing %+v, want the new signature's refusal", signatureOf(a), a.Importable, a.Crossing)
+	}
+}
+
+func TestListNeverAnswersOneBucketFromAnothersCache(t *testing.T) {
+	// The fake derives an ETag from the key, so both users' files share
+	// their ETags, as two objects may on a real MinIO.
+	f := newFakeMinio()
+	folder := base + "x/"
+	mine := manifestOf(t, "alice-app", 2)
+	seedFolder(f, bucketAlice, folder, 2048, mine, signManifest(t, testPriv, mine))
+	theirs := manifestOf(t, "bob-app", 2)
+	seedFolder(f, "user-bob", folder, 2048, theirs, signManifest(t, otherPriv, theirs))
+	r := keyRig(t, f)
+	if a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]; signatureOf(a) != ArchiveSignatureVerified {
+		t.Fatalf("alice's archive: signature %q, want verified", signatureOf(a))
+	}
+	b := byKey(listOf(t, r.get("/api/archives", "b")))[folder+"x.tar.gz"]
+	if signatureOf(b) != ArchiveSignatureUnknownKey || b.Importable || b.Crossing != nil {
+		t.Errorf("bob's archive: signature %q importable %v crossing %+v, want his own refusal", signatureOf(b), b.Importable, b.Crossing)
 	}
 	bobReads := 0
 	for _, c := range f.recorded() {
@@ -644,25 +693,244 @@ func TestListMarksEachUsersOwnManifest(t *testing.T) {
 			bobReads++
 		}
 	}
-	if bobReads != 1 {
-		t.Errorf("bob's list read %d of his manifests, want 1", bobReads)
+	if bobReads != 2 {
+		t.Errorf("bob's list read %d of his files, want his manifest and his signature", bobReads)
 	}
 }
 
-func TestMarkCacheHoldsAtMost4096(t *testing.T) {
+func TestListVerifiesASignatureBeforeNamingTheCrossing(t *testing.T) {
+	f := newFakeMinio()
+	trusted := archive.PublicKeySHA256(testPub)
+	signed := manifestOf(t, "web-portal", 3)
+	seedFolder(f, bucketAlice, base+"signed/", 2048, signed, signManifest(t, testPriv, signed))
+	old := manifestOf(t, "", 2)
+	seedFolder(f, bucketAlice, base+"old/", 2048, old, signManifest(t, testPriv, old))
+	forged := manifestOf(t, "forged-name", 3)
+	// Another key signs it, and the file names the trusted key.
+	seedFolder(f, bucketAlice, base+"forged/", 2048, forged, sigNaming(t, otherPriv, forged, trusted))
+	foreign := manifestOf(t, "foreign-name", 3)
+	seedFolder(f, bucketAlice, base+"foreign/", 2048, foreign, signManifest(t, otherPriv, foreign))
+	got := byKey(listOf(t, keyRig(t, f).get("/api/archives", "t")))
+
+	a := got[base+"signed/x.tar.gz"]
+	if a.Crossing == nil || a.Crossing.Project == nil || *a.Crossing.Project != "web-portal" || a.Crossing.SealedAt != sealedAt || a.Crossing.Packages != 3 {
+		t.Errorf("a verified archive's crossing %+v, want web-portal sealed %s with 3 packages", a.Crossing, sealedAt)
+	}
+	if a.DeclaredSize == nil || *a.DeclaredSize != 2048 || a.Crossing != nil && a.Crossing.Review != nil {
+		t.Errorf("a verified archive's declared size %v, crossing review %+v", a.DeclaredSize, a.Crossing)
+	}
+	if o := got[base+"old/x.tar.gz"]; o.Crossing == nil || o.Crossing.Project != nil || signatureOf(o) != ArchiveSignatureVerified {
+		t.Errorf("a verified manifest with no review: crossing %+v, signature %q; want a crossing with no project", o.Crossing, signatureOf(o))
+	}
+	for _, key := range []string{base + "forged/x.tar.gz", base + "foreign/x.tar.gz"} {
+		if a := got[key]; a.Crossing != nil || a.DeclaredSize != nil || a.Importable {
+			t.Errorf("%s: crossing %+v, declared size %v, importable %v; an unverified manifest names nothing", key, a.Crossing, a.DeclaredSize, a.Importable)
+		}
+	}
+}
+
+func TestListRefusesEachKindWithItsWords(t *testing.T) {
+	f := newFakeMinio()
+	good := manifestOf(t, "web-portal", 3)
+	seedFolder(f, bucketAlice, base+"unsigned/", 2048, good, nil)
+	seedFolder(f, bucketAlice, base+"unknown-key/", 2048, good, signManifest(t, otherPriv, good))
+	seedFolder(f, bucketAlice, base+"mismatch/", 2048, good, sigNaming(t, otherPriv, good, archive.PublicKeySHA256(testPub)))
+	garbled := []byte(`{"formatVersion": 2, "packages": "none"}`)
+	seedFolder(f, bucketAlice, base+"garbled/", 2048, garbled, signManifest(t, testPriv, garbled))
+	seedFolder(f, bucketAlice, base+"bad-signature/", 2048, good, []byte(`{"algorithm": "rsa"}`))
+	seedFolder(f, bucketAlice, base+"pip-inside/", 2048, pipManifest, signManifest(t, testPriv, pipManifest))
+	seedFolder(f, bucketAlice, pipBase+"npm-inside/", 2048, good, signManifest(t, testPriv, good))
+	seedFolder(f, bucketAlice, base+"size-differs/", 2049, good, signManifest(t, testPriv, good))
+	// Past archive.MaxManifestSize, 16 MiB: refused unread.
+	f.put(bucketAlice, base+"huge/x.tar.gz", 2048)
+	f.put(bucketAlice, base+"huge/manifest.json", 16<<20+1)
+	f.putData(base+"huge/manifest.json.sig", signManifest(t, testPriv, good))
+	want := map[string]struct {
+		signature ArchiveSignature
+		reason    string
+	}{
+		base + "unsigned/x.tar.gz":      {ArchiveSignatureUnsigned, "no manifest.json.sig in its folder"},
+		base + "unknown-key/x.tar.gz":   {ArchiveSignatureUnknownKey, "signed with a key this side does not trust"},
+		base + "mismatch/x.tar.gz":      {ArchiveSignatureMismatch, "its signature does not match its manifest"},
+		base + "garbled/x.tar.gz":       {ArchiveSignatureVerified, "its manifest cannot be read"},
+		base + "huge/x.tar.gz":          {ArchiveSignatureUnreadable, "its manifest cannot be read"},
+		base + "bad-signature/x.tar.gz": {ArchiveSignatureUnreadable, "its manifest.json.sig cannot be read"},
+		base + "pip-inside/x.tar.gz":    {ArchiveSignatureVerified, reasonWrongPip},
+		pipBase + "npm-inside/x.tar.gz": {ArchiveSignatureVerified, reasonWrongNPM},
+		base + "size-differs/x.tar.gz":  {ArchiveSignatureVerified, "the archive does not match its manifest"},
+	}
+	r := keyRig(t, f)
+	for round := 1; round <= 2; round++ {
+		got := byKey(listOf(t, r.get("/api/archives", "t")))
+		for key, w := range want {
+			a := got[key]
+			if a.Importable || reasonOf(a) != w.reason || signatureOf(a) != w.signature {
+				t.Errorf("list %d, %s: importable %v signature %q reason %q, want %q %q", round, key, a.Importable, signatureOf(a), reasonOf(a), w.signature, w.reason)
+			}
+		}
+		if a := got[base+"size-differs/x.tar.gz"]; a.DeclaredSize == nil || *a.DeclaredSize != 2048 || a.Crossing == nil {
+			t.Errorf("an archive whose size differs: declared %v crossing %+v, want both from its verified manifest", a.DeclaredSize, a.Crossing)
+		}
+	}
+	if n := f.gets(base + "huge/manifest.json"); n != 0 {
+		t.Errorf("a manifest over 16 MiB was read %d times", n)
+	}
+}
+
+func TestListNamesAnUnknownKeyOnlyWhenItsFingerprintIs64Hex(t *testing.T) {
+	other := archive.PublicKeySHA256(otherPub)
+	f := newFakeMinio()
+	m := manifestOf(t, "web-portal", 1)
+	named := map[string]string{"hex": other, "short": other[:63], "upper": strings.ToUpper(other), "control": other[:63] + "\x1b"}
+	for folder, key := range named {
+		seedFolder(f, bucketAlice, base+folder+"/", 2048, m, sigNaming(t, otherPriv, m, key))
+	}
+	got := byKey(listOf(t, keyRig(t, f).get("/api/archives", "t")))
+	for folder := range named {
+		a := got[base+folder+"/x.tar.gz"]
+		if folder == "hex" {
+			if a.SignerKeySha256 == nil || *a.SignerKeySha256 != other || signatureOf(a) != ArchiveSignatureUnknownKey {
+				t.Errorf("%s: signer %v signature %q, want %s", folder, a.SignerKeySha256, signatureOf(a), other)
+			}
+			continue
+		}
+		if a.SignerKeySha256 != nil || signatureOf(a) != ArchiveSignatureUnreadable || a.Importable {
+			t.Errorf("%s: signer %v signature %q importable %v, want no signer and an unreadable signature", folder, a.SignerKeySha256, signatureOf(a), a.Importable)
+		}
+	}
+}
+
+func TestListListsEachFilesSizeAndUploadTime(t *testing.T) {
+	f := newFakeMinio()
+	folder := base + "web-portal/"
+	m := manifestOf(t, "web-portal", 1)
+	sig := signManifest(t, testPriv, m)
+	seedFolder(f, bucketAlice, folder, 2048, m, sig)
+	times := map[string]time.Time{"x.tar.gz": epoch, manifestName: epoch.Add(time.Minute), signatureName: epoch.Add(2 * time.Minute)}
+	for name, at := range times {
+		o := f.buckets[bucketAlice][folder+name]
+		o.LastModified = at
+		f.buckets[bucketAlice][folder+name] = o
+	}
+	a := byKey(listOf(t, keyRig(t, f).get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if a.Files == nil || len(*a.Files) != 3 {
+		t.Fatalf("files %v, want the archive, its manifest and its signature", a.Files)
+	}
+	want := []ArchiveFile{{Name: "x.tar.gz", Size: 2048, Modified: epoch}, {Name: manifestName, Size: int64(len(m)), Modified: epoch.Add(time.Minute)}, {Name: signatureName, Size: int64(len(sig)), Modified: epoch.Add(2 * time.Minute)}}
+	for i, w := range want {
+		if g := (*a.Files)[i]; g.Name != w.Name || g.Size != w.Size || !g.Modified.Equal(w.Modified) {
+			t.Errorf("file %d: %+v, want %+v", i, g, w)
+		}
+	}
+	unsigned := newFakeMinio()
+	seedFolder(unsigned, bucketAlice, folder, 2048, m, nil)
+	if a := byKey(listOf(t, keyRig(t, unsigned).get("/api/archives", "t")))[folder+"x.tar.gz"]; a.Files == nil || len(*a.Files) != 2 {
+		t.Errorf("an unsigned folder lists files %v, want the archive and its manifest", a.Files)
+	}
+}
+
+// countingMinio counts the reads it opens and the bytes they serve.
+type countingMinio struct {
+	*fakeMinio
+	mu     sync.Mutex
+	reads  int
+	served int64
+}
+
+func (c *countingMinio) Get(ctx context.Context, bucket, key, etag string) (io.ReadCloser, s3.Object, error) {
+	body, o, err := c.fakeMinio.Get(ctx, bucket, key, etag)
+	if err != nil {
+		return nil, o, err
+	}
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return countedBody{body, c}, o, nil
+}
+
+type countedBody struct {
+	io.ReadCloser
+	c *countingMinio
+}
+
+func (b countedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.c.mu.Lock()
+	b.c.served += int64(n)
+	b.c.mu.Unlock()
+	return n, err
+}
+
+func TestListReadsAtMost50ManifestsAnd64MiBInOneList(t *testing.T) {
+	folderAt := func(i int) string { return base + "f" + strconv.Itoa(100+i) + "/" }
+	t.Run("60 manifests of 4 MiB", func(t *testing.T) {
+		c := &countingMinio{fakeMinio: newFakeMinio()}
+		for i := 0; i < 60; i++ {
+			c.put(bucketAlice, folderAt(i)+"x.tar.gz", 2048)
+			c.put(bucketAlice, folderAt(i)+manifestName, 4<<20)
+			c.put(bucketAlice, folderAt(i)+signatureName, 200)
+		}
+		r := keyRig(t, c)
+		l := listOf(t, r.get("/api/archives", "t"))
+		if c.served > 64<<20 {
+			t.Errorf("one list read %d bytes, want at most 64 MiB", c.served)
+		}
+		if c.reads > 2*50 {
+			t.Errorf("one list opened %d reads, want at most 50 manifests and their signatures", c.reads)
+		}
+		notChecked := 0
+		for _, a := range l.Archives {
+			if signatureOf(a) == ArchiveSignatureNotChecked {
+				notChecked++
+				if !a.Importable || a.Crossing != nil {
+					t.Errorf("%s: not checked, yet importable %v crossing %+v", a.Key, a.Importable, a.Crossing)
+				}
+			}
+		}
+		if notChecked == 0 || notChecked == 60 {
+			t.Errorf("%d of 60 archives not checked, want those past the bound only", notChecked)
+		}
+		before := c.served
+		listOf(t, r.get("/api/archives", "t"))
+		if c.served-before > 64<<20 || c.served == before {
+			t.Errorf("the second list read %d bytes, want the next ones within 64 MiB", c.served-before)
+		}
+	})
+	t.Run("60 small manifests", func(t *testing.T) {
+		c := &countingMinio{fakeMinio: newFakeMinio()}
+		for i := 0; i < 60; i++ {
+			m := manifestOf(t, "p"+strconv.Itoa(i), 1)
+			seedFolder(c.fakeMinio, bucketAlice, folderAt(i), 2048, m, signManifest(t, testPriv, m))
+		}
+		r := keyRig(t, c)
+		count := func() (verified int) {
+			for _, a := range listOf(t, r.get("/api/archives", "t")).Archives {
+				if signatureOf(a) == ArchiveSignatureVerified {
+					verified++
+				}
+			}
+			return verified
+		}
+		if n := count(); n != 50 || c.gets(folderAt(50)+manifestName) != 0 {
+			t.Errorf("first list verified %d, want 50 and the rest left for later", n)
+		}
+		if n := count(); n != 60 {
+			t.Errorf("second list verified %d, want 60", n)
+		}
+	})
+}
+
+func TestCheckCacheHoldsAtMost4096(t *testing.T) {
 	var h Handlers
 	for i := 0; i < 4096; i++ {
-		h.remember(strconv.Itoa(i), archive.NPM)
+		h.remember(strconv.Itoa(i), folderCheck{eco: archive.NPM})
 	}
-	if eco, ok := h.recall("0"); !ok || eco != archive.NPM || len(h.marks) != 4096 {
-		t.Fatalf("after 4096 marks: %q %v, %d kept", eco, ok, len(h.marks))
+	if c, ok := h.recall("0"); !ok || c.eco != archive.NPM || len(h.marks) != 4096 {
+		t.Fatalf("after 4096 checks: %+v %v, %d kept", c, ok, len(h.marks))
 	}
-	h.remember("one more", archive.Pip)
+	h.remember("one more", folderCheck{eco: archive.Pip})
 	if _, ok := h.recall("0"); ok || len(h.marks) != 1 {
-		t.Errorf("the 4097th mark kept %d marks, want the cache emptied first", len(h.marks))
-	}
-	if eco, ok := h.recall("one more"); !ok || eco != archive.Pip {
-		t.Errorf("the 4097th mark is %q %v", eco, ok)
+		t.Errorf("the 4097th check kept %d, want the cache emptied first", len(h.marks))
 	}
 }
 
@@ -708,4 +976,61 @@ func TestListKeepsOneFolderWhenTheOtherFails(t *testing.T) {
 			t.Errorf("detail %q", d)
 		}
 	})
+}
+
+func TestListRefusesASignatureOverItsBoundUnreadAndUncounted(t *testing.T) {
+	f := newFakeMinio()
+	big := base + "a-big/"
+	m := manifestOf(t, "big", 1)
+	f.put(bucketAlice, big+"x.tar.gz", 2048)
+	f.putData(big+manifestName, m)
+	f.put(bucketAlice, big+signatureName, archive.MaxSignatureSize+1)
+	for i := 0; i < 50; i++ {
+		folder := base + "f" + strconv.Itoa(100+i) + "/"
+		mi := manifestOf(t, "p"+strconv.Itoa(i), 1)
+		seedFolder(f, bucketAlice, folder, 2048, mi, signManifest(t, testPriv, mi))
+	}
+	r := keyRig(t, f)
+	got := byKey(listOf(t, r.get("/api/archives", "t")))
+	a := got[big+"x.tar.gz"]
+	if a.Importable || signatureOf(a) != ArchiveSignatureUnreadable || reasonOf(a) != "its manifest.json.sig cannot be read" {
+		t.Errorf("a signature one byte over the bound: importable %v signature %q reason %q", a.Importable, signatureOf(a), reasonOf(a))
+	}
+	if n, s := f.gets(big+manifestName), f.gets(big+signatureName); n != 0 || s != 0 {
+		t.Errorf("the refused folder was read: manifest %d, signature %d", n, s)
+	}
+	verified := 0
+	for _, a := range got {
+		if signatureOf(a) == ArchiveSignatureVerified {
+			verified++
+		}
+	}
+	if verified != 50 {
+		t.Errorf("verified %d of the 50 folders beside it, want 50: the refusal took a read", verified)
+	}
+}
+
+func TestListRemembersNoCheckOfAnObjectThatEndsShort(t *testing.T) {
+	f := newFakeMinio()
+	folder := base + "short/"
+	m := manifestOf(t, "short", 1)
+	seedFolder(f, bucketAlice, folder, 2048, m, signManifest(t, testPriv, m))
+	f.mu.Lock()
+	f.data[dataKey(bucketAlice, folder+manifestName)] = m[:len(m)-1]
+	f.mu.Unlock()
+	r := keyRig(t, f)
+	a := byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if signatureOf(a) != ArchiveSignatureNotChecked || a.Crossing != nil {
+		t.Errorf("a manifest that ended short: signature %q crossing %+v, want not checked", signatureOf(a), a.Crossing)
+	}
+	f.mu.Lock()
+	f.data[dataKey(bucketAlice, folder+manifestName)] = m
+	f.mu.Unlock()
+	a = byKey(listOf(t, r.get("/api/archives", "t")))[folder+"x.tar.gz"]
+	if signatureOf(a) != ArchiveSignatureVerified || !a.Importable {
+		t.Errorf("the next list: signature %q importable %v, want verified", signatureOf(a), a.Importable)
+	}
+	if n := f.gets(folder + manifestName); n != 2 {
+		t.Errorf("the manifest was read %d times, want 2", n)
+	}
 }

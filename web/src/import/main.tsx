@@ -14,6 +14,7 @@ import { createRoot } from "react-dom/client"
 import { applyTheme, readStoredTheme } from "@/components/theme-toggle"
 
 import { retryOnlyTransient } from "./api/queries"
+import { adoptStyleNonce } from "./lib/nonce"
 import { routeTree } from "./routeTree.gen"
 
 const router = createRouter({ routeTree })
@@ -23,6 +24,8 @@ declare module "@tanstack/react-router" {
     router: typeof router
   }
 }
+
+adoptStyleNonce(document)
 
 // The theme control lives in the settings sheet, which is not open at load.
 applyTheme(readStoredTheme())

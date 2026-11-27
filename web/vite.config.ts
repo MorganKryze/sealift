@@ -40,7 +40,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     // tests/ holds the browser gate, which runs under Playwright.
-    include: ["src/**/*.test.{ts,tsx}", "vite.config.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}", "vite.config.test.ts", "import-sources.test.ts"],
     setupFiles: ["./src/test/setup.ts"],
     globals: true,
     passWithNoTests: true,

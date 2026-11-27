@@ -1,8 +1,11 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -916,4 +919,46 @@ func TestCheckReasonsLeavesAFixedUnplacedCVEOut(t *testing.T) {
 	fixed := rank.Finding{ID: "CVE-2025-0301", Package: "qs", Version: "6.0.0", Severity: rank.Medium, FixedVersion: "6.2.0"}
 	req := withProject(request(map[string][]string{}, cveReason("Templates are ours.", "html-minifier")), fixed)
 	assertProblems(t, CheckReasons(r, req, askReasons()), nil)
+}
+
+func TestSignsTheProjectsNameInTheReview(t *testing.T) {
+	for name, tc := range map[string]struct{ project, read string }{
+		"a name the import reads": {"pdf-renderer", "pdf-renderer"},
+		"a name the import drops": {"pdf\u202erenderer", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHarness(t)
+			analysisDir := filepath.Join(t.TempDir(), "analyses", "20260910T080000Z")
+			h.buildAnalysis(analysisDir)
+			exportDir := filepath.Join(t.TempDir(), "exports", "20260917T101502Z.tmp")
+			exp := reviewedExport(t, h, analysisDir, exportDir, "Only our own build calls the gadget.")
+			exp.Project.Name = tc.project
+			if err := exp.Run(context.Background(), noopEmit); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			assertSigned(t, exportDir, h.store.SigningKey())
+			data, err := os.ReadFile(filepath.Join(exportDir, "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written struct {
+				Review struct {
+					Project *string `json:"project"`
+				} `json:"review"`
+			}
+			if err := json.Unmarshal(data, &written); err != nil {
+				t.Fatal(err)
+			}
+			if written.Review.Project == nil || *written.Review.Project != tc.project {
+				t.Errorf("review.project = %v, want the store's name %q", written.Review.Project, tc.project)
+			}
+			m, err := archive.ParseManifest(data)
+			if err != nil {
+				t.Fatalf("ParseManifest: %v", err)
+			}
+			if m.Review == nil || m.ReviewProblem != "" || m.Review.Project != tc.read {
+				t.Errorf("the import read %+v, %q, want the project %q", m.Review, m.ReviewProblem, tc.read)
+			}
+		})
+	}
 }

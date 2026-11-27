@@ -5,7 +5,7 @@ import { createPortal } from "react-dom"
 import { useBrand } from "@/components/frame/brand"
 import { cn } from "@/lib/utils"
 
-export type TermId = "cve" | "severity" | "major-jump" | "yanked" | "wheel" | "target"
+export type TermId = "cve" | "severity" | "major-jump" | "checks" | "sha512" | "yanked" | "wheel" | "target"
 
 // Matches the popover's w-72 class.
 const POPOVER_WIDTH = 288
@@ -27,7 +27,10 @@ export function termSide(prefer: "above" | "below", button: { top: number; botto
 const DOCS = "https://github.com/MorganKryze/sealift/blob/main/docs/how-sealift-chooses.md"
 const PYTHON_DOCS = "https://github.com/MorganKryze/sealift/blob/main/docs/python.md"
 
-/** Where each term's section of the docs lives: fixed addresses, so no link is built from data. */
+/**
+ * Where each term's section of the docs lives: fixed addresses, so no link is built from data. The import side's terms have
+ * none, as its network reaches no public docs.
+ */
 export const TERM_DOCS: Record<"cve" | "severity" | "major-jump", string> = {
   cve: `${DOCS}#known-cves`,
   severity: `${DOCS}#severity`,
@@ -41,10 +44,12 @@ export const PIP_TERM_DOCS: Record<"yanked" | "wheel" | "target", string> = {
   target: `${PYTHON_DOCS}#the-target`,
 }
 
-const DOCS_OF: Record<TermId, string> = { ...TERM_DOCS, ...PIP_TERM_DOCS }
+const DOCS_OF: Partial<Record<TermId, string>> = { ...TERM_DOCS, ...PIP_TERM_DOCS }
+
+const SHA512 = "Each package's own fingerprint, listed in the manifest."
 
 // The target's text names the deployment's air-gapped side, so it is written where the brand is read.
-const TERMS: Record<TermId, { name: string; text: string | ((offline: string) => string) }> = {
+const TERMS: Record<TermId, { name: string; text: string | { term: string; text: string }[] | ((offline: string) => string) }> = {
   cve: {
     name: "What a CVE is",
     text: "A CVE is a publicly listed security flaw, named by an id such as CVE-2024-4068. Known CVEs counts the ones the scan found in these versions.",
@@ -57,6 +62,15 @@ const TERMS: Record<TermId, { name: string; text: string | ((offline: string) =>
     name: "What a major jump is",
     text: "A major jump moves a package to a new major version, such as 4.x to 5.x. It may break your code, so it needs a reason.",
   },
+  checks: {
+    name: "What these checks mean",
+    text: [
+      { term: "Signature", text: "The connected side signed the manifest. This side checked it with the key its administrators trust." },
+      { term: "sha256", text: "A fingerprint of the file. One changed byte gives another one." },
+      { term: "sha512", text: SHA512 },
+    ],
+  },
+  sha512: { name: "What a sha512 is", text: SHA512 },
   yanked: {
     name: "What a yanked release is",
     text: "The publisher withdrew this release from the index, most often for a bug. pip still installs it when a file pins this exact version, as here.",
@@ -72,7 +86,7 @@ const TERMS: Record<TermId, { name: string; text: string | ((offline: string) =>
 }
 
 /**
- * An info button beside a term, opening two sentences and a link to its docs section. A disclosure, not a
+ * An info button beside a term, opening two sentences, or a short list of definitions, and a link to its docs section when it has one. A disclosure, not a
  * dialog: the focus stays on the button until Tab moves into the link. Escape, a second press or a press
  * outside closes it and gives the focus back to the button. The popover renders at the end of its dialog, or
  * of the body outside one, placed from the button, so no block that clips its overflow cuts it. `children`
@@ -80,6 +94,7 @@ const TERMS: Record<TermId, { name: string; text: string | ((offline: string) =>
  */
 export function Term({ id, prefer = "below", children }: { id: TermId; prefer?: "above" | "below"; children?: ReactNode }) {
   const term = TERMS[id]
+  const docs = DOCS_OF[id]
   const brand = useBrand()
   const text = typeof term.text === "function" ? term.text(brand.offline) : term.text
   const [open, setOpen] = useState(false)
@@ -89,7 +104,7 @@ export function Term({ id, prefer = "below", children }: { id: TermId; prefer?: 
   const popoverId = useId()
   const wrapper = useRef<HTMLSpanElement>(null)
   const button = useRef<HTMLButtonElement>(null)
-  const popover = useRef<HTMLSpanElement>(null)
+  const popover = useRef<HTMLDivElement>(null)
   const link = useRef<HTMLAnchorElement>(null)
   // Inside a dialog the popover stays in it, so the dialog's focus trap and outside press keep working.
   const [host, setHost] = useState<HTMLElement | null>(null)
@@ -183,7 +198,7 @@ export function Term({ id, prefer = "below", children }: { id: TermId; prefer?: 
       </button>
       {open ? (
         createPortal(
-          <span
+          <div
             ref={popover}
             id={popoverId}
             data-align={align}
@@ -191,25 +206,40 @@ export function Term({ id, prefer = "below", children }: { id: TermId; prefer?: 
             style={{ position: "fixed", ...place }}
             className="animate-fade z-60 block w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-rule-2 bg-bg p-3.5 text-left text-[13px] leading-normal font-normal text-ink-2 shadow-[0_8px_24px_rgba(var(--shadow),0.12)] motion-reduce:animate-none"
           >
-            <span className="block">{text}</span>
+            {typeof text === "string" ? (
+              <span className="block">{text}</span>
+            ) : (
+              <div role="group" aria-label={term.name}>
+                <dl className="grid gap-2">
+                  {text.map((d) => (
+                    <div key={d.term}>
+                      <dt className="font-semibold text-ink">{d.term}</dt>
+                      <dd>{d.text}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
             {children}
-            <a
-              ref={link}
-              href={DOCS_OF[id]}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-flex min-h-8 items-center font-medium text-ink underline"
-              onKeyDown={(event) => {
-                if (event.key !== "Tab") return
-                const next = event.shiftKey ? button.current : after()
-                if (!next) return
-                event.preventDefault()
-                next.focus()
-              }}
-            >
-              Read more
-            </a>
-          </span>,
+            {docs ? (
+              <a
+                ref={link}
+                href={docs}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex min-h-8 items-center font-medium text-ink underline"
+                onKeyDown={(event) => {
+                  if (event.key !== "Tab") return
+                  const next = event.shiftKey ? button.current : after()
+                  if (!next) return
+                  event.preventDefault()
+                  next.focus()
+                }}
+              >
+                Read more
+              </a>
+            ) : null}
+          </div>,
           host ?? document.body,
         )
       ) : (

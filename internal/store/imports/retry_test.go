@@ -3,6 +3,8 @@ package imports
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -260,4 +262,104 @@ func TestEndedAttemptsFailPendingPackagesAsInterrupted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// endedWith records an import whose first attempt ended incomplete with left-pad
+// failed and zeta published.
+func endedWith(t *testing.T, s *Store) Import {
+	t.Helper()
+	imp := newImport(t, s, "alice")
+	if _, _, err := s.Begin(imp.User, imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := pendingResults()
+	pkgs[0].State, pkgs[0].Kind, pkgs[0].Reason = importer.Failed, importer.KindNexus, "no answer"
+	pkgs[1].State = importer.Published
+	rep := importer.Report{Outcome: importer.OutcomeIncomplete, Packages: pkgs, Counts: importer.Counts{Published: 1, Failed: 1}}
+	if err := s.Finish(imp.User, imp.ID, 1, rep, nil); err != nil {
+		t.Fatal(err)
+	}
+	return imp
+}
+
+func TestStoreRetryList(t *testing.T) {
+	t.Run("records the files a retry takes", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := endedWith(t, s)
+		got, err := s.Retry(imp.User, imp.ID, "left-pad-1.3.0.tgz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := s.Get(imp.User, imp.ID)
+		for _, i := range []Import{got, stored} {
+			if r := i.Attempts[1].Retry; len(r) != 1 || r[0] != "left-pad-1.3.0.tgz" {
+				t.Errorf("the new attempt's list = %v", r)
+			}
+			if i.Attempts[0].Retry != nil {
+				t.Errorf("the first attempt has a list: %v", i.Attempts[0].Retry)
+			}
+		}
+	})
+	t.Run("records no list for a whole retry", func(t *testing.T) {
+		for name, files := range map[string][]string{"nil": nil, "empty": {}} {
+			s, _ := openStore(t, testRoot(t))
+			imp := endedWith(t, s)
+			got, err := s.Retry(imp.User, imp.ID, files...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Attempts[1].Retry != nil {
+				t.Errorf("%s: list %v, want none", name, got.Attempts[1].Retry)
+			}
+			raw, err := os.ReadFile(filepath.Join(s.dir(imp.User, imp.ID), recordFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), `"retry"`) {
+				t.Errorf("%s: the record writes a retry list", name)
+			}
+		}
+	})
+	t.Run("records a list that names every package of the attempt", func(t *testing.T) {
+		// Nexus did not answer, so every package failed with one cause and
+		// a retry of that cause lists them all.
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		if _, _, err := s.Begin(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		pkgs := pendingResults()
+		for i := range pkgs {
+			pkgs[i].State, pkgs[i].Kind, pkgs[i].Reason = importer.Failed, importer.KindNexus, "no answer"
+		}
+		rep := importer.Report{Outcome: importer.OutcomeIncomplete, Packages: pkgs, Counts: importer.Counts{Failed: len(pkgs)}}
+		if err := s.Finish(imp.User, imp.ID, 1, rep, nil); err != nil {
+			t.Fatal(err)
+		}
+		files := []string{"left-pad-1.3.0.tgz", "zeta-2.0.0.tgz"}
+		got, err := s.Retry(imp.User, imp.ID, files...)
+		if err != nil {
+			t.Fatalf("a list of every failed package: err = %v", err)
+		}
+		if r := got.Attempts[1].Retry; strings.Join(r, " ") != strings.Join(files, " ") {
+			t.Errorf("the new attempt's list = %v, want %v", r, files)
+		}
+	})
+	t.Run("refuses a list that is not failed packages of the latest attempt", func(t *testing.T) {
+		for name, files := range map[string][]string{
+			"a published package": {"zeta-2.0.0.tgz"},
+			"an unknown file":     {"other-1.0.0.tgz"},
+			"a duplicate":         {"left-pad-1.3.0.tgz", "left-pad-1.3.0.tgz"},
+			"more than listed":    {"left-pad-1.3.0.tgz", "a", "b"},
+		} {
+			s, _ := openStore(t, testRoot(t))
+			imp := endedWith(t, s)
+			if _, err := s.Retry(imp.User, imp.ID, files...); !errors.Is(err, ErrRetryList) {
+				t.Errorf("%s: err = %v, want ErrRetryList", name, err)
+			}
+			if got, _ := s.Get(imp.User, imp.ID); len(got.Attempts) != 1 {
+				t.Errorf("%s: a refused list left %d attempts", name, len(got.Attempts))
+			}
+		}
+	})
 }

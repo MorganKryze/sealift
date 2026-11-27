@@ -201,7 +201,7 @@ For `is not a PEM private key` or `is not an Ed25519 key`, the file is damaged o
 
 ## Import
 
-These messages come from `sealift import` (exit code 3 for a refusal, 2 for a settings error) and from the import service, which shows a refusal as the cause on the import's page. Nothing was published in any of them. [Archive format](dev/archive-format.md#what-sealift-import-checks) describes the check order.
+These messages come from `sealift import` (exit code 3 for a refusal, 2 for a settings error) and from the import service, which shows a refusal as the cause on the import's page. Nothing was published in any of them. The service also checks each signature when it lists your folder, so the home marks such an archive Refused before anyone presses Import, with a shorter reason: `signed with a key this side does not trust`, `its signature does not match its manifest` or `its manifest.json.sig cannot be read`. [Archive format](dev/archive-format.md#what-sealift-import-checks) describes the check order.
 
 ### the archive is unsigned
 
@@ -225,7 +225,7 @@ The signature verified, but the manifest names no format, or a format this impor
 
 ### MinIO could not list packages/pip/
 
-**Archives** shows `MinIO could not list packages/pip/: ` followed by MinIO's reason, and still lists `packages/npm/`. The import service's MinIO user has a policy that covers `packages/npm/` alone, as before sealift imported Python packages. Ask the administrators to extend it as [the request](admin-request.md#minio) gives it; nothing else changes.
+Choose an archive shows `MinIO could not list packages/pip/: ` followed by MinIO's reason, and still lists `packages/npm/`. The import service's MinIO user has a policy that covers `packages/npm/` alone, as before sealift imported Python packages. Ask the administrators to extend it as [the request](admin-request.md#minio) gives it; nothing else changes.
 
 ### the settings name no pip repository
 
@@ -238,6 +238,46 @@ The import and the service start only with a trusted key. They exit with code 2 
 ### signatureKeyFile is an unknown field
 
 A settings file written for 0.4 still holds `signatureKeyFile`. Remove the line and add `publicKeyFile`, as [The air gap](air-gap.md#the-import) shows.
+
+## A failed import
+
+The import page shows one block per cause, under the count of packages not in Nexus. Each block's Retry sends that cause's packages alone. The packages already in Nexus stay there, and the archive stays in MinIO until every package is in. [Importing](importing.md#the-causes-of-a-failed-import) shows the page.
+
+### No answer from Nexus
+
+Nexus closed the connection or sent no answer for these packages. The service waits up to 5 minutes for Nexus to start answering. Check that Nexus is up and reachable from the service, then retry: nothing else needs to change.
+
+### Too large for Nexus
+
+Nexus answered 413 to the upload. The block gives the file's size and, when a smaller file went through in an earlier or later attempt, the size of the largest one, so the limit sits between the two. Press **Copy request** and send it to Nexus's administrators: the limit sits in Nexus or in the proxy in front of it. Retry once they raise it.
+
+### Nexus refused it
+
+Nexus answered another status, such as 401, 403 or 500. The status sits in the block, and Nexus's own words in the log, shown as text. A 401 or 403 means the import account lacks a privilege on the repository: ask the administrators to check it. A 5xx is Nexus's own failure. Retry once it is fixed.
+
+### Another file under the same version
+
+Nexus holds this name and version with another sha512, and sealift never overwrites a version. **Compare the two sha512** sets the archive's beside Nexus's. Under Nexus's copy, `Uploaded` gives the day Nexus received it and, when Nexus tells the import account, who uploaded it. Nexus may withhold the uploader from an import account with few privileges. For a scoped npm package such as `@babel/code-frame`, the service asks Nexus by its group, `babel`, and its name, `code-frame`. When the copy in Nexus is the wrong one, remove it there (**Copy its path** gives its path), then retry. When it is the right one, the archive is not: export it again.
+
+### Could not read the archive from MinIO
+
+MinIO did not give the archive's bytes, or stopped partway. Retry: the retry reads the archive again. If it fails again, check that the archive is still in your folder, unchanged.
+
+### Stopped before it was published
+
+The service stopped, restarted or took a cancel before these packages were published. Retry: nothing needs to change.
+
+### Not the package the manifest names
+
+The archive does not hold what its signed manifest names for these packages, so a retry reads the same wrong files. Bring the archive again from the connected side, upload it with its manifest and its signature, and start a new import.
+
+### Failed on this side
+
+A file of the service or its Nexus client failed, such as a full data volume. Retry once. If it fails the same way, ask the contact the page names to check the service's data volume and settings file.
+
+### Not in Nexus
+
+sealift 0.4.0 or earlier recorded this package with no cause. Read the reason the block shows, fix what it names, and retry.
 
 ## Reporting a problem
 

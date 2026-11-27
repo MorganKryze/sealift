@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress"
 import { archiveName, counts, latestAttempt, type Attempt, type Import } from "@/import/lib/outcome"
 import { formatWhen } from "@/lib/utils"
 
+import { crossingLabel, folderLabel } from "./archive-row"
 import { OutcomeBadge } from "./outcome-badge"
 
 const clamp = "line-clamp-2 [overflow-wrap:anywhere]"
@@ -13,10 +14,19 @@ function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`
 }
 
-/** One import of the list: a single link to the import, with what its latest attempt did. */
+/** The import's name on the list and in its page's breadcrumb: its signed crossing, else its folder. */
+export function importName(imp: Import): string {
+  const project = latestAttempt(imp).report.crossing?.project
+  return project ? crossingLabel(project, imp.createdAt, [imp.createdAt]) : folderLabel(imp.archive.key)
+}
+
+/** One import of the list: a single link to the import, named by its signed crossing as on the home, with what its latest attempt did. */
 export function ImportRow({ imp }: { imp: Import }) {
   const attempt = latestAttempt(imp)
-  const { folder, file } = archiveName(imp.archive.key)
+  const { file } = archiveName(imp.archive.key)
+  const project = attempt.report.crossing?.project
+  const name = importName(imp)
+  const path = imp.archive.key.slice(0, imp.archive.key.length - file.length)
   return (
     <li className="border-t border-line first:border-t-0">
       <Link
@@ -25,13 +35,11 @@ export function ImportRow({ imp }: { imp: Import }) {
         className="grid min-h-18 grid-cols-[minmax(0,1fr)_128px_288px_16px] items-center gap-5 px-5 py-4 text-ink outline-none hover:bg-card focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       >
         <div className="min-w-0">
-          <p title={file} className={`font-mono text-[13px] font-medium ${clamp}`}>
-            {file}
+          <p data-row-name="" className={project ? `font-semibold ${clamp}` : `font-mono text-[13px] font-medium ${clamp}`}>
+            {name}
           </p>
           <p className="mt-1 flex min-w-0 gap-2 text-xs text-muted">
-            <span title={folder} className={`min-w-0 font-mono text-[11.5px] ${clamp}`}>
-              {folder}
-            </span>
+            <span className={`min-w-0 font-mono text-[11.5px] ${clamp}`}>{path}</span>
             <time dateTime={imp.createdAt} className="flex-none whitespace-nowrap before:mr-2 before:content-['·']">
               {formatWhen(imp.createdAt)}
             </time>

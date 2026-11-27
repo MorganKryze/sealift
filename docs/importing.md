@@ -6,17 +6,49 @@ Sign in through your organisation's gateway and open its address. Every screen s
 
 ## Home
 
-![The home for alice: Good afternoon, alice, the Import card, then Needs you with archives to import, failed and refused ones, In progress with a queued and a running import, and Done today](assets/offline-home.png)
+![The home for alice: the Import card, then Needs you with a cancelled import and two refused folders, the archives to import with their Compliant chip, and Done today](assets/offline-home.png)
 
 The home greets you by name, such as `Good morning, alice`, and offers one card, **Import** an archive, which opens Choose an archive. Three groups follow, newest first. A group with no row is left out.
 
 | Group | Holds | Row's action |
 | --- | --- | --- |
-| Needs you | Each archive in your folders with no import yet, with its ecosystem, its size and when it was uploaded, such as `uploaded 3 hours ago`; an archive that cannot be imported, or whose latest import was refused, marked Refused with its reason; and the latest import of an archive that ended incomplete or interrupted, marked Failed, with how many packages are not in Nexus | **Import** opens Choose an archive with that archive's start panel open; **Open** otherwise |
+| Needs you | Each archive in your folders with no import yet; an archive the list refused, marked Refused with its reason; and the latest import of an archive that ended incomplete, interrupted or cancelled, marked Failed or Cancelled, with how many packages are not in Nexus | **Import** opens Choose an archive with that archive's start panel open; **Open** otherwise |
 | In progress | Imports queued (Queued, Waiting its turn) or running (Importing, with the packages done so far) | **Open** |
 | Done today | Imports that completed since midnight, with how many packages are in Nexus | **Open** |
 
-A group shows ten rows, then **Show all**, such as Show all 12 archives and imports under Needs you. With nothing in any group, Needs you reads `No archive in` and your two folders, or that MinIO is not configured.
+A group shows ten rows, then **Show all**, such as Show all 12 archives. With nothing in any group, Needs you reads `No archive in` and your two folders, or that MinIO is not configured.
+
+### An archive's row
+
+The service checks each archive's signature when it lists your folder, before anyone presses Import. An archive whose signature verifies with the trusted key is named by the crossing its signed manifest records: the project and the day it was sealed, such as `sealift-demo · 27 Nov`, and `· 2` after the second crossing of the same project that day. A manifest from sealift 0.7.0 or earlier names no project, so its row shows the folder, such as `release-070/`. Under the name, the row reads `npm · 92 packages · 2.3 MB · uploaded less than a minute ago`.
+
+A verified archive carries the **Compliant** chip. Pressing it opens `3 checks passed`:
+
+| Check | What it says |
+| --- | --- |
+| Files | The folder `holds the archive, its manifest and its signature` |
+| Signature | `Ed25519, by the key this side trusts` |
+| Folder | `an npm manifest, in packages/npm/`, or the pip one |
+| Contents | `sha256 and sha512, checked when the import starts`, shown as not yet checked |
+
+An archive the list has not checked yet reads `Not checked yet` in place of the chip. The list checks at most 50 new manifests each time it reads the folders, and the next list checks the rest.
+
+### A refused archive
+
+An archive whose files fail a check sits under Needs you, marked Refused with its reason, such as `signed with a key this side does not trust` or `its signature does not match its manifest`. **Open** shows the refused panel over the home.
+
+![The refused panel for other-key/: Signed with a key this side does not trust, the two keys compared, and What to do](assets/import-refused.png)
+
+The panel's title names the cause: `The signature does not match the manifest.`, `Signed with a key this side does not trust.` or `The archive does not match its manifest.`. Under it, `Nothing reached Nexus. Stopped at the signature check.` The Files block lists the archive, `manifest.json` and `manifest.json.sig` with their state, such as `Not checked` or `Do not match`. For an unknown key, a Keys block sets `Signed with` beside `Trusted here`, both as sha256, and counts how many characters differ. **Copy details** puts the facts on the clipboard for your administrators.
+
+`What to do` says how to clear it:
+
+| Cause | What to do |
+| --- | --- |
+| A file changed after the export | `Download the files marked Do not match again from Online.` A new upload into the same folder replaces them, and the next list checks them again. `If the new copy is refused too`, see your administrators. |
+| Another key signed it | `Send your administrators the details, then remove the three files from your folder.` `To trust another key` follows. |
+
+The panel has no button to remove the files. Remove them in MinIO's browser.
 
 ## The trusted key
 
@@ -44,8 +76,12 @@ An archive can be imported when its folder holds one archive, its `manifest.json
 | `no manifest.json.sig in its folder` | Upload the signature next to the manifest. sealift 0.4.0 and earlier wrote none: export such an archive again. |
 | `its manifest is a pip archive's: keep the three files under packages/pip/` | Move the archive, its manifest and its signature to `packages/pip/`. |
 | `its manifest is an npm archive's: keep the three files under packages/npm/` | Move the archive, its manifest and its signature to `packages/npm/`. |
+| `signed with a key this side does not trust` | Send your administrators the details from the refused panel, then remove the three files. |
+| `its signature does not match its manifest` | Download `manifest.json` and `manifest.json.sig` again from the connected side and upload them into the same folder. |
+| `the archive does not match its manifest` | The archive's size differs from the one the signed manifest states: download the archive again. |
+| `its manifest cannot be read` or `its manifest.json.sig cannot be read` | Upload the file again: it was cut or replaced in transit. |
 
-The list reads each manifest to tell which folder it belongs in, at most 50 new manifests each time it reads the folders. A row past those 50, or whose manifest cannot be read, shows no such reason until a later list. The import itself checks the folder again once the signature verifies, and refuses an archive in the wrong one with `the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/`, or `the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/`.
+The list checks each manifest's signature with the trusted key, then reads which folder the manifest belongs in. It checks at most 50 manifests it has not checked before, and reads at most 64 MiB, each time it reads the folders. A row past those bounds reads `Not checked yet` until a later list. A new upload of the manifest or its signature is checked again. The import itself checks everything again when it starts, and refuses an archive in the wrong folder with `the manifest describes a pip archive, and this folder takes npm archives: move the three files to packages/pip/`, or `the manifest describes an npm archive, and this folder takes pip archives: move the three files to packages/npm/`.
 
 When MinIO refuses to list one of the two folders, for instance before the administrator's MinIO policy covers `packages/pip/`, the list still shows the other folder's archives.
 
@@ -69,60 +105,67 @@ If the archive already has an import that has not completed, the panel says `Thi
 
 ## Imports
 
-Imports lists every import you started, newest first, with its state, its attempt and its counts of `published`, `present` and `failed` packages. A row that ended `incomplete` says how many packages are not in Nexus and sends you to its retry. `No import yet` is the empty list. While an import is running or queued, the list says `One import runs at a time; the others wait in the order they were started.` and updates every 5 seconds.
+Imports lists every import you started, newest first, with its state, its attempt and its counts of `published`, `present` and `failed` packages. `No import yet` is the empty list. While an import is running or queued, the list says `One import runs at a time; the others wait in the order they were started.` and updates every 5 seconds.
 
 ## One import
 
-An import shows the archive's name and folder, its state, the settings it ran with (the attempt number, the start, the archive size, the Nexus repository and address, the target platform and the Node and pnpm versions), and a notice when Nexus, MinIO or the key set is reached over plain http.
+An import's page names it as the home does, such as `sealift-demo · 27 Nov`, and sets a step bar above it: `Check`, `Publish` and `In Nexus`. The settings it ran with follow: the archive size, the Nexus repository and address, and the target. A notice says when Nexus, MinIO or the key set is reached over plain http.
 
-### States
+### In the queue
 
-| State | Meaning |
+Imports run one at a time for every user. A queued import reads `Waiting its turn`, then its place, such as `1 import ahead of this one` or `No import ahead of this one`, and `Keeps its place if you leave this page`. **Cancel** takes it out of the queue at once, with no confirm: nothing has run yet.
+
+### Check and publish
+
+Once its turn comes, the import reads the manifest, then checks the archive against it. The check reads the whole archive once, so a large archive can take minutes. When the checks pass, the archive's line gains the **Compliant** chip, and its `3 checks passed` reads Signature `Ed25519, by the key this side trusts`, Archive `sha256 as the signed manifest states it` and Packages, such as `92 sha512 as the manifest lists them`.
+
+![An import publishing: 25 of 92 packages in Nexus, 4 packages failed, Causes at the end, and the live log](assets/import-running.png)
+
+While it publishes, the title reads the time left, `Estimating time left` at first, and the line under it counts, such as `54 of 92 packages in Nexus` and `3 packages failed`, with `Causes at the end`. The log below grows as each package ends. A reload brings it back with no line twice. Nexus's own answers, such as its 413 page, show in the log and nowhere else, as text.
+
+**Cancel** asks first, in place: `Packages already in Nexus stay there; a retry publishes the rest.`, with **Keep running**, which holds the focus, and **Cancel import**. The package in flight finishes, and the packages not reached fail as stopped before they were published. The page then reads `Import cancelled`, how long it ran and how many packages are in Nexus, such as `After 1 min 12 s. 63 of 265 packages are in Nexus.`, the log, and **Retry 202 packages**. A cancelled import removes nothing from MinIO, and its archive cannot start a second import until this one completes.
+
+### The causes of a failed import
+
+An import that ends with failures reads, for example, `5 packages not in Nexus`, then `87 of 92 packages in Nexus. The archive stays in MinIO until all are in.` One closed block follows per cause, each with its packages and the action that clears it. The first cause a retry can clear leads with the page's primary **Retry**. The log stays folded below, and `Still blocked after these steps?` names your administrators last.
+
+![A failed import: No answer from Nexus, Too large for Nexus and Another file under the same version, each with its packages and its action](assets/import-incomplete.png)
+
+| Cause | What the block says and offers |
 | --- | --- |
-| `Queued` | Waiting its turn. The panel says `Waiting its turn`. |
-| `Running` | Going through its stages, see below. |
-| `Complete` | Every package is in Nexus. |
-| `Incomplete` | At least one package failed. |
-| `Refused` | A check failed before the first package, the signature check first. |
-| `Interrupted` | The service stopped before the attempt ended. |
-| `Not recorded` | A record that names no state this version knows. |
+| `No answer from Nexus` | `Nothing needs to change before a retry.` and Retry, such as **Retry 2 packages**. |
+| `Too large for Nexus` | `Nexus refused this file as too large.`, the file's size and, when a smaller file went through in any attempt, `The largest file that went through is 308.2 KB, so the limit sits between the two sizes.` Then `Raise Nexus's upload limit above this file's size` with **Copy request** for Nexus's administrators, and Retry once the limit is raised. |
+| `Nexus refused it` | Nexus's status, such as `Nexus answered 401 and 500 to these 2 packages. Its words are in the log.`, and Retry. A status this version does not name reads the same way, with its number. |
+| `Another file under the same version` | `Nexus holds` the version `with a different sha512`. The steps are `Compare the two sha512`, `Remove the copy in Nexus` with **Copy its path**, then Retry once the copy is removed. Under Nexus's copy, `Uploaded` gives the day and, when Nexus says so, the account. sealift never overwrites a version. |
+| `Could not read the archive from MinIO` | `MinIO did not give the archive's bytes for` the packages, `A retry reads the archive again.`, and Retry. |
+| `Stopped before it was published` | `Nothing needs to change before a retry.` and Retry. |
+| `Not the package the manifest names` | The archive does not hold what its manifest names, `so a retry would read the same files.` Bring the archive again from Online, then start a new import. |
+| `Failed on this side` | `Something on this side failed` with a file of the service or its Nexus client. Retry, and ask the contact if it fails the same way. |
+| `Not in Nexus` | A package recorded by sealift 0.4.0 or earlier, which kept no cause: `Recorded by an older sealift, with no cause.` and its reasons, then Retry. |
 
-While it runs, one panel shows the stage and stays in place: `Waiting its turn`, `Reading the manifest`, `Checking the archive` (the check reads the whole archive once and shows no byte progress, so a large archive can take minutes) and `Publishing packages: 37 of 101` with a bar and the counts `published`, `present`, `failed` and `pending`. The page updates every 2 seconds. When the attempt ends, the panel reads `Attempt 1 ended: Complete`, or the state that applies.
+Each Retry sends only that cause's packages. Every other package is read from Nexus and never uploaded, and one Nexus still lacks keeps the cause it had. [Troubleshooting](troubleshooting.md#a-failed-import) gives each cause's fix. Earlier attempts stay listed under `Earlier attempts`, each with its report.
 
-![A running import, publishing packages: 37 of 101](assets/import-running.png)
+### Done
 
-### How an attempt ends
+![A completed import: 92 packages in Nexus, the counts, Checks with 3 passed, the comment to add to the pull request, and Done](assets/import-done.png)
 
-| Card | When | What it says |
-| --- | --- | --- |
-| `Archive removed from MinIO` | `Complete`, the removal recorded | `All 101 packages are in Nexus: 0 published, 101 present.` The archive, the manifest and the signature were removed, in that order, after each still carried the ETag the import read. The card shows `Archive ETag`, `Manifest ETag` and `Signature ETag`. |
-| `Archive removed from MinIO, manifest kept` | `Complete`, the manifest or the signature could not go | The reason follows. |
-| `Archive kept in MinIO` | `Complete`, the removal failed or was refused | The reason, and a `Retry import` button. |
-| `Checking the archive's removal` | `Complete`, no removal recorded yet | The page updates until the service records it. |
-| `Refused before the first package` | `Refused` | The reason, such as both digests when the expected sha256 differs, or one of the signature reasons that [Troubleshooting](troubleshooting.md#import) lists. `This attempt published nothing and read no package.` and `Go to archives`. Starting the archive again is allowed. |
-| `Stopped before it ended` | `Interrupted` | `The service stopped or restarted before this attempt ended.`, how many packages were finished and how many were not. |
+A completed import reads, for example, `92 packages in Nexus` and `sealift-demo · 27 Nov · imported by alice`. Under `In Nexus · npm` it counts `2 packages published` and `90 already there`, across every attempt of the import, and names the archive `removed from your folder`, or `Checking whether it left your folder` until the removal is recorded.
 
-The words `complete` and `removed` appear only when the record says so. The `Archive sha256 check` block says `The archive matched: its manifest carries a valid signature by this key, and the archive passed its checks against the manifest.` only when the attempt recorded that the signature verified and the checks passed, and `The archive has not passed its checks.` when it recorded that they did not. An attempt that has not reached the checks yet, because it is queued or running before the manifest is read, says `The archive's checks have not run yet.` An attempt that ended with no check result, such as one interrupted while it waited or a record written by 0.4.0, says `Not recorded: this attempt did not record the archive's checks.` A package of a 0.4.0 record has no kind, and its next action is the general one: `Read the reason: it names what failed. Fix that, then retry.`
+`Checks · 3 passed` lists Signature, Archive and Packages, such as `92 of 92 sha512 in the manifest`, each sha256 by its first and last eight characters. `Compare with the connected side` takes a sha256 you paste, such as the one `shasum -a 256` gives for the sealed file, and says `Matches the archive's sha256`, `Matches the signing key's sha256` or how many characters differ. The browser compares and sends nothing.
 
-The `Archive sha256 check` block shows `Expected sha256` (`No expected sha256 was given.` when you gave none), `Manifest sha256` and `Public key sha256`, the trusted key's, each with a `Copy` button. A record without the key's sha256 says `Not recorded`, and so does a record written by 0.4.0. Where the browser offers no clipboard, which is the case on a page served over plain http from any name other than `localhost`, the button selects the text and says `The clipboard is not available on this page. The text is selected: press Ctrl+C, or Command+C on a Mac, to copy it.`
+`Add this comment to your PR` holds a table to paste into the pull request that asked for the packages: Packages in Nexus, Packages updated, Known CVEs before and after, Carried with a reason, Major jumps and the archive's sha256 in full. The update, CVE, reason and jump figures come from the review the signed manifest carries. **Preview** opens the comment in place, and **Copy** puts it on the clipboard. Where the browser offers no clipboard, the comment is selected for Ctrl+C. **Done** goes back to the home.
 
-### The retry card
+The comment carries no link to the import and the page has no report link yet: the import's page answers only its importer, so a reviewer could not open it.
 
-An `Incomplete` import shows a card titled `1 of 101 packages are not in Nexus`. It lists what a retry does: it adds an attempt, reads the archive and its manifest from MinIO again and checks the sha256 again, reads every package from Nexus again, says how many are there already and stay untouched, uploads only what Nexus lacks and removes the archive only once every package is in Nexus. The card sorts the failures by what they need:
+### Other ends
 
-| Group | Kinds |
+| End | What the page says |
 | --- | --- |
-| `Can succeed on retry` | `interrupted`, `source`: retry as it is. |
-| `Fails again until fixed outside sealift` | `conflict`, `mismatch`, `nexus`, `local`, each with its count and its words. |
-| `Cause not recorded` | A package with no kind, or one this version does not know. |
+| `Refused` | `Refused before the first package`, the reason, and `This attempt published nothing and read no package.` Starting the archive again is allowed. |
+| `Interrupted` | `The service stopped or restarted before this attempt ended.` with how many packages were finished. |
+| A complete import whose archive stayed | `Kept in your folder` and the reason. |
 
-For a `conflict`, the card says `Nexus holds this version with other bytes, and sealift never overwrites it. If that copy is the wrong one, delete it in Nexus, then retry.` The retry button is `Retry import`. A retry checks the signature again before anything else, so a retry of an import recorded by 0.4.0, which holds no signature, ends `Refused` as unsigned: start a new import from an archive exported again. If the service refuses it, the card says `The retry was refused` and why. Earlier attempts stay listed under `Earlier attempts`.
-
-![An incomplete import with its retry card and the failed package](assets/import-incomplete.png)
-
-### Packages
-
-`Packages` is a table with the columns `Package`, `State` and `Detail`. It lists each package of the attempt with its state, `Published`, `Present` (Nexus already held the same bytes), `Failed`, `Not finished`, `Pending` or `Not recorded`. A failed row is tinted and its detail gives the reason, then `Next:` and what to do. `All` and `Failed` filter the list. A long reason is cut: `Show full reason` opens it. An import that ends with failures opens on `Failed`.
+A record written by sealift 0.4.0 shows `Not recorded` for every field it lacks, such as the start or the Nexus repository.
 
 ## When your session ends
 
@@ -134,14 +177,15 @@ A gateway page with a 4xx status, such as a 403, 404 or 429, is a failed request
 
 ## Checked in the lab
 
-An earlier run read the import screens on the lab's gateway at http://localhost:18440 (see `lab/README.md`), signed in as `alice` and `bob`, in a browser driven by script. Its image predates the frame, the home and the Instance page, and showed the archive list as its own screen, Archives. The captures of one import come from that run. The browser gate covers the newer screens, and the home's capture comes from its fixtures. The run covered:
+A run on commit 109ff80 drove these screens on the lab's gateway at http://localhost:18440 (see `lab/README.md`), signed in as `alice` and `bob`, in a browser driven by script. The captures on this page come from it. It showed:
 
-- Archives with five rows: two in a folder holding two archives, one in a folder with no manifest, one not imported yet and one whose import ended incomplete. Archives while one import ran and another waited, with the `Follow` links.
-- Imports, with imports of every state the lab held, and each of these on its own page: a complete import with the archive removed, an incomplete one with a planted conflict, a refused one, a running one at 37 of 101 packages, a queued one and an interrupted one after `docker compose restart import-server`. The queued import read `The archive's checks have not run yet.` and, once the restart had interrupted it before it started, `Not recorded: this attempt did not record the archive's checks.`
-- The session ending: deleting the `_oauth2_proxy` cookie and pressing `Refresh` on Archives, and opening Imports from an import page, each replaced the list with `Your session has ended`.
-- A stopped `import-server`: the gateway answered `/api/imports` with a 502 `text/html` page, and the running import's page kept its panel and never said `Your session has ended` over 26 seconds. A 502 HTML answer to the Archives `Refresh`, served by the script, left the 10 rows in place with `The last refresh failed. The list is as it was.`
-- `bob` saw none of alice's archives or imports, and her import's address answered `No such import` to him.
+- The home with two Compliant archives, the chip's four checks, and two Refused folders: one whose manifest was edited after signing, one signed by another key. Each panel named its cause and its fix.
+- bob's import ahead of alice's: her page read `1 import ahead of this one` until his ended.
+- Three causes planted in one attempt: `No answer from Nexus` for two packages, `Too large for Nexus` for a 467.8 KB file under a 400 KB limit, and `Another file under the same version` for two versions planted with other bytes. Each cause's Retry then cleared it alone, and the last one ended Done.
+- The done page's comment matched the signed manifest's review figure for figure, and `Compare with the connected side` matched the sha256 that `shasum -a 256` gave on the connected side.
+- A cancel during a 265-package import: Keep running kept it going, and Cancel import ended it `cancelled` with 63 packages in Nexus and none removed.
+- A copy of a lab volume written by 0.4.0 to 0.7.0, with 24 records, and an archive exported by 0.7.0: every record opened with no error, and the 0.7.0 archive was listed by its folder.
 
-Not driven in the lab this time: the cards for a kept archive and a removal not yet recorded, a retry, an import that was refused after an incomplete attempt, and the clipboard fallback of `Copy`. The unit tests and the browser gate's fixtures cover the cards and the wording.
+The same run found that Nexus 3.96.5 stores a scoped package such as `@babel/code-frame` under the group `babel` and the name `code-frame`. The service now asks Nexus for a scoped package's upload facts by that group and name. It also found that Nexus withholds the uploader from the lab's import account: a conflict's copy read `Uploaded 27 Nov 2026` with no account, and the same search as admin named one. An import account with the least privileges never shows who uploaded the other copy.
 
-The signature was checked in the lab on commit 744e44c, through the command and the service's API, not through these screens in a browser: the trusted key's sha256 from `GET /api/me` equalled the one sealift's `GET /api/signing-key` gave, an export of the connected sealift imported `complete` through `sealift import` and through the service, a manifest changed by one byte was refused with `the signature does not match the manifest` (exit 3), an export made after a regenerate was refused with `the manifest is signed by another key` and both sha256 named, a folder without `manifest.json.sig` listed its archive as not importable, and an archive from the 0.4.0 image was refused as unsigned.
+Not driven in this run: the clipboard of Copy details and of the comment in a real browser, and the screens after the fixes that followed the run. The unit tests and the browser gate cover them.

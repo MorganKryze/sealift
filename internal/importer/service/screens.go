@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"io"
 	"io/fs"
 	"net/http"
@@ -9,6 +11,20 @@ import (
 
 // ScreensPolicy limits every load of a page to its own origin and forbids framing.
 const ScreensPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// shellPolicy is ScreensPolicy with one style nonce allowed. The dialogs'
+// scroll lock injects a <style> element, which a plain 'self' refuses.
+func shellPolicy(nonce string) string {
+	return strings.Replace(ScreensPolicy, "style-src 'self'", "style-src 'self' 'nonce-"+nonce+"'", 1)
+}
+
+// newNonce returns 128 random bits in base64, fresh for each page.
+func newNonce() string {
+	b := make([]byte, 16)
+	// crypto/rand.Read never returns an error since Go 1.24.
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 // secure sets the headers every answer carries, screens and API alike.
 func secure(next http.Handler) http.Handler {
@@ -25,16 +41,19 @@ func secure(next http.Handler) http.Handler {
 // token check: the files hold no user data.
 func serveScreens(mux *http.ServeMux, screens fs.FS) {
 	shell := func(w http.ResponseWriter, r *http.Request) {
-		f, err := screens.Open("index.html")
+		page, err := fs.ReadFile(screens, "index.html")
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		defer f.Close()
+		nonce := newNonce()
+		meta := `<head><meta name="csp-nonce" content="` + nonce + `">`
+		w.Header().Set("Content-Security-Policy", shellPolicy(nonce))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		// The status line is sent by now; a failed copy leaves nothing to report to the client.
-		_, _ = io.Copy(w, f)
+		// no-store: a page kept by a cache would carry a nonce already sent.
+		w.Header().Set("Cache-Control", "no-store")
+		// The status line is sent by now; a failed write leaves nothing to report to the client.
+		_, _ = io.WriteString(w, strings.Replace(string(page), "<head>", meta, 1))
 	}
 	mux.HandleFunc("GET /{$}", shell)
 	mux.HandleFunc("GET /imports", shell)

@@ -738,6 +738,8 @@ func (e *PipExport) writeSummary(findings []rank.Finding, wheels []pipWheelFile,
 // reads it first, so an export never signs one the import would keep out.
 func (e *PipExport) writeManifest(wheels []pipWheelFile, arch report.ArchiveManifest, key store.SigningKey) error {
 	review := PipReviewOf(e.Analysis.Result, e.Reasons)
+	// As the npm export does: a name the import refuses drops the name only.
+	review.Project = e.Project.Name
 	if err := archive.CheckReview(review, archive.Pip); err != nil {
 		return fmt.Errorf("jobs: the review would not read at import: %w", err)
 	}

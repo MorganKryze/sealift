@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -23,9 +27,11 @@ const (
 	FolderPip = "packages/pip/"
 	// MaxListed is how many objects one list of a folder reads: one MinIO page of 1,000 keys.
 	MaxListed = 1000
-	// maxMarkReads is how many manifests one list reads for the folder mark: 50.
-	maxMarkReads = 50
-	// maxMarks is how many manifests the mark cache keeps: 4,096.
+	// maxCheckReads is how many manifests one list reads that it has not read before: 50.
+	maxCheckReads = 50
+	// maxCheckBytes is how many bytes of manifests and signatures one list reads: 64 MiB.
+	maxCheckBytes = 64 << 20
+	// maxMarks is how many folder checks the cache keeps: 4,096.
 	maxMarks = 4096
 
 	archiveSuffix = ".tar.gz"
@@ -42,7 +48,14 @@ const (
 	reasonSeveral     = "the folder holds more than one archive"
 	reasonNoManifest  = "no manifest.json in its folder"
 	reasonNoSignature = "no " + signatureName + " in its folder"
+	reasonUnknownKey  = "signed with a key this side does not trust"
+	reasonMismatch    = "its signature does not match its manifest"
+	reasonSize        = "the archive does not match its manifest"
+	reasonManifest    = "its manifest cannot be read"
+	reasonSignature   = "its " + signatureName + " cannot be read"
 )
+
+var lowerSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Objects is the MinIO the service reads. It lists, heads, reads and deletes; it never writes.
 type Objects interface {
@@ -262,47 +275,184 @@ func (h *Handlers) ListArchives(ctx context.Context, _ ListArchivesRequestObject
 		out.Message = &failures[0]
 	}
 	sort.Slice(out.Archives, func(i, j int) bool { return out.Archives[i].Key < out.Archives[j].Key })
-	h.markFolders(lctx, out.Bucket, out.Archives, listed)
+	h.checkFolders(lctx, out.Bucket, out.Archives, listed)
 	h.addLatestImports(user, out.Archives, listed)
 	return ListArchives200JSONResponse(out), nil
 }
 
-// markFolders marks an importable archive whose manifest describes the other
-// ecosystem. It reads at most maxMarkReads manifests it has not read before,
-// each with its listed ETag and within archive.MaxManifestSize. The mark is
-// advisory: a manifest it cannot read or parse leaves the row as it is, and
-// the attempt checks the ecosystem again after the signature.
-func (h *Handlers) markFolders(ctx context.Context, bucket string, archives []Archive, listed []s3.Object) {
-	manifests := make(map[string]s3.Object, len(listed))
+// checkFolders checks each importable archive's manifest signature with the
+// trusted key, then reads its crossing from the manifest the signature
+// verified, and refuses the archive when a check fails. One list reads at
+// most maxCheckReads manifests it has not read before, and at most
+// maxCheckBytes of manifests and signatures, each within its own bound and
+// with its listed ETag; an archive past either bound stays not checked until
+// a later list. The attempt checks everything again.
+func (h *Handlers) checkFolders(ctx context.Context, bucket string, archives []Archive, listed []s3.Object) {
+	objects := make(map[string]s3.Object, len(listed))
 	for _, o := range listed {
-		manifests[o.Key] = o
+		objects[o.Key] = o
 	}
-	reads := 0
+	trusted := len(h.settings.PublicKey) == ed25519.PublicKeySize
+	reads, bytes := 0, int64(0)
 	for i := range archives {
 		a := &archives[i]
+		dir := path.Dir(a.Key) + "/"
+		m, hasManifest := objects[dir+manifestName]
+		s, hasSignature := objects[dir+signatureName]
+		a.Files = filesOf(objects, a.Key, dir)
 		folder, ok := FolderOf(a.Key)
-		m, found := manifests[path.Dir(a.Key)+"/"+manifestName]
-		if !a.Importable || !ok || !found || m.Size > archive.MaxManifestSize || !validETag(m.ETag) {
+		state := ArchiveSignatureNotChecked
+		if !hasSignature {
+			state = ArchiveSignatureUnsigned
+		}
+		a.Signature = &state
+		if !a.Importable || !ok || !hasManifest || !hasSignature || !trusted {
 			continue
 		}
-		mark := markKey(bucket, m)
-		eco, known := h.recall(mark)
-		if !known {
-			if reads == maxMarkReads {
+		id := checkID(bucket, m, s)
+		c, known := h.recall(id)
+		switch {
+		case known:
+		case m.Size > archive.MaxManifestSize:
+			c = folderCheck{signature: ArchiveSignatureUnreadable, reason: reasonManifest}
+			h.remember(id, c)
+		case s.Size > archive.MaxSignatureSize:
+			c = folderCheck{signature: ArchiveSignatureUnreadable, reason: reasonSignature}
+			h.remember(id, c)
+		case !validETag(m.ETag) || !validETag(s.ETag) || reads == maxCheckReads || bytes+m.Size+s.Size > maxCheckBytes:
+			continue
+		default:
+			reads, bytes = reads+1, bytes+m.Size+s.Size
+			manifest, err := h.readListed(ctx, bucket, m)
+			var sig []byte
+			if err == nil {
+				sig, err = h.readListed(ctx, bucket, s)
+			}
+			if err != nil {
+				// A read that failed may pass on a later list.
 				continue
 			}
-			reads++
-			var err error
-			if eco, err = h.readEcosystem(ctx, bucket, m); err != nil {
-				continue
-			}
-			h.remember(mark, eco)
+			c = checkFolder(manifest, sig, h.settings.PublicKey, folder)
+			h.remember(id, c)
 		}
-		if eco != "" && eco != folder {
-			reason := "its manifest is " + article(eco) + " " + string(eco) + " archive's: keep the three files under " + folderFor(eco)
-			a.Importable, a.Reason = false, &reason
+		c.apply(a)
+	}
+}
+
+// folderCheck is what one read of a folder's manifest and signature proved.
+// It holds nothing a manifest says unless its signature verified.
+type folderCheck struct {
+	eco       archive.Ecosystem
+	signature ArchiveSignature
+	// signer is the key sha256 the signature file names, on an unknown key only.
+	signer string
+	// reason says why the archive cannot be imported; empty when the checks pass.
+	reason   string
+	project  string
+	sealedAt string
+	packages int
+	declared int64
+}
+
+// checkFolder verifies manifest against the signature file with the trusted
+// key, then reads the verified manifest's ecosystem, crossing and declared
+// size. The file's own key sha256 only picks the words of a refusal.
+func checkFolder(manifest, sig []byte, trusted ed25519.PublicKey, folder archive.Ecosystem) folderCheck {
+	if err := archive.CheckSignature(manifest, sig, trusted); err != nil {
+		named, ok := signerOf(sig)
+		switch {
+		case !ok:
+			return folderCheck{signature: ArchiveSignatureUnreadable, reason: reasonSignature}
+		case named != archive.PublicKeySHA256(trusted):
+			return folderCheck{signature: ArchiveSignatureUnknownKey, signer: named, reason: reasonUnknownKey}
+		}
+		return folderCheck{signature: ArchiveSignatureMismatch, reason: reasonMismatch}
+	}
+	c := folderCheck{signature: ArchiveSignatureVerified}
+	eco, err := archive.ManifestEcosystem(manifest)
+	if err != nil {
+		c.reason = reasonManifest
+		return c
+	}
+	c.eco = eco
+	var review *archive.Review
+	switch eco {
+	case archive.Pip:
+		var p archive.PipManifest
+		if p, err = archive.ParsePipManifest(manifest); err == nil {
+			c.sealedAt, c.packages, c.declared, review = p.CreatedAt, len(p.Packages), p.Archive.Size, p.Review
+		}
+	default:
+		var n archive.Manifest
+		if n, err = archive.ParseManifest(manifest); err == nil {
+			c.sealedAt, c.packages, c.declared, review = n.CreatedAt, len(n.Packages), n.Archive.Size, n.Review
 		}
 	}
+	if review != nil {
+		c.project = review.Project
+	}
+	switch {
+	case eco != folder:
+		c.reason = "its manifest is " + article(eco) + " " + string(eco) + " archive's: keep the three files under " + folderFor(eco)
+	case err != nil:
+		c.reason = reasonManifest
+	}
+	return c
+}
+
+// apply puts the check on its archive's row. The size the manifest states
+// is compared with the archive listed now, which the check's key does not
+// cover.
+func (c folderCheck) apply(a *Archive) {
+	state := c.signature
+	a.Signature = &state
+	if c.signer != "" {
+		a.SignerKeySha256 = ptr(c.signer)
+	}
+	if c.signature == ArchiveSignatureVerified && c.sealedAt != "" {
+		a.Crossing = &Crossing{SealedAt: c.sealedAt, Packages: c.packages}
+		if c.project != "" {
+			a.Crossing.Project = ptr(c.project)
+		}
+		a.DeclaredSize = ptr(c.declared)
+	}
+	reason := c.reason
+	if reason == "" && a.DeclaredSize != nil && *a.DeclaredSize != a.Size {
+		reason = reasonSize
+	}
+	if reason != "" {
+		a.Importable, a.Reason = false, &reason
+	}
+}
+
+// signerOf returns the key sha256 a signature file names, and whether the
+// file has a signature's shape: the ed25519 algorithm, a key sha256 of 64
+// lowercase hex digits and a base64 signature of 64 bytes.
+func signerOf(sig []byte) (string, bool) {
+	var doc struct {
+		Algorithm       string `json:"algorithm"`
+		PublicKeySha256 string `json:"publicKeySha256"`
+		Signature       string `json:"signature"`
+	}
+	if json.Unmarshal(sig, &doc) != nil || doc.Algorithm != "ed25519" || !lowerSHA256.MatchString(doc.PublicKeySha256) {
+		return "", false
+	}
+	if raw, err := base64.StdEncoding.Strict().DecodeString(doc.Signature); err != nil || len(raw) != ed25519.SignatureSize {
+		return "", false
+	}
+	return doc.PublicKeySha256, true
+}
+
+// filesOf lists the archive, manifest.json and manifest.json.sig of an
+// archive's folder as MinIO listed them, each when present.
+func filesOf(objects map[string]s3.Object, archiveKey, dir string) *[]ArchiveFile {
+	files := []ArchiveFile{}
+	for _, key := range []string{archiveKey, dir + manifestName, dir + signatureName} {
+		if o, ok := objects[key]; ok {
+			files = append(files, ArchiveFile{Name: cleanText(path.Base(key)), Size: o.Size, Modified: o.LastModified})
+		}
+	}
+	return &files
 }
 
 func article(eco archive.Ecosystem) string {
@@ -312,54 +462,48 @@ func article(eco archive.Ecosystem) string {
 	return "a"
 }
 
-// readEcosystem reads a manifest's ecosystem. An error is a read that failed
-// and may pass later; a manifest that does not parse gives "" and no error,
-// since the same object with the same ETag holds the same bytes.
-func (h *Handlers) readEcosystem(ctx context.Context, bucket string, m s3.Object) (archive.Ecosystem, error) {
-	body, _, err := h.objects.Get(ctx, bucket, m.Key, m.ETag)
+// readListed reads an object with its listed ETag and no more than its
+// listed size. A read that ends short is an error: it may pass later.
+func (h *Handlers) readListed(ctx context.Context, bucket string, o s3.Object) ([]byte, error) {
+	body, _, err := h.objects.Get(ctx, bucket, o.Key, o.ETag)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer body.Close()
-	data, err := archive.ReadManifest(body)
-	var ref *archive.Refusal
-	switch {
-	case errors.As(err, &ref):
-		return "", nil
-	case err != nil:
-		return "", err
-	}
-	eco, err := archive.ManifestEcosystem(data)
+	data, err := io.ReadAll(io.LimitReader(body, o.Size))
 	if err != nil {
-		return "", nil
+		return nil, err
 	}
-	return eco, nil
+	if int64(len(data)) != o.Size {
+		return nil, errors.New("the object ended before its listed size")
+	}
+	return data, nil
 }
 
-// markKey names a manifest in the mark cache by its bucket, key and ETag.
-// Two objects may share an ETag, so one user's manifest never answers for
-// another's.
-func markKey(bucket string, m s3.Object) string {
-	return bucket + "\x00" + m.Key + "\x00" + m.ETag
+// checkID names a folder's check by its bucket, and the key and ETag of its
+// manifest and its signature. Two objects may share an ETag, so one user's
+// files never answer for another's, and a replaced file is read again.
+func checkID(bucket string, m, s s3.Object) string {
+	return strings.Join([]string{bucket, m.Key, m.ETag, s.Key, s.ETag}, "\x00")
 }
 
-// recall returns the ecosystem remembered for a manifest's mark key.
-func (h *Handlers) recall(mark string) (archive.Ecosystem, bool) {
+// recall returns the check remembered under id.
+func (h *Handlers) recall(id string) (folderCheck, bool) {
 	h.marksMu.Lock()
 	defer h.marksMu.Unlock()
-	eco, ok := h.marks[mark]
-	return eco, ok
+	c, ok := h.marks[id]
+	return c, ok
 }
 
-// remember keeps a manifest's ecosystem by its mark key. The cache is emptied
-// when it holds maxMarks entries, so a long-running service stays bounded.
-func (h *Handlers) remember(mark string, eco archive.Ecosystem) {
+// remember keeps a check under id. The cache is emptied when it holds
+// maxMarks entries, so a long-running service stays bounded.
+func (h *Handlers) remember(id string, c folderCheck) {
 	h.marksMu.Lock()
 	defer h.marksMu.Unlock()
 	if h.marks == nil || len(h.marks) >= maxMarks {
-		h.marks = make(map[string]archive.Ecosystem)
+		h.marks = make(map[string]folderCheck)
 	}
-	h.marks[mark] = eco
+	h.marks[id] = c
 }
 
 // addLatestImports gives each archive the id and outcome of its user's newest

@@ -1,10 +1,14 @@
-import { ArchiveRestore, CircleCheck, CircleX, Clock, FileArchive, LoaderCircle } from "lucide-react"
+import { ArchiveRestore, ChevronDown, ChevronUp, CircleCheck, CircleDashed, CircleX, Clock, LoaderCircle } from "lucide-react"
+import { useNavigate, useSearch } from "@tanstack/react-router"
+import { Fragment, type ReactNode, type Ref, useEffect, useId, useRef, useState } from "react"
 
-import { EmptyGroup, type HomeRow, PathCard, RowGroup } from "@/components/home/blocks"
+import { EmptyGroup, GROUP_ROWS, type HomeRow, PathCard, RowGroup } from "@/components/home/blocks"
 import { ApiFailure } from "@/components/import/api-failure"
+import { crossingLabel, folderLabel, HomeArchiveRow, HomeLine, localDay } from "@/components/import/archive-row"
+import { RefusedPanel } from "@/components/import/refused-panel"
+import { Button } from "@/components/ui/button"
 import { useArchives, useImports, useMe, type Archive, type Import } from "@/import/api/queries"
-import { archiveName, counts, ecosystemOf, FOLDERS, latestAttempt, whereText } from "@/import/lib/outcome"
-import { formatBytes } from "@/lib/utils"
+import { archiveName, counts, FOLDERS, latestAttempt, whereText } from "@/import/lib/outcome"
 
 /** The greeting for the local part of the day: morning until noon, afternoon until 18:00, then evening. */
 export function greeting(now: Date, user?: string): string {
@@ -13,94 +17,187 @@ export function greeting(now: Date, user?: string): string {
   return user ? `Good ${part}, ${user}` : `Good ${part}`
 }
 
-/** An archive's row name: its folder, its file at the root of an ecosystem's folder, or both when the folder holds another archive. */
-function rowName(key: string, shared = false): string {
-  const { folder, file } = archiveName(key)
-  if ((FOLDERS as readonly string[]).includes(folder) || folder === "") return file
-  return shared ? `${folder}${file}` : folder.replace(/\/$/, "")
-}
-
-const DAY_MS = 86_400_000
-const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`
-
-/** When an archive came in, in words: minutes, hours today, yesterday, days within the week, then the day. */
-function uploaded(modified: string, now: Date): string {
-  const at = new Date(modified)
-  const minutes = Math.floor((now.getTime() - at.getTime()) / 60_000)
-  if (minutes < 1) return "uploaded less than a minute ago"
-  if (minutes < 60) return `uploaded ${plural(minutes, "minute")} ago`
-  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  if (at >= midnight) return `uploaded ${plural(Math.floor(minutes / 60), "hour")} ago`
-  const days = Math.ceil((midnight.getTime() - new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime()) / DAY_MS)
-  if (days <= 1) return "uploaded yesterday"
-  if (days < 7) return `uploaded ${days} days ago`
-  const year = at.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const }
-  return `uploaded ${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", ...year }).format(at)}`
-}
-
 const ended = (imp: Import) => latestAttempt(imp).endedAt ?? imp.createdAt
 const time = (value: string) => Date.parse(value)
+const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`
+
+/** The times of each project's crossings, by project and local day, so a second crossing of the day reads "· 2". */
+function crossingDays(entries: { project?: string; at: string }[]): (project: string | undefined, at: string) => string[] {
+  const days = new Map<string, string[]>()
+  const keyOf = (project: string, at: string) => `${project}\u0000${localDay(at)}`
+  for (const { project, at } of entries) {
+    if (!project) continue
+    const key = keyOf(project, at)
+    days.set(key, [...(days.get(key) ?? []), at])
+  }
+  return (project, at) => (project ? (days.get(keyOf(project, at)) ?? []) : [])
+}
+
+/** The project an import's latest report names from its signed manifest. */
+const projectOf = (imp: Import) => latestAttempt(imp).report.crossing?.project
 
 interface Placed {
-  row: HomeRow
+  key: string
   when: string
+  row: HomeRow
+}
+
+/** "3 packages not in Nexus", the count in weight 600. */
+function missingText(n: number, lead = ""): ReactNode {
+  return (
+    <>
+      {lead}
+      <b className="font-semibold text-ink-2">{n.toLocaleString("en-US")}</b>
+      {` ${n === 1 ? "package" : "packages"} not in Nexus`}
+    </>
+  )
 }
 
 /** What an import says on the home, or nothing when its row belongs to its archive or to no group. */
-function importRow(imp: Import, newer: boolean, midnight: Date): { group: "needs" | "progress" | "done"; placed: Placed } | null {
-  const name = rowName(imp.archive.key)
+function importRow(imp: Import, name: string, newer: boolean, midnight: Date): { group: "needs" | "progress" | "done"; placed: Placed; detail?: ReactNode } | null {
   const open = { label: "Open", to: `/imports/${encodeURIComponent(imp.id)}` }
   const attempt = latestAttempt(imp)
   const c = counts(attempt)
+  const placed = (when: string, row: Omit<HomeRow, "key" | "name" | "action">): Placed => ({ key: imp.id, when, row: { key: imp.id, name, action: open, ...row } })
   switch (imp.outcome) {
     case "queued":
-      return { group: "progress", placed: { when: imp.createdAt, row: { key: imp.id, icon: Clock, name, detail: "Waiting its turn", state: { label: "Queued", tone: "info" }, action: open } } }
+      return { group: "progress", placed: placed(imp.createdAt, { icon: Clock, detail: "Waiting its turn", state: { label: "Queued", tone: "info" } }) }
     case "running":
       return {
         group: "progress",
-        placed: { when: imp.createdAt, row: { key: imp.id, icon: LoaderCircle, name, detail: c.total > 0 ? `${c.done.toLocaleString("en-US")} of ${plural(c.total, "package")}` : "Reading the manifest", state: { label: "Importing", tone: "info" }, action: open } },
+        placed: placed(imp.createdAt, { icon: LoaderCircle, detail: c.total > 0 ? `${c.done.toLocaleString("en-US")} of ${plural(c.total, "package")}` : "Reading the manifest", state: { label: "Importing", tone: "info" } }),
       }
     case "incomplete":
-    case "interrupted": {
+    case "interrupted":
+    case "cancelled": {
       // A later import of the same archive takes over: the user started again from there.
       if (newer) return null
-      const missing = c.failed + c.notFinished
+      const missing = c.failed + c.notFinished + c.pending
       const detail = missing > 0 ? `${plural(missing, "package")} not in Nexus` : attempt.report.reason || "Reason not recorded"
-      return { group: "needs", placed: { when: ended(imp), row: { key: imp.id, icon: CircleX, name, detail: imp.outcome === "interrupted" ? `Interrupted, ${detail}` : detail, state: { label: "Failed", tone: "bad" }, action: open } } }
+      // An older record's reason can be the state's own word, which needs no repeating.
+      const same = imp.outcome === "interrupted" && missing === 0 && detail.trim().toLowerCase() === "interrupted"
+      const lead = imp.outcome === "interrupted" && !same ? "Interrupted, " : ""
+      const shown = missing > 0 ? missingText(missing, lead) : same ? "Interrupted" : `${lead}${detail}`
+      if (imp.outcome === "cancelled") return { group: "needs", placed: placed(ended(imp), { icon: CircleDashed, detail, state: { label: "Cancelled", tone: "warn" } }), detail: shown }
+      return { group: "needs", placed: placed(ended(imp), { icon: CircleX, detail: same ? "Interrupted" : `${lead}${detail}`, state: { label: "Failed", tone: "bad" } }), detail: shown }
     }
     case "complete":
       if (time(ended(imp)) < midnight.getTime()) return null
-      return { group: "done", placed: { when: ended(imp), row: { key: imp.id, icon: CircleCheck, name, detail: `${plural(c.published + c.present, "package")} in Nexus`, state: { label: "Done", tone: "ok" }, action: open } } }
+      return { group: "done", placed: placed(ended(imp), { icon: CircleCheck, detail: `${plural(c.published + c.present, "package")} in Nexus`, state: { label: "Done", tone: "ok" } }) }
     default:
       // A refusal reads on its archive's row while the archive stays in the folder.
       return null
   }
 }
 
+/** A Needs you row: an import that needs the user, or an archive of the folder; urgent rows come first. */
+interface NeedsRow {
+  key: string
+  when: string
+  urgent: boolean
+  draw: (actionRef?: Ref<HTMLAnchorElement>) => ReactNode
+}
+
 /** What an archive of the folder asks of the user, or nothing when one of its imports speaks for it. */
-function archiveRow(archive: Archive, imports: Map<string, Import>, now: Date, shared: boolean): Placed | null {
-  const name = rowName(archive.key, shared)
+function archiveRow(
+  archive: Archive,
+  imports: Map<string, Import>,
+  sameDay: (project: string | undefined, at: string) => string[],
+  shared: boolean,
+  opener: (el: HTMLAnchorElement | null) => void,
+): NeedsRow | null {
   const latest = archive.latestImport ? imports.get(archive.latestImport.id) : undefined
   const outcome = latest?.outcome ?? archive.latestImport?.outcome
   if (outcome && outcome !== "refused") return null
-  const refused = (reason: string, to: string): Placed => ({
-    when: archive.modified,
-    row: { key: archive.key, icon: CircleX, name, detail: reason, state: { label: "Refused", tone: "bad" }, action: { label: "Open", to } },
-  })
-  if (!archive.importable) return refused(archive.reason || "Reason not recorded", "/import")
-  if (archive.latestImport && outcome === "refused") {
-    const reason = latest ? latestAttempt(latest).report.reason : ""
-    return refused(reason || "Reason not recorded", `/imports/${encodeURIComponent(archive.latestImport.id)}`)
+  const project = archive.signature === "verified" ? archive.crossing?.project : undefined
+  const rank = { project, sameDay: sameDay(project, archive.modified) }
+  if (!archive.importable) {
+    // A refusal the list found opens its panel here; the address carries it, so a reload keeps it open.
+    const name = archiveNameOf(archive, rank, shared)
+    return {
+      key: archive.key,
+      when: archive.modified,
+      urgent: true,
+      draw: () => (
+        <HomeLine
+          key={archive.key}
+          icon={CircleX}
+          name={name}
+          mono={!project}
+          state={{ label: "Refused", tone: "bad" }}
+          detail={archive.reason || "Reason not recorded"}
+          action={{ label: "Open", to: "/", search: { refused: archive.key } }}
+          actionRef={opener}
+        />
+      ),
+    }
   }
-  const detail = `${archive.ecosystem ?? ecosystemOf(archive.key)} · ${formatBytes(archive.size)} · ${uploaded(archive.modified, now)}`
-  return { when: archive.modified, row: { key: archive.key, icon: FileArchive, name, detail, action: { label: "Import", to: "/import", search: { start: archive.key } } } }
+  const refusal =
+    archive.importable && archive.latestImport && outcome === "refused"
+      ? { reason: (latest ? latestAttempt(latest).report.reason : "") || "Reason not recorded", to: `/imports/${encodeURIComponent(archive.latestImport.id)}` }
+      : undefined
+  return {
+    key: archive.key,
+    when: archive.modified,
+    urgent: !archive.importable || refusal !== undefined,
+    draw: (actionRef) => <HomeArchiveRow key={archive.key} archive={archive} rank={rank} shared={shared} refusal={refusal} actionRef={actionRef} />,
+  }
 }
 
-const newestFirst = (rows: Placed[]) => [...rows].sort((a, b) => time(b.when) - time(a.when)).map((p) => p.row)
+/** A home row's name for an archive: its crossing once the signature verifies, else its folder. */
+function archiveNameOf(archive: Archive, rank: { project?: string; sameDay: string[] }, shared: boolean): string {
+  return rank.project ? crossingLabel(rank.project, archive.modified, rank.sameDay) : folderLabel(archive.key, shared)
+}
+
+const newestFirst = <T extends { when: string }>(rows: T[]) => [...rows].sort((a, b) => time(b.when) - time(a.when))
+
+/** Needs you: refused and failed rows first, then the archives to import, newest first in each; the first 10, then Show all in place. */
+function NeedsYou({ rows }: { rows: NeedsRow[] }) {
+  const id = useId()
+  const [all, setAll] = useState(false)
+  // The control that showed the rest stays, so focus moves to the first row it showed.
+  const moveFocus = useRef(false)
+  const ordered = [...newestFirst(rows.filter((r) => r.urgent)), ...newestFirst(rows.filter((r) => !r.urgent))]
+  const shown = all ? ordered : ordered.slice(0, GROUP_ROWS)
+  const list = useRef<HTMLUListElement>(null)
+  useEffect(() => {
+    if (moveFocus.current) {
+      moveFocus.current = false
+      list.current?.children[GROUP_ROWS]?.querySelector<HTMLAnchorElement>("a")?.focus()
+    }
+  }, [all])
+  return (
+    <section aria-labelledby={id} className="mt-10">
+      <h2 id={id} className="border-b border-rule pb-2 text-sm font-medium text-ink-2">
+        Needs you
+      </h2>
+      <ul ref={list} className="flex flex-col">{shown.map((row) => <Fragment key={row.key}>{row.draw()}</Fragment>)}</ul>
+      {ordered.length > GROUP_ROWS ? (
+        <Button
+          variant="outline"
+          className="mt-4"
+          aria-expanded={all}
+          onClick={() => {
+            moveFocus.current = !all
+            setAll(!all)
+          }}
+        >
+          {all ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+          {all ? "Show fewer" : `Show all ${plural(ordered.length, "archive")}`}
+        </Button>
+      ) : null}
+    </section>
+  )
+}
 
 /** The Offline home: the greeting, the Import card, then what needs the user, what runs and what came in today. */
 export function OfflineHome() {
   const me = useMe()
+  const navigate = useNavigate()
+  const search: { refused?: unknown } = useSearch({ strict: false })
+  const openKey = typeof search.refused === "string" ? search.refused : undefined
+  // The Open link of the refused row whose panel is open, to take the focus back on close.
+  const [opener, setOpener] = useState<HTMLAnchorElement | null>(null)
   const archives = useArchives(true)
   const imports = useImports()
   const now = new Date()
@@ -110,20 +207,34 @@ export function OfflineHome() {
   const list = archives.data
   const records = imports.data?.imports ?? []
   const byId = new Map(records.map((imp) => [imp.id, imp]))
-  const groups: Record<"needs" | "progress" | "done", Placed[]> = { needs: [], progress: [], done: [] }
+  const sameDayImport = crossingDays(records.map((imp) => ({ project: projectOf(imp), at: imp.createdAt })))
+  const nameOf = (imp: Import) => {
+    const project = projectOf(imp)
+    return project ? crossingLabel(project, imp.createdAt, sameDayImport(project, imp.createdAt)) : folderLabel(imp.archive.key)
+  }
+  const groups: Record<"progress" | "done", Placed[]> = { progress: [], done: [] }
+  const needs: NeedsRow[] = []
   for (const imp of records) {
     const newer = records.some((other) => other.archive.key === imp.archive.key && time(other.createdAt) > time(imp.createdAt))
-    const placed = importRow(imp, newer, midnight)
-    if (placed) groups[placed.group].push(placed.placed)
+    const placed = importRow(imp, nameOf(imp), newer, midnight)
+    if (!placed) continue
+    if (placed.group === "needs") {
+      const { key, ...line } = placed.placed.row
+      const detail = placed.detail ?? line.detail
+      needs.push({ key, when: placed.placed.when, urgent: true, draw: (actionRef) => <HomeLine key={key} {...line} detail={detail} mono={!projectOf(imp)} actionRef={actionRef} /> })
+    } else groups[placed.group].push(placed.placed)
   }
   const folderOf = (archive: Archive) => archiveName(archive.key).folder
   const archivesIn = new Map<string, number>()
   for (const archive of list?.archives ?? []) archivesIn.set(folderOf(archive), (archivesIn.get(folderOf(archive)) ?? 0) + 1)
+  const sameDayArchive = crossingDays((list?.archives ?? []).map((a) => ({ project: a.signature === "verified" ? a.crossing?.project : undefined, at: a.modified })))
   for (const archive of list?.archives ?? []) {
-    const placed = archiveRow(archive, byId, now, (archivesIn.get(folderOf(archive)) ?? 0) > 1)
-    if (placed) groups.needs.push(placed)
+    const row = archiveRow(archive, byId, sameDayArchive, (archivesIn.get(folderOf(archive)) ?? 0) > 1, archive.key === openKey ? setOpener : () => {})
+    if (row) needs.push(row)
   }
-  const nothing = groups.needs.length + groups.progress.length + groups.done.length === 0
+  const opened = openKey ? list?.archives.find((a) => a.key === openKey && !a.importable) : undefined
+  const openedProject = opened?.signature === "verified" ? opened.crossing?.project : undefined
+  const nothing = needs.length + groups.progress.length + groups.done.length === 0
   const refresh = () => void Promise.all([archives.refetch(), imports.refetch()])
 
   return (
@@ -151,10 +262,20 @@ export function OfflineHome() {
               text={list.minioConfigured ? `No archive in ${list.bucket}/${FOLDERS[0]} or ${FOLDERS[1]}` : "MinIO is not configured. The administrator sets it in the settings file."}
             />
           ) : (
-            <RowGroup title="Needs you" rows={newestFirst(groups.needs)} noun={["archive or import", "archives and imports"]} />
+            <NeedsYou rows={needs} />
           )}
-          <RowGroup title="In progress" rows={newestFirst(groups.progress)} noun={["import", "imports"]} />
-          <RowGroup title="Done today" rows={newestFirst(groups.done)} noun={["import", "imports"]} />
+          <RowGroup title="In progress" rows={newestFirst(groups.progress).map((p) => p.row)} noun={["import", "imports"]} />
+          <RowGroup title="Done today" rows={newestFirst(groups.done).map((p) => p.row)} noun={["import", "imports"]} />
+          {opened ? (
+            <RefusedPanel
+              archive={opened}
+              trusted={me.data?.publicKeySha256 ?? ""}
+              name={archiveNameOf(opened, { project: openedProject, sameDay: sameDayArchive(openedProject, opened.modified) }, (archivesIn.get(folderOf(opened)) ?? 0) > 1)}
+              open
+              onClose={() => void navigate({ to: "/", replace: true })}
+              returnFocus={opener}
+            />
+          ) : null}
         </>
       )}
     </div>

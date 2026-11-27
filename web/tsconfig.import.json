@@ -31,6 +31,10 @@
     "src/components/frame/brand.tsx",
     "src/components/fingerprint/fingerprint.tsx",
     "src/components/copy-control.tsx",
+    "src/components/job-progress.tsx",
+    "src/components/step-bar.tsx",
+    "src/lib/analysisEvents.ts",
+    "src/api/schema.d.ts",
     "src/components/theme-toggle.tsx",
     "src/lib/utils.ts",
     "src/test"

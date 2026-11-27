@@ -5,6 +5,8 @@
 @source "../components/import";
 @source "../components/home";
 @source "../components/copy-control.tsx";
+@source "../components/job-progress.tsx";
+@source "../components/step-bar.tsx";
 @source "../components/ui";
 @source "../components/brand";
 @source "../components/frame";

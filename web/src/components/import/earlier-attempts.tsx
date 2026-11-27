@@ -1,11 +1,12 @@
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { useState } from "react"
 
+import { LogBlock } from "@/components/job-progress"
 import { counts, type Attempt } from "@/import/lib/outcome"
 import { formatWhen } from "@/lib/utils"
 
 import { OutcomeBadge } from "./outcome-badge"
-import { ReportList } from "./report-list"
+import { attemptLog } from "./progress"
 
 const toggle =
   "inline-flex h-8 items-center gap-1.5 rounded-md text-sm outline-none hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
@@ -29,7 +30,7 @@ function EarlierAttempt({ attempt }: { attempt: Attempt }) {
       </div>
       {open ? (
         <div role="region" aria-label={`Report of attempt ${attempt.n}`} className="mt-3">
-          <ReportList attempt={attempt} />
+          <LogBlock lines={attemptLog(attempt)} defaultOpen />
         </div>
       ) : null}
     </li>

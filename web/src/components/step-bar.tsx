@@ -4,6 +4,9 @@ import { cn } from "@/lib/utils"
 
 export type StepId = "drop" | "analysis" | "review" | "export"
 
+/** The import's steps on the Offline side. */
+export type OfflineStepId = "check" | "publish" | "in-nexus"
+
 /**
  * What a step's work has come to. "available" is reachable but not done
  * yet (Review before any export); "cancelled" marks where a stopped run
@@ -13,7 +16,7 @@ export type StepId = "drop" | "analysis" | "review" | "export"
 export type StepStatus = "upcoming" | "available" | "running" | "done" | "failed" | "cancelled"
 
 export interface StepBarStep {
-  id: StepId
+  id: StepId | OfflineStepId
   label: string
   status: StepStatus
   /** The step on screen. */
@@ -24,20 +27,25 @@ export interface StepBarStep {
 
 interface StepBarProps {
   steps: StepBarStep[]
+  /** What the steps belong to, for a screen reader. */
+  label?: string
 }
 
 // The ids stay those of the routes and the API; only the words the developer reads changed.
-const STEP_LABELS: Record<StepId, string> = {
+const STEP_LABELS: Record<StepId | OfflineStepId, string> = {
   drop: "Check",
   analysis: "Analyse",
   review: "Review",
   export: "Seal",
+  check: "Check",
+  publish: "Publish",
+  "in-nexus": "In Nexus",
 }
 
 const SPOKEN: Partial<Record<StepStatus, string>> = { failed: ", failed", running: ", running", cancelled: ", cancelled" }
 
 /** Fills in the label from the step id, so callers only pass status and onNavigate. */
-export function stepBarStep(id: StepId, status: StepStatus, current: boolean, onNavigate?: () => void): StepBarStep {
+export function stepBarStep(id: StepId | OfflineStepId, status: StepStatus, current: boolean, onNavigate?: () => void): StepBarStep {
   return { id, label: STEP_LABELS[id], status, current, onNavigate }
 }
 
@@ -46,9 +54,9 @@ export function stepBarStep(id: StepId, status: StepStatus, current: boolean, on
  * Presentational only: callers compute status and navigation from the project and analysis state, since what counts
  * as reachable differs before a session exists (the drop screen) and after.
  */
-export function StepBar({ steps }: StepBarProps) {
+export function StepBar({ steps, label = "Session steps" }: StepBarProps) {
   return (
-    <nav aria-label="Session steps" className="mb-7">
+    <nav aria-label={label} className="mb-7">
       <div className="flex items-center gap-2">
         {steps.map((step, index) => {
           const circle = (

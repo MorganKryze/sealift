@@ -674,7 +674,7 @@ for (const state of UI.answers) {
 for (const route of IMPORT.routes) {
   for (const width of UI.widths) {
     for (const theme of UI.themes) {
-      const label = route.path + (route.hold ? " loading" : "") + (route.open ? ` ${route.open.name}` : "")
+      const label = route.path + (route.name ? ` ${route.name}` : "") + (route.hold ? " loading" : "") + (route.open ? ` ${route.open.name}` : "")
       test(`import ${route.user} ${label} ${width} ${theme}`, async ({ page }) => {
         const where = `${route.user} ${label} · ${width}px · ${theme}`
         const stray = []
@@ -684,7 +684,7 @@ for (const route of IMPORT.routes) {
         const released = new Promise((done) => { release = done })
         const failures = await inspect(page, {
           where,
-          capture: `import-${slug(route.user, route.path, route.hold && "loading", route.open?.name)}`,
+          capture: `import-${slug(route.user, route.path, route.name, route.hold && "loading", route.open?.name)}`,
           url: new URL(route.path, IMPORT.baseURL).href,
           width,
           theme,
@@ -701,6 +701,10 @@ for (const route of IMPORT.routes) {
               const { pathname } = new URL(req.url())
               if (COLLECTION_API.test(pathname)) stray.push(`${where} · ${pathname}: a collection route was called`)
             })
+            // The browser denies the clipboard unless the context grants it; the panel would then select its text.
+            if (route.grant) await p.context().grantPermissions(route.grant, { origin: IMPORT.baseURL })
+            // A state the server cannot hold, answered as the store writes it (import-fixtures.mjs).
+            await route.before?.(p)
             if (route.hold) {
               await p.route(`**${route.hold}`, async (r) => {
                 reached()
@@ -711,7 +715,7 @@ for (const route of IMPORT.routes) {
           },
           ready: async (p) => {
             if (route.hold) await arrived
-            await p.getByText(route.ready, { exact: true }).first().waitFor({ timeout: 15_000 })
+            await p.getByText(route.ready, { exact: !route.before }).first().waitFor({ timeout: 15_000 })
             if (route.open) {
               await p.getByRole(route.open.role, { name: route.open.name, exact: route.open.exact ?? true }).click()
               if (route.open.pressed) {
@@ -720,6 +724,11 @@ for (const route of IMPORT.routes) {
                 await p.getByRole(route.open.opens.role, { name: route.open.opens.name }).waitFor()
               } else {
                 await p.getByRole("dialog").waitFor()
+              }
+              // A second press, once the first brought up its control: a confirm, say.
+              if (route.open.then) {
+                await p.getByRole(route.open.then.role, { name: route.open.then.name, exact: true }).click()
+                await p.getByRole(route.open.then.opens.role, { name: route.open.then.opens.name }).waitFor()
               }
             }
           },

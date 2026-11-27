@@ -2,6 +2,7 @@ package imports
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -10,8 +11,9 @@ import (
 )
 
 // RunFunc runs one attempt of imp in dir, a working directory the queue owns,
-// and reports each package's state through p. It never writes the attempt's
-// end. The Remover it returns is nil unless the attempt may remove the archive.
+// and reports each package's state through p. ctx ends on Close; p.Cancelled
+// closes on a cancel of the attempt. It never writes the attempt's end. The
+// Remover it returns is nil unless the attempt may remove the archive.
 type RunFunc func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, Remover)
 
 // Remover deletes the archive and says what became of it. The queue calls it
@@ -20,6 +22,24 @@ type RunFunc func(ctx context.Context, imp Import, dir string, p importer.Progre
 type Remover func(ctx context.Context) *Removal
 
 type queued struct{ user, id string }
+
+// OutcomeCancelled is the outcome of an attempt its user cancelled.
+const OutcomeCancelled = "cancelled"
+
+// reasonCancelled is the reason of a package a cancel kept from Nexus.
+const reasonCancelled = "cancelled before it was published"
+
+// ErrEnded answers a cancel of an import whose latest attempt has ended.
+var ErrEnded = errors.New("imports: the latest attempt has ended")
+
+// current is the attempt the worker took from the queue. Its fields are
+// guarded by the queue's mutex.
+type current struct {
+	queued
+	cancel    chan struct{} // closed on the first cancel of this attempt
+	cancelled bool          // a cancel reached the run before it returned
+	returned  bool          // the run returned: a cancel comes too late
+}
 
 // Queue runs submitted attempts on one goroutine, the first submitted first.
 // It writes an attempt's start and its end; the run function writes only
@@ -34,13 +54,32 @@ type Queue struct {
 
 	mu    sync.Mutex
 	items []queued
+	now   *current
 	wake  chan struct{}
+}
+
+// putBack returns an attempt a cancel took out of the queue to its place at,
+// so a cancel whose end was not stored leaves it runnable.
+func (q *Queue) putBack(user, id string, at int) {
+	q.mu.Lock()
+	if q.ctx.Err() == nil {
+		at = min(at, len(q.items))
+		q.items = append(q.items[:at:at], append([]queued{{user, id}}, q.items[at:]...)...)
+	}
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
 }
 
 // NewQueue starts the queue's worker.
 func NewQueue(s *Store, run RunFunc, log *slog.Logger) *Queue {
 	ctx, stop := context.WithCancel(context.Background())
 	q := &Queue{s: s, run: run, log: log, ctx: ctx, stop: stop, done: make(chan struct{}), wake: make(chan struct{}, 1)}
+	s.mu.Lock()
+	s.queue = q
+	s.mu.Unlock()
 	go q.loop()
 	return q
 }
@@ -69,30 +108,86 @@ func (q *Queue) Close() {
 	<-q.done
 }
 
+// ahead returns how many attempts run or wait before the one of user and
+// id, and false when the queue does not hold it waiting.
+func (q *Queue) ahead(user, id string) (int, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.items {
+		if it.user == user && it.id == id {
+			if q.now != nil {
+				i++
+			}
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// The answers of cancel.
+type cancelResult int
+
+const (
+	cancelUnknown  cancelResult = iota // the queue does not hold the attempt
+	cancelTaken                        // taken out of the queue: it never runs
+	cancelStopping                     // running: it stops before its next package
+	cancelTooLate                      // its run has returned
+)
+
+// cancel takes the attempt of user and id out of the queue, or stops its
+// run when it is the one running.
+// at is the attempt's place in the queue when it is taken out.
+func (q *Queue) cancel(user, id string) (_ cancelResult, at int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, it := range q.items {
+		if it.user == user && it.id == id {
+			q.items = append(q.items[:i:i], q.items[i+1:]...)
+			return cancelTaken, i
+		}
+	}
+	if c := q.now; c != nil && c.user == user && c.id == id {
+		if c.returned {
+			return cancelTooLate, 0
+		}
+		if !c.cancelled {
+			c.cancelled = true
+			close(c.cancel)
+		}
+		return cancelStopping, 0
+	}
+	return cancelUnknown, 0
+}
+
 func (q *Queue) loop() {
 	defer close(q.done)
 	for {
-		it, ok := q.next()
+		c, ok := q.next()
 		if !ok {
 			return
 		}
-		q.process(it)
+		q.process(c)
+		q.mu.Lock()
+		q.now = nil
+		q.mu.Unlock()
 	}
 }
 
-// next waits for the first queued attempt. It returns false once the queue is closed.
-func (q *Queue) next() (queued, bool) {
+// next waits for the first queued attempt and makes it the current one. It
+// returns false once the queue is closed.
+func (q *Queue) next() (*current, bool) {
 	for {
 		q.mu.Lock()
 		if q.ctx.Err() != nil {
 			q.mu.Unlock()
-			return queued{}, false
+			return nil, false
 		}
 		if len(q.items) > 0 {
-			it := q.items[0]
+			c := &current{queued: q.items[0], cancel: make(chan struct{})}
 			q.items = q.items[1:]
+			q.now = c
 			q.mu.Unlock()
-			return it, true
+			return c, true
 		}
 		q.mu.Unlock()
 		select {
@@ -106,7 +201,8 @@ func (q *Queue) next() (queued, bool) {
 // text stays out of the record because it may quote a path.
 const reasonPanic = "the import stopped on an internal error; see the service log"
 
-func (q *Queue) process(it queued) {
+func (q *Queue) process(c *current) {
+	it := c.queued
 	logf := func(what string, err error) {
 		q.log.Error(what, "user", it.user, "id", it.id, "error", err)
 	}
@@ -117,19 +213,28 @@ func (q *Queue) process(it queued) {
 			logf("could not end an attempt", err)
 		}
 	}
+	// An attempt that never reaches its run has ended for a cancel.
+	ended := func() {
+		q.mu.Lock()
+		c.returned = true
+		q.mu.Unlock()
+	}
 	dir, n, err := q.s.Begin(it.user, it.id)
 	if err != nil {
+		ended()
 		logf("could not start an attempt", err)
 		abandon("the import could not be started; see the service log")
 		return
 	}
 	imp, err := q.s.Get(it.user, it.id)
 	if err != nil {
+		ended()
 		logf("could not read an import to run", err)
 		abandon("the import could not be read; see the service log")
 		return
 	}
 	progress := importer.Progress{
+		Cancelled: c.cancel,
 		Listed: func(rep importer.Report) {
 			if err := q.s.Listed(it.user, it.id, n, rep); err != nil {
 				logf("could not store the package list", err)
@@ -146,7 +251,11 @@ func (q *Queue) process(it queued) {
 			}
 		},
 	}
-	rep, remove, panicked := q.guarded(it, imp, dir, progress)
+	rep, remove, panicked := q.guarded(q.ctx, it, imp, dir, progress)
+	q.mu.Lock()
+	c.returned = true
+	cancelled := c.cancelled
+	q.mu.Unlock()
 	if panicked {
 		// The states the run stored stay; only the outcome and the reason are set.
 		if err := q.s.Break(it.user, it.id, reasonPanic); err != nil {
@@ -156,11 +265,19 @@ func (q *Queue) process(it queued) {
 		return
 	}
 	// A run that was cut short reports incomplete; a report that finished
-	// every package stays what it says, even when Close came last.
-	if q.ctx.Err() != nil && rep.Outcome == importer.OutcomeIncomplete {
-		rep.Outcome, remove = OutcomeInterrupted, nil
-		if rep.Reason == "" {
-			rep.Reason = OutcomeInterrupted
+	// every package stays what it says, even when a cancel or Close came last.
+	if rep.Outcome == importer.OutcomeIncomplete {
+		switch {
+		case cancelled && cutShort(rep):
+			// A stop of the service may have cut a package after its upload
+			// reached Nexus, so the reasons name the cancel only without one.
+			cancelledReport(&rep, q.ctx.Err() == nil)
+			remove = nil
+		case q.ctx.Err() != nil:
+			rep.Outcome, remove = OutcomeInterrupted, nil
+			if rep.Reason == "" {
+				rep.Reason = OutcomeInterrupted
+			}
 		}
 	}
 	if rep.Packages == nil {
@@ -183,13 +300,114 @@ func (q *Queue) process(it queued) {
 
 // guarded runs one attempt. A panic in the run, in archive parsing for one,
 // is reported through panicked and leaves the worker alive for every user.
-func (q *Queue) guarded(it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, remove Remover, panicked bool) {
+func (q *Queue) guarded(ctx context.Context, it queued, imp Import, dir string, p importer.Progress) (rep importer.Report, remove Remover, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			q.log.Error("an import attempt panicked", "user", it.user, "id", it.id, "panic", fmt.Sprint(r))
 			rep, remove, panicked = importer.Report{}, nil, true
 		}
 	}()
-	rep, remove = q.run(q.ctx, imp, dir, p)
+	rep, remove = q.run(ctx, imp, dir, p)
 	return rep, remove, false
+}
+
+// cutShort reports whether a run stopped before it listed its packages or
+// left one interrupted; an incomplete report without either ended on its own.
+func cutShort(rep importer.Report) bool {
+	if len(rep.Packages) == 0 {
+		return true
+	}
+	for _, p := range rep.Packages {
+		if p.State == importer.Failed && p.Kind == importer.KindInterrupted {
+			return true
+		}
+	}
+	return false
+}
+
+// cancelledReport marks the report of a run a cancel cut short: with
+// reasons, the packages it did not reach say so, and those in Nexus stay as
+// they ended.
+func cancelledReport(rep *importer.Report, reasons bool) {
+	rep.Outcome = OutcomeCancelled
+	if rep.Reason == "" || rep.Reason == OutcomeInterrupted {
+		rep.Reason = OutcomeCancelled
+	}
+	if !reasons {
+		return
+	}
+	for i, p := range rep.Packages {
+		if p.State == importer.Failed && p.Kind == importer.KindInterrupted {
+			rep.Packages[i].Reason = reasonCancelled
+		}
+	}
+}
+
+// Ahead returns how many attempts run or wait before the latest attempt of
+// the user's import, whoever started them, and false when no queue holds it
+// waiting.
+func (s *Store) Ahead(user, id string) (n int, queued bool) {
+	s.mu.Lock()
+	q := s.queue
+	s.mu.Unlock()
+	if q == nil {
+		return 0, false
+	}
+	return q.ahead(user, id)
+}
+
+// Cancel ends the latest attempt of the user's import: a queued one at once,
+// a running one before its next package, through its queue. An attempt that
+// has ended answers ErrEnded. A store with no queue ends a queued attempt and
+// answers ErrBusy for a running one, which it cannot stop.
+func (s *Store) Cancel(user, id string) (Import, error) {
+	if !ValidUser(user) || !ValidID(id) {
+		return Import{}, ErrNotFound
+	}
+	// The record is read first, so another user's id never reaches the queue.
+	if _, err := s.Get(user, id); err != nil {
+		return Import{}, err
+	}
+	s.mu.Lock()
+	q := s.queue
+	s.mu.Unlock()
+	if q != nil {
+		switch res, at := q.cancel(user, id); res {
+		case cancelStopping:
+			return s.Get(user, id)
+		case cancelTooLate:
+			return Import{}, ErrEnded
+		case cancelTaken:
+			imp, err := s.cancelQueued(user, id)
+			if err != nil {
+				q.putBack(user, id, at)
+			}
+			return imp, err
+		}
+	}
+	// Held by no queue: nothing else starts it now.
+	return s.cancelQueued(user, id)
+}
+
+// cancelQueued ends a queued latest attempt as cancelled.
+func (s *Store) cancelQueued(user, id string) (Import, error) {
+	var out Import
+	_, err := s.update(user, id, func(imp *Import) (string, error) {
+		a := &imp.Attempts[len(imp.Attempts)-1]
+		switch a.Status {
+		case StatusEnded:
+			return "", ErrEnded
+		case StatusRunning:
+			return "", ErrBusy
+		}
+		now := s.clock()
+		a.Status, a.EndedAt, a.Outcome, a.Removal = StatusEnded, &now, OutcomeCancelled, nil
+		a.Report.Outcome, a.Report.Reason = OutcomeCancelled, OutcomeCancelled
+		out = normalize(*imp)
+		return "", nil
+	})
+	if err != nil {
+		return Import{}, err
+	}
+	return out, nil
 }

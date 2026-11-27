@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import type { Attempt, Import } from "@/import/lib/outcome"
@@ -35,10 +35,20 @@ function value(label: string): string {
 }
 
 describe("import header", () => {
-  it("names the archive, its folder, the outcome and the attempt", () => {
+  it("names the import by its crossing, else its folder", () => {
+    const signed = attempt({}, { crossing: { project: "billing-api", sealedAt: "2026-10-01T09:00:00Z", packages: 12 } })
+    const { unmount } = render(<ImportPageHeader imp={imp(signed)} />)
+    const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", ...(new Date().getFullYear() === 2026 ? {} : { year: "numeric" as const }) }).format(new Date("2026-11-05T09:00:00Z"))
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(`billing-api · ${day}`)
+    expect(screen.getByText("2026-11-05-billing-api/packages_npm.tar.gz")).toBeInTheDocument()
+    unmount()
     render(<ImportPageHeader imp={imp(attempt())} />)
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("packages_npm.tar.gz")
-    expect(screen.getByText("2026-11-05-billing-api/")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("2026-11-05-billing-api/")
+    expect(screen.getByText("packages_npm.tar.gz")).toBeInTheDocument()
+  })
+
+  it("names the outcome and the attempt", () => {
+    render(<ImportPageHeader imp={imp(attempt())} />)
     expect(screen.getByText("Incomplete")).toBeInTheDocument()
     expect(value("Attempt")).toBe("2")
   })
@@ -92,8 +102,8 @@ describe("import header", () => {
     const pip = { os: "linux", cpu: "x86_64", libc: "", node: "", pnpmVer: "", python: "3.11.2", glibc: "2.28" }
     const a = attempt({}, { ecosystem: "pip", target: pip, nexus: { url: "http://nexus.lab:8081", repository: "pypi-hosted" } })
     render(<ImportPageHeader imp={imp(a, "packages/pip/2026-11-20-data-tools/packages_pip.tar.gz")} />)
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("packages_pip.tar.gz")
-    expect(screen.getByText("2026-11-20-data-tools/")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("2026-11-20-data-tools/")
+    expect(screen.getByText("packages_pip.tar.gz")).toBeInTheDocument()
     expect(value("Target OS")).toBe("linux")
     expect(value("CPU")).toBe("x86_64")
     expect(value("Python")).toBe("3.11.2")
@@ -127,8 +137,8 @@ describe("import header", () => {
   it("wraps a 1,024-byte key", () => {
     const key = `packages/npm/${"k".repeat(1024 - 13 - 1 - 19)}/packages_npm.tar.gz`
     render(<ImportPageHeader imp={imp(attempt(), key)} />)
-    const folder = screen.getByText(/^k+\/$/)
-    expect(within(folder.parentElement as HTMLElement).getByRole("heading", { level: 1 })).toBeInTheDocument()
+    const folder = screen.getByRole("heading", { level: 1 })
+    expect(folder).toHaveTextContent(/^k+\/$/)
     expect(folder.className).toContain("[overflow-wrap:anywhere]")
   })
 })

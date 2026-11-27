@@ -242,6 +242,57 @@ func TestParseManifestReadsTheReviewExample(t *testing.T) {
 	}
 }
 
+// parseBoth reads review through an npm and a pip manifest, named by
+// ecosystem, with names valid in both.
+func parseBoth(t *testing.T, review map[string]any) map[string]struct {
+	review  *Review
+	problem string
+} {
+	t.Helper()
+	npmDoc, pipDoc := manifestDoc(), pipManifestDoc()
+	npmDoc["review"], pipDoc["review"] = review, review
+	m, err := ParseManifest(encode(t, npmDoc))
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	p, err := ParsePipManifest(encode(t, pipDoc))
+	if err != nil {
+		t.Fatalf("ParsePipManifest: %v", err)
+	}
+	return map[string]struct {
+		review  *Review
+		problem string
+	}{"npm": {m.Review, m.ReviewProblem}, "pip": {p.Review, p.ReviewProblem}}
+}
+
+func TestReadsTheProjectAReviewCarries(t *testing.T) {
+	for name, project := range map[string]string{
+		"a plain name":            "pdf-renderer",
+		"a scoped npm name":       "@acme/pdf-renderer",
+		"100 characters":          strings.Repeat("p", 100),
+		"spaces around 100":       "  " + strings.Repeat("p", 100) + "  ",
+		"214 bytes":               strings.Repeat("東", 71) + "a",
+		"a name with a no-break":  "Rendu\u00a0PDF",
+		"letters of other script": "東京リアクト",
+		"spaces around a name":    "  pdf-renderer  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := reviewDoc("jinja2", "3.1.4", "3.1.6")
+			doc["project"] = project
+			want := wantReview("jinja2", "3.1.4", "3.1.6")
+			want.Project = strings.TrimSpace(project)
+			for eco, got := range parseBoth(t, doc) {
+				if got.problem != "" || !reflect.DeepEqual(got.review, want) {
+					t.Errorf("%s: read %+v, %q, want the project %q", eco, got.review, got.problem, want.Project)
+				}
+			}
+			if err := CheckReview(*want, NPM); err != nil {
+				t.Errorf("CheckReview refused a review with a project: %v", err)
+			}
+		})
+	}
+}
+
 // yankedDoc is a pip review that carries two yanked releases, one with the
 // index's reason and one without.
 func yankedDoc() map[string]any {
@@ -307,6 +358,61 @@ func TestAnUnreadableYankedListKeepsTheReviewOut(t *testing.T) {
 			}
 			if strings.Contains(m.ReviewProblem, "owned") {
 				t.Errorf("problem %q repeats the value", m.ReviewProblem)
+			}
+		})
+	}
+}
+
+func TestReadsAReviewWithNoProject(t *testing.T) {
+	for eco, got := range parseBoth(t, reviewDoc("jinja2", "3.1.4", "3.1.6")) {
+		if got.problem != "" || got.review == nil || got.review.Project != "" {
+			t.Fatalf("%s: read %+v, %q, want a review with no project", eco, got.review, got.problem)
+		}
+		if !reflect.DeepEqual(got.review, wantReview("jinja2", "3.1.4", "3.1.6")) {
+			t.Errorf("%s: read %+v", eco, got.review)
+		}
+	}
+	data, err := json.Marshal(*wantReview("jinja2", "3.1.4", "3.1.6"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"project"`) {
+		t.Errorf("a review with no project writes the key: %s", data)
+	}
+}
+
+func TestDropsAnUnreadableProjectAndKeepsTheReview(t *testing.T) {
+	for name, project := range map[string]any{
+		"a bidirectional override, 215 bytes": "pdf\u202e" + strings.Repeat("r", 215-len("pdf\u202e")),
+		"a bidirectional override":            "pdf\u202erenderer",
+		"215 bytes":                           strings.Repeat("東", 71) + "ab",
+		"101 characters":                      strings.Repeat("p", 101),
+		"a newline":                           "pdf\nrenderer",
+		"a line separator":                    "pdf\u2028renderer",
+		"an escape sequence":                  "pdf\x1b[2Jrenderer",
+		"empty":                               "",
+		"spaces only":                         "   ",
+		"a number":                            42,
+		"an object":                           map[string]any{"name": "pdf-renderer"},
+		"null":                                nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if s, ok := project.(string); ok && name == "a bidirectional override, 215 bytes" && len(s) != 215 {
+				t.Fatalf("the test name holds %d bytes, want 215", len(s))
+			}
+			doc := reviewDoc("jinja2", "3.1.4", "3.1.6")
+			doc["project"] = project
+			for eco, got := range parseBoth(t, doc) {
+				if got.problem != "" || !reflect.DeepEqual(got.review, wantReview("jinja2", "3.1.4", "3.1.6")) {
+					t.Errorf("%s: read %+v, %q, want the whole review with no project", eco, got.review, got.problem)
+				}
+			}
+			if s, ok := project.(string); ok {
+				r := wantReview("jinja2", "3.1.4", "3.1.6")
+				r.Project = s
+				if err := CheckReview(*r, NPM); err != nil {
+					t.Errorf("CheckReview refused the review over its project: %v", err)
+				}
 			}
 		})
 	}

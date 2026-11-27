@@ -1,10 +1,13 @@
+import { useQuery } from "@tanstack/react-query"
 import { createRootRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
 import type { ReactNode } from "react"
 
 import { BrandProvider, DEFAULT_BRAND } from "@/components/frame/brand"
 import { Frame } from "@/components/frame/frame"
 import { ApiFailure } from "@/components/import/api-failure"
+import { importName } from "@/components/import/import-row"
 import { useMe } from "@/import/api/queries"
+import type { Import } from "@/import/lib/outcome"
 import { OFFLINE_INSTANCE, OFFLINE_PLACES, offlineCrumbs } from "@/import/lib/places"
 
 export const Route = createRootRoute({
@@ -33,9 +36,12 @@ export const Route = createRootRoute({
 function OfflineFrame({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const me = useMe()
+  // The import's page reads its record; the frame only watches that read, so it fetches nothing of its own.
+  const id = pathname.startsWith("/imports/") ? decodeURIComponent(pathname.slice("/imports/".length)) : ""
+  const name = useQuery({ queryKey: ["imports", id], enabled: false, select: (imp: Import) => importName(imp) }).data
   return (
     <BrandProvider brand={DEFAULT_BRAND}>
-      <Frame side="offline" places={OFFLINE_PLACES} instance={OFFLINE_INSTANCE} user={me.data?.user} crumbs={offlineCrumbs(pathname)}>
+      <Frame side="offline" places={OFFLINE_PLACES} instance={OFFLINE_INSTANCE} user={me.data?.user} crumbs={offlineCrumbs(pathname, name)}>
         <div className="mx-auto flex w-full max-w-240 flex-1 flex-col px-5 py-8">{children}</div>
       </Frame>
     </BrandProvider>

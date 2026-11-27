@@ -3,6 +3,7 @@ package importer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,14 +12,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MorganKryze/sealift/archive"
 	"github.com/MorganKryze/sealift/internal/importtest"
 	"github.com/MorganKryze/sealift/internal/nexus"
+	"github.com/MorganKryze/sealift/npm"
 )
 
 func fileSource(opts Options) Source {
@@ -442,6 +446,8 @@ type pipFixture struct {
 	// cancelOpen and cancelRead cancel the attempt as the archive is opened,
 	// or as its first bytes are read.
 	cancelOpen, cancelRead bool
+	// wrap, when set, wraps the Nexus client the attempt builds.
+	wrap func(Publisher) Publisher
 }
 
 // cancelOnRead cancels the attempt on each read and reads on, so only the
@@ -517,7 +523,17 @@ func (p *pipFixture) attempt(t *testing.T, folder archive.Ecosystem, opts ...fun
 	for _, o := range opts {
 		o(&a)
 	}
-	return RunAttempt(ctx, a, clientFor), opened
+	newPublisher := clientFor
+	if p.wrap != nil {
+		newPublisher = func(s Settings) (Publisher, error) {
+			c, err := clientFor(s)
+			if err != nil {
+				return nil, err
+			}
+			return p.wrap(c), nil
+		}
+	}
+	return RunAttempt(ctx, a, newPublisher), opened
 }
 
 func TestPipAttemptRefusals(t *testing.T) {
@@ -660,5 +676,372 @@ func TestPipAttemptPublishes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// crossingReviewDoc is a signed review whose figures differ by how they
+// count: two updates and three jumped packages, and three CVEs carried with
+// a reason on two dependencies beside one carried without. Its names and
+// versions read in npm and in pip.
+func crossingReviewDoc() map[string]any {
+	move := func(name string) map[string]any { return map[string]any{"name": name, "from": "1.0.0", "to": "2.0.0"} }
+	left := func(dep, id, reason string) map[string]any {
+		return map[string]any{"dependency": dep, "version": "1.0.0", "id": id, "severity": "HIGH", "package": dep, "fixedIn": "", "reason": reason}
+	}
+	return map[string]any{
+		"project": "pdf-renderer",
+		"cves":    map[string]any{"before": []any{1, 4, 6, 2, 0}, "after": []any{0, 1, 3, 1, 0}},
+		"updates": []any{
+			map[string]any{"name": "six", "from": "1.0.0", "to": "1.1.0", "fixed": []any{0, 1, 0, 0, 0}, "left": []any{0, 0, 0, 0, 0}},
+			map[string]any{"name": "idna", "from": "3.6.0", "to": "3.7.0", "fixed": []any{1, 0, 0, 0, 0}, "left": []any{0, 0, 0, 0, 0}},
+		},
+		"kept": []any{},
+		"jumps": []any{
+			map[string]any{"family": "jinja 3", "packages": []any{move("jinja2"), move("markupsafe")}, "reason": "The templates moved to the next line."},
+			map[string]any{"packages": []any{move("certifi")}, "reason": "The new line drops an old root."},
+		},
+		"left": []any{
+			left("html5lib", "CVE-2024-0001", "No release fixes it; the parser reads our own pages only."),
+			left("html5lib", "CVE-2024-0002", "No release fixes it; the parser reads our own pages only."),
+			left("lxml", "CVE-2024-0003", "No release fixes it; the feature is off."),
+			left("chardet", "CVE-2024-0004", ""),
+		},
+		"unchanged": 7,
+	}
+}
+
+// wantCrossingReview is what the report keeps of crossingReviewDoc.
+func wantCrossingReview() *CrossingReview {
+	return &CrossingReview{Updated: 5, CVEsBefore: [5]int{1, 4, 6, 2, 0}, CVEsAfter: &[5]int{0, 1, 3, 1, 0}, Carried: 2, Jumps: 3}
+}
+
+// addReview writes review into the manifest at path and signs it again.
+func addReview(t *testing.T, path string, review map[string]any) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["review"] = review
+	if b, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signManifest(t, path)
+}
+
+func TestAttemptKeepsTheCrossingAndTheReviewsFigures(t *testing.T) {
+	t.Run("npm", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		addReview(t, r.opts.Manifest, crossingReviewDoc())
+		a := r.attemptOf(t)
+		var listed Report
+		a.Progress.Listed = func(rep Report) { listed = rep }
+		rep := r.runAttempt(t, a)
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := &Crossing{Project: "pdf-renderer", SealedAt: "2026-09-23T12:04:24Z", Packages: 2, Review: wantCrossingReview()}
+		if !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("crossing %+v, review %+v, want %+v, review %+v", rep.Crossing, reviewOf(rep.Crossing), want, want.Review)
+		}
+		if !reflect.DeepEqual(listed.Crossing, want) {
+			t.Errorf("the listed report keeps the crossing %+v, want %+v", listed.Crossing, want)
+		}
+	})
+	t.Run("pip", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, crossingReviewDoc())
+		rep, _ := p.attempt(t, archive.Pip)
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := &Crossing{Project: "pdf-renderer", SealedAt: "2026-11-20T09:17:42Z", Packages: 2, Review: wantCrossingReview()}
+		if !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("crossing %+v, review %+v, want %+v, review %+v", rep.Crossing, reviewOf(rep.Crossing), want, want.Review)
+		}
+	})
+	// A review whose project scan was never read has no after count. The
+	// report keeps it absent, so no reader takes it for zero CVEs.
+	noAfter := func() map[string]any {
+		review := crossingReviewDoc()
+		review["cves"] = map[string]any{"before": []any{1, 4, 6, 2, 0}}
+		return review
+	}
+	checkNoAfter := func(t *testing.T, rep Report) {
+		t.Helper()
+		if rep.Outcome != OutcomeComplete {
+			t.Fatalf("outcome %q (%s)", rep.Outcome, rep.Reason)
+		}
+		want := wantCrossingReview()
+		want.CVEsAfter = nil
+		if got := reviewOf(rep.Crossing); !reflect.DeepEqual(got, want) {
+			t.Errorf("review %+v, after %v, want %+v with no after count", got, afterOf(got), want)
+		}
+		b, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"cvesAfter"`) {
+			t.Errorf("the report names an after count the review lacks: %s", b)
+		}
+	}
+	t.Run("npm, a review with no after count", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		addReview(t, r.opts.Manifest, noAfter())
+		checkNoAfter(t, r.runAttempt(t, r.attemptOf(t)))
+	})
+	t.Run("pip, a review with no after count", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, noAfter())
+		rep, _ := p.attempt(t, archive.Pip)
+		checkNoAfter(t, rep)
+	})
+}
+
+// afterOf is r's after count, nil when r or its count is.
+func afterOf(r *CrossingReview) *[5]int {
+	if r == nil {
+		return nil
+	}
+	return r.CVEsAfter
+}
+
+// reviewOf is c's review, nil when c is.
+func reviewOf(c *Crossing) *CrossingReview {
+	if c == nil {
+		return nil
+	}
+	return c.Review
+}
+
+func TestAttemptKeepsNoCrossingBeforeTheSignatureVerifies(t *testing.T) {
+	other, _ := newTestKey()
+	for name, setup := range map[string]func(t *testing.T, r *runFixture, a *Attempt){
+		"another key": func(_ *testing.T, _ *runFixture, a *Attempt) {
+			a.Settings.PublicKey, a.Settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		},
+		"a review changed after the signature": func(t *testing.T, r *runFixture, _ *Attempt) {
+			sig, err := os.ReadFile(r.opts.Manifest + ".sig")
+			if err != nil {
+				t.Fatal(err)
+			}
+			review := crossingReviewDoc()
+			review["unchanged"] = 8
+			addReview(t, r.opts.Manifest, review)
+			if err := os.WriteFile(r.opts.Manifest+".sig", sig, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unsigned": func(_ *testing.T, _ *runFixture, a *Attempt) {
+			a.Source.Signature = func(context.Context) (io.ReadCloser, error) { return nil, ErrUnsigned }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRunFixture(t)
+			addReview(t, r.opts.Manifest, crossingReviewDoc())
+			a := r.attemptOf(t)
+			setup(t, r, &a)
+			rep := r.runAttempt(t, a)
+			if rep.Outcome != OutcomeRefused {
+				t.Fatalf("outcome %q (%s), want refused", rep.Outcome, rep.Reason)
+			}
+			if rep.Crossing != nil {
+				t.Errorf("a refusal before the signature verifies keeps the crossing %+v", rep.Crossing)
+			}
+			b, err := json.Marshal(rep)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), `"crossing"`) || strings.Contains(string(b), "pdf-renderer") {
+				t.Errorf("the refused report names the crossing: %s", b)
+			}
+		})
+	}
+	t.Run("pip, another key", func(t *testing.T) {
+		p := newPipFixture(t)
+		addReview(t, p.files.Manifest, crossingReviewDoc())
+		p.settings.PublicKey, p.settings.PublicKeySHA256 = other, archive.PublicKeySHA256(other)
+		rep, _ := p.attempt(t, archive.Pip)
+		if rep.Outcome != OutcomeRefused || rep.Crossing != nil {
+			t.Errorf("outcome %q, crossing %+v, want a refusal with no crossing", rep.Outcome, rep.Crossing)
+		}
+	})
+}
+
+func TestAttemptKeepsTheProjectOutOfAManifestWithNoReview(t *testing.T) {
+	t.Run("npm", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		rep := r.runAttempt(t, r.attemptOf(t))
+		want := &Crossing{SealedAt: "2026-09-23T12:04:24Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
+	t.Run("pip", func(t *testing.T) {
+		rep, _ := newPipFixture(t).attempt(t, archive.Pip)
+		want := &Crossing{SealedAt: "2026-11-20T09:17:42Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
+	t.Run("a review the import keeps out", func(t *testing.T) {
+		r := newRunFixture(t)
+		r.serveUploads()
+		review := crossingReviewDoc()
+		review["unchanged"] = -1
+		addReview(t, r.opts.Manifest, review)
+		rep := r.runAttempt(t, r.attemptOf(t))
+		want := &Crossing{SealedAt: "2026-09-23T12:04:24Z", Packages: 2}
+		if rep.Outcome != OutcomeComplete || !reflect.DeepEqual(rep.Crossing, want) {
+			t.Errorf("outcome %q, crossing %+v, want %+v", rep.Outcome, rep.Crossing, want)
+		}
+	})
+}
+
+func TestRunAttemptCancel(t *testing.T) {
+	newFixture := func(t *testing.T) *runFixture {
+		t.Helper()
+		r := newRunFixture(t)
+		r.opts.Archive, r.opts.Manifest = testArchive(t, r.archives,
+			[3]string{"left-pad", "1.3.0", "left body"}, [3]string{"@scope/zeta", "2.0.0", "zeta body"}, [3]string{"right-pad", "1.0.0", "right body"})
+		return r
+	}
+	t.Run("lets the package in flight finish and starts no other", func(t *testing.T) {
+		r := newFixture(t)
+		cancelled := make(chan struct{})
+		r.f.onUpload = func(f *fakeNexus, u upload) {
+			if info, err := npm.InspectTarball(bytes.NewReader(u.Body)); err == nil {
+				f.put(info.Name, info.Version, u.Body)
+			}
+			// Nexus has stored the package and its answer has not left yet.
+			if u.File == "left-pad-1.3.0.tgz" {
+				close(cancelled)
+			}
+		}
+		a := r.attemptOf(t)
+		a.Progress.Cancelled = cancelled
+		rep := r.runAttempt(t, a)
+		if p := rep.Packages[0]; p.State != Published {
+			t.Errorf("the package in flight = %+v, want published once read back", p)
+		}
+		for _, p := range rep.Packages[1:] {
+			if p.State != Failed || p.Kind != KindInterrupted || p.Reason != reasonInterrupted {
+				t.Errorf("%s after the cancel = %+v, want failed interrupted", p.Name, p)
+			}
+		}
+		if n := r.f.uploadCount(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if rep.Outcome != OutcomeIncomplete || rep.Counts.Published != 1 || rep.Counts.Failed != 2 {
+			t.Errorf("outcome %q, counts %+v", rep.Outcome, rep.Counts)
+		}
+	})
+	t.Run("lets the wheel in flight finish and starts no other", func(t *testing.T) {
+		p := newPipFixture(t)
+		w := &cancelInFlight{cancel: make(chan struct{})}
+		p.wrap = func(c Publisher) Publisher {
+			w.Publisher = c
+			return w
+		}
+		rep, _ := p.attempt(t, archive.Pip, func(a *Attempt) {
+			a.Progress.Cancelled = w.cancel
+			open := a.Source.Archive
+			a.Source.Archive = func(ctx context.Context) (io.ReadCloser, error) {
+				w.checks = ctx
+				return open(ctx)
+			}
+		})
+		if r := rep.Packages[0]; r.State != Published {
+			t.Errorf("the wheel in flight = %+v, want published once read back", r)
+		}
+		if r := rep.Packages[1]; r.State != Failed || r.Kind != KindInterrupted || r.Reason != reasonInterrupted {
+			t.Errorf("%s after the cancel = %+v, want failed interrupted", r.Name, r)
+		}
+		if n := p.n.Uploads(); n != 1 {
+			t.Errorf("%d uploads, want 1", n)
+		}
+		if rep.Outcome != OutcomeIncomplete || rep.Counts.Published != 1 || rep.Counts.Failed != 1 {
+			t.Errorf("outcome %q, counts %+v", rep.Outcome, rep.Counts)
+		}
+	})
+	t.Run("stops the checks of an attempt cancelled before its first package", func(t *testing.T) {
+		r := newFixture(t)
+		cancelled := make(chan struct{})
+		close(cancelled)
+		a := r.attemptOf(t)
+		a.Progress.Cancelled = cancelled
+		rep := r.runAttempt(t, a)
+		if rep.Outcome != OutcomeIncomplete || len(rep.Packages) != 3 || *rep.ArchiveChecked {
+			t.Fatalf("outcome %q (%s), checked %v, packages %+v", rep.Outcome, rep.Reason, *rep.ArchiveChecked, rep.Packages)
+		}
+		for _, p := range rep.Packages {
+			if p.State != Failed || p.Kind != KindInterrupted {
+				t.Errorf("%s = %+v, want failed interrupted", p.Name, p)
+			}
+		}
+		if r.f.mu.Lock(); len(r.f.requests) != 0 {
+			t.Errorf("%d requests reached Nexus", len(r.f.requests))
+		}
+		r.f.mu.Unlock()
+	})
+}
+
+// cancelInFlight cancels the attempt once Nexus has stored the first upload,
+// and answers only after the cancel has ended checks, the context the archive
+// was read on. An upload made on that context then fails, as one a cancel
+// cut on the network would.
+type cancelInFlight struct {
+	Publisher
+	cancel chan struct{}
+	checks context.Context
+	once   sync.Once
+}
+
+func (c *cancelInFlight) Upload(ctx context.Context, file string, r io.Reader) error {
+	if err := c.Publisher.Upload(ctx, file, r); err != nil {
+		return err
+	}
+	first := false
+	c.once.Do(func() { first = true })
+	if !first {
+		return nil
+	}
+	close(c.cancel)
+	select {
+	case <-c.checks.Done():
+	case <-time.After(10 * time.Second):
+		return errors.New("the cancel never ended the checks")
+	}
+	return ctx.Err()
+}
+
+func TestRetryOfOneCauseReportsAnUnlistedPackageLiveAsItEnds(t *testing.T) {
+	r := newRunFixture(t)
+	r.serveUploads()
+	a := r.attemptOf(t)
+	a.Only = map[string]bool{"left-pad-1.3.0.tgz": true}
+	a.Before = map[string]Result{}
+	ended := map[string]Result{}
+	a.Progress.Ended = func(_ int, res Result) { ended[res.Name] = res }
+	rep := r.runAttempt(t, a)
+	z, ok := ended["@scope/zeta"]
+	if !ok {
+		t.Fatalf("zeta never ended through the progress; report %+v", rep.Packages)
+	}
+	if z.State != Failed || z.Kind != KindNexus || z.Reason != reasonNotInNexus {
+		t.Errorf("zeta as it ended = %+v, want failed as nexus with %q", z, reasonNotInNexus)
+	}
+	if l := ended["left-pad"]; l.State != Published {
+		t.Errorf("left-pad as it ended = %+v, want published", l)
 	}
 }

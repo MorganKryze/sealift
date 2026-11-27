@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const (
@@ -480,5 +481,172 @@ func TestNexusErrorsCarryNoPipSecret(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// searchServer answers the asset search with body and records each query.
+func searchServer(t *testing.T, body string, queries *[]url.Values) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/service/rest/v1/search/assets" {
+			http.NotFound(w, r)
+			return
+		}
+		if queries != nil {
+			*queries = append(*queries, r.URL.Query())
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAssetReadsUploaderAndDate(t *testing.T) {
+	var queries []url.Values
+	srv := searchServer(t, `{"items":[
+		{"path":"@types/node/-/node-22.10.1.tgz","uploader":"someone-else","lastModified":"2024-01-01T00:00:00.000+00:00"},
+		{"path":"@types/node/-/node-22.10.2.tgz","uploader":"ci-publish","lastModified":"2025-10-03T09:12:44.123+00:00"}
+	],"continuationToken":null}`, &queries)
+	facts, found, err := newClient(t, srv, "").Asset(context.Background(), "@types/node", "22.10.2")
+	if err != nil || !found {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if facts.Uploader != "ci-publish" || !facts.LastModified.Equal(time.Date(2025, 10, 3, 9, 12, 44, 123e6, time.UTC)) {
+		t.Fatalf("facts = %+v", facts)
+	}
+	q := queries[0]
+	if q.Get("repository") != "npm-hosted" || q.Get("group") != "types" || q.Get("name") != "node" || q.Get("version") != "22.10.2" {
+		t.Fatalf("query = %v", q)
+	}
+}
+
+func TestAssetSendsNoGroupForAnUnscopedName(t *testing.T) {
+	var queries []url.Values
+	srv := searchServer(t, `{"items":[]}`, &queries)
+	if _, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0"); err != nil || found {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if q := queries[0]; q.Has("group") || q.Get("name") != "left-pad" {
+		t.Fatalf("query = %v", q)
+	}
+}
+
+func TestAssetFileReadsAPypiFileByItsPath(t *testing.T) {
+	file := "numpy-2.1.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+	var queries []url.Values
+	srv := searchServer(t, `{"items":[
+		{"path":"packages/numpy/2.1.3/numpy-2.1.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","uploader":"other"},
+		{"path":"packages/numpy/2.1.3/`+file+`","uploader":"jo","lastModified":"2025-09-02T10:00:00Z"}
+	]}`, &queries)
+	facts, found, err := newClient(t, srv, "").AssetFile(context.Background(), "numpy", file)
+	if err != nil || !found || facts.Uploader != "jo" || facts.LastModified.Year() != 2025 {
+		t.Fatalf("facts %+v, found %v, err %v", facts, found, err)
+	}
+	if q := queries[0]; q.Get("repository") != "npm-hosted" || q.Get("name") != "numpy" {
+		t.Fatalf("query = %v", q)
+	}
+}
+
+func TestAssetBoundsAndScrubsTheAnswer(t *testing.T) {
+	big := searchServer(t, `{"items":[{"path":"`+strings.Repeat("a", 2<<20)+`"}]}`, nil)
+	if _, found, err := newClient(t, big, "").Asset(context.Background(), "left-pad", "1.0.0"); err == nil || found {
+		t.Fatalf("a 2 MiB answer: found %v, err %v", found, err)
+	}
+
+	basic := base64.StdEncoding.EncodeToString([]byte(testUser + ":" + testPassword))
+	head := "\x1b[31m" + testPassword + " " + basic + " "
+	cases := map[string]struct{ uploader, want string }{
+		"short": {
+			uploader: "jo " + head + "\x07",
+			want:     "jo [31m[redacted] [redacted] ",
+		},
+		"long": {
+			uploader: head + strings.Repeat("u", 150),
+			want:     ("[31m[redacted] [redacted] " + strings.Repeat("u", 150))[:100],
+		},
+	}
+	for name, tc := range cases {
+		body, _ := json.Marshal(map[string]any{"items": []map[string]string{{"path": "left-pad/-/left-pad-1.0.0.tgz", "uploader": tc.uploader, "lastModified": "not a date"}}})
+		srv := searchServer(t, string(body), nil)
+		facts, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0")
+		if err != nil || !found {
+			t.Fatalf("%s: found %v, err %v", name, found, err)
+		}
+		if facts.Uploader != tc.want {
+			t.Errorf("%s: uploader = %q, want %q", name, facts.Uploader, tc.want)
+		}
+		if !facts.LastModified.IsZero() {
+			t.Errorf("%s: an unreadable date reads as %v", name, facts.LastModified)
+		}
+	}
+}
+
+func TestAssetAnswersNotFoundForAnEmptySearch(t *testing.T) {
+	srv := searchServer(t, `{"items":[],"continuationToken":null}`, nil)
+	c := newClient(t, srv, "")
+	if _, found, err := c.Asset(context.Background(), "left-pad", "1.0.0"); err != nil || found {
+		t.Fatalf("npm: found %v, err %v", found, err)
+	}
+	if _, found, err := c.AssetFile(context.Background(), "idna", "idna-3.10-py3-none-any.whl"); err != nil || found {
+		t.Fatalf("pypi: found %v, err %v", found, err)
+	}
+}
+
+func TestAssetReportsNexusStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	_, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0")
+	var e *Error
+	if found || !asError(err, &e) || e.Status != http.StatusForbidden {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+}
+
+func TestAssetSearchGivesUpOnATricklingNexus(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		for {
+			if _, err := w.Write([]byte(" ")); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}))
+	defer srv.Close()
+	defer close(stop)
+	c := newClient(t, srv, "")
+	c.searchTimeout = 200 * time.Millisecond
+	start := time.Now()
+	_, found, err := c.Asset(context.Background(), "left-pad", "1.0.0")
+	if err == nil || found {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the search held the caller for %v", d)
+	}
+}
+
+func TestClientSearchesAssetsWithinThirtySeconds(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	if c := newClient(t, srv, ""); c.searchTimeout != 30*time.Second {
+		t.Fatalf("searchTimeout = %v", c.searchTimeout)
+	}
+}
+
+func TestAssetFileMatchesTheWholeFileName(t *testing.T) {
+	srv := searchServer(t, `{"items":[
+		{"path":"packages/six/1.16.0/xsix-1.16.0-py2.py3-none-any.whl","uploader":"other"}
+	]}`, nil)
+	if _, found, err := newClient(t, srv, "").AssetFile(context.Background(), "six", "six-1.16.0-py2.py3-none-any.whl"); err != nil || found {
+		t.Fatalf("a longer file name ending the same way: found %v, err %v", found, err)
 	}
 }

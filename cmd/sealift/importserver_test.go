@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -228,6 +229,8 @@ func TestImportServerChecksTokens(t *testing.T) {
 	s.stop(t)
 }
 
+var styleNonce = regexp.MustCompile(` 'nonce-[A-Za-z0-9+/=]+'`)
+
 func TestImportServerServesScreens(t *testing.T) {
 	s := startServer(t, "-settings", serverSettings(t, tokenSection(serverKeySet)), "-data", t.TempDir(), "-addr", "127.0.0.1:0")
 	for _, path := range []string{"/", "/imports", "/imports/20261106T101500Z-3f9a0c1d"} {
@@ -239,7 +242,9 @@ func TestImportServerServesScreens(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200", path, resp.StatusCode)
 		}
-		if got := resp.Header.Get("Content-Security-Policy"); got != service.ScreensPolicy || !strings.Contains(got, "frame-ancestors 'none'") {
+		// The shell adds its own style nonce to the screens' policy.
+		got := resp.Header.Get("Content-Security-Policy")
+		if plain := styleNonce.ReplaceAllString(got, ""); plain != service.ScreensPolicy || !strings.Contains(got, "frame-ancestors 'none'") {
 			t.Errorf("GET %s: Content-Security-Policy = %q, want the screens' policy", path, got)
 		}
 	}

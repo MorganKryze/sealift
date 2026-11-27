@@ -2,8 +2,10 @@ package imports
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -267,5 +269,513 @@ func TestQueuePanicKeepsTheStoredPackages(t *testing.T) {
 	}
 	if r.Counts.Published != 1 || r.Counts.Failed != 1 {
 		t.Errorf("counts = %+v, want 1 published and 1 failed", r.Counts)
+	}
+}
+
+// heldQueue runs each attempt through run after it tells started its id.
+func heldQueue(t *testing.T, s *Store, started chan<- string, run RunFunc) *Queue {
+	t.Helper()
+	q := NewQueue(s, func(ctx context.Context, imp Import, dir string, p importer.Progress) (importer.Report, Remover) {
+		started <- imp.ID
+		return run(ctx, imp, dir, p)
+	}, quietLog())
+	t.Cleanup(q.Close)
+	return q
+}
+
+func TestQueueRank(t *testing.T) {
+	t.Run("gives the rank of every attempt before this one, whoever started it", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		first, other, mine := newImport(t, s, "alice"), newImport(t, s, "bob"), newImport(t, s, "alice")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		for _, imp := range []Import{first, other, mine} {
+			q.Submit(imp.User, imp.ID)
+		}
+		waitFor(t, started, "the first run")
+		for _, tc := range []struct {
+			imp    Import
+			n      int
+			queued bool
+		}{{first, 0, false}, {other, 1, true}, {mine, 2, true}} {
+			if n, queued := s.Ahead(tc.imp.User, tc.imp.ID); n != tc.n || queued != tc.queued {
+				t.Errorf("%s's import: ahead %d queued %v, want %d %v", tc.imp.User, n, queued, tc.n, tc.queued)
+			}
+		}
+		close(release)
+		waitFor(t, started, "the second run")
+		waitFor(t, started, "the third run")
+		q.Close()
+		if n, queued := s.Ahead(mine.User, mine.ID); n != 0 || queued {
+			t.Errorf("after the runs: ahead %d queued %v", n, queued)
+		}
+	})
+	t.Run("a store with no queue ranks nothing", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		if n, queued := s.Ahead(imp.User, imp.ID); n != 0 || queued {
+			t.Errorf("ahead %d queued %v", n, queued)
+		}
+	})
+}
+
+func TestQueueCancel(t *testing.T) {
+	t.Run("takes a queued attempt out of the queue on cancel", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		running, waiting := newImport(t, s, "alice"), newImport(t, s, "bob")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		q.Submit(running.User, running.ID)
+		q.Submit(waiting.User, waiting.ID)
+		waitFor(t, started, "the first run")
+
+		got, err := s.Cancel(waiting.User, waiting.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Outcome() != OutcomeCancelled {
+			t.Errorf("the answer reads %q, want cancelled at once", got.Outcome())
+		}
+		if n, queued := s.Ahead(waiting.User, waiting.ID); queued || n != 0 {
+			t.Errorf("the cancelled attempt still ranks: %d %v", n, queued)
+		}
+		later := newImport(t, s, "alice")
+		q.Submit(later.User, later.ID)
+		close(release)
+		if id := waitFor(t, started, "the next run"); id != later.ID {
+			t.Errorf("import %s ran after its cancel", id)
+		}
+		q.Close()
+		stored, _ := s.Get(waiting.User, waiting.ID)
+		a := stored.Attempts[0]
+		if a.Status != StatusEnded || a.Outcome != OutcomeCancelled || a.EndedAt == nil || a.Removal != nil || a.Report.Reason == "" {
+			t.Errorf("stored attempt = %+v", a)
+		}
+	})
+
+	t.Run("stops a running attempt before its next package", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp, next := newImport(t, s, "alice"), newImport(t, s, "bob")
+		started, inRun := make(chan string, 2), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, run Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			if run.ID == next.ID {
+				return completeReport(), nil
+			}
+			p.Listed(listedReport())
+			first := pendingResults()[0]
+			first.State = importer.Published
+			p.Ended(0, first)
+			close(inRun)
+			select {
+			case <-p.Cancelled:
+			case <-ctx.Done():
+				t.Error("the cancel ended the run's context, which cuts the package in flight")
+			}
+			second := pendingResults()[1]
+			second.State, second.Kind, second.Reason = importer.Failed, importer.KindInterrupted, "interrupted"
+			p.Ended(1, second)
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{first, second}, Counts: importer.Counts{Published: 1, Failed: 1}}, nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
+		waitFor(t, inRun, "the first package")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		// The worker takes the next attempt once the end of this one is stored.
+		q.Submit(next.User, next.ID)
+		waitFor(t, started, "the next run")
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		a := got.Attempts[0]
+		if a.Outcome != OutcomeCancelled || a.Report.Outcome != OutcomeCancelled || a.Report.Reason == "" {
+			t.Fatalf("attempt = %s, report %s %q", a.Outcome, a.Report.Outcome, a.Report.Reason)
+		}
+		if p := a.Report.Packages[0]; p.State != importer.Published {
+			t.Errorf("the package in Nexus became %+v", p)
+		}
+		if p := a.Report.Packages[1]; p.State != importer.Failed || p.Kind != importer.KindInterrupted || p.Reason != reasonCancelled {
+			t.Errorf("the package not reached = %+v, want failed interrupted %q", p, reasonCancelled)
+		}
+	})
+
+	t.Run("never removes the archive of a cancelled attempt", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started := make(chan string, 1)
+		removed := false
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			select {
+			case <-p.Cancelled:
+			case <-ctx.Done():
+			}
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, func(context.Context) *Removal {
+				removed = true
+				return &Removal{Removed: true}
+			}
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		if removed || got.Attempts[0].Removal != nil || got.ArchiveRemoved() || got.Outcome() != OutcomeCancelled {
+			t.Errorf("removed %v, attempt %+v", removed, got.Attempts[0])
+		}
+	})
+
+	t.Run("keeps the reason of a package a stop of the service cut after a cancel", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, inRun := make(chan string, 1), make(chan struct{})
+		cancelReturned, looked := make(chan struct{}), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			p.Listed(listedReport())
+			close(inRun)
+			// The test stops the service only once this run has looked at
+			// the cancel, so ctx can end here through the cancel alone.
+			select {
+			case <-cancelReturned:
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				t.Error("the cancel ended the run's context, which cuts the package in flight")
+			}
+			select {
+			case <-p.Cancelled:
+			default:
+				t.Error("the cancel never reached the run")
+			}
+			close(looked)
+			// The package in flight goes on after the cancel, until the stop cuts it.
+			<-ctx.Done()
+			pkgs := pendingResults()
+			pkgs[0].State = importer.Published
+			pkgs[1].State, pkgs[1].Kind, pkgs[1].Reason = importer.Failed, importer.KindInterrupted, "interrupted"
+			return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: pkgs, Counts: importer.Counts{Published: 1, Failed: 1}}, nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, inRun, "the run")
+		if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+			t.Fatal(err)
+		}
+		close(cancelReturned)
+		waitFor(t, looked, "the run's look at the cancel")
+		q.Close()
+		got, _ := s.Get(imp.User, imp.ID)
+		a := got.Attempts[0]
+		if a.Outcome != OutcomeCancelled || a.Removal != nil {
+			t.Fatalf("attempt = %s, removal %+v", a.Outcome, a.Removal)
+		}
+		if p := a.Report.Packages[1]; p.Reason != "interrupted" {
+			t.Errorf("the package the stop cut reads %q, though its upload may have reached Nexus", p.Reason)
+		}
+	})
+
+	t.Run("keeps an attempt that ended every package before the cancel as it ended", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, inRun, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+		removed := false
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			close(inRun)
+			<-release
+			return completeReport(), func(context.Context) *Removal {
+				removed = true
+				return &Removal{Removed: true}
+			}
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, inRun, "the run")
+		// A second cancel of the same run answers as the first.
+		for range 2 {
+			if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		close(release)
+		waitStored(t, s, imp)
+		q.Close()
+		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete || !removed || !got.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", got.Outcome(), removed)
+		}
+	})
+
+	t.Run("answers ErrEnded once the latest attempt has ended", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started := make(chan string, 1)
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			return completeReport(), nil
+		})
+		q.Submit(imp.User, imp.ID)
+		waitFor(t, started, "the run")
+		q.Close()
+		if _, err := s.Cancel(imp.User, imp.ID); !errors.Is(err, ErrEnded) {
+			t.Errorf("err = %v, want ErrEnded", err)
+		}
+		if _, err := s.Cancel("bob", imp.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("another user: err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("answers ErrEnded to a cancel that lands after the run returned", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		imp := newImport(t, s, "alice")
+		started, removing, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			return completeReport(), func(ctx context.Context) *Removal {
+				close(removing)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return &Removal{Removed: true}
+			}
+		})
+		q.Submit(imp.User, imp.ID)
+		// The queue removes the archive after the end is stored, while the
+		// attempt is still its current one.
+		waitFor(t, removing, "the removal")
+		_, err := s.Cancel(imp.User, imp.ID)
+		close(release)
+		if !errors.Is(err, ErrEnded) {
+			t.Errorf("err = %v, want ErrEnded", err)
+		}
+		q.Close()
+		if got, _ := s.Get(imp.User, imp.ID); got.Outcome() != importer.OutcomeComplete || !got.ArchiveRemoved() {
+			t.Errorf("outcome %q, removed %v, want complete and removed", got.Outcome(), got.ArchiveRemoved())
+		}
+	})
+
+	t.Run("a store with no queue ends a queued attempt and refuses a running one", func(t *testing.T) {
+		s, _ := openStore(t, testRoot(t))
+		queued, running := newImport(t, s, "alice"), newImport(t, s, "alice")
+		if got, err := s.Cancel(queued.User, queued.ID); err != nil || got.Outcome() != OutcomeCancelled {
+			t.Errorf("queued: outcome %q, err %v", got.Outcome(), err)
+		}
+		if _, _, err := s.Begin(running.User, running.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Cancel(running.User, running.ID); !errors.Is(err, ErrBusy) {
+			t.Errorf("running: err = %v, want ErrBusy", err)
+		}
+	})
+}
+
+// An id is unique per user only, so two users' imports can share one: a
+// cancel or a rank reaches the attempt of the user who asks, never another's.
+func TestQueueKeepsEachUserToTheirOwnImport(t *testing.T) {
+	// sharedID returns alice's and bob's first imports, created in one second.
+	sharedID := func(t *testing.T) (*Store, Import, Import) {
+		t.Helper()
+		s := openStoreInOneSecond(t, testRoot(t))
+		alice, bob := createFor(t, s, "alice"), createFor(t, s, "bob")
+		if alice.ID != bob.ID {
+			t.Fatalf("ids %s and %s, want one id for both", alice.ID, bob.ID)
+		}
+		return s, alice, bob
+	}
+	t.Run("ranks and cancels the queued attempt of the user who asks", func(t *testing.T) {
+		s, alice, bob := sharedID(t)
+		running := createFor(t, s, "alice")
+		started, release := make(chan string, 3), make(chan struct{})
+		q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+			<-release
+			return completeReport(), nil
+		})
+		for _, imp := range []Import{running, alice, bob} {
+			q.Submit(imp.User, imp.ID)
+		}
+		waitFor(t, started, "the first run")
+		if n, queued := s.Ahead(bob.User, bob.ID); n != 2 || !queued {
+			t.Errorf("bob's rank: ahead %d queued %v, want 2 true", n, queued)
+		}
+		if _, err := s.Cancel(bob.User, bob.ID); err != nil {
+			t.Fatal(err)
+		}
+		if n, queued := s.Ahead(alice.User, alice.ID); n != 1 || !queued {
+			t.Errorf("bob's cancel moved alice's attempt: ahead %d queued %v, want 1 true", n, queued)
+		}
+		close(release)
+		if id := waitFor(t, started, "the second run"); id != alice.ID {
+			t.Errorf("import %s ran second, want alice's", id)
+		}
+		q.Close()
+		a, _ := s.Get(alice.User, alice.ID)
+		b, _ := s.Get(bob.User, bob.ID)
+		if a.Outcome() != importer.OutcomeComplete || b.Outcome() != OutcomeCancelled || b.Attempts[0].StartedAt != nil {
+			t.Errorf("alice's import %q, bob's %q started %v", a.Outcome(), b.Outcome(), b.Attempts[0].StartedAt)
+		}
+	})
+	t.Run("leaves another user's running attempt of the same id alone", func(t *testing.T) {
+		s, alice, bob := sharedID(t)
+		if _, _, err := s.Begin(bob.User, bob.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Finish(bob.User, bob.ID, 1, completeReport(), nil); err != nil {
+			t.Fatal(err)
+		}
+		next := createFor(t, s, "alice")
+		started, release := make(chan string, 2), make(chan struct{})
+		q := heldQueue(t, s, started, func(ctx context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			// A cancel that reached this run closed p.Cancelled before the
+			// test released it.
+			select {
+			case <-p.Cancelled:
+				return importer.Report{Outcome: importer.OutcomeIncomplete, Packages: []importer.Result{}}, nil
+			default:
+				return completeReport(), nil
+			}
+		})
+		q.Submit(alice.User, alice.ID)
+		waitFor(t, started, "alice's run")
+		if _, err := s.Cancel(bob.User, bob.ID); !errors.Is(err, ErrEnded) {
+			t.Errorf("bob's cancel of his ended import: err = %v, want ErrEnded", err)
+		}
+		close(release)
+		// The worker takes the next attempt once the end of alice's is
+		// stored, so the stop below cuts no run.
+		q.Submit(next.User, next.ID)
+		waitFor(t, started, "the next run")
+		q.Close()
+		if a, _ := s.Get(alice.User, alice.ID); a.Outcome() != importer.OutcomeComplete {
+			t.Errorf("bob's cancel reached alice's run: alice's import reads %q", a.Outcome())
+		}
+	})
+}
+
+// waitStored waits for the latest attempt of imp to end, so the queue's
+// Close cannot be what ends it.
+func waitStored(t *testing.T, s *Store, imp Import) Import {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		got, err := s.Get(imp.User, imp.ID)
+		if err == nil && got.Attempts[len(got.Attempts)-1].Status == StatusEnded {
+			return got
+		}
+	}
+	t.Fatal("timed out waiting for the attempt to end")
+	return Import{}
+}
+
+func TestQueueCancelAfterEveryPackageEnded(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp := newImport(t, s, "alice")
+	started, inRun, release := make(chan string, 1), make(chan struct{}), make(chan struct{})
+	q := heldQueue(t, s, started, func(_ context.Context, _ Import, _ string, p importer.Progress) (importer.Report, Remover) {
+		p.Listed(listedReport())
+		close(inRun)
+		<-release
+		pkgs := pendingResults()
+		pkgs[0].State = importer.Published
+		pkgs[1].State, pkgs[1].Kind, pkgs[1].Reason = importer.Failed, importer.KindConflict, "Nexus holds other bytes"
+		return importer.Report{Outcome: importer.OutcomeIncomplete, Reason: "one package failed", Packages: pkgs}, nil
+	})
+	q.Submit(imp.User, imp.ID)
+	waitFor(t, inRun, "the run")
+	if _, err := s.Cancel(imp.User, imp.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	a := waitStored(t, s, imp).Attempts[0]
+	q.Close()
+	if a.Outcome != importer.OutcomeIncomplete || a.Report.Reason != "one package failed" {
+		t.Errorf("outcome %q reason %q, want the incomplete end the run reported", a.Outcome, a.Report.Reason)
+	}
+	if p := a.Report.Packages[1]; p.Kind != importer.KindConflict || p.Reason != "Nexus holds other bytes" {
+		t.Errorf("the conflict became %+v", p)
+	}
+}
+
+// recordReadOnly makes the import's folder refuse new files, so every write
+// of its record fails while reads still work.
+func recordReadOnly(t *testing.T, s *Store, imp Import) func() {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("root writes through the mode")
+	}
+	dir := s.dir(imp.User, imp.ID)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() { _ = os.Chmod(dir, 0o700) }
+	t.Cleanup(restore)
+	return restore
+}
+
+func TestQueueCancelThatCannotBeStoredLeavesTheAttemptQueued(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	running, waiting := newImport(t, s, "alice"), newImport(t, s, "alice")
+	started, release := make(chan string, 2), make(chan struct{})
+	q := heldQueue(t, s, started, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+		<-release
+		return completeReport(), nil
+	})
+	q.Submit(running.User, running.ID)
+	q.Submit(waiting.User, waiting.ID)
+	waitFor(t, started, "the first run")
+	restore := recordReadOnly(t, s, waiting)
+	if _, err := s.Cancel(waiting.User, waiting.ID); err == nil {
+		t.Fatal("the cancel answered no error though its end was not stored")
+	}
+	if n, queued := s.Ahead(waiting.User, waiting.ID); !queued || n != 1 {
+		t.Errorf("after the failed cancel: ahead %d queued %v, want 1 true", n, queued)
+	}
+	restore()
+	close(release)
+	if id := waitFor(t, started, "the second run"); id != waiting.ID {
+		t.Errorf("%s ran, want %s", id, waiting.ID)
+	}
+	q.Close()
+	if got, _ := s.Get(waiting.User, waiting.ID); got.Outcome() != importer.OutcomeComplete {
+		t.Errorf("outcome %q, want complete", got.Outcome())
+	}
+}
+
+// blockingHandler holds the logging of one message until release closes.
+type blockingHandler struct {
+	slog.Handler
+	msg     string
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (h blockingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == h.msg {
+		close(h.reached)
+		<-h.release
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func TestQueueCancelOfAnAttemptThatCouldNotStartAnswersEnded(t *testing.T) {
+	s, _ := openStore(t, testRoot(t))
+	imp := newImport(t, s, "alice")
+	recordReadOnly(t, s, imp)
+	h := blockingHandler{Handler: slog.NewTextHandler(io.Discard, nil), msg: "could not start an attempt", reached: make(chan struct{}), release: make(chan struct{})}
+	q := NewQueue(s, func(context.Context, Import, string, importer.Progress) (importer.Report, Remover) {
+		t.Error("an attempt that could not start ran")
+		return completeReport(), nil
+	}, slog.New(h))
+	t.Cleanup(q.Close)
+	q.Submit(imp.User, imp.ID)
+	waitFor(t, h.reached, "the failed start")
+	_, err := s.Cancel(imp.User, imp.ID)
+	close(h.release)
+	if !errors.Is(err, ErrEnded) {
+		t.Errorf("err = %v, want ErrEnded", err)
 	}
 }

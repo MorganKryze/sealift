@@ -97,7 +97,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Import"
         "409":
-          description: The archive already has an import that is queued, running, incomplete or interrupted, or MinIO is not configured
+          description: The archive already has an import that is queued, running, incomplete, interrupted or cancelled, or MinIO is not configured
           content:
             application/problem+json:
               schema:
@@ -134,13 +134,21 @@ paths:
       summary: Add an attempt to an import
       description: >
         Queues a new attempt that reads the archive and the manifest again,
-        checks them again and reads every package from Nexus again; nothing
-        carries over from an earlier attempt. Accepted whatever the last
-        outcome was, while no attempt is queued or running and the archive is
-        still in MinIO. 409 otherwise. The attempt ends refused, publishing
-        nothing, when the archive or the manifest changed in MinIO since the
-        import was created. Another user's id answers 404 like a missing one.
-        The guard against cross-site requests is the one of startImport.
+        checks them again and reads every package from Nexus again. With no
+        packages it may upload any package, and nothing carries over from an
+        earlier attempt. With packages it uploads only those files; every other
+        package is read from Nexus and never uploaded, and one Nexus lacks
+        stays failed with the kind and reason the latest attempt recorded. A
+        package the latest attempt published or found in Nexus, and that Nexus
+        has lost since, fails with the kind nexus and a new reason.
+        Accepted whatever the last outcome was, while no attempt is queued or
+        running and the archive is still in MinIO. 409 otherwise. 400 when
+        packages names anything but failed packages of the latest attempt, or
+        one twice; the answer repeats none of them and nothing changes. The
+        attempt ends refused, publishing nothing, when the archive or the
+        manifest changed in MinIO since the import was created. Another user's
+        id answers 404 like a missing one. The guard against cross-site
+        requests is the one of startImport.
       parameters:
         - name: importId
           in: path
@@ -152,8 +160,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              description: An empty object
+              $ref: "#/components/schemas/RetryImport"
       responses:
         "202":
           description: The import, with its new attempt queued
@@ -169,13 +176,57 @@ paths:
                 $ref: "#/components/schemas/ImportConflict"
         default:
           $ref: "#/components/responses/Problem"
+  /imports/{importId}/cancel:
+    post:
+      operationId: cancelImport
+      tags:
+        - imports
+      summary: Cancel the latest attempt of an import
+      description: >
+        A queued attempt leaves the queue and ends cancelled at once. A running
+        attempt stops before its next package and ends cancelled; its packages
+        not reached fail with the kind interrupted. Every package already in
+        Nexus stays there, and a cancelled attempt removes nothing from MinIO.
+        An attempt that ended every package before the cancel keeps the outcome
+        it ends with. A cancelled import takes a retry and blocks a new start
+        of its archive like an incomplete one. 409 once the latest attempt has
+        ended, or for a running attempt no queue of this service holds. Another user's id answers 404 like a missing one. The guard
+        against cross-site requests is the one of startImport.
+      parameters:
+        - name: importId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: An empty object
+      responses:
+        "202":
+          description: The import, its latest attempt cancelled or stopping before its next package
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Import"
+        "409":
+          description: The latest attempt has ended, or it runs where this service cannot stop it
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ImportConflict"
+        default:
+          $ref: "#/components/responses/Problem"
 components:
   responses:
     Problem:
       description: >
         Error. 401 when the token fails a check (the detail names the check),
-        403 when its preferred_username cannot name a user folder or a start
-        looks cross-site, 404 for an unknown import or an archive outside the
+        403 when its preferred_username cannot name a user folder or a start,
+        a retry or a cancel looks cross-site, 404 for an unknown import or an archive outside the
         user's folder, 413 for a body over 64 KiB, 502 when MinIO fails, 503
         when the realm's keys cannot be had or the service is stopping.
       content:
@@ -274,11 +325,125 @@ components:
           description: Why the archive cannot be imported; absent when it can
         latestImport:
           $ref: "#/components/schemas/LatestImport"
+        crossing:
+          $ref: "#/components/schemas/Crossing"
+        signature:
+          type: string
+          enum:
+            - verified
+            - unsigned
+            - unknown-key
+            - mismatch
+            - unreadable
+            - not-checked
+          description: >
+            What the list found when it checked the manifest's signature
+            against the trusted key: verified, unsigned (no manifest.json.sig
+            in the folder), unknown-key (manifest.json.sig names another key),
+            mismatch (the signature does not match the manifest), unreadable
+            (manifest.json or manifest.json.sig cannot be read), or
+            not-checked (this list read neither, as when its read bound is
+            reached; a later list checks it). Absent from an archive listed by
+            sealift 0.7.0 or earlier.
+        signerKeySha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: >
+            The key sha256 that manifest.json.sig names, on an unknown-key
+            archive only, and only when it is 64 lowercase hex digits. It is
+            never trusted. Absent from an archive listed by sealift 0.7.0 or
+            earlier.
+        declaredSize:
+          type: integer
+          format: int64
+          description: >
+            The archive's size as its signed manifest states it, once the
+            signature verifies. Absent otherwise, and from an archive listed
+            by sealift 0.7.0 or earlier.
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArchiveFile"
+          description: >
+            The archive, manifest.json and manifest.json.sig of the archive's
+            folder as MinIO lists them, in that order, each when present.
+            Absent from an archive listed by sealift 0.7.0 or earlier.
       required:
         - key
         - size
         - modified
         - importable
+    ArchiveFile:
+      type: object
+      description: A file of an archive's folder as MinIO lists it
+      properties:
+        name:
+          type: string
+          description: The file's name in its folder
+        size:
+          type: integer
+          format: int64
+        modified:
+          type: string
+          format: date-time
+          description: When MinIO received the file
+      required:
+        - name
+        - size
+        - modified
+    Crossing:
+      type: object
+      description: >
+        The crossing an archive comes from, read from its manifest once the
+        signature verifies with the trusted key, and never before.
+      properties:
+        project:
+          type: string
+          description: >
+            The project's name the manifest's review signs. Absent when the
+            manifest carries no review or no readable name, as a manifest of
+            sealift 0.7.0 or earlier.
+        sealedAt:
+          type: string
+          description: The manifest's createdAt, an RFC 3339 time
+        packages:
+          type: integer
+          description: How many packages the manifest lists
+        review:
+          $ref: "#/components/schemas/CrossingReview"
+      required:
+        - sealedAt
+        - packages
+    CrossingReview:
+      type: object
+      description: >
+        The figures of the review the signed manifest carries. Absent on an
+        archive's crossing, and from a report whose manifest has no review.
+      properties:
+        updated:
+          type: integer
+          description: The packages the review updates, those of its major jumps included
+        cvesBefore:
+          type: array
+          items:
+            type: integer
+          description: The known CVEs before the update, by severity, critical first
+        cvesAfter:
+          type: array
+          items:
+            type: integer
+          description: The known CVEs after the update, by severity; absent when they were not checked together
+        carried:
+          type: integer
+          description: The dependencies carried with a reason for the CVEs they keep
+        jumps:
+          type: integer
+          description: The packages its major jumps move
+      required:
+        - updated
+        - cvesBefore
+        - carried
+        - jumps
     Ecosystem:
       type: string
       enum:
@@ -295,7 +460,7 @@ components:
           type: string
         outcome:
           type: string
-          description: queued, running, complete, incomplete, refused or interrupted
+          description: queued, running, complete, incomplete, refused, interrupted or cancelled
       required:
         - id
         - outcome
@@ -310,6 +475,18 @@ components:
           description: The archive's sha256 received through a separate channel, 64 hex digits; a different archive is refused
       required:
         - archive
+    RetryImport:
+      type: object
+      description: An empty object retries the whole import.
+      properties:
+        packages:
+          type: array
+          description: >
+            The file names of the packages to upload, each a failed package of
+            the latest attempt, none twice. Absent or empty retries the whole
+            import.
+          items:
+            type: string
     ImportList:
       type: object
       properties:
@@ -363,6 +540,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Attempt"
+        queueAhead:
+          type: integer
+          description: >
+            How many attempts run or wait before the latest one in the
+            service's queue, whoever started them. Present only while the
+            latest attempt is queued in this service; never stored, so absent
+            from every import read after it left the queue.
       required:
         - id
         - createdAt
@@ -391,7 +575,15 @@ components:
           format: date-time
         outcome:
           type: string
-          description: complete, incomplete, refused or interrupted once the attempt has ended
+          description: complete, incomplete, refused, interrupted or cancelled once the attempt has ended
+        retry:
+          type: array
+          description: >
+            The file names this attempt was asked to upload, the packages of
+            one cause. Absent on a first attempt, on a whole retry, and on an
+            attempt recorded by sealift 0.7.0 or earlier.
+          items:
+            type: string
         report:
           $ref: "#/components/schemas/Report"
         removal:
@@ -418,6 +610,7 @@ components:
       properties:
         outcome:
           type: string
+          description: complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs
         reason:
           type: string
         unencrypted:
@@ -453,6 +646,12 @@ components:
           type: string
           pattern: "^[0-9a-f]{64}$"
           description: The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
+        crossing:
+          $ref: "#/components/schemas/Crossing"
+          description: >
+            The crossing the signed manifest names, set once the signature
+            verifies. Absent before, and from a report written by sealift
+            0.7.0 or earlier.
       required:
         - outcome
         - reason
@@ -561,6 +760,36 @@ components:
             manifest names), local (a file or the Nexus client on the import's
             own side failed). Set on a failed package only. Absent in a report
             written by sealift 0.4.0 or earlier.
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            The size in bytes of the checked file. Absent when the file could
+            not be read, and in a report written by sealift 0.7.0 or earlier.
+        nexusStatus:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: >
+            The HTTP status Nexus answered on a nexus failure. Absent when
+            Nexus did not answer, on any other kind, and in a report written
+            by sealift 0.7.0 or earlier.
+        nexusUploadedAt:
+          type: string
+          format: date-time
+          description: >
+            When Nexus received the copy it holds, on a conflict only, as
+            Nexus's asset search tells it. Absent when Nexus does not say, and
+            in a report written by sealift 0.7.0 or earlier.
+        nexusUploader:
+          type: string
+          maxLength: 100
+          description: >
+            The account that uploaded the copy Nexus holds, on a conflict
+            only, as Nexus's asset search tells it, with control characters
+            removed. Absent when Nexus does not say, and in a report written
+            by sealift 0.7.0 or earlier.
       required:
         - name
         - version

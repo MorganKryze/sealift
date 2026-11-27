@@ -39,12 +39,17 @@ type Source struct {
 	Archive       func(ctx context.Context) (io.ReadCloser, error)
 }
 
-// Progress receives the attempt's package states as they change. Either field
-// may be nil.
+// Progress receives the attempt's package states as they change, and tells it
+// when its user cancels it. Any field may be nil.
 type Progress struct {
 	Listed  func(rep Report)      // the manifest is read: the report so far, every package pending, no outcome
 	Checked func()                // the archive passed its checks
 	Ended   func(i int, r Result) // package i has ended
+	// Cancelled closes when the attempt's user cancels it. The checks stop at
+	// once and the publishing before its next package: the package in flight
+	// finishes its upload and its read back, so its result says what Nexus
+	// holds. Only the attempt's context ending cuts that package.
+	Cancelled <-chan struct{}
 }
 
 // Attempt is one try at importing an archive.
@@ -59,6 +64,13 @@ type Attempt struct {
 	// Ecosystem is the archive's folder: a manifest of another ecosystem is
 	// refused. Empty accepts either.
 	Ecosystem archive.Ecosystem
+	// Only names, by file, the packages a retry of one cause uploads; nil
+	// uploads any package. A package outside it is read from Nexus and
+	// never uploaded.
+	Only map[string]bool
+	// Before holds, by file, the results of the attempt a retry follows. A
+	// package outside Only that Nexus lacks keeps its failure from there.
+	Before map[string]Result
 }
 
 type publishEachFunc func(context.Context, Publisher, []Package, string, func(int, Result)) []Result
@@ -67,12 +79,81 @@ type publishEachFunc func(context.Context, Publisher, []Package, string, func(in
 // manifest, then publishes its packages. It writes only to a.Dir and empties it before
 // it returns.
 func RunAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error)) Report {
-	return runAttempt(ctx, a, newPublisher, PublishEach)
+	if a.Only == nil {
+		return runAttempt(ctx, a, newPublisher, PublishEach)
+	}
+	k := &kept{only: a.Only, before: a.Before, refused: map[string]bool{}}
+	readOnly := func(s Settings) (Publisher, error) {
+		p, err := newPublisher(s)
+		if err != nil {
+			return nil, err
+		}
+		return onlyListed{Publisher: p, kept: k}, nil
+	}
+	if ended := a.Progress.Ended; ended != nil {
+		a.Progress.Ended = func(i int, r Result) { ended(i, k.result(r)) }
+	}
+	rep := runAttempt(ctx, a, readOnly, PublishEach)
+	for i, r := range rep.Packages {
+		rep.Packages[i] = k.result(r)
+	}
+	return rep
+}
+
+// errNotListed is the upload error of a package a retry of one cause leaves out.
+var errNotListed = errors.New("not part of this retry")
+
+// reasonNotInNexus is the reason of a package a retry of one cause left out
+// that Nexus no longer holds, though the earlier attempt did not fail it.
+const reasonNotInNexus = "nexus no longer holds this package: retry the whole import to upload it again"
+
+// kept tracks the packages a retry of one cause did not upload. The run
+// publishes one package at a time on one goroutine, so refused needs no lock.
+type kept struct {
+	only    map[string]bool
+	before  map[string]Result
+	refused map[string]bool
+}
+
+// result is r, or for a package whose upload was refused because the retry
+// leaves it out, its earlier failure.
+func (k *kept) result(r Result) Result {
+	if r.State != Failed || !k.refused[r.File] {
+		return r
+	}
+	pkg := Package{Name: r.Name, Version: r.Version, File: r.File}
+	out := failed(pkg, KindNexus, reasonNotInNexus)
+	if b, ok := k.before[r.File]; ok && b.State == Failed {
+		// The cause reads from the kind and Nexus's facts together, so they stay with it.
+		out = failed(pkg, b.Kind, b.Reason)
+		out.NexusStatus, out.NexusUploadedAt, out.NexusUploader = b.NexusStatus, b.NexusUploadedAt, b.NexusUploader
+	}
+	out.Size = r.Size
+	return out
+}
+
+// onlyListed reads every package from Nexus and uploads only those of Only.
+type onlyListed struct {
+	Publisher
+	kept *kept
+}
+
+func (o onlyListed) Upload(ctx context.Context, file string, r io.Reader) error {
+	if !o.kept.only[file] {
+		o.kept.refused[file] = true
+		return errNotListed
+	}
+	return o.Publisher.Upload(ctx, file, r)
 }
 
 // runAttempt takes the publishing step as a parameter so a test can fix its results.
 func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), publishAll publishEachFunc) Report {
 	defer emptyDir(a.Dir)
+	// The packages publish on the caller's context, which a cancel leaves
+	// running so the package in flight finishes; the checks stop at once.
+	publishing := withCancelled(ctx, a.Progress.Cancelled)
+	ctx, endChecks := untilClosed(ctx, a.Progress.Cancelled)
+	defer endChecks()
 	rep := Report{
 		Outcome:         OutcomeRefused,
 		Unencrypted:     a.Unencrypted || a.Settings.NexusURL.Scheme == "http",
@@ -112,7 +193,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		return stop(wrongFolder(eco, a.Ecosystem))
 	}
 	if eco == archive.Pip {
-		return runPip(ctx, a, newPublisher, data, &rep, stop)
+		return runPip(ctx, publishing, a, newPublisher, data, &rep, stop)
 	}
 	m, err := archive.ParseManifest(data)
 	if err != nil {
@@ -121,6 +202,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
 	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Libc: m.Target.Libc, Node: m.Target.Node, PnpmVer: m.Target.PnpmVer}
 	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
+	rep.Crossing = crossingOf(m.CreatedAt, len(m.Packages), m.Review)
 
 	listed := make([]Result, len(m.Packages))
 	for i, p := range m.Packages {
@@ -175,7 +257,7 @@ func runAttempt(ctx context.Context, a Attempt, newPublisher func(Settings) (Pub
 		}
 	}
 
-	rep.Packages = publish(ctx, a, newPublisher, publishAll, pkgs)
+	rep.Packages = publish(publishing, a, newPublisher, publishAll, pkgs)
 	for _, r := range rep.Packages {
 		switch r.State {
 		case Published:
@@ -210,6 +292,37 @@ func readSigned(ctx context.Context, src Source, trusted ed25519.PublicKey) ([]b
 		return nil, err
 	}
 	return data, nil
+}
+
+// crossingOf is the crossing a manifest whose signature verified describes.
+// Its figures count as a reader of the review does: an update or a jumped
+// package each counts once, and the CVEs carried with a reason count by
+// dependency.
+func crossingOf(sealedAt string, packages int, r *archive.Review) *Crossing {
+	c := &Crossing{SealedAt: sealedAt, Packages: packages}
+	if r == nil {
+		return c
+	}
+	c.Project = r.Project
+	jumped := 0
+	for _, j := range r.Jumps {
+		jumped += len(j.Packages)
+	}
+	carried := map[string]bool{}
+	for _, l := range r.Left {
+		if l.Reason != "" {
+			carried[l.Dependency] = true
+		}
+	}
+	c.Review = &CrossingReview{
+		Updated: len(r.Updates) + jumped, CVEsBefore: r.CVEs.Before,
+		Carried: len(carried), Jumps: jumped,
+	}
+	if r.CVEs.After != nil {
+		after := *r.CVEs.After
+		c.Review.CVEsAfter = &after
+	}
+	return c
 }
 
 // wrongFolder refuses a manifest of ecosystem got found in a folder that takes want.
@@ -282,9 +395,10 @@ func verify(ctx context.Context, a Attempt, m archive.Manifest) ([]archive.Check
 
 // runPip goes on with a pip manifest whose signature checked. rep is the
 // attempt's report, the one stop fills. The settings and the repository are
-// checked before the archive is read, so a deployment that cannot take wheels
-// refuses the archive without reading it.
-func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), data []byte, rep *Report, stop func(error) Report) Report {
+// checked on ctx before the archive is read, so a deployment that cannot take
+// wheels refuses the archive without reading it; the wheels publish on
+// publishing.
+func runPip(ctx, publishing context.Context, a Attempt, newPublisher func(Settings) (Publisher, error), data []byte, rep *Report, stop func(error) Report) Report {
 	rep.Ecosystem = ecosystemPip
 	rep.Nexus.Repository = ""
 	if a.Settings.Pip != nil {
@@ -297,6 +411,7 @@ func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publish
 	rep.ToolVersion, rep.AnalysisID = m.ToolVersion, m.AnalysisID
 	rep.Target = TargetInfo{OS: m.Target.OS, CPU: m.Target.CPU, Python: m.Target.Python, Glibc: m.Target.Glibc}
 	rep.Archive.SHA256, rep.Archive.Size = m.Archive.SHA256, m.Archive.Size
+	rep.Crossing = crossingOf(m.CreatedAt, len(m.Packages), m.Review)
 
 	listed := make([]Result, len(m.Packages))
 	for i, w := range m.Packages {
@@ -371,7 +486,7 @@ func runPip(ctx context.Context, a Attempt, newPublisher func(Settings) (Publish
 		wheels[i] = Package{Name: c.Wheel.Name, Version: c.Wheel.Version, File: c.Wheel.File, Path: c.Path, SHA512: c.SHA512}
 	}
 	// PublishWheels hashes the Nexus copies as they arrive, so it needs no directory.
-	rep.Packages = PublishWheels(ctx, pub, wheels, "", func(i int, r Result) { ended(i, r) })
+	rep.Packages = PublishWheels(publishing, pub, wheels, "", func(i int, r Result) { ended(i, r) })
 	rep.Counts = Counts{}
 	for i, r := range rep.Packages {
 		rep.Packages[i].Reason = cut(r.Reason)
@@ -443,6 +558,28 @@ func publish(ctx context.Context, a Attempt, newPublisher func(Settings) (Publis
 		results[i] = finish(i, results[i])
 	}
 	return results
+}
+
+// untilClosed returns a context that ends with ctx or once ch closes; a nil
+// ch never closes.
+func untilClosed(ctx context.Context, ch <-chan struct{}) (context.Context, context.CancelFunc) {
+	c, stop := context.WithCancel(ctx)
+	if ch == nil {
+		return c, stop
+	}
+	select {
+	case <-ch:
+		stop()
+	default:
+		go func() {
+			select {
+			case <-ch:
+				stop()
+			case <-c.Done():
+			}
+		}()
+	}
+	return c, stop
 }
 
 // cut keeps the first maxStoredReason characters of a reason.

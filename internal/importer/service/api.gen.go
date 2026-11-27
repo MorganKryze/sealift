@@ -16,6 +16,36 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ArchiveSignature.
+const (
+	ArchiveSignatureMismatch   ArchiveSignature = "mismatch"
+	ArchiveSignatureNotChecked ArchiveSignature = "not-checked"
+	ArchiveSignatureUnknownKey ArchiveSignature = "unknown-key"
+	ArchiveSignatureUnreadable ArchiveSignature = "unreadable"
+	ArchiveSignatureUnsigned   ArchiveSignature = "unsigned"
+	ArchiveSignatureVerified   ArchiveSignature = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ArchiveSignature enum.
+func (e ArchiveSignature) Valid() bool {
+	switch e {
+	case ArchiveSignatureMismatch:
+		return true
+	case ArchiveSignatureNotChecked:
+		return true
+	case ArchiveSignatureUnknownKey:
+		return true
+	case ArchiveSignatureUnreadable:
+		return true
+	case ArchiveSignatureUnsigned:
+		return true
+	case ArchiveSignatureVerified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Ecosystem.
 const (
 	Npm Ecosystem = "npm"
@@ -36,28 +66,28 @@ func (e Ecosystem) Valid() bool {
 
 // Defines values for ReportPackageKind.
 const (
-	Conflict    ReportPackageKind = "conflict"
-	Interrupted ReportPackageKind = "interrupted"
-	Local       ReportPackageKind = "local"
-	Mismatch    ReportPackageKind = "mismatch"
-	Nexus       ReportPackageKind = "nexus"
-	Source      ReportPackageKind = "source"
+	ReportPackageKindConflict    ReportPackageKind = "conflict"
+	ReportPackageKindInterrupted ReportPackageKind = "interrupted"
+	ReportPackageKindLocal       ReportPackageKind = "local"
+	ReportPackageKindMismatch    ReportPackageKind = "mismatch"
+	ReportPackageKindNexus       ReportPackageKind = "nexus"
+	ReportPackageKindSource      ReportPackageKind = "source"
 )
 
 // Valid indicates whether the value is a known member of the ReportPackageKind enum.
 func (e ReportPackageKind) Valid() bool {
 	switch e {
-	case Conflict:
+	case ReportPackageKindConflict:
 		return true
-	case Interrupted:
+	case ReportPackageKindInterrupted:
 		return true
-	case Local:
+	case ReportPackageKindLocal:
 		return true
-	case Mismatch:
+	case ReportPackageKindMismatch:
 		return true
-	case Nexus:
+	case ReportPackageKindNexus:
 		return true
-	case Source:
+	case ReportPackageKindSource:
 		return true
 	default:
 		return false
@@ -66,9 +96,18 @@ func (e ReportPackageKind) Valid() bool {
 
 // Archive defines model for Archive.
 type Archive struct {
+	// Crossing The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before.
+	Crossing *Crossing `json:"crossing,omitempty"`
+
+	// DeclaredSize The archive's size as its signed manifest states it, once the signature verifies. Absent otherwise, and from an archive listed by sealift 0.7.0 or earlier.
+	DeclaredSize *int64 `json:"declaredSize,omitempty"`
+
 	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
-	Ecosystem  *Ecosystem `json:"ecosystem,omitempty"`
-	Importable bool       `json:"importable"`
+	Ecosystem *Ecosystem `json:"ecosystem,omitempty"`
+
+	// Files The archive, manifest.json and manifest.json.sig of the archive's folder as MinIO lists them, in that order, each when present. Absent from an archive listed by sealift 0.7.0 or earlier.
+	Files      *[]ArchiveFile `json:"files,omitempty"`
+	Importable bool           `json:"importable"`
 
 	// Key The object key, under packages/npm/ or packages/pip/
 	Key string `json:"key"`
@@ -79,7 +118,26 @@ type Archive struct {
 
 	// Reason Why the archive cannot be imported; absent when it can
 	Reason *string `json:"reason,omitempty"`
-	Size   int64   `json:"size"`
+
+	// Signature What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+	Signature *ArchiveSignature `json:"signature,omitempty"`
+
+	// SignerKeySha256 The key sha256 that manifest.json.sig names, on an unknown-key archive only, and only when it is 64 lowercase hex digits. It is never trusted. Absent from an archive listed by sealift 0.7.0 or earlier.
+	SignerKeySha256 *string `json:"signerKeySha256,omitempty"`
+	Size            int64   `json:"size"`
+}
+
+// ArchiveSignature What the list found when it checked the manifest's signature against the trusted key: verified, unsigned (no manifest.json.sig in the folder), unknown-key (manifest.json.sig names another key), mismatch (the signature does not match the manifest), unreadable (manifest.json or manifest.json.sig cannot be read), or not-checked (this list read neither, as when its read bound is reached; a later list checks it). Absent from an archive listed by sealift 0.7.0 or earlier.
+type ArchiveSignature string
+
+// ArchiveFile A file of an archive's folder as MinIO lists it
+type ArchiveFile struct {
+	// Modified When MinIO received the file
+	Modified time.Time `json:"modified"`
+
+	// Name The file's name in its folder
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // ArchiveList defines model for ArchiveList.
@@ -114,7 +172,7 @@ type Attempt struct {
 	EndedAt *time.Time `json:"endedAt,omitempty"`
 	N       int        `json:"n"`
 
-	// Outcome complete, incomplete, refused or interrupted once the attempt has ended
+	// Outcome complete, incomplete, refused, interrupted or cancelled once the attempt has ended
 	Outcome  string     `json:"outcome"`
 	QueuedAt *time.Time `json:"queuedAt,omitempty"`
 
@@ -122,11 +180,47 @@ type Attempt struct {
 	Removal *Removal `json:"removal,omitempty"`
 
 	// Report The account of one attempt; a package still pending has not ended
-	Report    Report     `json:"report"`
+	Report Report `json:"report"`
+
+	// Retry The file names this attempt was asked to upload, the packages of one cause. Absent on a first attempt, on a whole retry, and on an attempt recorded by sealift 0.7.0 or earlier.
+	Retry     *[]string  `json:"retry,omitempty"`
 	StartedAt *time.Time `json:"startedAt,omitempty"`
 
 	// Status queued, running or ended
 	Status string `json:"status"`
+}
+
+// Crossing The crossing an archive comes from, read from its manifest once the signature verifies with the trusted key, and never before.
+type Crossing struct {
+	// Packages How many packages the manifest lists
+	Packages int `json:"packages"`
+
+	// Project The project's name the manifest's review signs. Absent when the manifest carries no review or no readable name, as a manifest of sealift 0.7.0 or earlier.
+	Project *string `json:"project,omitempty"`
+
+	// Review The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review.
+	Review *CrossingReview `json:"review,omitempty"`
+
+	// SealedAt The manifest's createdAt, an RFC 3339 time
+	SealedAt string `json:"sealedAt"`
+}
+
+// CrossingReview The figures of the review the signed manifest carries. Absent on an archive's crossing, and from a report whose manifest has no review.
+type CrossingReview struct {
+	// Carried The dependencies carried with a reason for the CVEs they keep
+	Carried int `json:"carried"`
+
+	// CvesAfter The known CVEs after the update, by severity; absent when they were not checked together
+	CvesAfter *[]int `json:"cvesAfter,omitempty"`
+
+	// CvesBefore The known CVEs before the update, by severity, critical first
+	CvesBefore []int `json:"cvesBefore"`
+
+	// Jumps The packages its major jumps move
+	Jumps int `json:"jumps"`
+
+	// Updated The packages the review updates, those of its major jumps included
+	Updated int `json:"updated"`
 }
 
 // Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
@@ -149,6 +243,9 @@ type Import struct {
 
 	// Outcome The latest attempt's outcome, or queued or running while it has none
 	Outcome string `json:"outcome"`
+
+	// QueueAhead How many attempts run or wait before the latest one in the service's queue, whoever started them. Present only while the latest attempt is queued in this service; never stored, so absent from every import read after it left the queue.
+	QueueAhead *int `json:"queueAhead,omitempty"`
 
 	// Signature A MinIO object as it was when the import was created
 	Signature *Object `json:"signature,omitempty"`
@@ -174,7 +271,7 @@ type ImportList struct {
 type LatestImport struct {
 	Id string `json:"id"`
 
-	// Outcome queued, running, complete, incomplete, refused or interrupted
+	// Outcome queued, running, complete, incomplete, refused, interrupted or cancelled
 	Outcome string `json:"outcome"`
 }
 
@@ -233,12 +330,17 @@ type Report struct {
 	ArchiveChecked *bool        `json:"archiveChecked,omitempty"`
 	Counts         ReportCounts `json:"counts"`
 
+	// Crossing The crossing the signed manifest names, set once the signature verifies. Absent before, and from a report written by sealift 0.7.0 or earlier.
+	Crossing *Crossing `json:"crossing,omitempty"`
+
 	// Ecosystem The archive's ecosystem. On an archive, its folder's. On a report, the manifest's once it is read, and the folder's before.
-	Ecosystem     *Ecosystem      `json:"ecosystem,omitempty"`
-	ImportVersion string          `json:"importVersion"`
-	Nexus         ReportNexus     `json:"nexus"`
-	Outcome       string          `json:"outcome"`
-	Packages      []ReportPackage `json:"packages"`
+	Ecosystem     *Ecosystem  `json:"ecosystem,omitempty"`
+	ImportVersion string      `json:"importVersion"`
+	Nexus         ReportNexus `json:"nexus"`
+
+	// Outcome complete, incomplete, refused, interrupted or cancelled; empty while the attempt runs
+	Outcome  string          `json:"outcome"`
+	Packages []ReportPackage `json:"packages"`
 
 	// PublicKeySha256 The sha256 of the public key the attempt checked the signature with. Absent in a report written by sealift 0.4.0 or earlier.
 	PublicKeySha256 *string      `json:"publicKeySha256,omitempty"`
@@ -275,10 +377,22 @@ type ReportPackage struct {
 	File string `json:"file"`
 
 	// Kind Why a failed package failed: conflict (Nexus holds this version with other bytes), nexus (Nexus refused, did not answer or served other bytes after the upload), source (the archive could not be read from MinIO), interrupted (the service stopped before the package ended), mismatch (the tarball is not the package the manifest names), local (a file or the Nexus client on the import's own side failed). Set on a failed package only. Absent in a report written by sealift 0.4.0 or earlier.
-	Kind   *ReportPackageKind `json:"kind,omitempty"`
-	Name   string             `json:"name"`
-	Note   string             `json:"note"`
-	Reason string             `json:"reason"`
+	Kind *ReportPackageKind `json:"kind,omitempty"`
+	Name string             `json:"name"`
+
+	// NexusStatus The HTTP status Nexus answered on a nexus failure. Absent when Nexus did not answer, on any other kind, and in a report written by sealift 0.7.0 or earlier.
+	NexusStatus *int `json:"nexusStatus,omitempty"`
+
+	// NexusUploadedAt When Nexus received the copy it holds, on a conflict only, as Nexus's asset search tells it. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+	NexusUploadedAt *time.Time `json:"nexusUploadedAt,omitempty"`
+
+	// NexusUploader The account that uploaded the copy Nexus holds, on a conflict only, as Nexus's asset search tells it, with control characters removed. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+	NexusUploader *string `json:"nexusUploader,omitempty"`
+	Note          string  `json:"note"`
+	Reason        string  `json:"reason"`
+
+	// Size The size in bytes of the checked file. Absent when the file could not be read, and in a report written by sealift 0.7.0 or earlier.
+	Size *int64 `json:"size,omitempty"`
 
 	// State pending, published, present or failed
 	State   string `json:"state"`
@@ -303,6 +417,12 @@ type ReportTarget struct {
 	Python *string `json:"python,omitempty"`
 }
 
+// RetryImport An empty object retries the whole import.
+type RetryImport struct {
+	// Packages The file names of the packages to upload, each a failed package of the latest attempt, none twice. Absent or empty retries the whole import.
+	Packages *[]string `json:"packages,omitempty"`
+}
+
 // StartImport defines model for StartImport.
 type StartImport struct {
 	// Archive The archive's object key, under packages/npm/ or packages/pip/
@@ -312,14 +432,17 @@ type StartImport struct {
 	ExpectedSha256 *string `json:"expectedSha256,omitempty"`
 }
 
-// RetryImportJSONBody defines parameters for RetryImport.
-type RetryImportJSONBody = map[string]interface{}
+// CancelImportJSONBody defines parameters for CancelImport.
+type CancelImportJSONBody = map[string]interface{}
 
 // StartImportJSONRequestBody defines body for StartImport for application/json ContentType.
 type StartImportJSONRequestBody = StartImport
 
+// CancelImportJSONRequestBody defines body for CancelImport for application/json ContentType.
+type CancelImportJSONRequestBody = CancelImportJSONBody
+
 // RetryImportJSONRequestBody defines body for RetryImport for application/json ContentType.
-type RetryImportJSONRequestBody = RetryImportJSONBody
+type RetryImportJSONRequestBody = RetryImport
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -335,6 +458,9 @@ type ServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(w http.ResponseWriter, r *http.Request, importId string)
+	// CancelImport Cancel the latest attempt of an import
+	// (POST /imports/{importId}/cancel)
+	CancelImport(w http.ResponseWriter, r *http.Request, importId string)
 	// RetryImport Add an attempt to an import
 	// (POST /imports/{importId}/retry)
 	RetryImport(w http.ResponseWriter, r *http.Request, importId string)
@@ -411,6 +537,32 @@ func (siw *ServerInterfaceWrapper) GetImport(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetImport(w, r, importId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelImport operation middleware
+func (siw *ServerInterfaceWrapper) CancelImport(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "importId" -------------
+	var importId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "importId", r.PathValue("importId"), &importId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "importId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelImport(w, r, importId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -586,6 +738,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports", wrapper.StartImport)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/imports/{importId}", wrapper.GetImport)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports/{importId}/retry", wrapper.RetryImport)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/imports/{importId}/cancel", wrapper.CancelImport)
 
 	return m
 }
@@ -760,6 +913,60 @@ func (response GetImportdefaultApplicationProblemPlusJSONResponse) VisitGetImpor
 	return err
 }
 
+type CancelImportRequestObject struct {
+	ImportId string `json:"importId"`
+	Body     *CancelImportJSONRequestBody
+}
+
+type CancelImportResponseObject interface {
+	VisitCancelImportResponse(w http.ResponseWriter) error
+}
+
+type CancelImport202JSONResponse Import
+
+func (response CancelImport202JSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelImport409ApplicationProblemPlusJSONResponse ImportConflict
+
+func (response CancelImport409ApplicationProblemPlusJSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelImportdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	StatusCode int
+}
+
+func (response CancelImportdefaultApplicationProblemPlusJSONResponse) VisitCancelImportResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RetryImportRequestObject struct {
 	ImportId string `json:"importId"`
 	Body     *RetryImportJSONRequestBody
@@ -866,6 +1073,9 @@ type StrictServerInterface interface {
 	// GetImport Read one import
 	// (GET /imports/{importId})
 	GetImport(ctx context.Context, request GetImportRequestObject) (GetImportResponseObject, error)
+	// CancelImport Cancel the latest attempt of an import
+	// (POST /imports/{importId}/cancel)
+	CancelImport(ctx context.Context, request CancelImportRequestObject) (CancelImportResponseObject, error)
 	// RetryImport Add an attempt to an import
 	// (POST /imports/{importId}/retry)
 	RetryImport(ctx context.Context, request RetryImportRequestObject) (RetryImportResponseObject, error)
@@ -1011,6 +1221,39 @@ func (sh *strictHandler) GetImport(w http.ResponseWriter, r *http.Request, impor
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetImportResponseObject); ok {
 		if err := validResponse.VisitGetImportResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelImport operation middleware
+func (sh *strictHandler) CancelImport(w http.ResponseWriter, r *http.Request, importId string) {
+	var request CancelImportRequestObject
+
+	request.ImportId = importId
+
+	var body CancelImportJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelImport(ctx, request.(CancelImportRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelImport")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelImportResponseObject); ok {
+		if err := validResponse.VisitCancelImportResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

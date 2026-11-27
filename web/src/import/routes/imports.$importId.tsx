@@ -1,15 +1,16 @@
+import { useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
+import { CircleX } from "lucide-react"
 
 import { ApiFailure } from "@/components/import/api-failure"
 import { EarlierAttempts } from "@/components/import/earlier-attempts"
 import { EndState } from "@/components/import/end-state"
 import { ImportPageHeader } from "@/components/import/import-header"
-import { AttemptProgress } from "@/components/import/progress"
-import { ReportList } from "@/components/import/report-list"
-import { RetryCard } from "@/components/import/retry-card"
-import { ShaBlock } from "@/components/import/sha-block"
+import { AttemptProgress, attemptSteps } from "@/components/import/progress"
+import { RefusedDetails } from "@/components/import/refused-panel"
+import { StepBar } from "@/components/step-bar"
 import { ImportApiError, SessionEnded } from "@/import/api/client"
-import { useImport } from "@/import/api/queries"
+import { useImport, useMe, type ArchiveList } from "@/import/api/queries"
 import { latestAttempt } from "@/import/lib/outcome"
 
 export const Route = createFileRoute("/imports/$importId")({
@@ -22,6 +23,8 @@ const back =
 function ImportRoute() {
   const { importId } = Route.useParams()
   const query = useImport(importId)
+  const me = useMe()
+  const client = useQueryClient()
   const imp = query.data
 
   if (query.isPending) {
@@ -47,25 +50,47 @@ function ImportRoute() {
   }
 
   const attempt = latestAttempt(imp)
+  // While it waits, runs, or once cancelled, the progress is the page.
+  const live = attempt.status !== "ended" || attempt.outcome === "cancelled"
+  const refused = attempt.status === "ended" && attempt.outcome === "refused"
+  // Every package in Nexus: the end carries the page's title, the checks and the action row.
+  const done = attempt.status === "ended" && attempt.outcome === "complete"
+  // The home's list, when this tab read it, gives each file's upload time; the page never lists the folder itself.
+  const listed = client.getQueryData<ArchiveList>(["archives"])?.archives.find((a) => a.key === imp.archive.key)
   return (
     <>
       <Link to="/imports" className={back}>
         All imports
       </Link>
-      <ImportPageHeader imp={imp} />
-      {query.isError ? <p className="mt-4 text-sm text-severity-critical-fg">The last refresh failed. The page is as it was.</p> : null}
-      <div className="mt-6">
-        <AttemptProgress attempt={attempt} />
+      <div className="mx-auto w-full max-w-190">
+        <StepBar steps={attemptSteps(attempt)} label="Import steps" />
+        {query.isError ? <p className="mb-4 text-sm text-severity-critical-fg">The last refresh failed. The page is as it was.</p> : null}
+        {live ? <AttemptProgress key={attempt.n} imp={imp} attempt={attempt} /> : null}
+        {done ? <EndState imp={imp} /> : null}
       </div>
-      <EndState imp={imp} />
-      {attempt.status === "ended" && (attempt.outcome === "incomplete" || attempt.outcome === "interrupted") ? <RetryCard imp={imp} /> : null}
-      <h2 className="mt-8 mb-3 text-lg font-semibold tracking-tight">Archive sha256 check</h2>
-      <ShaBlock expected={imp.expectedSha256} manifest={attempt.report.archive.sha256} checked={attempt.report.archiveChecked} publicKey={attempt.report.publicKeySha256} status={attempt.status} />
-      <h2 className="mt-8 mb-3 text-lg font-semibold tracking-tight">Packages</h2>
-      <ReportList key={attempt.n} attempt={attempt} />
-      <div className="mt-8">
-        <EarlierAttempts attempts={imp.attempts.filter((a) => a.n !== attempt.n)} />
-      </div>
+      {live || done ? null : (
+        <>
+          <ImportPageHeader imp={imp} />
+          {refused ? (
+            <section aria-labelledby="refused-heading" className="mt-6 max-w-190 rounded-xl border border-bad-line p-5">
+              <h2 id="refused-heading" className="mb-4 inline-flex items-center gap-2 text-lg font-semibold text-bad">
+                <CircleX aria-hidden="true" className="size-5" />
+                Refused
+              </h2>
+              <RefusedDetails imp={imp} archive={listed} trusted={me.data?.publicKeySha256 ?? attempt.report.publicKeySha256 ?? ""} />
+            </section>
+          ) : (
+            <>
+              <EndState imp={imp} />
+            </>
+          )}
+        </>
+      )}
+      {done ? null : (
+        <div className="mt-8">
+          <EarlierAttempts attempts={imp.attempts.filter((a) => a.n !== attempt.n)} />
+        </div>
+      )}
     </>
   )
 }

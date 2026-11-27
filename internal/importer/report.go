@@ -35,6 +35,33 @@ type Report struct {
 	// Ecosystem is "pip" for a pip archive. An npm report leaves it out, as
 	// every record written before pip existed does.
 	Ecosystem string `json:"ecosystem,omitempty"`
+	// Crossing is what the signed manifest says of the crossing, set once
+	// the signature verifies. A record written by 0.7.0 or earlier, and a
+	// report refused before the signature verified, have none.
+	Crossing *Crossing `json:"crossing,omitempty"`
+}
+
+// Crossing names an archive's crossing from its signed manifest: the
+// project's name, when the review carries one, the manifest's createdAt and
+// its package count, and the figures of the review it carries.
+type Crossing struct {
+	Project  string          `json:"project,omitempty"`
+	SealedAt string          `json:"sealedAt"`
+	Packages int             `json:"packages"`
+	Review   *CrossingReview `json:"review,omitempty"`
+}
+
+// CrossingReview holds the figures of a signed review: the packages it
+// updates, its jumped packages included, the project's CVE counts before
+// and after the selection, the dependencies whose CVEs it carries with a
+// reason, and the packages its jumps move. CVEsAfter is nil when the review
+// has no after count.
+type CrossingReview struct {
+	Updated    int     `json:"updated"`
+	CVEsBefore [5]int  `json:"cvesBefore"`
+	CVEsAfter  *[5]int `json:"cvesAfter,omitempty"`
+	Carried    int     `json:"carried"`
+	Jumps      int     `json:"jumps"`
 }
 
 // ArchiveInfo names the archive and holds the digest and size its manifest declares.

@@ -2146,6 +2146,7 @@ func TestPipExportSignsItsReview(t *testing.T) {
 	}
 	after := [5]int{0, 1, 0, 0, 0}
 	want := archive.Review{
+		Project: f.project.Name,
 		CVEs:    archive.ReviewCVEs{Before: [5]int{}, After: &after},
 		Updates: []archive.ReviewUpdate{{Name: "requests", From: "2.31.0", To: "2.32.3", Left: [5]int{0, 1, 0, 0, 0}}},
 		Kept:    []archive.ReviewKept{},
@@ -2284,5 +2285,47 @@ func TestPipExportReadsNoOtherAnalysis(t *testing.T) {
 	}
 	if !bytes.Equal(manifests[0], manifests[1]) {
 		t.Errorf("the manifest changed once the earlier analysis was gone:\n%s\n%s", manifests[0], manifests[1])
+	}
+}
+
+// The pip review carries the project's name as the npm one does, and the
+// name stays out of the archive itself.
+func TestPipExportSignsTheProjectsNameInTheReview(t *testing.T) {
+	ix := piptest.NewIndex(t)
+	f := donePipAnalysis(t, ix)
+	var archives [][]byte
+	for _, tc := range []struct{ project, read string }{
+		{"data-tools", "data-tools"},
+		{"data\u202etools", ""},
+	} {
+		e := f.newPipExport(t)
+		e.Project.Name = tc.project
+		if _, err := runPipExport(context.Background(), e); err != nil {
+			t.Fatalf("%q: Run: %v", tc.project, err)
+		}
+		assertSigned(t, e.Dir, f.st.SigningKey())
+		data := readFile(t, filepath.Join(e.Dir, "manifest.json"))
+		var written struct {
+			Review struct {
+				Project *string `json:"project"`
+			} `json:"review"`
+		}
+		if err := json.Unmarshal(data, &written); err != nil {
+			t.Fatal(err)
+		}
+		if written.Review.Project == nil || *written.Review.Project != tc.project {
+			t.Errorf("review.project = %v, want the store's name %q", written.Review.Project, tc.project)
+		}
+		m, err := archive.ParsePipManifest(data)
+		if err != nil {
+			t.Fatalf("ParsePipManifest: %v", err)
+		}
+		if m.Review == nil || m.ReviewProblem != "" || m.Review.Project != tc.read {
+			t.Errorf("%q: the import read %+v, %q, want the project %q", tc.project, m.Review, m.ReviewProblem, tc.read)
+		}
+		archives = append(archives, readFile(t, filepath.Join(e.Dir, archive.PipArchiveFile)))
+	}
+	if !bytes.Equal(archives[0], archives[1]) {
+		t.Error("the archive's bytes changed with the project's name")
 	}
 }

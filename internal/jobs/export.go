@@ -716,6 +716,9 @@ func (e *Export) writeReports(ctx context.Context, emit func(Event), shipped []s
 // review it cannot read, and the reasons in it would be lost unseen.
 func (e *Export) writeManifest(shipped []shippedPackage, arch report.ArchiveManifest, key store.SigningKey, projected *rank.Vector) error {
 	review := ReviewOf(e.Analysis.Result, e.Request, projected)
+	// The name goes as the store holds it: a name the import's rule refuses
+	// drops the name only, never the review.
+	review.Project = e.Project.Name
 	if err := archive.CheckReview(review, archive.NPM); err != nil {
 		return fmt.Errorf("jobs: the import would keep the review out: %w", err)
 	}
