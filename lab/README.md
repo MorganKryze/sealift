@@ -15,7 +15,7 @@ docker compose up -d
 
 The import service exits with code 2 without `import/public-key.pem`, and a stopped `import-server` takes the gateway down with it, so the second line carries the connected sealift's public key before the rest of the stack starts. The key is generated per volume; [Cross the gap](#cross-the-gap) says when to carry it again.
 
-Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.7.0`. `SEALIFT_IMAGE` picks any other image, such as `sealift:dev` after `just image`.
+Every sealift service, connected and air-gapped, runs the published `ghcr.io/morgankryze/sealift:0.8.0`. `SEALIFT_IMAGE` picks any other image, such as `sealift:dev` after `just image`.
 
 `setup.sh` waits for Nexus (about two minutes on a first start), sets its admin password, accepts its EULA, creates the `npm` and `pypi` hosted repositories, creates the MinIO buckets `user-alice` and `user-bob` with `packages/npm/` and `packages/pip/`, and creates the MinIO user `sealift-import` with `import/minio-policy.json`. Run it again at any time: it creates what is missing, and rewrites the import's roles and users, passwords included, from the files under `import/`.
 
