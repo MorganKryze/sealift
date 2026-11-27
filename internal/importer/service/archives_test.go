@@ -977,3 +977,35 @@ func TestListKeepsOneFolderWhenTheOtherFails(t *testing.T) {
 		}
 	})
 }
+
+func TestListRefusesASignatureOverItsBoundUnreadAndUncounted(t *testing.T) {
+	f := newFakeMinio()
+	big := base + "a-big/"
+	m := manifestOf(t, "big", 1)
+	f.put(bucketAlice, big+"x.tar.gz", 2048)
+	f.putData(big+manifestName, m)
+	f.put(bucketAlice, big+signatureName, archive.MaxSignatureSize+1)
+	for i := 0; i < 50; i++ {
+		folder := base + "f" + strconv.Itoa(100+i) + "/"
+		mi := manifestOf(t, "p"+strconv.Itoa(i), 1)
+		seedFolder(f, bucketAlice, folder, 2048, mi, signManifest(t, testPriv, mi))
+	}
+	r := keyRig(t, f)
+	got := byKey(listOf(t, r.get("/api/archives", "t")))
+	a := got[big+"x.tar.gz"]
+	if a.Importable || signatureOf(a) != ArchiveSignatureUnreadable || reasonOf(a) != "its manifest.json.sig cannot be read" {
+		t.Errorf("a signature one byte over the bound: importable %v signature %q reason %q", a.Importable, signatureOf(a), reasonOf(a))
+	}
+	if n, s := f.gets(big+manifestName), f.gets(big+signatureName); n != 0 || s != 0 {
+		t.Errorf("the refused folder was read: manifest %d, signature %d", n, s)
+	}
+	verified := 0
+	for _, a := range got {
+		if signatureOf(a) == ArchiveSignatureVerified {
+			verified++
+		}
+	}
+	if verified != 50 {
+		t.Errorf("verified %d of the 50 folders beside it, want 50: the refusal took a read", verified)
+	}
+}
