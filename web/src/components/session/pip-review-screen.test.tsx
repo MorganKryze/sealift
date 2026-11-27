@@ -297,7 +297,10 @@ describe("the groups", () => {
     const columns = within(table).getAllByRole("columnheader").map((th) => th.textContent)
     expect(columns).toEqual(["Package", "Version", "Pinned in", "Known CVEs fixed", "Wheel"])
     const row = within(table).getByText("pillow").closest("tr") as HTMLElement
-    expect(within(row).getByText("requirements.txt, line 7")).toBeDefined()
+    // At 1024 px "requirements.txt, line 7" wrapped mid-place: the line sits muted below its file.
+    const file = within(row).getByText("requirements.txt")
+    expect(file.className).toContain("whitespace-nowrap")
+    expect(within(row).getByText("line 7").className).toContain("text-muted")
     expect(within(row).getByText("x86_64")).toBeDefined()
     expect(row.querySelector("[data-version-change]")?.textContent).toMatch(/10\.2\.0\s*to\s*10\.4\.0/)
     fireEvent.click(screen.getByRole("button", { name: /^1 package unchanged/ }))

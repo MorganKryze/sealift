@@ -757,7 +757,7 @@ function Group({ kind, first, packages, open, onToggle, severityAt, explainWheel
                       {kind === "changed" && pkg.previous ? <VersionChange before={pkg.previous.version} after={pkg.version} /> : <span className={cn(mono, "text-ink-2")}>{pkg.version}</span>}
                     </td>
                     <td className="py-2 pr-3 align-top">
-                      <PinnedIn pkg={pkg} className="text-ink-2" />
+                      <PinnedIn pkg={pkg} stacked className="text-ink-2" />
                     </td>
                     <td className="py-2 pr-3 align-top">
                       <span className="inline-flex flex-wrap items-center gap-x-1">

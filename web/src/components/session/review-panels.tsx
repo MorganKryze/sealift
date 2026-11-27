@@ -514,9 +514,22 @@ export function pipCve(finding: PipFinding): Cve {
 }
 
 /** Where a package is pinned, each file and line, or "dependency" for a package no file pins. */
-export function PinnedIn({ pkg, className }: { pkg: { pinnedAt?: PipPackage["pinnedAt"]; files?: string[] }; className?: string }) {
+export function PinnedIn({ pkg, className, stacked = false }: { pkg: { pinnedAt?: PipPackage["pinnedAt"]; files?: string[] }; className?: string; stacked?: boolean }) {
   const places = pinnedPlaces(pkg)
   if (places.length === 0) return <span className={cn("text-muted", className)}>dependency</span>
+  // A narrow table column: each file keeps one line, its line number muted below it.
+  if (stacked && pkg.pinnedAt && pkg.pinnedAt.length > 0) {
+    return (
+      <span className={cn("flex flex-col font-mono text-[12.5px] [font-variant-ligatures:none]", className)}>
+        {pkg.pinnedAt.map((place) => (
+          <span key={`${place.file}:${place.line}`} className="flex flex-col">
+            <span className="whitespace-nowrap">{place.file}</span>
+            <span className="text-xs text-muted">line {place.line.toLocaleString("en-US")}</span>
+          </span>
+        ))}
+      </span>
+    )
+  }
   return (
     <span className={cn("flex flex-col font-mono text-[12.5px] [font-variant-ligatures:none]", className)}>
       {places.map((place) => (
