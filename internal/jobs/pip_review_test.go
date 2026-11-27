@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -316,5 +317,34 @@ func TestPipReviewOfKeepsTheIndexReason(t *testing.T) {
 	}
 	if err := archive.CheckReview(got, archive.Pip); err == nil || !strings.Contains(err.Error(), "review.yanked[0].indexReason") {
 		t.Errorf("CheckReview = %v, want the index reason refused by name", err)
+	}
+}
+
+func TestPipBlockedRefusalNamesAtMostThreePackages(t *testing.T) {
+	r := pipReviewResult()
+	r.Packages = nil
+	r.Blocking = []PipBlocking{{Name: "a", Version: "1.0"}, {Name: "b", Version: "1.0"}, {Name: "c", Version: "1.0"}, {Name: "d", Version: "1.0"}, {Name: "e", Version: "1.0"}}
+	err := pipBlockedRefusal(r)
+	if err == nil || !strings.HasSuffix(err.Error(), "c 1.0 and 2 more") || strings.Contains(err.Error(), "d 1.0") {
+		t.Errorf("pipBlockedRefusal = %v, want three packages and the 2 more", err)
+	}
+}
+
+func TestPipReviewOfCountsTwoSpellingsOfAVersionAsUnchanged(t *testing.T) {
+	r := pipReviewResult()
+	r.Packages[0].Version, r.Packages[0].Previous.Version = "1.0", "1.0.0"
+	got := PipReviewOf(r, pipReviewReasons())
+	if got.Unchanged != 2 || len(got.Updates) != 1 {
+		t.Errorf("unchanged %d, updates %v; want 1.0 and 1.0.0 counted as unchanged", got.Unchanged, got.Updates)
+	}
+}
+
+func TestPipReviewOfClearsBlankFixingVersions(t *testing.T) {
+	r := pipReviewResult()
+	r.Packages[4].CVEs[0].FixedVersions = []string{" ", ""}
+	got := PipReviewOf(r, pipReviewReasons())
+	want := archive.ReviewCVE{Dependency: "urllib3", Version: "1.26.0", ID: "CVE-2099-0001", Severity: "HIGH", Package: "urllib3", Reason: "The proxy never reaches it."}
+	if !slices.Contains(got.Left, want) {
+		t.Errorf("left = %+v, want %+v", got.Left, want)
 	}
 }
