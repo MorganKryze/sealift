@@ -23,7 +23,7 @@ const SET = resultOf([
 
 const block = () => screen.getByRole("region", { name: /^Wheels for/ })
 const rows = () => Array.from(block().querySelectorAll("[data-platform]")) as HTMLElement[]
-const platform = (words: string) => within(block()).getByRole("button", { name: new RegExp(`^${words.replace(/[.()]/g, "\\$&")}`) })
+const platform = (words: string) => within(block()).getByRole("button", { name: new RegExp(`^${words.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) })
 
 beforeEach(() => cleanup())
 

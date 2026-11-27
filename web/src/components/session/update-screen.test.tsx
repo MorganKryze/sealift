@@ -354,7 +354,7 @@ function dropFiles(container: HTMLElement, files: Record<string, string>, input 
 }
 
 const nameField = () => screen.getByRole("textbox", { name: "Project name" })
-const fileRow = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name.replace(/[.]/g, "\\.")}`) })
+const fileRow = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`) })
 
 describe("Update, the Check step for requirements files", () => {
   it("sends nothing before Analyse", async () => {
