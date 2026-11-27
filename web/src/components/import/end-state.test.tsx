@@ -331,6 +331,22 @@ describe("EndState, packages not in Nexus", () => {
     expect(large.textContent).not.toContain("500 MB")
   })
 
+  it("takes the largest file that went through from every attempt of the import", async () => {
+    const big = pkg("failed", { name: "big", version: "1.0.0", file: "big-1.0.0.tgz", kind: "nexus", nexusStatus: 413, reason: "upload failed: nexus answered 413", size: mb(120) })
+    const first = attempt("incomplete", [pkg("published", { name: "mid", file: "mid-1.0.0.tgz", size: mb(30) }), big])
+    const latest = attempt("incomplete", [pkg("present", { name: "mid", file: "mid-1.0.0.tgz", size: mb(30) }), big], { n: 2 })
+    renderEnd(make(latest, { attempts: [first, latest] }))
+    const large = await screen.findByRole("region", { name: "Too large for Nexus" })
+    expect(large.textContent).toContain("The largest file that went through is 30.0 MB, so the limit sits between the two sizes.")
+  })
+
+  it("keeps the period against the sha512 info button", async () => {
+    renderEnd(make(attempt("incomplete", [pkg("failed", { name: "is-number", version: "7.0.0", file: "is-number-7.0.0.tgz", kind: "conflict", reason: conflictReason(sha("a"), sha("b")) })])))
+    const conflict = await screen.findByRole("region", { name: "Another file under the same version" })
+    const hold = within(conflict).getByRole("button", { name: "What a sha512 is" }).closest("[data-term-tight]")
+    expect(hold).toHaveClass("-mr-2", "-my-2")
+  })
+
   it("leads with the first retryable cause's Retry and keeps the others secondary", async () => {
     const a = attempt("incomplete", [
       pkg("failed", { name: "a", version: "1.0.0", file: "a-1.0.0.tgz", kind: "nexus", reason: "nexus unreachable: EOF" }),
@@ -354,7 +370,7 @@ const REVIEW = { updated: 17, cvesBefore: [2, 8, 10, 5], cvesAfter: [0, 0, 2, 0]
 
 /** A complete import of web-portal, created on 26 Nov from a manifest sealed on 20 Oct. */
 function done(over: { published?: number; present?: number; removal?: Attempt["removal"]; crossing?: Attempt["report"]["crossing"] | null; name?: string } = {}): Import {
-  const packages = [...many(over.published ?? 1271, "published"), ...many(over.present ?? 13, "present")]
+  const packages = [...many(over.published ?? 1271, "published"), ...many(over.present ?? 13, "present")].map((p, i) => ({ ...p, file: `f${i}.tgz` }))
   const a = attempt("complete", packages, { removal: over.removal === undefined ? { removed: true, reason: "" } : over.removal })
   a.report.archive = { file: "web-portal-2026-11-25.tar.gz", sha256: ARCHIVE_SHA, size: mb(96.5) }
   a.report.publicKeySha256 = KEY
@@ -510,6 +526,21 @@ describe("EndState, every package in Nexus", () => {
     renderEnd(done({ published: 1, present: 0 }))
     expect(await screen.findByRole("heading", { level: 1, name: "1 package in Nexus" })).toBeInTheDocument()
     expect(screen.getByText("1 of 1")).toBeInTheDocument()
+  })
+
+  it("writes one package published in the singular", async () => {
+    renderEnd(done({ published: 1, present: 100 }))
+    expect((await screen.findByText("package published")).parentElement?.textContent).toBe("1 package published")
+  })
+
+  it("counts a retried import's packages across its attempts", async () => {
+    const first = attempt("incomplete", [...many(85, "published"), ...many(5, "present", { file: "old" }), pkg("failed", { file: "late", kind: "nexus", reason: "nexus unreachable: EOF" })])
+    first.report.packages.forEach((p, i) => { if (p.state === "published") p.file = `p${i}` })
+    const latest = attempt("complete", [...first.report.packages.map((p) => ({ ...p, state: "present" })).slice(0, 90), pkg("published", { file: "late" })], { n: 2 })
+    renderEnd(make(latest, { attempts: [first, latest] }))
+    expect(await screen.findByRole("heading", { level: 1, name: "91 packages in Nexus" })).toBeInTheDocument()
+    expect(screen.getByText("packages published").parentElement?.textContent).toContain("86")
+    expect(screen.getByText("already there").parentElement?.textContent).toContain("5")
   })
 
   it("keeps the worst case readable", async () => {

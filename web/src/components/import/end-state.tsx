@@ -33,7 +33,7 @@ import { Term } from "@/components/ui/term"
 import { ImportApiError } from "@/import/api/client"
 import { useMe, useRetryImport } from "@/import/api/queries"
 import { CAUSES, causeOf, causeWords, copyRequest, nexusPath, type Cause } from "@/import/lib/kinds"
-import { archiveName, counts, ecosystemOf, latestAttempt, type Import, type ReportPackage } from "@/import/lib/outcome"
+import { archiveName, counts, ecosystemOf, importCounts, latestAttempt, publishedFiles, type Import, type ReportPackage } from "@/import/lib/outcome"
 import { cn, formatBytes, formatWhen } from "@/lib/utils"
 
 import { attemptLog } from "./progress"
@@ -176,6 +176,7 @@ function CauseBlock({ imp, cause, pkgs, lead }: { imp: Import; cause: Cause; pkg
   // PyPI publishes several files per version and Nexus takes or refuses each, so these causes name the file.
   const byFile = eco === "pip" && (cause === "too-large" || cause === "conflict" || cause === "refused")
   const warn = words.tone === "warn"
+  const through = Math.max(0, ...publishedFiles(imp).values())
   const retry = <RetryButton imp={imp} cause={cause} pkgs={pkgs} primary={lead} />
   return (
     <section aria-labelledby={headingId} className={cn("rounded-lg px-4 py-3.5", warn ? "tinted-warn" : "tinted-bad")}>
@@ -193,14 +194,14 @@ function CauseBlock({ imp, cause, pkgs, lead }: { imp: Import; cause: Cause; pkg
         {warn ? (
           <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0 max-w-[62ch] text-sm text-ink-2">
-              <Diagnosis cause={cause} pkgs={pkgs} all={a.report.packages} eco={eco} />
+              <Diagnosis cause={cause} pkgs={pkgs} through={through} eco={eco} />
             </div>
             <div className="flex-none">{retry}</div>
           </div>
         ) : (
           <>
             <div className="mt-3 max-w-[62ch] text-sm text-ink-2">
-              <Diagnosis cause={cause} pkgs={pkgs} all={a.report.packages} eco={eco} />
+              <Diagnosis cause={cause} pkgs={pkgs} through={through} eco={eco} />
             </div>
             <ol aria-label="Steps" className="mt-3 grid">
               {cause === "too-large" ? (
@@ -278,14 +279,13 @@ function PackageList({ pkgs, byFile, sized }: { pkgs: ReportPackage[]; byFile: b
 }
 
 /** What was seen, in words: the raw text Nexus sent stays in the log. */
-function Diagnosis({ cause, pkgs, all, eco }: { cause: Cause; pkgs: ReportPackage[]; all: ReportPackage[]; eco: "npm" | "pip" }) {
+function Diagnosis({ cause, pkgs, through, eco }: { cause: Cause; pkgs: ReportPackage[]; through: number; eco: "npm" | "pip" }) {
   const one = pkgs.length === 1
   const these = one ? "this package" : `these ${plural(pkgs.length, "package")}`
   switch (cause) {
     case "no-answer":
       return <p>{`Nexus did not answer for ${these}. Nothing needs to change before a retry.`}</p>
     case "too-large": {
-      const through = Math.max(0, ...all.filter((p) => p.state === "published").map((p) => p.size ?? 0))
       const smallest = Math.min(...pkgs.map((p) => p.size ?? Infinity))
       return (
         <p>
@@ -311,7 +311,10 @@ function Diagnosis({ cause, pkgs, all, eco }: { cause: Cause; pkgs: ReportPackag
       return (
         <p>
           {`Nexus holds ${held} with a different sha512`}
-          <Term id="sha512" />
+          {/* The button's padding would stand between the word and the period, and raise the line. */}
+          <span data-term-tight className="-my-2 -mr-2 inline-flex align-middle max-sm:-my-3.5 max-sm:-mr-3.5">
+            <Term id="sha512" />
+          </span>
           {". "}
           {one ? `The archive's copy is the one ${origin} published. ` : `The archive's copies are the ones ${origin} published. `}
           {`sealift never overwrites a package, so a retry alone cannot fix ${one ? "it" : "them"}.`}
@@ -492,7 +495,7 @@ function DoneEnd({ imp }: { imp: Import }) {
   const brand = useBrand()
   const me = useMe()
   const a = latestAttempt(imp)
-  const c = counts(a)
+  const c = { ...counts(a), ...importCounts(imp) }
   const inNexus = c.published + c.present
   const name = importName(imp)
   const user = me.data?.user
@@ -521,7 +524,7 @@ function DoneEnd({ imp }: { imp: Import }) {
           <p className="flex items-center gap-2.5 px-4 py-3 text-sm text-ink-2">
             <Upload aria-hidden="true" className="size-4 flex-none text-muted" />
             <span>
-              <b className="text-[17px] font-semibold text-ink tabular-nums">{COUNT.format(c.published)}</b> <span>packages published</span>
+              <b className="text-[17px] font-semibold text-ink tabular-nums">{COUNT.format(c.published)}</b> <span>{c.published === 1 ? "package published" : "packages published"}</span>
             </span>
           </p>
           <p className="flex items-center gap-2.5 border-t border-rule px-4 py-3 text-sm text-ink-2 sm:border-t-0 sm:border-l">

@@ -100,3 +100,28 @@ export function archiveName(key: string): { folder: string; file: string } {
   }
   return { folder: rel.slice(0, cut + 1), file: rel.slice(cut + 1) }
 }
+
+/** The files any attempt of the import published, with the size each was checked at. */
+export function publishedFiles(imp: Import): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const a of imp.attempts) {
+    for (const p of a.report.packages) {
+      if (p.state === "published") out.set(p.file, Math.max(out.get(p.file) ?? 0, p.size ?? 0))
+    }
+  }
+  return out
+}
+
+/** The latest attempt's packages in Nexus, split by who put them there: this import in any attempt, or someone before it. */
+export function importCounts(imp: Import): { published: number; present: number } {
+  const ours = publishedFiles(imp)
+  const out = { published: 0, present: 0 }
+  for (const p of latestAttempt(imp).report.packages) {
+    if (p.state === "published" || (p.state === "present" && ours.has(p.file))) {
+      out.published++
+    } else if (p.state === "present") {
+      out.present++
+    }
+  }
+  return out
+}
