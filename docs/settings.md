@@ -173,7 +173,7 @@ review:
 | `review.proposeOtherMajors` | `true`, `false` | `false` | With `true`, an analysis may propose a version outside the dependency's current line, as sealift 0.7.0 did |
 | `review.majorJump` | `reason`, `refuse` | `reason` | An export that takes a version outside its line needs a reason, or is refused whatever reason it holds. For pip, a jump is a package whose major changed since the previous crossing |
 | `review.cveWithoutFix` | `reason`, `refuse` | `reason` | An export whose archive holds a version with a CVE that no version fixes needs a reason, or is refused |
-| `review.yanked` | `reason`, `refuse` | `reason` | A pip export that carries a release its index yanked needs a reason for it, or is refused whatever reason it holds. An npm export has no yanked release |
+| `review.yanked` | `reason`, `refuse` | `reason` | A pip export that carries a release its index yanked needs a reason for it, or is refused whatever reason it holds. An npm export has no yanked release. An analysis written by sealift 0.7.0 named its yanked releases in its warnings only, so its export asks no such reason and this rule never refuses it. Run a new analysis to apply the rule |
 
 A key the file leaves out keeps its default. Any other value stops sealift at start with the key and the values it takes, such as `review.majorJump must be one of reason, refuse`. The rules apply to every analysis and export after the start. An analysis keeps the proposals it made under the rule of its time: a new analysis applies a changed `review.proposeOtherMajors`. `GET /api/instance` reports the four rules under `policy.review`. [How sealift chooses](how-sealift-chooses.md#reasons) explains the line and the reasons.
 
