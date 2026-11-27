@@ -1291,6 +1291,14 @@ components:
           type: string
           description: Normalized name
           example: jinja2
+        declared:
+          type: string
+          description: >-
+            The name as the first requirements file that pins it writes it,
+            for display only. Absent when it matches the normalized name, for
+            a transitive package and from an analysis written before
+            spellings were recorded.
+          example: Jinja2
         version:
           type: string
           example: 3.1.2

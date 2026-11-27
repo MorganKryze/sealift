@@ -6,6 +6,7 @@ import { SessionLoadError } from "@/components/route-error"
 import { AnalysisScreen } from "@/components/session/analysis-screen"
 import { CheckBlock } from "@/components/session/check-block"
 import { ExportScreen } from "@/components/session/export-screen"
+import { PipCrossingCheck, PipReviewScreen } from "@/components/session/pip-review-screen"
 import { ReviewScreen } from "@/components/session/review-screen"
 import { StepBar, type StepId } from "@/components/step-bar"
 import { Button } from "@/components/ui/button"
@@ -81,7 +82,9 @@ function CrossingRoute() {
 
   const onChanged = () => void queryClient.invalidateQueries({ queryKey: ["project", projectId] })
 
+  const pip = project.ecosystem === "pip"
   if (step === "check" || !analysis) {
+    if (pip) return <PipCrossingCheck project={project} analysis={analysis} onNavigateStep={goToStep} />
     return <CheckStep project={project} analysis={analysis} onNavigateStep={goToStep} />
   }
 
@@ -107,6 +110,9 @@ function CrossingRoute() {
     )
   }
 
+  if (pip) {
+    return <PipReviewScreen key={analysis.id} project={project} analysis={analysis} onNavigateStep={goToStep} />
+  }
   return <ReviewScreen key={analysis.id} project={project} analysis={analysis} onNavigateStep={goToStep} />
 }
 

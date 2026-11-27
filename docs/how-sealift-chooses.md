@@ -105,6 +105,16 @@ reason 2 (major-jump) covers nothing the selection takes
 
 Under `refuse`, the problem names the policy key: `review.majorJump is refuse: react 18.3.1 to 19.2.0 cannot cross`.
 
+A pip export asks one reason per package for each of three things:
+
+| What the set carries | Since |
+| --- | --- |
+| A major jump | the previous crossing of the same project |
+| A known CVE that no version fixes | always |
+| A yanked release | always |
+
+A pip major jump changes the epoch or the first release segment of the version, such as Django 4.2.16 to 5.1.4. Python makes no semver promise, so the first segment stands for the major. A version whose first segment is 1000 or more reads as a date, such as 2023.11.17, and never jumps. With no previous crossing, nothing jumps. `review.yanked: refuse` stops a yanked release whatever its reason, and Review says so before **Seal**. [Python projects](python.md#yanked-releases) shows it.
+
 [Workflow](workflow.md#what-needs-a-reason) shows where the review asks for them. [The air gap](air-gap.md#the-review-in-the-manifest) describes what the manifest carries.
 
 ## Why the oldest version that fixes the most

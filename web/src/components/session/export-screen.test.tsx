@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { apiFetch } from "@/api/client"
+import { apiFetch, ProblemError } from "@/api/client"
 import { cancelExport, getAnalysisLog, queueExport, type Analysis, type Export, type Project } from "@/api/projects"
 import { getInstance, getSigningKey, type Instance } from "@/api/settings"
 import type { StepId } from "@/components/step-bar"
@@ -360,6 +360,137 @@ describe("sealed", () => {
     await screen.findByRole("heading", { name: "Sealed" })
     await waitFor(() => expect(getInstance).toHaveBeenCalledTimes(2))
     expect(screen.queryByRole("button", { name: "Erase now" })).not.toBeInTheDocument()
+  })
+})
+
+// A pip crossing whose analysis holds 3 packages; its manifest.json lists 243 wheels, the figure Sealed reads.
+const pipTarget = { python: "3.11.2", os: "linux", cpu: "x86_64", glibc: "2.28", uvVer: "0.13.7" }
+const pipWheel = (name: string, version: string) => ({ file: `${name}-${version}-py3-none-any.whl`, url: `https://files.example/${name}`, sha256: "b".repeat(64), size: 1000 })
+const pipAnalysis = {
+  id: "20261125T091500Z",
+  projectId: "ledger-service",
+  state: "done",
+  createdAt: "2026-11-25T09:15:00Z",
+  pipResult: {
+    target: pipTarget,
+    files: ["requirements.txt"],
+    packages: [
+      { name: "attrs", version: "24.2.0", files: ["requirements.txt"], wheel: pipWheel("attrs", "24.2.0"), cves: [] },
+      { name: "django", version: "5.1.4", files: ["requirements.txt"], wheel: pipWheel("django", "5.1.4"), cves: [], previous: { version: "4.2.16", cves: [], majorJump: true } },
+      { name: "requests", version: "2.32.0", files: ["requirements.txt"], wheel: pipWheel("requests", "2.32.0"), cves: [], yanked: { reason: "Yanked due to conflicts" }, previous: { version: "2.32.0", cves: [], majorJump: false } },
+    ],
+    blocking: [],
+    warnings: [],
+    previous: { projectId: "ledger-service", projectName: "ledger-service", exportId: "20261120T102000Z", analysisId: "20261120T101500Z", sealedAt: "2026-11-20T10:20:00Z" },
+  },
+} as Analysis
+const pipProject = { id: "ledger-service", name: "ledger-service", ecosystem: "pip", pipTarget, createdAt: "2026-11-25T09:14:00Z", analyses: [pipAnalysis] } as unknown as Project
+const PIP_FILES = ["findings.csv", "manifest.json", "manifest.json.sig", "packages_pip.tar.gz", "report.cdx.json", "report.trivy.json", "summary.md"]
+const pipRecord = (over: Partial<Export>) => exportRecord({ id: "20261125T092000Z", projectId: "ledger-service", analysisId: pipAnalysis.id, files: PIP_FILES, ...over })
+// manifest.json as the pip export writes it: format 3, every wheel with its sha256.
+const PIP_MANIFEST = {
+  formatVersion: 3,
+  ecosystem: "pip",
+  analysisId: pipAnalysis.id,
+  target: pipTarget,
+  archive: { sha256: ARCHIVE_SHA, size: 195_454_566 },
+  packages: Array.from({ length: 243 }, (_, i) => ({ name: `lib-${i}`, version: "1.0.0", file: `lib_${i}-1.0.0-py3-none-any.whl`, sha256: "c".repeat(64), shippedSha512: "0".repeat(128) })),
+}
+const PIP_REASONS = { "major-jump:django": "Moved to Django 5.1 in branch django-5", "yanked:requests": "  Client tests pin 2.32.0 " }
+const renderPip = (record: Export) => renderScreen(record, { of: pipAnalysis, on: pipProject })
+
+describe("a pip crossing", () => {
+  it("names the wheels and the size on the pip archive line", async () => {
+    serve(() => Promise.resolve(PIP_MANIFEST))
+    renderPip(pipRecord({}))
+    await screen.findByRole("heading", { level: 1, name: "Sealed" })
+    const carry = screen.getByRole("region", { name: /^To carry/ })
+    const archive = within(carry).getByText("packages_pip.tar.gz").closest("p") as HTMLElement
+    expect(archive).toHaveTextContent(/^packages_pip\.tar\.gz · 243 wheels · 186\.4 MB$/)
+    expect(within(archive).getByText("243")).toHaveClass("figure")
+    expect(within(carry).getByText("manifest.json").closest("p")).toHaveTextContent("manifest.json · every wheel with its sha256")
+    expect(document.body).not.toHaveTextContent(/\bPR\b/)
+    expect(document.body).not.toHaveTextContent(/Linux x86_64|Any platform/)
+  })
+
+  it("counts the wheels while a pip export downloads", () => {
+    events({ steps: [{ name: "package-list", state: "done", durationMs: 90 }, { name: "download", state: "running" }], progressByStep: { download: { step: "download", done: 120, total: 243, cacheHits: 0 } } })
+    renderPip(pipRecord({ state: "running", files: undefined }))
+    expect(screen.getByRole("heading", { level: 1, name: "Downloading and verifying each wheel" })).toBeInTheDocument()
+    expect(screen.getByText(/of/, { selector: "p" })).toHaveTextContent("120 of 243 wheels downloaded")
+  })
+
+  it("retries a pip export with its reasons", async () => {
+    sessionStorage.setItem(`sealift:reasons:${pipAnalysis.id}`, JSON.stringify(PIP_REASONS))
+    vi.mocked(queueExport).mockResolvedValue(pipRecord({ id: "20261125T093000Z", state: "queued", files: undefined }))
+    renderPip(pipRecord({ state: "failed", files: undefined, failure: { step: "download", message: "pip: download django: unexpected EOF" } as Export["failure"] }))
+    expect(screen.getByText(/Your reasons are kept\./)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    await waitFor(() => expect(queueExport).toHaveBeenCalled())
+    expect(vi.mocked(queueExport).mock.calls[0]).toEqual([
+      "ledger-service",
+      pipAnalysis.id,
+      {
+        selection: {},
+        includeProject: false,
+        reasons: [
+          { kind: "major-jump", dependencies: ["django"], text: "Moved to Django 5.1 in branch django-5" },
+          { kind: "yanked", dependencies: ["requests"], text: "Client tests pin 2.32.0" },
+        ],
+      },
+    ])
+  })
+
+  it("shows a refusing rule with its packages", async () => {
+    const detail =
+      "jobs: review.cveWithoutFix is refuse: ecdsa 0.19.1 keeps CVE-2024-23342, which no version fixes, and cannot cross; mlflow 2.19.0 keeps CVE-2024-37052 and CVE-2024-37053, which no version fixes, and cannot cross; and 3 more"
+    vi.mocked(queueExport).mockRejectedValue(new ProblemError(409, { type: "about:blank", title: "queue export", status: 409, detail }))
+    renderPip(pipRecord({ state: "failed", files: undefined, failure: { step: "download", message: "pip: download django: unexpected EOF" } as Export["failure"] }))
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    const rule = (await screen.findByText("This instance refuses every known CVE with no fixed version")).closest("[data-refusal]") as HTMLElement
+    expect(rule).toHaveTextContent("5 packages")
+    expect(within(rule).getByText("ecdsa")).toBeInTheDocument()
+    expect(within(rule).getByText("0.19.1")).toBeInTheDocument()
+    expect(within(rule).getByText("mlflow")).toBeInTheDocument()
+    expect(within(rule).getByText("and 3 more")).toBeInTheDocument()
+    expect(rule).not.toHaveTextContent("review.cveWithoutFix")
+  })
+
+  it("names the packages with no wheel when the server refuses the set", async () => {
+    const detail = "jobs: 3 packages have no wheel for the target, so the set cannot cross: psycopg2 2.9.10, pyodbc 5.2.0 and mysqlclient 2.2.6"
+    vi.mocked(queueExport).mockRejectedValue(new ProblemError(409, { type: "about:blank", title: "queue export", status: 409, detail }))
+    renderPip(pipRecord({ state: "failed", files: undefined, failure: { step: "download", message: "pip: download django: unexpected EOF" } as Export["failure"] }))
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+    const rule = (await screen.findByText("3 packages have no wheel for the target")).closest("[data-refusal]") as HTMLElement
+    expect(within(rule).getByText("pyodbc")).toBeInTheDocument()
+    expect(within(rule).getByText("2.2.6")).toBeInTheDocument()
+  })
+
+  it("returns to Ready to seal after a cancelled pip export", () => {
+    sessionStorage.setItem(`sealift:reasons:${pipAnalysis.id}`, JSON.stringify(PIP_REASONS))
+    const { onNavigateStep } = renderPip(pipRecord({ state: "cancelled", files: undefined }))
+    expect(onNavigateStep).toHaveBeenCalledWith("review")
+    expect(JSON.parse(sessionStorage.getItem(`sealift:reasons:${pipAnalysis.id}`) ?? "{}")).toEqual(PIP_REASONS)
+  })
+
+  it("keeps Done disabled until a download starts", async () => {
+    serve(() => Promise.resolve(PIP_MANIFEST))
+    renderPip(pipRecord({}))
+    await screen.findByRole("heading", { level: 1, name: "Sealed" })
+    expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-disabled", "true")
+    expect(screen.getByText("Opens once a download starts")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("link", { name: "Download packages_pip.tar.gz" }))
+    expect(screen.getByRole("link", { name: "Done" })).toHaveAttribute("href", "/")
+  })
+
+  it("does not open Done on Download all with no file to carry", async () => {
+    serve(() => Promise.reject(new Error("no file manifest.json in this export")))
+    renderPip(pipRecord({ files: ["summary.md"] }))
+    const carry = await screen.findByRole("region", { name: /^To carry/ })
+    expect(carry).toHaveTextContent("To carry · 0 files")
+    fireEvent.click(within(carry).getByRole("button", { name: "Download all" }))
+    expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-disabled", "true")
+    expect(screen.queryByRole("link", { name: "Done" })).not.toBeInTheDocument()
   })
 })
 

@@ -757,6 +757,11 @@ export interface components {
              * @example jinja2
              */
             name: string;
+            /**
+             * @description The name as the first requirements file that pins it writes it, for display only. Absent when it matches the normalized name, for a transitive package and from an analysis written before spellings were recorded.
+             * @example Jinja2
+             */
+            declared?: string;
             /** @example 3.1.2 */
             version: string;
             /** @description The project files that pin it, empty for a transitive package */

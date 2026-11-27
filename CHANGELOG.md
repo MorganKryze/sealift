@@ -23,6 +23,10 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - An info button explains CVE, a severity and major jump where each first appears on a screen, in two sentences with a link to its section of [How sealift chooses](docs/how-sealift-chooses.md#terms).
 - An analysis answer carries `advisories`: for each CVE id it lists, the title, a short summary and the publication date from the Trivy report, for npm and pip. An analysis from an earlier release answers without them.
 - `review.yanked` in the policy file: by default, a pip export that carries a release its index yanked needs a reason for it, and `refuse` stops such an export whatever its reason. `GET /api/instance` and the Instance page report it. [Settings](docs/settings.md#review-rules) lists it.
+- A pip crossing in the web, from requirements files dropped on Update: Check reads each file and its five checks, and shows the target with the two commands that read it on an Offline machine. Analyse shows the pip steps and each failure's cause. Review compares the set with the previous crossing of the same project and asks each reason. Ready to seal counts the wheels per platform, and Sealed counts the wheels. [Python projects](docs/python.md#cross-in-the-web) walks through one.
+- Info buttons explain a yanked release, a wheel and the target where each first appears, with a link to its section of [Python projects](docs/python.md).
+- Decide shows a What the flaw does row: the title and publication date of the advisory behind each CVE the dependency carries, for npm and pip.
+- Under `review.yanked: refuse`, Review shows each yanked release as refused by the instance before **Seal**, and asks no reason for it.
 
 ### Changed
 

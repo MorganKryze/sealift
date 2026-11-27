@@ -542,6 +542,9 @@ type PipPackage struct {
 	// Cves Sorted by severity, then id
 	Cves []PipFinding `json:"cves"`
 
+	// Declared The name as the first requirements file that pins it writes it, for display only. Absent when it matches the normalized name, for a transitive package and from an analysis written before spellings were recorded.
+	Declared *string `json:"declared,omitempty"`
+
 	// Files The project files that pin it, empty for a transitive package
 	Files []string `json:"files"`
 

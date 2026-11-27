@@ -96,7 +96,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
         <div className="overflow-hidden rounded-xl border border-rule bg-bg">
           {jumps.length > 0 ? (
             <div role="group" aria-labelledby={`${id}-jumps`}>
-              <Band tone="info">
+              <ReasonBand tone="info">
                 <ArrowUpRight aria-hidden="true" className="size-4 flex-none text-info" />
                 <p id={`${id}-jumps`} className="text-[13px] text-ink-2">
                   <span className="figure text-ink">{plural(moves, "major jump", "major jumps")}</span>
@@ -104,7 +104,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
                   {carried(jumpsWritten)}
                 </p>
                 <Term id="major-jump" />
-              </Band>
+              </ReasonBand>
               <ul className="flex flex-col gap-1.5 p-1.5">
                 {jumps.map((row) => (
                   <JumpReasonRow key={reasonKey(row.need)} row={row} text={textOf(row.need)} onJump={onJump} />
@@ -114,7 +114,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
           ) : null}
           {cves.length > 0 ? (
             <div role="group" aria-labelledby={`${id}-cves`} className={cn(jumps.length > 0 && "border-t border-rule")}>
-              <Band tone="warn">
+              <ReasonBand tone="warn">
                 <CircleAlert aria-hidden="true" className="size-4 flex-none text-warn" />
                 <p id={`${id}-cves`} className="text-[13px] text-ink-2">
                   <span className="figure text-ink">{plural(cveCount, "known CVE", "known CVEs")}</span>
@@ -123,7 +123,7 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
                   {carried(cvesWritten)}
                 </p>
                 {explainCves ? <Term id="cve" /> : null}
-              </Band>
+              </ReasonBand>
               <ul className="flex flex-col gap-1.5 p-1.5">
                 {cves.map((row) => (
                   <CveReasonRow key={reasonKey(row.need)} row={row} text={textOf(row.need)} explain={row === firstSeverities} onDecide={onDecide} />
@@ -143,7 +143,8 @@ export function ReasonsBlock({ needed, reasons, result, onDecide, onJump, refusa
   )
 }
 
-function Band({ tone, children }: { tone: "info" | "warn"; children: ReactNode }) {
+/** A band's head: its icon, its count and the reasons carried, on the info or warn tint. */
+export function ReasonBand({ tone, children }: { tone: "info" | "warn"; children: ReactNode }) {
   return (
     <div className={cn("flex min-h-11 items-center gap-2.5 border-b px-4 py-1", tone === "info" ? "border-info-line/60 bg-info-tint" : "border-warn-line/60 bg-warn-tint")}>
       {children}
@@ -191,112 +192,143 @@ function Disclosure({ open, label, onToggle }: { open: boolean; label: string; o
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto_2rem]"
 
-function JumpReasonRow({ row, text, onJump }: { row: JumpRow; text?: string; onJump: (name: string) => void }) {
+interface ReasonRowProps {
+  /** The reason's text as written, absent until it is. */
+  text?: string
+  /** The name its action and focus return use: the package, or the family. */
+  label: string
+  action: "Decide" | "Jump"
+  onAction: () => void
+  /** What the row is about: its name, its version and its evidence. */
+  children: ReactNode
+  /** A chevron that lists the row's detail in place, with what it lists. */
+  more?: { label: string; content: ReactNode; ruled?: boolean }
+}
+
+/** One row of a band: a closed amber row while its reason is missing, its text and Change once written. */
+export function ReasonRow({ text, label, action, onAction, children, more }: ReasonRowProps) {
   const [open, setOpen] = useState(false)
   const missing = !written(text)
-  const first = row.moves[0]
   return (
     <li data-reason-row className={cn(missing ? "tinted-warn" : "rounded-lg")}>
       <div className={ROW}>
-        <div className="min-w-0">
-          <p data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
-            {row.need.label}
-          </p>
-          {row.family ? (
-            <p className="text-[13px] text-muted">{plural(row.moves.length, "package", "packages")}</p>
-          ) : first ? (
-            <VersionChange before={first.dependency.current} after={first.to} />
-          ) : null}
-        </div>
-        <ReasonCell text={text} label={row.need.label} action="Jump" onAction={() => onJump(row.need.dependencies[0])} />
-        {row.family ? <Disclosure open={open} label={`${plural(row.moves.length, "package", "packages")} of ${row.need.label}`} onToggle={() => setOpen((was) => !was)} /> : <span />}
+        <div className="min-w-0">{children}</div>
+        <ReasonCell text={text} label={label} action={action} onAction={onAction} />
+        {more ? <Disclosure open={open} label={more.label} onToggle={() => setOpen((was) => !was)} /> : <span />}
       </div>
-      {open ? (
-        <div className="animate-fade px-3 pb-2.5">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="text-left text-xs text-muted">
-                <th scope="col" className="py-1.5 font-semibold">Package</th>
-                <th scope="col" className="py-1.5 font-semibold">Version</th>
-              </tr>
-            </thead>
-            <tbody>
-              {row.moves.map((move) => (
-                <tr key={move.dependency.name} className="border-t border-rule">
-                  <td className="py-2 pr-3 font-medium text-ink [overflow-wrap:anywhere]">{move.dependency.name}</td>
-                  <td className="py-2">
-                    <VersionChange before={move.dependency.current} after={move.to} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+      {open && more ? <div className={cn("animate-fade px-3 pb-2.5", more.ruled && "border-t border-warn-line/50")}>{more.content}</div> : null}
     </li>
   )
 }
 
+function JumpReasonRow({ row, text, onJump }: { row: JumpRow; text?: string; onJump: (name: string) => void }) {
+  const first = row.moves[0]
+  return (
+    <ReasonRow
+      text={text}
+      label={row.need.label}
+      action="Jump"
+      onAction={() => onJump(row.need.dependencies[0])}
+      more={
+        row.family
+          ? {
+              label: `${plural(row.moves.length, "package", "packages")} of ${row.need.label}`,
+              content: (
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-xs text-muted">
+                      <th scope="col" className="py-1.5 font-semibold">Package</th>
+                      <th scope="col" className="py-1.5 font-semibold">Version</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {row.moves.map((move) => (
+                      <tr key={move.dependency.name} className="border-t border-rule">
+                        <td className="py-2 pr-3 font-medium text-ink [overflow-wrap:anywhere]">{move.dependency.name}</td>
+                        <td className="py-2">
+                          <VersionChange before={move.dependency.current} after={move.to} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ),
+            }
+          : undefined
+      }
+    >
+      <p data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
+        {row.need.label}
+      </p>
+      {row.family ? (
+        <p className="text-[13px] text-muted">{plural(row.moves.length, "package", "packages")}</p>
+      ) : first ? (
+        <VersionChange before={first.dependency.current} after={first.to} />
+      ) : null}
+    </ReasonRow>
+  )
+}
+
+/** The CVEs of a row, listed in place under it: id, severity and what its record says of a fix. */
+export function CveTable({ cves }: { cves: Cve[] }) {
+  return (
+    <table className="w-full text-[13px]">
+      <thead>
+        <tr className="text-left text-xs text-muted">
+          <th scope="col" className="py-1.5 font-semibold">Known CVE</th>
+          <th scope="col" className="py-1.5 font-semibold">Severity</th>
+          <th scope="col" className="py-1.5 font-semibold">Fix</th>
+        </tr>
+      </thead>
+      <tbody>
+        {cves.map((cve) => (
+          <tr key={cve.id} className="border-t border-rule">
+            <td className="py-1.5 pr-3">
+              <span className="font-mono text-xs text-ink [font-variant-ligatures:none] [overflow-wrap:anywhere]">{cve.id}</span>
+            </td>
+            <td className="py-1.5 pr-3">
+              <SeverityMark severity={severityOf(cve)} />
+            </td>
+            <td className="py-1.5 text-ink-2">{fixWords(cve)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function CveReasonRow({ row, text, explain, onDecide }: { row: CveRow; text?: string; explain: boolean; onDecide: (name: string) => void }) {
-  const [open, setOpen] = useState(false)
-  const missing = !written(text)
   const single = row.cves.length === 1 ? row.cves[0] : undefined
   return (
-    <li data-reason-row className={cn(missing ? "tinted-warn" : "rounded-lg")}>
-      <div className={ROW}>
-        <div className="min-w-0">
-          <p className="flex flex-wrap items-baseline gap-x-1.5">
-            <span data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
-              {row.dependency.name}
-            </span>
-            {row.versions.map((version) => (
-              <span key={version} className="font-mono text-[12.5px] text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">
-                {version}
-              </span>
-            ))}
-          </p>
-          <div className="flex flex-wrap items-center gap-x-2">
-            {single ? (
-              <>
-                <span className="font-mono text-xs text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{single.id}</span>
-                <SeverityMark severity={severityOf(single)} />
-                {cveFix(single).kind === "unknown" ? <span className="text-xs text-muted">fix not recorded</span> : null}
-              </>
-            ) : (
-              <SeverityCounts vector={vectorOfCves(row.cves)} />
-            )}
-            {explain ? <Term id="severity" /> : null}
-          </div>
-        </div>
-        <ReasonCell text={text} label={row.dependency.name} action="Decide" onAction={() => onDecide(row.dependency.name)} />
-        {single ? <span /> : <Disclosure open={open} label={`${plural(row.cves.length, "CVE", "CVEs")} of ${row.dependency.name}`} onToggle={() => setOpen((was) => !was)} />}
+    <ReasonRow
+      text={text}
+      label={row.dependency.name}
+      action="Decide"
+      onAction={() => onDecide(row.dependency.name)}
+      more={single ? undefined : { label: `${plural(row.cves.length, "CVE", "CVEs")} of ${row.dependency.name}`, content: <CveTable cves={row.cves} />, ruled: true }}
+    >
+      <p className="flex flex-wrap items-baseline gap-x-1.5">
+        <span data-reason-name className="font-semibold text-ink [overflow-wrap:anywhere]">
+          {row.dependency.name}
+        </span>
+        {row.versions.map((version) => (
+          <span key={version} className="font-mono text-[12.5px] text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">
+            {version}
+          </span>
+        ))}
+      </p>
+      <div className="flex flex-wrap items-center gap-x-2">
+        {single ? (
+          <>
+            <span className="font-mono text-xs text-ink-2 [font-variant-ligatures:none] [overflow-wrap:anywhere]">{single.id}</span>
+            <SeverityMark severity={severityOf(single)} />
+            {cveFix(single).kind === "unknown" ? <span className="text-xs text-muted">fix not recorded</span> : null}
+          </>
+        ) : (
+          <SeverityCounts vector={vectorOfCves(row.cves)} />
+        )}
+        {explain ? <Term id="severity" /> : null}
       </div>
-      {open ? (
-        <div className="animate-fade border-t border-warn-line/50 px-3 pb-2.5">
-          <table className="w-full text-[13px]">
-            <thead>
-              <tr className="text-left text-xs text-muted">
-                <th scope="col" className="py-1.5 font-semibold">Known CVE</th>
-                <th scope="col" className="py-1.5 font-semibold">Severity</th>
-                <th scope="col" className="py-1.5 font-semibold">Fix</th>
-              </tr>
-            </thead>
-            <tbody>
-              {row.cves.map((cve) => (
-                <tr key={cve.id} className="border-t border-rule">
-                  <td className="py-1.5 pr-3">
-                    <span className="font-mono text-xs text-ink [font-variant-ligatures:none] [overflow-wrap:anywhere]">{cve.id}</span>
-                  </td>
-                  <td className="py-1.5 pr-3">
-                    <SeverityMark severity={severityOf(cve)} />
-                  </td>
-                  <td className="py-1.5 text-ink-2">{fixWords(cve)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
-    </li>
+    </ReasonRow>
   )
 }
