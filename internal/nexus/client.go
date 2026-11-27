@@ -30,6 +30,10 @@ const (
 	maxErrorBody = 8 << 10
 	// maxRepositoryList is the largest repository listing the client decodes.
 	maxRepositoryList = 1 << 20
+	// maxAssetSearch is the largest asset search answer the client reads.
+	maxAssetSearch = 1 << 20
+	// maxUploaderChars is the longest account name kept from an asset.
+	maxUploaderChars = 100
 	// dialTimeout and handshakeTimeout bound connection setup.
 	dialTimeout      = 30 * time.Second
 	handshakeTimeout = 30 * time.Second
@@ -203,6 +207,73 @@ func (c *Client) Fetch(ctx context.Context, name, version string, w io.Writer, l
 		return false, c.statusError(resp)
 	}
 	return true, c.copyLimited(w, resp.Body, limit)
+}
+
+// AssetFacts is what Nexus says of a file it holds: the account that
+// uploaded it and when. Either is empty when Nexus does not say.
+type AssetFacts struct {
+	Uploader     string
+	LastModified time.Time
+}
+
+// Asset reads the facts of the npm tarball of name@version through Nexus's
+// asset search. It reports found false when the search lists no such file.
+func (c *Client) Asset(ctx context.Context, name, version string) (AssetFacts, bool, error) {
+	want := strings.TrimPrefix(npm.TarballURL("", name, version), "/")
+	q := url.Values{"repository": {c.repo}, "name": {name}, "version": {version}}
+	return c.searchAsset(ctx, q, func(path string) bool { return strings.TrimPrefix(path, "/") == want })
+}
+
+// AssetFile reads the facts of a file of a pypi project through Nexus's
+// asset search. It reports found false when the search lists no such file.
+func (c *Client) AssetFile(ctx context.Context, project, file string) (AssetFacts, bool, error) {
+	q := url.Values{"repository": {c.repo}, "name": {project}}
+	return c.searchAsset(ctx, q, func(path string) bool { return path[strings.LastIndexByte(path, '/')+1:] == file })
+}
+
+// searchAsset reads the first page of an asset search and returns the facts
+// of the first asset whose path is wanted. A file the first page does not
+// list reads as not found.
+func (c *Client) searchAsset(ctx context.Context, q url.Values, wanted func(string) bool) (AssetFacts, bool, error) {
+	resp, err := c.do(ctx, http.MethodGet, c.endpoint("/service/rest/v1/search/assets", q.Encode()), nil, "")
+	if err != nil {
+		return AssetFacts{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return AssetFacts{}, false, c.statusError(resp)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAssetSearch+1))
+	if err != nil {
+		return AssetFacts{}, false, fmt.Errorf("nexus unreachable: %s", c.clean(err.Error()))
+	}
+	if len(body) > maxAssetSearch {
+		return AssetFacts{}, false, fmt.Errorf("nexus asset search is larger than %d bytes", maxAssetSearch)
+	}
+	var page struct {
+		Items []struct {
+			Path         string `json:"path"`
+			Uploader     string `json:"uploader"`
+			LastModified string `json:"lastModified"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return AssetFacts{}, false, errors.New("nexus asset search is not readable JSON")
+	}
+	for _, item := range page.Items {
+		if !wanted(item.Path) {
+			continue
+		}
+		facts := AssetFacts{Uploader: c.clean(item.Uploader)}
+		if r := []rune(facts.Uploader); len(r) > maxUploaderChars {
+			facts.Uploader = string(r[:maxUploaderChars])
+		}
+		if at, err := time.Parse(time.RFC3339, item.LastModified); err == nil {
+			facts.LastModified = at
+		}
+		return facts, true, nil
+	}
+	return AssetFacts{}, false, nil
 }
 
 // copyLimited copies body to w and fails past limit bytes.

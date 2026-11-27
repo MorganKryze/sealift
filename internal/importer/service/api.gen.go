@@ -377,10 +377,22 @@ type ReportPackage struct {
 	File string `json:"file"`
 
 	// Kind Why a failed package failed: conflict (Nexus holds this version with other bytes), nexus (Nexus refused, did not answer or served other bytes after the upload), source (the archive could not be read from MinIO), interrupted (the service stopped before the package ended), mismatch (the tarball is not the package the manifest names), local (a file or the Nexus client on the import's own side failed). Set on a failed package only. Absent in a report written by sealift 0.4.0 or earlier.
-	Kind   *ReportPackageKind `json:"kind,omitempty"`
-	Name   string             `json:"name"`
-	Note   string             `json:"note"`
-	Reason string             `json:"reason"`
+	Kind *ReportPackageKind `json:"kind,omitempty"`
+	Name string             `json:"name"`
+
+	// NexusStatus The HTTP status Nexus answered on a nexus failure. Absent when Nexus did not answer, on any other kind, and in a report written by sealift 0.7.0 or earlier.
+	NexusStatus *int `json:"nexusStatus,omitempty"`
+
+	// NexusUploadedAt When Nexus received the copy it holds, on a conflict only, as Nexus's asset search tells it. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+	NexusUploadedAt *time.Time `json:"nexusUploadedAt,omitempty"`
+
+	// NexusUploader The account that uploaded the copy Nexus holds, on a conflict only, as Nexus's asset search tells it, with control characters removed. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+	NexusUploader *string `json:"nexusUploader,omitempty"`
+	Note          string  `json:"note"`
+	Reason        string  `json:"reason"`
+
+	// Size The size in bytes of the checked file. Absent when the file could not be read, and in a report written by sealift 0.7.0 or earlier.
+	Size *int64 `json:"size,omitempty"`
 
 	// State pending, published, present or failed
 	State   string `json:"state"`

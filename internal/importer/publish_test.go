@@ -7,12 +7,18 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/MorganKryze/sealift/internal/importtest"
+	"github.com/MorganKryze/sealift/internal/nexus"
 )
 
 func hexOf(p Package) string { return hex.EncodeToString(p.SHA512) }
@@ -506,5 +512,179 @@ func TestPublishEachReportsEveryPackageOfAFailedCheck(t *testing.T) {
 	})
 	if !slices.Equal(ended, []int{0, 1}) {
 		t.Fatalf("callbacks %v, want [0 1]", ended)
+	}
+}
+
+// describing is a publisher that answers Nexus's upload facts from its fields
+// and records each lookup.
+type describing struct {
+	Publisher
+	facts nexus.AssetFacts
+	found bool
+	err   error
+	mu    sync.Mutex
+	calls []string
+}
+
+func (d *describing) lookup(key string) (nexus.AssetFacts, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, key)
+	return d.facts, d.found, d.err
+}
+
+func (d *describing) Asset(_ context.Context, name, version string) (nexus.AssetFacts, bool, error) {
+	return d.lookup(name + "@" + version)
+}
+
+func (d *describing) AssetFile(_ context.Context, project, file string) (nexus.AssetFacts, bool, error) {
+	return d.lookup(project + "/" + file)
+}
+
+var uploadedAt = time.Date(2025, 10, 3, 9, 12, 44, 0, time.UTC)
+
+func TestPublishRecordsNexusStatusOnARefusedUpload(t *testing.T) {
+	f := newFakeNexus(t)
+	dir := t.TempDir()
+	large := stage(t, dir, "@next/swc-linux-x64-gnu", "15.5.6", []byte("large"))
+	cut := stage(t, dir, "typescript", "5.6.3", []byte("cut"))
+	f.postStatus = http.StatusRequestEntityTooLarge
+	f.drop[tarballPath("typescript", "5.6.3")] = true
+	res := Publish(context.Background(), f.client(t), []Package{large, cut}, t.TempDir())
+	if r := res[0]; r.Kind != KindNexus || r.NexusStatus != http.StatusRequestEntityTooLarge {
+		t.Errorf("refused upload: %+v", r)
+	}
+	if r := res[1]; r.Kind != KindNexus || r.NexusStatus != 0 {
+		t.Errorf("no answer: %+v", r)
+	}
+
+	f.repoStatus = http.StatusUnauthorized
+	res = Publish(context.Background(), f.client(t), []Package{large}, t.TempDir())
+	if r := res[0]; r.Kind != KindNexus || r.NexusStatus != http.StatusUnauthorized {
+		t.Errorf("refused repository check: %+v", r)
+	}
+}
+
+func TestPublishRecordsTheSizeOfEachPackage(t *testing.T) {
+	f := newFakeNexus(t)
+	dir := t.TempDir()
+	published := stage(t, dir, "aaa", "1.0.0", []byte("published"))
+	present := stage(t, dir, "bbb", "1.0.0", []byte("present"))
+	conflict := stage(t, dir, "ccc", "1.0.0", []byte("conflict"))
+	f.storeUploads(published)
+	f.put("bbb", "1.0.0", packed(t, "bbb", "1.0.0", "present"))
+	f.put("ccc", "1.0.0", packed(t, "ccc", "1.0.0", "other"))
+	pkgs := []Package{published, present, conflict}
+	check := func(res []Result) {
+		t.Helper()
+		for i, r := range res {
+			info, err := os.Stat(pkgs[i].Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Size != info.Size() || r.Size == 0 {
+				t.Errorf("%s: size %d, want %d", r.Name, r.Size, info.Size())
+			}
+		}
+	}
+	check(Publish(context.Background(), f.client(t), pkgs, t.TempDir()))
+	f.repoStatus = http.StatusInternalServerError
+	check(Publish(context.Background(), f.client(t), pkgs, t.TempDir()))
+}
+
+func TestPublishReadsNexusUploadFactsOnAConflictOnly(t *testing.T) {
+	f := newFakeNexus(t)
+	dir := t.TempDir()
+	published := stage(t, dir, "aaa", "1.0.0", []byte("published"))
+	present := stage(t, dir, "bbb", "1.0.0", []byte("present"))
+	conflict := stage(t, dir, "is-number", "7.0.0", []byte("shipped"))
+	refused := stage(t, dir, "ddd", "1.0.0", []byte("refused"))
+	f.storeUploads(published)
+	f.put("bbb", "1.0.0", packed(t, "bbb", "1.0.0", "present"))
+	f.put("is-number", "7.0.0", packed(t, "is-number", "7.0.0", "other"))
+	f.getStatus[tarballPath("ddd", "1.0.0")] = http.StatusBadGateway
+	d := &describing{Publisher: f.client(t), facts: nexus.AssetFacts{Uploader: "ci-publish", LastModified: uploadedAt}, found: true}
+	res := Publish(context.Background(), d, []Package{published, present, conflict, refused}, t.TempDir())
+	if !slices.Equal(d.calls, []string{"is-number@7.0.0"}) {
+		t.Fatalf("lookups = %v, want the conflict's only", d.calls)
+	}
+	if r := res[2]; r.Kind != KindConflict || r.NexusUploader != "ci-publish" || r.NexusUploadedAt == nil || !r.NexusUploadedAt.Equal(uploadedAt) {
+		t.Errorf("conflict: %+v", r)
+	}
+	for _, i := range []int{0, 1, 3} {
+		if r := res[i]; r.NexusUploader != "" || r.NexusUploadedAt != nil {
+			t.Errorf("%s holds upload facts: %+v", r.Name, r)
+		}
+	}
+	if res[3].Kind != KindNexus {
+		t.Errorf("refused: %+v", res[3])
+	}
+}
+
+func TestPublishWheelsReadsNexusUploadFactsOnAConflict(t *testing.T) {
+	six := importtest.Wheel(t, "six", "1.16.0", "py2.py3-none-any")
+	other := importtest.Wheel(t, "six", "1.16.0", "py2.py3-none-any", importtest.Entry{Name: "six/extra.py", Body: []byte("x = 1\n")})
+	n := importtest.NewPyPINexus(t, pipRepo)
+	n.Put("six", six.File, other.Body)
+	d := &describing{Publisher: pypiClient(t, n), facts: nexus.AssetFacts{Uploader: "jo"}, found: true}
+	res := PublishWheels(context.Background(), d, []Package{stageWheel(t, t.TempDir(), six)}, "", nil)
+	if !slices.Equal(d.calls, []string{"six/" + six.File}) {
+		t.Fatalf("lookups = %v", d.calls)
+	}
+	if r := res[0]; r.Kind != KindConflict || r.NexusUploader != "jo" || r.NexusUploadedAt != nil {
+		t.Errorf("conflict: %+v", r)
+	}
+}
+
+func TestPublishKeepsAConflictWhenTheLookupFails(t *testing.T) {
+	for name, d := range map[string]*describing{
+		"lookup error": {err: errors.New("nexus answered 500")},
+		"not found":    {},
+		"no facts":     {found: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeNexus(t)
+			pkg := stage(t, t.TempDir(), "is-number", "7.0.0", []byte("shipped"))
+			f.put("is-number", "7.0.0", packed(t, "is-number", "7.0.0", "other"))
+			d.Publisher = f.client(t)
+			r := Publish(context.Background(), d, []Package{pkg}, t.TempDir())[0]
+			if r.State != Failed || r.Kind != KindConflict || !strings.Contains(r.Reason, "other bytes") || r.NexusUploader != "" || r.NexusUploadedAt != nil || r.NexusStatus != 0 {
+				t.Fatalf("got %+v", r)
+			}
+		})
+	}
+}
+
+func TestPublishNeverUploadsOverAConflictingCopy(t *testing.T) {
+	f := newFakeNexus(t)
+	pkg := stage(t, t.TempDir(), "is-number", "7.0.0", []byte("shipped"))
+	f.put("is-number", "7.0.0", packed(t, "is-number", "7.0.0", "other"))
+	d := &describing{Publisher: f.client(t), facts: nexus.AssetFacts{Uploader: "ci-publish"}, found: true}
+	only := onlyListed{Publisher: d, kept: &kept{only: map[string]bool{pkg.File: true}, refused: map[string]bool{}}}
+	r := Publish(context.Background(), only, []Package{pkg}, t.TempDir())[0]
+	if r.Kind != KindConflict || r.NexusUploader != "ci-publish" {
+		t.Fatalf("got %+v", r)
+	}
+	if n := f.uploadCount(); n != 0 {
+		t.Fatalf("%d uploads", n)
+	}
+}
+
+func TestRetryOfOneCauseKeepsTheEarlierCauseNexusFacts(t *testing.T) {
+	k := &kept{
+		only: map[string]bool{},
+		before: map[string]Result{
+			"large.tgz": {File: "large.tgz", State: Failed, Kind: KindNexus, Reason: "upload failed: nexus answered 413", NexusStatus: 413, Size: 9},
+			"other.tgz": {File: "other.tgz", State: Failed, Kind: KindConflict, Reason: "nexus holds this version with other bytes", NexusUploader: "ci-publish", NexusUploadedAt: &uploadedAt},
+		},
+		refused: map[string]bool{"large.tgz": true, "other.tgz": true},
+	}
+	large := k.result(Result{Name: "large", File: "large.tgz", State: Failed, Kind: KindNexus, Reason: "upload failed: not part of this retry", Size: 7})
+	if large.Kind != KindNexus || large.NexusStatus != 413 || large.Size != 7 || !strings.Contains(large.Reason, "413") {
+		t.Errorf("too large: %+v", large)
+	}
+	other := k.result(Result{Name: "other", File: "other.tgz", State: Failed, Kind: KindNexus, Size: 3})
+	if other.Kind != KindConflict || other.NexusUploader != "ci-publish" || other.NexusUploadedAt == nil || other.Size != 3 {
+		t.Errorf("conflict: %+v", other)
 	}
 }

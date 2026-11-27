@@ -122,10 +122,14 @@ func (k *kept) result(r Result) Result {
 		return r
 	}
 	pkg := Package{Name: r.Name, Version: r.Version, File: r.File}
+	out := failed(pkg, KindNexus, reasonNotInNexus)
 	if b, ok := k.before[r.File]; ok && b.State == Failed {
-		return failed(pkg, b.Kind, b.Reason)
+		// The cause reads from the kind and Nexus's facts together, so they stay with it.
+		out = failed(pkg, b.Kind, b.Reason)
+		out.NexusStatus, out.NexusUploadedAt, out.NexusUploader = b.NexusStatus, b.NexusUploadedAt, b.NexusUploader
 	}
-	return failed(pkg, KindNexus, reasonNotInNexus)
+	out.Size = r.Size
+	return out
 }
 
 // onlyListed reads every package from Nexus and uploads only those of Only.

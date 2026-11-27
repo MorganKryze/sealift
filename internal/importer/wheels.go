@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/MorganKryze/sealift/internal/nexus"
 	"github.com/MorganKryze/sealift/pip"
 )
 
@@ -38,13 +39,15 @@ func publishWheel(ctx context.Context, p Publisher, w Package) Result {
 	project := pip.Normalize(w.Name)
 	remote, found, err := fileDigest(ctx, p, project, w.File, limit)
 	if err != nil {
-		return failedOr(ctx, w, KindNexus, err.Error())
+		return nexusFailed(ctx, w, KindNexus, "", err)
 	}
 	if found {
 		if bytes.Equal(remote, w.SHA512) {
 			return Result{Name: w.Name, Version: w.Version, File: w.File, State: Present}
 		}
-		return failed(w, KindConflict, "nexus holds this file with other bytes: "+digests(w.SHA512, remote))
+		return conflictWith(p, w, "nexus holds this file with other bytes: "+digests(w.SHA512, remote), func(d Describer) (nexus.AssetFacts, bool, error) {
+			return d.AssetFile(ctx, project, w.File)
+		})
 	}
 
 	// The file is hashed again here: nothing reaches Nexus that the checks
@@ -60,12 +63,12 @@ func publishWheel(ctx context.Context, p Publisher, w Package) Result {
 		return failed(w, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 	if err := p.Upload(ctx, w.File, f); err != nil {
-		return failedOr(ctx, w, KindNexus, "upload failed: "+err.Error())
+		return nexusFailed(ctx, w, KindNexus, "upload failed: ", err)
 	}
 
 	remote, found, err = fileDigest(ctx, p, project, w.File, limit)
 	if err != nil {
-		return failedOr(ctx, w, KindNexus, "read back failed: "+err.Error())
+		return nexusFailed(ctx, w, KindNexus, "read back failed: ", err)
 	}
 	if !found {
 		return failed(w, KindNexus, "nexus accepted the upload but does not list the file")

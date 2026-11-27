@@ -11,8 +11,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/MorganKryze/sealift/internal/nexus"
 	"github.com/MorganKryze/sealift/npm"
 )
 
@@ -54,15 +56,23 @@ const (
 	KindLocal       Kind = "local"       // a file or a client on the import's own side failed
 )
 
-// Result is what happened to one package. Kind is set on a failed package only.
+// Result is what happened to one package. Kind is set on a failed package
+// only. Size is the checked file's size; NexusStatus is Nexus's HTTP status
+// on a nexus failure where Nexus answered; NexusUploadedAt and NexusUploader
+// say where a conflicting copy came from, as Nexus tells it. Each is absent
+// when unknown, and in a record written before they were added.
 type Result struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	File    string `json:"file"`
-	State   State  `json:"state"`
-	Reason  string `json:"reason"`
-	Note    string `json:"note"`
-	Kind    Kind   `json:"kind,omitempty"`
+	Name            string     `json:"name"`
+	Version         string     `json:"version"`
+	File            string     `json:"file"`
+	State           State      `json:"state"`
+	Reason          string     `json:"reason"`
+	Note            string     `json:"note"`
+	Kind            Kind       `json:"kind,omitempty"`
+	Size            int64      `json:"size,omitempty"`
+	NexusStatus     int        `json:"nexusStatus,omitempty"`
+	NexusUploadedAt *time.Time `json:"nexusUploadedAt,omitempty"`
+	NexusUploader   string     `json:"nexusUploader,omitempty"`
 }
 
 // Publisher is the part of the Nexus client the run uses: Fetch reads an
@@ -72,6 +82,13 @@ type Publisher interface {
 	Fetch(context.Context, string, string, io.Writer, int64) (bool, error)
 	FetchFile(ctx context.Context, project, file string, w io.Writer, limit int64) (bool, error)
 	Upload(context.Context, string, io.Reader) error
+}
+
+// Describer is the optional part of a publisher that reads what Nexus says
+// of a file it holds: Asset for an npm tarball, AssetFile for a pypi file.
+type Describer interface {
+	Asset(ctx context.Context, name, version string) (nexus.AssetFacts, bool, error)
+	AssetFile(ctx context.Context, project, file string) (nexus.AssetFacts, bool, error)
 }
 
 // Publish handles each package once, in order. Nexus copies are written to
@@ -92,6 +109,11 @@ func PublishEach(ctx context.Context, p Publisher, pkgs []Package, dir string, e
 func publishEach(ctx context.Context, p Publisher, pkgs []Package, ended func(int, Result), one func(Package) Result) []Result {
 	results := make([]Result, len(pkgs))
 	done := func(i int, r Result) {
+		if r.Size == 0 && pkgs[i].Path != "" {
+			if info, err := os.Stat(pkgs[i].Path); err == nil {
+				r.Size = info.Size()
+			}
+		}
 		results[i] = r
 		if ended != nil {
 			ended(i, r)
@@ -99,7 +121,7 @@ func publishEach(ctx context.Context, p Publisher, pkgs []Package, ended func(in
 	}
 	if err := p.CheckRepository(ctx); err != nil {
 		for i, pkg := range pkgs {
-			done(i, failedOr(ctx, pkg, KindNexus, "repository check failed: "+err.Error()))
+			done(i, nexusFailed(ctx, pkg, KindNexus, "repository check failed: ", err))
 		}
 		return results
 	}
@@ -148,6 +170,42 @@ func failedOr(ctx context.Context, pkg Package, kind Kind, reason string) Result
 	return failed(pkg, kind, reason)
 }
 
+// nexusFailed is failedOr with the reason prefix followed by err's text, and
+// Nexus's HTTP status kept on a nexus failure where Nexus answered one.
+func nexusFailed(ctx context.Context, pkg Package, kind Kind, prefix string, err error) Result {
+	r := failedOr(ctx, pkg, kind, prefix+err.Error())
+	var answer *nexus.Error
+	if r.Kind == KindNexus && errors.As(err, &answer) {
+		r.NexusStatus = answer.Status
+	}
+	return r
+}
+
+// conflictWith fails pkg as a conflict with reason, and adds what Nexus says
+// of its copy when the publisher can say it. A lookup that fails or finds
+// nothing leaves the conflict as it is.
+func conflictWith(p Publisher, pkg Package, reason string, lookup func(Describer) (nexus.AssetFacts, bool, error)) Result {
+	r := failed(pkg, KindConflict, reason)
+	// A retry of one cause wraps the client; the lookup reads, so it goes to the client itself.
+	if o, ok := p.(onlyListed); ok {
+		p = o.Publisher
+	}
+	d, ok := p.(Describer)
+	if !ok {
+		return r
+	}
+	facts, found, err := lookup(d)
+	if err != nil || !found {
+		return r
+	}
+	r.NexusUploader = facts.Uploader
+	if !facts.LastModified.IsZero() {
+		at := facts.LastModified
+		r.NexusUploadedAt = &at
+	}
+	return r
+}
+
 // localError marks a failure on the import's own side inside a helper that
 // also reports Nexus failures.
 type localError struct{ error }
@@ -183,7 +241,7 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 
 	remote, found, same, err := fetchDigest(ctx, p, pkg, dir, limit, f, info.Size())
 	if err != nil {
-		return failedOr(ctx, pkg, kindOf(err), err.Error())
+		return nexusFailed(ctx, pkg, kindOf(err), "", err)
 	}
 	if found {
 		if bytes.Equal(remote, pkg.SHA512) {
@@ -192,7 +250,9 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 		if same {
 			return Result{Name: pkg.Name, Version: pkg.Version, File: pkg.File, State: Present, Note: noteSameContent}
 		}
-		return failed(pkg, KindConflict, "nexus holds this version with other bytes: "+digests(pkg.SHA512, remote))
+		return conflictWith(p, pkg, "nexus holds this version with other bytes: "+digests(pkg.SHA512, remote), func(d Describer) (nexus.AssetFacts, bool, error) {
+			return d.Asset(ctx, pkg.Name, pkg.Version)
+		})
 	}
 
 	// The file is hashed again here: nothing reaches Nexus that the checks
@@ -208,12 +268,12 @@ func publishOne(ctx context.Context, p Publisher, pkg Package, dir string) Resul
 		return failed(pkg, KindLocal, "cannot read the checked file: "+err.Error())
 	}
 	if err := p.Upload(ctx, pkg.File, f); err != nil {
-		return failedOr(ctx, pkg, KindNexus, "upload failed: "+err.Error())
+		return nexusFailed(ctx, pkg, KindNexus, "upload failed: ", err)
 	}
 
 	remote, found, _, err = fetchDigest(ctx, p, pkg, dir, limit, nil, 0)
 	if err != nil {
-		return failedOr(ctx, pkg, kindOf(err), "read back failed: "+err.Error())
+		return nexusFailed(ctx, pkg, kindOf(err), "read back failed: ", err)
 	}
 	if !found {
 		return failed(pkg, KindNexus, "nexus accepted the upload but does not serve the version")

@@ -351,6 +351,20 @@ export interface components {
              * @enum {string}
              */
             kind?: "conflict" | "nexus" | "source" | "interrupted" | "mismatch" | "local";
+            /**
+             * Format: int64
+             * @description The size in bytes of the checked file. Absent when the file could not be read, and in a report written by sealift 0.7.0 or earlier.
+             */
+            size?: number;
+            /** @description The HTTP status Nexus answered on a nexus failure. Absent when Nexus did not answer, on any other kind, and in a report written by sealift 0.7.0 or earlier. */
+            nexusStatus?: number;
+            /**
+             * Format: date-time
+             * @description When Nexus received the copy it holds, on a conflict only, as Nexus's asset search tells it. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier.
+             */
+            nexusUploadedAt?: string;
+            /** @description The account that uploaded the copy Nexus holds, on a conflict only, as Nexus's asset search tells it, with control characters removed. Absent when Nexus does not say, and in a report written by sealift 0.7.0 or earlier. */
+            nexusUploader?: string;
         };
         /** @description A Problem that names the import in the way */
         ImportConflict: {

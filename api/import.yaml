@@ -760,6 +760,36 @@ components:
             manifest names), local (a file or the Nexus client on the import's
             own side failed). Set on a failed package only. Absent in a report
             written by sealift 0.4.0 or earlier.
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            The size in bytes of the checked file. Absent when the file could
+            not be read, and in a report written by sealift 0.7.0 or earlier.
+        nexusStatus:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: >
+            The HTTP status Nexus answered on a nexus failure. Absent when
+            Nexus did not answer, on any other kind, and in a report written
+            by sealift 0.7.0 or earlier.
+        nexusUploadedAt:
+          type: string
+          format: date-time
+          description: >
+            When Nexus received the copy it holds, on a conflict only, as
+            Nexus's asset search tells it. Absent when Nexus does not say, and
+            in a report written by sealift 0.7.0 or earlier.
+        nexusUploader:
+          type: string
+          maxLength: 100
+          description: >
+            The account that uploaded the copy Nexus holds, on a conflict
+            only, as Nexus's asset search tells it, with control characters
+            removed. Absent when Nexus does not say, and in a report written
+            by sealift 0.7.0 or earlier.
       required:
         - name
         - version
