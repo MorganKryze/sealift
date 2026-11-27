@@ -58,9 +58,9 @@ export function SideLabel({ side }: { side: "online" | "offline" }) {
   const brand = useBrand()
   const Icon = side === "online" ? Globe : Unplug
   return (
-    <span className="inline-flex min-h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-rule-2 px-2.5 text-[13px] text-muted">
+    <span className="inline-flex min-h-7 flex-none items-center gap-1.5 rounded-full border border-rule-2 px-2.5 text-[13px] whitespace-nowrap text-muted">
       <Icon aria-hidden="true" className="size-3.5 flex-none" />
-      <span className="[overflow-wrap:anywhere]">{side === "online" ? brand.online : brand.offline}</span>
+      <span>{side === "online" ? brand.online : brand.offline}</span>
     </span>
   )
 }
