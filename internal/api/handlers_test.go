@@ -2306,10 +2306,14 @@ func postExport(t *testing.T, srv *httptest.Server, projectID, analysisID, body 
 	return resp.StatusCode, data
 }
 
-func TestQueueExportForAPipProject(t *testing.T) {
+// donePipServer serves a done pip analysis of certifi and requests, under
+// the review rules review, set before the server starts.
+func donePipServer(t *testing.T, review policy.Review) (*Handlers, *httptest.Server, store.Project, store.AnalysisInfo) {
+	t.Helper()
 	q := jobs.NewQueue(nil)
 	h := newTestHandlersWithTrivy(t, q)
 	t.Cleanup(q.Close)
+	h.Service.Review = review
 	srv := httptest.NewServer(Routes(h, testStatic()))
 	t.Cleanup(srv.Close)
 
@@ -2333,6 +2337,12 @@ func TestQueueExportForAPipProject(t *testing.T) {
 	if info, err := h.Store.AnalysisInfo(project.ID, analysis.ID); err != nil || info.State != store.Done {
 		t.Fatalf("analysis = %+v, %v; want done", info, err)
 	}
+
+	return h, srv, project, analysis
+}
+
+func TestQueueExportForAPipProject(t *testing.T) {
+	h, srv, project, analysis := donePipServer(t, policy.DefaultReview())
 
 	status, body := postExport(t, srv, project.ID, analysis.ID, `{"selection":{"requests":["2.32.3"]}}`)
 	if p := decodeProblem(t, body); status != http.StatusBadRequest || !strings.Contains(deref(p.Detail), "takes no selection") {
@@ -2379,8 +2389,61 @@ func TestQueueExportForAPipProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body = postExport(t, srv, project.ID, analysis.ID, `{"selection":{}}`)
-	if p := decodeProblem(t, body); status != http.StatusConflict || !strings.Contains(deref(p.Detail), "1 of 2 packages has no wheel") {
-		t.Errorf("an analysis without every wheel answered %d %s, want 409 naming the count", status, body)
+	if p := decodeProblem(t, body); status != http.StatusConflict || !strings.Contains(deref(p.Detail), "1 package has no wheel for the target, so the set cannot cross: certifi 2024.8.30") {
+		t.Errorf("an analysis without every wheel answered %d %s, want 409 naming the package", status, body)
+	}
+}
+
+// markYanked records requests 2.32.3 as yanked in the analysis's result.
+func markYanked(t *testing.T, h *Handlers, project store.Project, analysisID string) {
+	t.Helper()
+	path := filepath.Join(project.Dir, "analyses", analysisID, "pip-result.json")
+	var result map[string]any
+	if err := json.Unmarshal(readTestFile(t, path), &result); err != nil {
+		t.Fatal(err)
+	}
+	pkg := result["packages"].([]any)[1].(map[string]any)
+	if pkg["name"] != "requests" {
+		t.Fatalf("package 2 is %v, want requests", pkg["name"])
+	}
+	pkg["yanked"] = map[string]any{"reason": "Broken release"}
+	if err := h.Store.WriteJSON(path, result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPipExportAnswersEachReasonRule(t *testing.T) {
+	const withReason = `{"selection":{},"reasons":[{"kind":"yanked","dependencies":["requests"],"text":"The yank concerned a wheel we do not use."}]}`
+
+	h, srv, project, analysis := donePipServer(t, policy.DefaultReview())
+	markYanked(t, h, project, analysis.ID)
+	status, body := postExport(t, srv, project.ID, analysis.ID, `{"selection":{}}`)
+	if p := decodeProblem(t, body); status != http.StatusBadRequest || deref(p.Detail) != "requests 2.32.3 is yanked on the index and needs a reason" {
+		t.Errorf("an export without its reason answered %d %s, want 400 naming the yanked release", status, body)
+	}
+	status, body = postExport(t, srv, project.ID, analysis.ID, withReason)
+	if status != http.StatusAccepted {
+		t.Fatalf("an export with its reason answered %d %s, want 202", status, body)
+	}
+	var queued Export
+	if err := json.Unmarshal(body, &queued); err != nil {
+		t.Fatal(err)
+	}
+	if done := waitForExportState(t, h, srv, project.ID, queued.Id, Done, Failed, Cancelled); done.State != Done {
+		t.Fatalf("export = %+v, want done", done)
+	}
+
+	refuse := policy.DefaultReview()
+	refuse.Yanked = policy.Refuse
+	h, srv, project, analysis = donePipServer(t, refuse)
+	markYanked(t, h, project, analysis.ID)
+	status, body = postExport(t, srv, project.ID, analysis.ID, withReason)
+	p := decodeProblem(t, body)
+	if want := "review.yanked is refuse: requests 2.32.3 is yanked on the index and cannot cross"; status != http.StatusConflict || !strings.Contains(deref(p.Detail), want) {
+		t.Errorf("an export under review.yanked: refuse answered %d %s, want 409 saying %q", status, body, want)
+	}
+	if strings.Contains(string(body), "wheel we do not use") {
+		t.Errorf("the refusal %s repeats the reason's text", body)
 	}
 }
 

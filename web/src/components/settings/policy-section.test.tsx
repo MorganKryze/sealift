@@ -10,7 +10,7 @@ const policy: Instance["policy"] = {
   minReleaseAgeDays: 14,
   resolveParallelism: 4,
   downloadParallelism: 16,
-  review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason" },
+  review: { proposeOtherMajors: false, majorJump: "reason", cveWithoutFix: "reason", yanked: "reason" },
 }
 
 // The value a term of the description list holds.
@@ -34,13 +34,15 @@ describe("PolicySection", () => {
     expect(valueOf("Proposals")).toBe("Inside the current line")
     expect(valueOf("Major jump")).toBe("Needs a reason")
     expect(valueOf("CVE without fix")).toBe("Needs a reason")
+    expect(valueOf("Yanked release")).toBe("Needs a reason")
   })
 
   it("shows the review rules a deployment widened or tightened", () => {
-    render(<PolicySection policy={{ ...policy, review: { proposeOtherMajors: true, majorJump: "refuse", cveWithoutFix: "refuse" } }} ephemeral={false} />)
+    render(<PolicySection policy={{ ...policy, review: { proposeOtherMajors: true, majorJump: "refuse", cveWithoutFix: "refuse", yanked: "refuse" } }} ephemeral={false} />)
     expect(valueOf("Proposals")).toBe("Any version")
     expect(valueOf("Major jump")).toBe("Refused")
     expect(valueOf("CVE without fix")).toBe("Refused")
+    expect(valueOf("Yanked release")).toBe("Refused")
   })
 
   it("names a target outside the platform list by its fields", () => {

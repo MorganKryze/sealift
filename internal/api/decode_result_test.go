@@ -266,3 +266,74 @@ func TestStatusForAnUnreachableReleaseSourceIsBadGateway(t *testing.T) {
 		t.Fatalf("statusFor = %d, want %d", got, http.StatusBadGateway)
 	}
 }
+
+// pipRecorded is a pip-result.json with every field a pip analysis records
+// for its review: where each pin is, a yanked release, the wheel's upload
+// time, a package with no wheel, and the previous crossing.
+var pipRecorded = `{
+  "target": {"python":"3.11.2","os":"linux","cpu":"x86_64","glibc":"2.28","uvVer":"0.13.7"},
+  "files": ["requirements.txt"],
+  "packages": [
+    {"name":"docopt","version":"0.6.2","files":["requirements.txt"],"pinnedAt":[{"file":"requirements.txt","line":1}],"cves":[]},
+    {"name":"jinja2","version":"3.1.4","files":["requirements.txt"],"pinnedAt":[{"file":"requirements.txt","line":2}],
+     "wheel":{"file":"jinja2-3.1.4-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/jinja2-3.1.4-py3-none-any.whl","sha256":"bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d","size":133271,"uploadedAt":"2024-05-05T23:41:49Z"},
+     "cves":[],
+     "yanked":{"reason":""},
+     "previous":{"version":"3.1.2","cves":[{"id":"CVE-2024-22195","severity":"MEDIUM","fixedVersions":["3.1.3"],"title":"jinja2: HTML attribute injection"}],"majorJump":false}}
+  ],
+  "blocking": [
+    {"name":"docopt","version":"0.6.2","kind":"source-only","detail":"source distribution only","pinnedAt":[{"file":"requirements.txt","line":1}]}
+  ],
+  "warnings": [],
+  "previous": {"projectId":"data-tools-3f9a1c","projectName":"Data tools","exportId":"20261120T101500Z","analysisId":"20261120T100000Z","sealedAt":"2026-11-20T10:15:00Z"},
+  "removed": [
+    {"name":"six","version":"1.16.0","cves":[{"id":"CVE-2099-0001","severity":"HIGH","fixedVersions":[]}]}
+  ]
+}`
+
+func TestDecodePipResultAnswersWhatTheAnalysisRecords(t *testing.T) {
+	result, ok := decodePipResult(json.RawMessage(pipRecorded))
+	if !ok {
+		t.Fatal("decodePipResult rejected the analysis")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"pinnedAt":[{"file":"requirements.txt","line":1}]`,
+		`"pinnedAt":[{"file":"requirements.txt","line":2}]`,
+		`"uploadedAt":"2024-05-05T23:41:49Z"`,
+		`"yanked":{"reason":""}`,
+		`"previous":{"cves":[{"fixedVersions":["3.1.3"],"id":"CVE-2024-22195","severity":"MEDIUM","title":"jinja2: HTML attribute injection"}],"majorJump":false,"version":"3.1.2"}`,
+		`"previous":{"analysisId":"20261120T100000Z","exportId":"20261120T101500Z","projectId":"data-tools-3f9a1c","projectName":"Data tools","sealedAt":"2026-11-20T10:15:00Z"}`,
+		`"removed":[{"cves":[{"fixedVersions":[],"id":"CVE-2099-0001","severity":"HIGH"}],"name":"six","version":"1.16.0"}]`,
+		`"detail":"source distribution only","kind":"source-only","name":"docopt","pinnedAt":[{"file":"requirements.txt","line":1}]`,
+	} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("the answer = %s, want it to hold %s", encoded, want)
+		}
+	}
+	if docopt := result.Packages[0]; docopt.Wheel != nil {
+		t.Errorf("docopt wheel = %+v, want none", *docopt.Wheel)
+	}
+}
+
+func TestDecodeA070PipResultAnswersWithoutTheNewFields(t *testing.T) {
+	result, ok := decodePipResult(json.RawMessage(pip070))
+	if !ok {
+		t.Fatal("decodePipResult rejected a 0.7.0 pip analysis")
+	}
+	if result.Previous != nil || result.Removed != nil {
+		t.Errorf("previous = %+v, removed = %+v, want both absent", result.Previous, result.Removed)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"previous"`, `"removed"`, `"pinnedAt"`, `"yanked"`, `"uploadedAt"`} {
+		if strings.Contains(string(encoded), key) {
+			t.Errorf("the answer for a 0.7.0 pip analysis holds %s, want it absent: %s", key, encoded)
+		}
+	}
+}

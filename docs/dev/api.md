@@ -118,10 +118,10 @@ A pip analysis runs these steps:
 | --- | --- |
 | `validate` | Reads the project's files again and copies them into the analysis. |
 | `prepare-tools` | Installs the target's uv from the package index, held to the minimum release age, and refreshes the Trivy database. |
-| `check-pins` | Reads the index page of every requirement the target installs. It fails when a requirement has no wheel the target can install, or none its `--hash` options list, and names every such requirement. |
+| `check-pins` | Reads the index page of every requirement the target installs, and records each one with no wheel the target can install, or none its `--hash` options list, in `blocking`. `resolve` gives uv its line as a constraint, which keeps its version without requiring it, and it joins the set at that version, without a wheel. |
 | `resolve` | Resolves every file together with uv, at the target's exact Python version and platform, with `--no-build`, and writes `project/requirements.lock`. The files' pins keep their versions; every other package is held to the minimum release age. |
-| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256. It reads index pages only and downloads no file. For a package no file pins, it chooses among the files uploaded before the minimum release age, as uv does. A wheel added later to an older release, or a file with no upload date, is never recorded. |
-| `scan` | Scans the set for known CVEs with Trivy. |
+| `choose-wheels` | Records, for every package of the set, the wheel the target's installer prefers, with the index's sha256 and upload time. A package with none stays in the set without a wheel and joins `blocking`. It reads index pages only and downloads no file. For a package no file pins, it chooses among the files uploaded before the minimum release age, as uv does. A wheel added later to an older release, or a file with no upload date, is never recorded. |
+| `scan` | Scans the set and each version the previous crossing held for known CVEs, in one Trivy run. |
 
 A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in place of `pnpmVersion`:
 
@@ -129,16 +129,14 @@ A done pip analysis carries `pipResult` in place of `result`, and `uvVersion` in
 | --- | --- |
 | `target` | The target the set was resolved for. |
 | `files` | The requirements files the set comes from. |
-| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `wheel` (`file`, `url`, `sha256`, `size`) and `cves` (`id`, `severity`, `fixedVersions`, `title`). `cves[].title` stays beside `advisories`. |
+| `packages` | Every package of the set, sorted by name: `name`, `version`, `files` (the files that pin it, empty for a package no file pins), `pinnedAt` (each `file` and `line` that pins it), `wheel` (`file`, `url`, `sha256`, `size`, and `uploadedAt` in UTC when the index gives one), `cves` (`id`, `severity`, `fixedVersions`, `title`), `yanked` (`reason`, empty when the index gives none) for a release the index has yanked, and `previous` (`version`, `cves` and `majorJump`) for a package the previous crossing held. `cves[].title` stays beside `advisories`. |
 | `advisories` | The same table as an npm analysis's `advisories`, by CVE id, for every id a package's `cves` names. An analysis written by sealift 0.7.0 has none. |
-| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind` and `detail`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
-| `warnings` | A yanked release with the index's reason, a pin uploaded within the minimum release age, a database that could not be refreshed, and findings Trivy reported for packages outside the set. |
+| `blocking` | Each package with no wheel the target can install: `name`, `version`, `kind`, `detail` and `pinnedAt`. `kind` is `source-only`, `other-platforms`, `no-files` or `hash-mismatch`. For a package no file pins, the kind counts only the files uploaded before the minimum release age, and `detail` says so. |
+| `previous` | The previous crossing: `projectId`, `projectName`, `exportId`, `analysisId` and `sealedAt`. It is the latest done export, created before the analysis started, of a pip project with the same name, trimmed and compared without case, this project included. |
+| `removed` | Each package of the previous crossing that the set no longer holds: `name`, `version` and `cves`. |
+| `warnings` | A pin uploaded within the minimum release age, a database that could not be refreshed, findings Trivy reported for packages outside the set, and a previous crossing that could not be read. |
 
-An analysis that stops on packages with no wheel fails at `check-pins`, `resolve` or `choose-wheels`, and still carries `pipResult`: `blocking` lists every such package and `packages` is empty.
-
-```json
-{"message":"2 packages have no wheel the target can install: docopt==0.6.2 (requirements.txt): source distribution only; pywin32==306 (requirements-win.txt): wheels for other platforms only","step":"check-pins"}
-```
+A done pip analysis may carry a non-empty `blocking`: each package in it stays in `packages` without a `wheel`, and the export refuses the set. An analysis fails on a package with no wheel only when uv itself names it, at `resolve`, since uv then gives no set. A blocked pin that another package needs fails `resolve` too. uv gets its line as a constraint, keeps its version and stops on it. A resolution that still brings it back at another version fails with the cause "1 package has no wheel the target can install and another package needs it", followed by the package, the files that pin it and why it has no wheel. A pip analysis that fails after finding a package with no wheel still carries `pipResult`: `blocking` lists every such package, and `packages` is empty. With no previous crossing, `previous` and `removed` are absent. An analysis written by sealift 0.7.0 has no `pinnedAt`, `yanked`, `uploadedAt`, `previous` or `removed`, and names a yanked release in `warnings`.
 
 uv stops at the first package with no usable wheel, so such a package that no file pins shows alone. A second one behind it shows at the next analysis.
 
@@ -201,7 +199,15 @@ A done export signs the reasons into the `review` of `manifest.json`. [Archive f
 
 ### pip exports
 
-A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body is `{"selection":{}}`; a selection that names a package answers 400, since the set is the analysis's. 409 when the analysis is not done, lists no package, or holds a package with no recorded wheel. A refused request creates no export.
+A pip export carries every package of the analysis, each with the wheel the analysis recorded. Its body holds an empty selection and the reasons the set needs: `{"selection":{},"reasons":[...]}`. The server checks the request against the stored analysis and the policy of its start, in this order, and a refused request creates no export:
+
+1. 400 when the selection names a package, since the set is the analysis's.
+2. 409 when the analysis is not done or lists no package.
+3. 409 when a package has no recorded wheel, or `blocking` names it. The detail counts and names them, such as `jobs: 1 package has no wheel for the target, so the set cannot cross: <name> <version>`.
+4. 409 when a refuse rule applies, whatever the reasons.
+5. 400 when the reasons fall short, as [Reasons of a pip export](#reasons-of-a-pip-export) lists.
+
+A queued pip export runs these steps:
 
 | Step | What it does |
 | --- | --- |
@@ -213,6 +219,44 @@ A pip export carries every package of the analysis, each with the wheel the anal
 A done pip export holds `packages_pip.tar.gz`, `manifest.json` (format version 3), `manifest.json.sig`, `report.trivy.json`, `report.cdx.json`, `findings.csv` and `summary.md`. [Archive format](archive-format.md#manifestjson-of-a-pip-export) describes the manifest. The same analysis exported twice gives the same archive sha256.
 
 Downloaded wheels stay in the shared cache `cache/wheels/`, named by their sha256, so a second export of the same set downloads nothing. In ephemeral mode, erasing a project empties `cache/wheels/` with the other shared caches.
+
+#### Reasons of a pip export
+
+A pip set asks one reason per package for each of three cases: `major-jump` for a package that left the major the previous crossing held, `cve-without-fix` for its CVEs that no version fixes, and `yanked` for a release its index yanked. A reason names one package in `dependencies`, compared in its normalized form, and its `text` follows the rule of [Reasons](#reasons). An analysis with no previous crossing asks no `major-jump` reason, and one written by sealift 0.7.0 asks no `yanked` reason either.
+
+```json
+{
+  "selection": {},
+  "reasons": [
+    {"kind": "major-jump", "dependencies": ["django"], "text": "Our tests pass on Django 5."},
+    {"kind": "yanked", "dependencies": ["idna"], "text": "Only the metadata was wrong."}
+  ]
+}
+```
+
+A shortfall answers 400 with the title `invalid export reasons` and one problem per shortfall in `detail`, joined by `; `. A problem names packages, versions and CVE ids, and a reason by its position and kind, never by its text:
+
+| Problem | When |
+| --- | --- |
+| `<name> <from> to <to> is a major jump and needs a reason` | The package left the previous crossing's major and no `major-jump` reason names it |
+| `<name> <version> keeps <ids>, which no version fixes, and needs a reason` | The package keeps a CVE without fix and no `cve-without-fix` reason names it |
+| `<name> <version> is yanked on the index and needs a reason` | The index yanked the release and no `yanked` reason names it |
+| `reason 2 (yanked) covers nothing the set needs: <name> needs no such reason` | The package needs no reason of that kind |
+| `reason 3 (major-jump) repeats the reason for <name>` | An earlier reason of the same kind names the package |
+| `reason 1 (yanked) names a package the analysis does not hold` | A name the set does not list |
+| `reason 1 (yanked) names no package` | The reason's `dependencies` is empty. Two names or more read `names 2 packages, and a pip reason covers one` |
+| `reason 1 (cve-without-fix): the reason is empty` | The text breaks the reason rule |
+| `reason 1 has an unknown kind` | `kind` is none of the three |
+
+Under `refuse`, a rule answers 409 whatever the reasons. The detail follows `jobs: ` with one part per rule that applies, joined by `; `. Each part names up to 3 packages, then `and <n> more`:
+
+| Rule | Part of the detail |
+| --- | --- |
+| `review.majorJump` | `review.majorJump is refuse: <name> <from> to <to> is a major jump and cannot cross` |
+| `review.cveWithoutFix` | `review.cveWithoutFix is refuse: <name> <version> keeps <ids>, which no version fixes, and cannot cross` |
+| `review.yanked` | `review.yanked is refuse: <name> <version> is yanked on the index and cannot cross` |
+
+A done pip export signs the reasons into the `review` of `manifest.json`. [Archive format](archive-format.md#manifestjson-of-a-pip-export) describes it.
 
 ## Settings
 
