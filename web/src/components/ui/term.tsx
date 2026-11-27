@@ -182,14 +182,16 @@ export function Term({ id, prefer = "below" }: { id: TermId; prefer?: "above" | 
             {typeof term.text === "string" ? (
               <span className="block">{term.text}</span>
             ) : (
-              <dl className="grid gap-2">
-                {term.text.map((d) => (
-                  <div key={d.term}>
-                    <dt className="font-semibold text-ink">{d.term}</dt>
-                    <dd>{d.text}</dd>
-                  </div>
-                ))}
-              </dl>
+              <div role="group" aria-label={term.name}>
+                <dl className="grid gap-2">
+                  {term.text.map((d) => (
+                    <div key={d.term}>
+                      <dt className="font-semibold text-ink">{d.term}</dt>
+                      <dd>{d.text}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
             )}
             {docs ? (
               <a

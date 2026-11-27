@@ -145,7 +145,7 @@ export const IMPORT = {
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", name: "matching", before: paste(doneArchive), ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", name: "differing", before: paste(differing), ready: "removed from your folder", open: { role: "button", name: "Compare", opens: { role: "textbox", name: "Compare with the connected side" } } },
-    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "What these checks mean", opens: { role: "term" } } },
+    { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: "What these checks mean", opens: { role: "group", name: "What these checks mean" } } },
     { path: `/imports/${IDS.completeRemoved}`, user: "alice", ready: "removed from your folder", open: { role: "button", name: /^signing key's sha256 /, opens: { role: "button", name: "Copy signing key's sha256" } } },
     { path: `/imports/${IDS.completeKept}`, user: "alice", ready: "Kept in your folder" },
     { path: `/imports/${IDS.completePending}`, user: "alice", ready: "Checking whether it left your folder" },
