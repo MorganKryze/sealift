@@ -542,21 +542,31 @@ func TestAssetBoundsAndScrubsTheAnswer(t *testing.T) {
 		t.Fatalf("a 2 MiB answer: found %v, err %v", found, err)
 	}
 
-	long := strings.Repeat("u", 150) + "\x1b[31m" + strings.Repeat("v", 150) + " " + testPassword
-	body, _ := json.Marshal(map[string]any{"items": []map[string]string{{"path": "left-pad/-/left-pad-1.0.0.tgz", "uploader": long, "lastModified": "not a date"}}})
-	srv := searchServer(t, string(body), nil)
-	facts, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0")
-	if err != nil || !found {
-		t.Fatalf("found %v, err %v", found, err)
+	basic := base64.StdEncoding.EncodeToString([]byte(testUser + ":" + testPassword))
+	head := "\x1b[31m" + testPassword + " " + basic + " "
+	cases := map[string]struct{ uploader, want string }{
+		"short": {
+			uploader: "jo " + head + "\x07",
+			want:     "jo [31m[redacted] [redacted] ",
+		},
+		"long": {
+			uploader: head + strings.Repeat("u", 150),
+			want:     ("[31m[redacted] [redacted] " + strings.Repeat("u", 150))[:100],
+		},
 	}
-	if n := len([]rune(facts.Uploader)); n != 100 {
-		t.Errorf("uploader has %d characters, want 100", n)
-	}
-	if strings.ContainsAny(facts.Uploader, "\x1b") || strings.Contains(facts.Uploader, testPassword) {
-		t.Errorf("uploader = %q", facts.Uploader)
-	}
-	if !facts.LastModified.IsZero() {
-		t.Errorf("an unreadable date reads as %v", facts.LastModified)
+	for name, tc := range cases {
+		body, _ := json.Marshal(map[string]any{"items": []map[string]string{{"path": "left-pad/-/left-pad-1.0.0.tgz", "uploader": tc.uploader, "lastModified": "not a date"}}})
+		srv := searchServer(t, string(body), nil)
+		facts, found, err := newClient(t, srv, "").Asset(context.Background(), "left-pad", "1.0.0")
+		if err != nil || !found {
+			t.Fatalf("%s: found %v, err %v", name, found, err)
+		}
+		if facts.Uploader != tc.want {
+			t.Errorf("%s: uploader = %q, want %q", name, facts.Uploader, tc.want)
+		}
+		if !facts.LastModified.IsZero() {
+			t.Errorf("%s: an unreadable date reads as %v", name, facts.LastModified)
+		}
 	}
 }
 
