@@ -134,7 +134,7 @@ The counts in this example are made up. Each count vector holds the number of CV
 | `kept[]` | A dependency kept on its line: `name`, `version`, and `jump`, the version outside the line it could take |
 | `jumps[]` | A family, or a lone dependency, the selection takes out of its line: `family` (absent for a lone dependency), `packages[]` with `name`, `from` and `to`, and the `reason` given for the jump |
 | `left[]` | A CVE the project keeps: the `dependency` and the `version` it keeps, the CVE `id`, its `severity`, the `package` Trivy found it in (empty when unknown), `fixedIn`, the versions Trivy names as fixing it (empty when none), and the `reason` given when no version fixes it |
-| `yanked[]` | A release its index has yanked that a pip set carries: the `dependency` and its `version`, `indexReason`, the reason the index gave (absent when it gave none), and the `reason` given for carrying it. Absent when the set carries no yanked release, so an npm review never holds it |
+| `yanked[]` | A release its index has yanked that a pip set carries: the `dependency` and its `version`, `indexReason`, the reason the index gave (absent when it gave none), and the `reason` given for carrying it. Absent when the set carries no yanked release, so an npm review never holds it. Also absent when the analysis recorded no yanked mark, as one written by sealift 0.7.0, so an absent list proves nothing |
 | `unchanged` | The number of other dependencies, which the selection leaves as they are |
 
 The review changes nothing the import must check, so it keeps `formatVersion` 2, as rule 6 of [What `sealift import` checks](#what-sealift-import-checks) allows. The import of sealift 0.7.0 ignores the key, and ignores `yanked` inside it. Imports after 0.7.0 read it by these rules:
@@ -348,10 +348,10 @@ A pip export writes a `review`, read by the rules of [The review](#the-review), 
 | `kept[]` | Empty: the export carries the set as the analysis resolved it |
 | `jumps[]` | One entry per package that left its major since the previous crossing, with no `family` |
 | `left[]` | Every CVE the set keeps |
-| `yanked[]` | Each release of the set its index yanked |
-| `unchanged` | The packages the previous crossing held at the same version. 0 with no previous crossing, since nothing was compared |
+| `yanked[]` | Each release of the set its index yanked. An export of a 0.7.0 analysis lists none, whatever its set carries |
+| `unchanged` | The packages the previous crossing held at the same version. 0 with no previous crossing, since nothing was compared. On a first crossing, the review compares the set with its requirements files only: `cves.before` equals `cves.after` and `unchanged` is 0 |
 
-A package new since the previous crossing counts in neither `updates` nor `unchanged`. An analysis written by sealift 0.7.0 recorded no previous crossing, so its export signs a review that compares nothing.
+A package new since the previous crossing counts in neither `updates` nor `unchanged`. An analysis written by sealift 0.7.0 recorded no previous crossing, so its export signs a review that compares nothing. It recorded no yanked mark either, so the review lists no yanked release whatever the set carries.
 
 ## Telling the formats apart
 
