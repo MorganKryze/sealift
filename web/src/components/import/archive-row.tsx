@@ -222,7 +222,7 @@ interface HomeLineProps {
 export function HomeLine({ icon: Icon, name, mono, state, detail, action, actionRef, aside, children }: HomeLineProps) {
   const failed = state?.tone === "bad"
   return (
-    <li className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 py-3", failed ? "tinted-bad -mx-3 my-1 px-3" : "border-b border-rule")}>
+    <li className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 py-3", failed ? "tinted-bad my-1 px-3" : "border-b border-rule")}>
       <span className={cn("grid size-8 flex-none place-items-center rounded-lg", state ? BOX[state.tone] : "bg-hover text-ink-2")}>
         <Icon aria-hidden="true" className="size-4" />
       </span>

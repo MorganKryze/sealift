@@ -223,6 +223,8 @@ describe("HomeArchiveRow", () => {
     const name = await nameOf()
     const row = name.closest("li") as HTMLElement
     expect(row).toHaveClass("tinted-bad")
+    // A tinted row keeps the width of the section's rule and of the cards around it.
+    expect([...row.classList].filter((c) => /^-?m[xlr]-|^-m[xlr]?-/.test(c))).toEqual([])
     expect(row).toHaveTextContent("Refused")
     expect(row).toHaveTextContent("signed with a key this side does not trust")
     expect(within(row).getAllByRole("link")).toHaveLength(1)
