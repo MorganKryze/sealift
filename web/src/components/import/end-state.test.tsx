@@ -336,4 +336,65 @@ describe("EndState, packages not in Nexus", () => {
     expect(container.querySelector("img")).toBeNull()
     expect([...container.querySelectorAll("b")].some((b) => b.textContent === "nexus said")).toBe(false)
   })
+
+  it("names the status Nexus answered to a refused package", async () => {
+    const a = attempt("incomplete", [
+      ...many(3, "present"),
+      pkg("failed", { name: "left-pad", version: "1.3.0", file: "left-pad-1.3.0.tgz", kind: "nexus", nexusStatus: 500, reason: "upload failed: nexus answered 500" }),
+      pkg("failed", { name: "is-odd", version: "3.0.1", file: "is-odd-3.0.1.tgz", kind: "nexus", nexusStatus: 401, reason: "upload failed: nexus answered 401" }),
+    ])
+    renderEnd(make(a))
+    const refused = await screen.findByRole("region", { name: "Nexus refused it" })
+    expect(refused.textContent).toContain("Nexus answered 401 and 500 to these 2 packages. Its words are in the log.")
+  })
+
+  it("copies the request and the paths the steps name", async () => {
+    const writeText = vi.fn(async () => {})
+    renderEnd(worstPip())
+    const large = await screen.findByRole("region", { name: "Too large for Nexus" })
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    fireEvent.click(within(large).getByRole("button", { name: "Copy request" }))
+    await within(large).findByText("Copied")
+    expect(writeText).toHaveBeenLastCalledWith(`Raise the upload limit of pypi-hosted above 906.4 MB: ${TOO_LARGE.map(([, , file]) => file).join(", ")} were refused as too large.`)
+    const conflict = block("Another file under the same version")
+    fireEvent.click(within(conflict).getByRole("button", { name: "Copy 3 paths" }))
+    await within(conflict).findByText("Copied")
+    expect(writeText).toHaveBeenLastCalledWith(
+      [
+        "packages/idna/3.10/idna-3.10-py3-none-any.whl",
+        "packages/pyyaml/6.0.2/PyYAML-6.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "packages/zope-deprecation/5.0/zope.deprecation-5.0-py3-none-any.whl",
+      ].join("\n"),
+    )
+  })
+
+  it("copies the one path of a single conflict", async () => {
+    const writeText = vi.fn(async () => {})
+    renderEnd(make(attempt("incomplete", [pkg("failed", { name: "@types/node", version: "22.10.2", file: "types-node-22.10.2.tgz", kind: "conflict", reason: conflictReason(sha("a"), sha("b")) })])))
+    const conflict = await screen.findByRole("region", { name: "Another file under the same version" })
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } })
+    fireEvent.click(within(conflict).getByRole("button", { name: "Copy its path" }))
+    await within(conflict).findByText("Copied")
+    expect(writeText).toHaveBeenCalledWith("@types/node/-/node-22.10.2.tgz")
+  })
+
+  it("names the uploader alone when Nexus gives no date", async () => {
+    renderEnd(make(attempt("incomplete", [pkg("failed", { name: "is-number", version: "7.0.0", file: "is-number-7.0.0.tgz", kind: "conflict", reason: conflictReason(sha("a"), sha("b")), nexusUploader: "jo" })])))
+    const conflict = await screen.findByRole("region", { name: "Another file under the same version" })
+    fireEvent.click(within(conflict).getByRole("button", { name: "Compare" }))
+    expect(within(conflict).getAllByText(uploadedLine).map((n) => n.textContent)).toEqual(["Uploaded by jo"])
+  })
+
+  it("never counts a package already there as the largest file that went through", async () => {
+    const a = attempt("incomplete", [
+      pkg("published", { name: "small", file: "small-1.0.0.tgz", size: mb(2) }),
+      pkg("present", { name: "huge", file: "huge-1.0.0.tgz", size: mb(500) }),
+      pkg("failed", { name: "big", version: "1.0.0", file: "big-1.0.0.tgz", kind: "nexus", nexusStatus: 413, reason: "upload failed: nexus answered 413", size: mb(120) }),
+    ])
+    renderEnd(make(a))
+    const large = await screen.findByRole("region", { name: "Too large for Nexus" })
+    expect(large.textContent).toContain("The largest file that went through is 2.0 MB, so the limit sits between the two sizes.")
+    expect(large.textContent).not.toContain("500 MB")
+  })
+
 })
