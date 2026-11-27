@@ -111,7 +111,7 @@ describe("ImportsList", () => {
     )
 
     const inc = within(rowOf("2026-11-03-kiosk-ui"))
-    expect(inc.getByText("packages_npm.tar.gz")).toBeInTheDocument()
+    expect(inc.getByText("packages/npm/2026-11-03-kiosk-ui/")).toBeInTheDocument()
     expect(inc.getByText("2026-11-03-kiosk-ui/")).toBeInTheDocument()
     expect(inc.getByText("Incomplete")).toBeInTheDocument()
     expect(inc.getByText("Attempt 1")).toBeInTheDocument()
@@ -210,7 +210,7 @@ describe("ImportsList", () => {
   it("keeps the same status region from loading to the list", async () => {
     renderList(() => json({ imports: [queued, running(37), complete] }))
     const region = await screen.findByRole("status")
-    await screen.findAllByRole("link", { name: /packages_npm/ })
+    await screen.findAllByRole("link", { name: /packages\/npm\// })
     expect(screen.getByRole("status")).toBe(region)
     expect(region).toHaveTextContent("3 imports")
     expect(region).toHaveTextContent("1 running")
