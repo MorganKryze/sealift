@@ -91,6 +91,7 @@ Each removed route below answers 410 Gone, with Problem Details that name what r
 
 ### Security
 
+- The image takes the Debian security fixes published after its base image was built, which closes CVE-2025-6020 in linux-pam.
 - Trivy is trusted by the sha256 built into sealift for each architecture, and no longer by the checksums file of the same release. sealift asks GitHub for the pinned release only, never for the latest one, and installs nothing when the download's sha256 differs. A mirror set in `SEALIFT_GITHUB_API` can delay Trivy and cannot swap it.
 - No route installs a tool or forces a release younger than the minimum release age, so the cross-site and DNS-rebinding exposure of the install routes is gone with them. A project's target can still name another pnpm or uv, and both are held to the minimum release age.
 - `SEALIFT_NPM_REGISTRY` must be `https`, or `http` on a loopback host, since pnpm's integrity comes from that registry. `SEALIFT_ALLOW_HTTP_REGISTRY=true` admits a plain `http` registry elsewhere, with a warning at start.
