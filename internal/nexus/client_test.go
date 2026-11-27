@@ -592,3 +592,41 @@ func TestAssetReportsNexusStatus(t *testing.T) {
 		t.Fatalf("found %v, err %v", found, err)
 	}
 }
+
+func TestAssetSearchGivesUpOnATricklingNexus(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		for {
+			if _, err := w.Write([]byte(" ")); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}))
+	defer srv.Close()
+	defer close(stop)
+	c := newClient(t, srv, "")
+	c.searchTimeout = 200 * time.Millisecond
+	start := time.Now()
+	_, found, err := c.Asset(context.Background(), "left-pad", "1.0.0")
+	if err == nil || found {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the search held the caller for %v", d)
+	}
+}
+
+func TestClientSearchesAssetsWithinThirtySeconds(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	if c := newClient(t, srv, ""); c.searchTimeout != 30*time.Second {
+		t.Fatalf("searchTimeout = %v", c.searchTimeout)
+	}
+}

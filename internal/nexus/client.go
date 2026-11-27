@@ -40,6 +40,9 @@ const (
 	// headerTimeout bounds the wait for response headers; an upload is
 	// not cut short by a client-wide deadline.
 	headerTimeout = 5 * time.Minute
+	// assetSearchTimeout bounds one asset search, so a slow Nexus cannot
+	// hold the attempt and the imports queued behind it.
+	assetSearchTimeout = 30 * time.Second
 )
 
 // Format is the Nexus format of a repository.
@@ -95,6 +98,9 @@ type Client struct {
 	pass    []byte
 	secrets []string
 	http    *http.Client
+	// searchTimeout is assetSearchTimeout, kept on the client so a test can
+	// shorten it.
+	searchTimeout time.Duration
 }
 
 // New builds a client that trusts the system roots plus CAFile, refuses
@@ -137,11 +143,12 @@ func New(cfg Config) (*Client, error) {
 	tr.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
 
 	c := &Client{
-		base:   *cfg.URL,
-		repo:   cfg.Repository,
-		format: format,
-		user:   cfg.User,
-		pass:   cfg.Password,
+		base:          *cfg.URL,
+		repo:          cfg.Repository,
+		format:        format,
+		user:          cfg.User,
+		pass:          cfg.Password,
+		searchTimeout: assetSearchTimeout,
 		http: &http.Client{
 			Transport: tr,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -235,6 +242,8 @@ func (c *Client) AssetFile(ctx context.Context, project, file string) (AssetFact
 // of the first asset whose path is wanted. A file the first page does not
 // list reads as not found.
 func (c *Client) searchAsset(ctx context.Context, q url.Values, wanted func(string) bool) (AssetFacts, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.searchTimeout)
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodGet, c.endpoint("/service/rest/v1/search/assets", q.Encode()), nil, "")
 	if err != nil {
 		return AssetFacts{}, false, err
