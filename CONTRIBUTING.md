@@ -100,10 +100,10 @@ When a screen changes, re-read the pages that describe it, since they quote its 
 | Analyse of a pip crossing | `docs/python.md`, `docs/troubleshooting.md` |
 | Seal and Sealed, npm and pip | `docs/workflow.md`, `docs/getting-started.md`, `docs/troubleshooting.md`, `docs/air-gap.md` |
 | Instance | `docs/settings.md`, `docs/deployment.md`, `docs/getting-started.md` |
-| Home (import service) | `docs/importing.md` |
+| Home and the refused panel (import service) | `docs/importing.md`, `docs/air-gap.md`, `docs/troubleshooting.md` |
 | Choose an archive (import service) | `docs/importing.md`, `docs/air-gap.md` |
 | Imports (import service) | `docs/importing.md`, `docs/air-gap.md` |
-| Import (import service) | `docs/importing.md`, `docs/air-gap.md` |
+| Import: the queue, Check, publishing, Cancel, the causes and Done (import service) | `docs/importing.md`, `docs/air-gap.md`, `docs/troubleshooting.md`, `lab/README.md` |
 | Instance (import service) | `docs/importing.md`, `docs/air-gap.md` |
 
 Retake the screenshots in `docs/assets/` from a fresh volume, analysing the project in [Getting started](docs/getting-started.md), so the numbers on them match the text.

@@ -27,6 +27,11 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - Info buttons explain a yanked release, a wheel and the target where each first appears, with a link to its section of [Python projects](docs/python.md).
 - Decide shows a What the flaw does row: the title and publication date of the advisory behind each CVE the dependency carries, for npm and pip.
 - Under `review.yanked: refuse`, Review shows each yanked release as refused by the instance before **Seal**, and asks no reason for it.
+- Cancel an import from its page. A queued import leaves the queue at once; a running one asks first, finishes the package in flight and stops. The packages already in Nexus stay there, and **Retry** publishes the rest. `POST /api/imports/{importId}/cancel` does the same.
+- Each cause of a failed import has its own **Retry**, which uploads that cause's packages alone. `POST /api/imports/{importId}/retry` takes the packages to upload in `packages`.
+- A completed import shows a comment to paste into the pull request that asked for the packages: packages in Nexus, updates, known CVEs before and after, reasons, major jumps and the archive's sha256, read from the signed review.
+- A queued import shows how many imports wait or run ahead of it.
+- The import home names each archive by the crossing its signed manifest records, such as `sealift-demo · 27 Nov`, once its signature verifies.
 
 ### Changed
 
@@ -57,6 +62,8 @@ The format follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/),
 - A pip analysis made by sealift 0.7.0 named its yanked releases in its warnings only, so an export from it asks no reason for them and `review.yanked: refuse` does not stop it. A new analysis records them.
 - The Update flow is redrawn in four steps, Check, Analyse, Review and Seal. Check runs three checks on the `package.json` and reads Compliant when all pass. Analyse shows the live log, and a stopped analysis names its cause with the one action that clears it. Review groups packages as updated, kept on their major and unchanged, asks each reason in a Decide or Jump panel, and reads Ready to seal once none is missing. Seal builds the archive on the same page and ends on Sealed with the files to carry; Done opens once a download starts. [Workflow](docs/workflow.md) walks through each screen.
 - A crossing lives at one address, `/crossings/<project>`, with `?analysis=` and `?step=`. Links to the earlier `/sessions/` pages still open, on the same crossing at the step they named.
+- The Offline screens are redrawn. The home holds a Compliant chip with the checks that passed and a refused panel that names the cause and what to do. An import page follows the steps Check, Publish and In Nexus, groups a failure by cause with the action that clears it, and ends on Done with its checks and a Compare against the connected side. [Importing](docs/importing.md) walks through them.
+- The import service checks each archive's signature when it lists the user's folder, so a refused archive shows on the home before anyone presses Import. The import checks it again when it starts.
 
 ### Removed
 

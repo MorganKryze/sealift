@@ -136,7 +136,7 @@ stateDiagram-v2
   interrupted --> queued: retry
 ```
 
-The diagram shows the states of one attempt. An import has one or more attempts, and its state is the state of the latest one. At start, the service marks every attempt a restart cut short as `interrupted` and starts nothing on its own ([Importing](importing.md#states) lists the words the screens use).
+The diagram shows the states of one attempt. An import has one or more attempts, and its state is the state of the latest one. At start, the service marks every attempt a restart cut short as `interrupted` and starts nothing on its own ([Importing](importing.md#one-import) lists the words the screens use).
 
 Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The kind tells a reader whether a retry can clear the failure or something outside sealift must change first ([The import report](dev/archive-format.md#the-import-report)).
 

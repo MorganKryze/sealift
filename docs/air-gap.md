@@ -49,6 +49,8 @@ The import side checks the signature with a public key you carry to it once. Do 
 3. Name it in the import's settings, as `publicKeyFile` below shows.
 4. Compare the Public key sha256 on both sides: sealift's Instance page shows one, the import side's Instance page shows the other under Trusted key, and every import report records the key it checked with. Equal values mean the import side holds the key you meant to carry.
 
+The import service checks the signature twice. It checks it when it lists the user's folder, so the home names a refused archive before anyone presses Import, and names a verified archive by the project and the day its signed manifest records. It checks it again when an import starts, on the exact bytes it then reads, and on every retry. The listing's check only words the screens: the start's check decides what is published.
+
 The import trusts that one key and no other. It ignores any key an archive, a manifest or the signature file names, and uses the name only to word a refusal. A key carried with the archive would give nothing: whoever forges the archive forges the key.
 
 What a valid signature shows: the manifest was made by the holder of the private key, which stays in the connected sealift's volume, and it has not changed since. What it does not show:
@@ -159,7 +161,7 @@ pnpm install --registry https://nexus.example.internal/repository/npm-hosted/
 
 ## The import through the service
 
-Where `sealift import-server` runs, users import without a shell on the air-gapped side. Each user uploads the archive, `manifest.json` and `manifest.json.sig` into their own MinIO bucket, `user-<name>`, under `packages/npm/`, with the manifest and its signature next to the archive. The archive may sit in one folder below, such as `packages/npm/second/`. The service lists the archives of the signed-in user and no one else's: another user's bucket answered an empty list in the lab.
+Where `sealift import-server` runs, users import without a shell on the air-gapped side. Each user uploads the archive, `manifest.json` and `manifest.json.sig` into their own MinIO bucket, `user-<name>`, under `packages/npm/`, or `packages/pip/` for a pip archive, with the manifest and its signature next to the archive. The archive may sit in one folder below, such as `packages/npm/second/`. The service lists the archives of the signed-in user and no one else's: another user's bucket answered an empty list in the lab.
 
 An import takes the archive through the same checks as `sealift import`, then publishes to Nexus with the service's own Nexus user. Imports run one at a time. The result for each package is stored as it ends:
 
@@ -169,10 +171,11 @@ An import takes the archive through the same checks as `sealift import`, then pu
 | `incomplete` | At least one package failed, such as a version Nexus holds with other bytes | Kept |
 | `interrupted` | The service stopped during the import | Kept |
 | `refused` | A check failed before anything was published | Kept |
+| `cancelled` | The user cancelled it; the packages already in Nexus stay | Kept |
 
 In the lab, an archive whose `bytes@3.1.2` already existed in Nexus with other bytes ended `incomplete` with 100 packages `present` and that one `failed`, and both objects stayed in MinIO. After the planted component was deleted in Nexus, a retry ended `complete`, uploaded that one package and removed the archive. Restarting the service during an import ended it `interrupted`, and a retry ended `complete`.
 
-The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each state word for word. Home lists the folder's archives and Import starts an import, Imports lists every import, and an import shows its stages, its report per package and its retry. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page sorts them into those a retry clears as it is and those that need a change first. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
+The screens of the service show all of this without `curl`: [Importing](importing.md) quotes each one word for word. The home lists the folder's archives, each checked and named by its crossing, and an import shows its place in the queue, its checks, its publishing and its end. Each failed package carries a kind: `conflict`, `nexus`, `source`, `interrupted`, `mismatch` or `local`. The page groups the failures by cause, each with the action that clears it and a Retry for that cause alone. An import can also be cancelled, and ends `cancelled` with what it published kept in Nexus. A record written by 0.4.0 has no kind and no check result, and the screen says `Not recorded` for both.
 
 A retry reads every package from Nexus again and uploads only what Nexus no longer serves. It needs the archive to be in MinIO still and unchanged. Delete or replace nothing in the user's folder while an import is queued or running.
 

@@ -63,7 +63,7 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
 
 4. Import. The service imports the archive from the user's folder; `sealift import` imports one from a local file. Both read `import/settings.yaml`, which points at Nexus as the `sealift-import` user for npm and the `sealift-import-pip` user for pip. `setup.sh` gives `sealift-import` the privileges to read, browse, add and edit in the `npm` and `pypi` repositories and to upload components, and `sealift-import-pip` browse, read and edit in `pypi` alone. `publicKeyFile` names `import/public-key.pem`, the file step 1 writes.
 
-   Through the screens, open Archives, press `Start` on the archive's row, optionally paste its sha256 and press `Start the import`. The import page follows it: `Queued`, `Running` with its stages in place, then `Complete`, `Incomplete`, `Interrupted` or `Refused`. Through the API, start the import and follow it. The archive, `manifest.json` and `manifest.json.sig` must sit together in the user's folder, as step 3 leaves them:
+   Through the screens, press **Import** on the archive's row of the home, optionally paste its sha256 and press `Start the import`. The import page follows it through `Check`, `Publish` and `In Nexus`, and ends on Done, on the causes of its failed packages, or refused. **Cancel** stops it, and a cancel through the API is `POST /api/imports/<id>/cancel` with the body `{}`. Through the API, start the import and follow it. The archive, `manifest.json` and `manifest.json.sig` must sit together in the user's folder, as step 3 leaves them:
 
    ```sh
    curl -X POST -H "Cookie: $cookie" -H 'Content-Type: application/json' \
@@ -121,6 +121,31 @@ The protocol follows the real crossing. The `transfer/` folder plays the USB key
    `airgap-shell` runs as linux x64, the platform sealift exports for. An arm64 shell would ask Nexus for platform packages the archive leaves out, such as `@esbuild/linux-arm64`.
 
 A crossing passes when the sha256 of the key matches on both sides, step 2 matches, step 4 reports no `failed`, and step 5 installs every selected version. With a planted conflict, step 4 fails that one package and step 5 installs the rest.
+
+### Plant the three failures
+
+The import page groups failed packages by cause. Three causes can be planted in one attempt, as a run on commit 109ff80 did. A scratch nginx in front of Nexus, on the lab's air-gapped network, plays the limit and the silence:
+
+```nginx
+server {
+  listen 8081;
+  client_max_body_size 400k;
+  proxy_read_timeout 600s;
+  proxy_send_timeout 600s;
+  location ~ ^/repository/npm/(express|body-parser)/-/ { return 444; }
+  location / { proxy_pass http://nexus:8081; }
+}
+```
+
+Point `nexus.url` of a copy of `import/settings.yaml` at that nginx, and mount the copy over `/import/settings.yaml` with a compose override. Then:
+
+| Cause | How to plant it |
+| --- | --- |
+| `No answer from Nexus` | `return 444` closes the connection with no answer on the tarball reads of the packages it names. `docker compose pause nexus` plants nothing: a paused Nexus still accepts connections, and the service waits up to 5 minutes for an answer. |
+| `Too large for Nexus` | `client_max_body_size` below the largest package of the archive, such as 400k for the getting-started archive, whose `@babel/parser` tarball is 467.8 KB. |
+| `Another file under the same version` | Upload a package of the archive with other bytes before the import, as step 4 shows. |
+
+Clear each cause, then press its block's Retry: remove the `return 444` line and reload nginx, raise `client_max_body_size`, and delete the planted copies in Nexus. Each Retry uploads that cause's packages alone. To see a cancel's confirm, pause Nexus during a large import, such as one of 265 packages: the attempt waits while paused, which leaves time to press Cancel. Remove the scratch nginx and the override when done.
 
 ## Cross the gap with pip
 
